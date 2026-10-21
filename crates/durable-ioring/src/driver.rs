@@ -10,7 +10,8 @@
 
 pub use crate::domains::first_repeat;
 pub use crate::durability::inconsistent;
-pub use crate::engine::{Engine, EngineGuard, Slot, lock, present};
+pub use crate::engine::{Engine, EngineGuard, Slot, lock, present, present_watched};
 pub use crate::ids::{Home, InstanceId};
+pub use crate::lock_watch::{ENGINE_LOCK, LockTimer, LockWatch, WatchedGuard};
 pub use crate::provider::{Answer, DomainCall};
 pub use crate::pump::{Pumped, PumpedDelivery, PumpedSetup};

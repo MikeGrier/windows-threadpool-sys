@@ -1330,8 +1330,8 @@
       "file": "src/io_core/provider.rs",
       "expect": "caught",
       "why": "DI-D-27: a provider's failure is a failure of its domain; taking it as success reports durable what was lost.",
-      "find": ["            .provided(lineage.seq, seal, id, outcome.into_result(domain));\n"],
-      "replace": ["            .provided(lineage.seq, seal, id, DomainOutcome::Succeeded.into_result(domain));\n"]
+      "find": ["                .provided(lineage.seq, seal, id, domain, outcome.into_result(domain));\n"],
+      "replace": ["                .provided(lineage.seq, seal, id, domain, DomainOutcome::Succeeded.into_result(domain));\n"]
     },
     {
       "name": "DI-3.10.3.5.3: an answer for a domain the provider does not serve is accepted",
@@ -1600,15 +1600,15 @@
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "The wait is for the completions the drain then takes. Drained first, a pump woken by a raising returns having taken nothing, and the entries are there only for the next one.",
-      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
-      "replace": ["        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);", "        let waited = self.notification.wait(timeout);"]
+      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let ready = self.locked().as_mut().is_some_and(Engine::drain);", "        let waited = self.notification.wait(timeout);"]
     },
     {
       "name": "DI-7.3: a pump waits holding the engine's lock",
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "The wait is for something another thread does, and doing it takes the lock: a push, a provider's answer, a handle's release. Held through the wait, nothing can wake the pump but its own timeout.",
-      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
+      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
       "replace": ["        let mut held = lock(&self.engine);", "        let waited = self.notification.wait(timeout);", "        let ready = held.as_mut().is_some_and(Engine::drain);"]
     },
     {
@@ -1616,8 +1616,8 @@
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "A delivery that cannot wait still delivers what has completed, and says why it could not wait. Skipping the drain makes a broken notification stop an instance delivering at all.",
-      "find": ["        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
-      "replace": ["        let ready = waited.is_ok() && lock(&self.engine).as_mut().is_some_and(Engine::drain);"]
+      "find": ["        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let ready = waited.is_ok() && self.locked().as_mut().is_some_and(Engine::drain);"]
     },
     {
       "name": "DI-7.3: a pump reports the drain's result inverted",
@@ -1688,15 +1688,15 @@
       "file": "src/pump.rs",
       "expect": "survives",
       "why": "The manifest checking itself on the new module: map_or(false, ..) is is_some_and(..), so this must survive; if it comes back caught, something is matching incidental text.",
-      "find": ["        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
-      "replace": ["        let ready = lock(&self.engine).as_mut().map_or(false, Engine::drain);"]
+      "find": ["        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let ready = self.locked().as_mut().map_or(false, Engine::drain);"]
     },
     {
       "name": "DI-7.5: a pump does not drain before it waits",
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "The notification is an edge: the completions that raised it may have been taken by another waiter on the same event, and waiting for a raising that has happened blocks while they sit in the backend.",
-      "find": ["        if lock(&self.engine).as_mut().is_some_and(Engine::drain) {"],
+      "find": ["        if self.locked().as_mut().is_some_and(Engine::drain) {"],
       "replace": ["        if false {"]
     },
     {
@@ -1704,8 +1704,8 @@
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "A first drain that delivered returns that it did, which sets the readiness event and tells the consumer to pop.",
-      "find": ["        if lock(&self.engine).as_mut().is_some_and(Engine::drain) {"],
-      "replace": ["        if !lock(&self.engine).as_mut().is_some_and(Engine::drain) {"]
+      "find": ["        if self.locked().as_mut().is_some_and(Engine::drain) {"],
+      "replace": ["        if !self.locked().as_mut().is_some_and(Engine::drain) {"]
     },
     {
       "name": "DI-13.9: a write-only access is said to be able to read",
@@ -1938,6 +1938,86 @@
       "why": "A control: the same limit by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["    short.map_or(length, |count| length.min(position(count)))\n"],
       "replace": ["    match short {\n        Some(count) => length.min(position(count)),\n        None => length,\n    }\n"]
+    },
+    {
+      "name": "DI-12.1.1: a seal's wait is stamped though no sink wants it",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A sink that does not want SealWaited must cost no clock read (DI-D-26): the stamp is taken only when the kind is wanted.",
+      "find": ["                if self.diagnostics.wants(DiagnosticKind::SealWaited) {"],
+      "replace": ["                if true {"]
+    },
+    {
+      "name": "DI-12.1.1: a flush is stamped though no sink wants its answer",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A sink that wants only the issue must leave nothing kept for the answer, which would otherwise be stamped and kept for good.",
+      "find": ["            if self.diagnostics.wants(DiagnosticKind::FlushAnswered) {"],
+      "replace": ["            if true {"]
+    },
+    {
+      "name": "DI-12.1.1: a retired lineage's flush stamps are kept",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "An answer to a retired lineage's flush is dropped unread, so the stamps its seals left would stay for the life of the instance.",
+      "find": ["            self.flush_issued.retain(|(key, ..), _| *key != lineage);"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-12.1.1: a seal's wait stamp is read and not removed",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "The stamp is taken out when the seal is reported, so a seal reported once is not reported again and nothing is kept for it.",
+      "find": ["            if let Some(began) = self.seal_waiting.remove(&(lineage, seq)) {"],
+      "replace": ["            if let Some(began) = self.seal_waiting.get(&(lineage, seq)).copied() {"]
+    },
+    {
+      "name": "DI-12.1.1: a flush's elapsed time is taken backwards",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "The time a file's flush took is from its issue to its answer; the other way round is zero, and so says nothing.",
+      "find": ["                elapsed: self.clock.elapsed(issued, self.clock.now()),"],
+      "replace": ["                elapsed: self.clock.elapsed(self.clock.now(), issued),"]
+    },
+    {
+      "name": "DI-12.1.1: a provider domain's elapsed time is taken backwards",
+      "file": "src/durability/providers.rs",
+      "expect": "caught",
+      "why": "As a file's: from the seal's issue to the domain's answer.",
+      "find": ["                elapsed: self.clock.elapsed(issued, self.clock.now()),"],
+      "replace": ["                elapsed: self.clock.elapsed(self.clock.now(), issued),"]
+    },
+    {
+      "name": "DI-12.1.1: every lock is timed, waited for or not",
+      "file": "src/lock_watch.rs",
+      "expect": "caught",
+      "why": "An immediate acquisition is a try_lock and nothing else (DI-D-26): no clock read and no event. Timing every one reads the clock on the path the pattern exists to keep free.",
+      "find": ["        let (guard, waited) = match mutex.try_lock() {"],
+      "replace": ["        let (guard, waited) = match Err::<MutexGuard<'a, T>, TryLockError<MutexGuard<'a, T>>>(TryLockError::WouldBlock) {"]
+    },
+    {
+      "name": "DI-12.1.1: a wait is timed though no sink wants it",
+      "file": "src/lock_watch.rs",
+      "expect": "caught",
+      "why": "A sink that does not want lock waits must cost a blocked acquisition no clock read.",
+      "find": ["            Err(TryLockError::WouldBlock) if !self.sink.wants(DiagnosticKind::LockWait) => {"],
+      "replace": ["            Err(TryLockError::WouldBlock) if false => {"]
+    },
+    {
+      "name": "DI-12.1.1: a wait is reported before the lock is let go",
+      "file": "src/lock_watch.rs",
+      "expect": "caught",
+      "why": "The report must not lengthen the hold it measures, so the guard is released first; a sink that takes its time would otherwise be holding the engine.",
+      "find": ["        drop(self.guard.take());"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-12.1.1 control: a seal's wait stamp is kept by another spelling of the same entry",
+      "file": "src/durability.rs",
+      "expect": "survives",
+      "why": "A control: the same stamp by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["                                .or_insert(now);"],
+      "replace": ["                                .or_insert_with(|| now);"]
     }
   ]
 }

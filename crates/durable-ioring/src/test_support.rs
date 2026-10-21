@@ -9,6 +9,7 @@
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use crate::clock::StampClock;
 use crate::error_code::ErrorCode;
@@ -26,6 +27,11 @@ impl StampClock for Ticks {
 
     fn now(&self) -> u64 {
         self.0.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// A tick is a nanosecond.
+    fn elapsed(&self, earlier: u64, later: u64) -> Duration {
+        Duration::from_nanos(later.saturating_sub(earlier))
     }
 }
 
@@ -52,6 +58,11 @@ impl StampClock for ManualClock {
 
     fn now(&self) -> u64 {
         self.0.load(Ordering::SeqCst)
+    }
+
+    /// A tick is a nanosecond.
+    fn elapsed(&self, earlier: u64, later: u64) -> Duration {
+        Duration::from_nanos(later.saturating_sub(earlier))
     }
 }
 

@@ -3,8 +3,9 @@
 //! entries become poppable, a backlog reached at setup, a callback environment's pool, and the
 //! engine handed back.
 
-use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
 use crate::InterruptStamps;
@@ -19,8 +20,9 @@ use durable_ioring::DurableIoCore;
 use durable_ioring::IoTarget;
 use durable_ioring::NoDiagnostics;
 use durable_ioring::backend::SubmissionData;
-use durable_ioring::driver::Engine;
+use durable_ioring::driver::{ENGINE_LOCK, Engine, LockWatch, lock};
 use durable_ioring::oracle::ConformanceOracle;
+use durable_ioring::{Diagnostic, DiagnosticKind, DiagnosticSink};
 use durable_ioring::{DurabilityRequest, Entry, Epoch, IoTargetKey, OpKind, WriteOptions};
 
 const KEY: IoTargetKey = IoTargetKey(1);
@@ -54,6 +56,19 @@ fn engine(file: &TempFile) -> Eng {
 
 /// A pool delivery of `engine` that sends on every readiness.
 fn delivered(engine: Eng, env: Option<&mut CallbackEnviron<'_>>) -> (Pool, Receiver<()>) {
+    delivered_watched(
+        engine,
+        env,
+        LockWatch::new(0, Arc::new(NoDiagnostics), Arc::new(InterruptStamps)),
+    )
+}
+
+/// As [`delivered`], with the waits for the engine's lock reported through `watch`.
+fn delivered_watched(
+    engine: Eng,
+    env: Option<&mut CallbackEnviron<'_>>,
+    watch: LockWatch,
+) -> (Pool, Receiver<()>) {
     let (tx, rx) = mpsc::channel();
     let pool = PoolDelivery::new(
         engine,
@@ -61,6 +76,7 @@ fn delivered(engine: Eng, env: Option<&mut CallbackEnviron<'_>>) -> (Pool, Recei
             let _ = tx.send(());
         },
         env,
+        watch,
     )
     .map_err(|(error, _)| error)
     .expect("wire the delivery");
@@ -243,4 +259,73 @@ fn the_engine_comes_back_once_delivery_stops() {
         assert!(started.elapsed() < BOUND, "the write never completed");
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+/// Says when the test's own thread has found a lock held -- the sink is asked whether it wants the
+/// wait as soon as there is one -- and keeps what is reported, with the thread that waited. A pool's
+/// own thread drains once on the ring's setup signal and may wait on the same lock, which is why the
+/// thread is part of the record.
+struct Contended {
+    test_thread: ThreadId,
+    found_held: Mutex<Sender<()>>,
+    waits: Mutex<Vec<(ThreadId, u64, String)>>,
+}
+
+impl DiagnosticSink for Contended {
+    fn wants(&self, kind: DiagnosticKind) -> bool {
+        if kind == DiagnosticKind::LockWait && thread::current().id() == self.test_thread {
+            let _ = self.found_held.lock().expect("the signal").send(());
+        }
+        kind == DiagnosticKind::LockWait
+    }
+
+    fn report(&self, event: &Diagnostic<'_>) {
+        let Diagnostic::LockWait { instance, lock, .. } = event else {
+            panic!("reported {event}");
+        };
+        self.waits.lock().expect("the record").push((
+            thread::current().id(),
+            *instance,
+            (*lock).to_owned(),
+        ));
+    }
+}
+
+#[test]
+fn a_consumer_call_that_waits_for_the_engine_reports_the_wait() {
+    let file = TempFile::new("pool-lock-wait");
+    let (found_held, signal) = mpsc::channel();
+    let sink = Arc::new(Contended {
+        test_thread: thread::current().id(),
+        found_held: Mutex::new(found_held),
+        waits: Mutex::default(),
+    });
+    let watch = LockWatch::new(5, sink.clone(), Arc::new(InterruptStamps));
+    let (pool, _ready) = delivered_watched(engine(&file), None, watch);
+
+    // Another thread holds the slot until this one's call has found it held.
+    let slot = pool.shared();
+    let (holding, held) = mpsc::channel();
+    thread::scope(|scope| {
+        let holder = scope.spawn(move || {
+            let guard = lock(&slot);
+            holding.send(()).expect("the test is listening");
+            signal
+                .recv_timeout(BOUND)
+                .expect("the call found the lock held");
+            drop(guard);
+        });
+        held.recv_timeout(BOUND).expect("the slot was taken");
+        drop(pool.engine());
+        holder.join().expect("the holder finished");
+    });
+    let waits = sink.waits.lock().expect("the record");
+    let ours: Vec<_> = waits
+        .iter()
+        .filter(|(waiter, ..)| *waiter == thread::current().id())
+        .collect();
+    assert_eq!(ours.len(), 1, "{waits:?}");
+    assert_eq!((ours[0].1, ours[0].2.as_str()), (5, ENGINE_LOCK));
+    drop(waits);
+    let _ = pool.into_engine();
 }

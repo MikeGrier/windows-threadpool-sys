@@ -1267,3 +1267,37 @@ Error Handling > Basic Debugging > Debugging Reference > Debugging Functions*. I
 where they are documented before it names a section.
 
 **Scheduled work.** [DI-12.1.1](CHECKLIST.md) to `DI-12.1.6`.
+
+## <a id="di-d-77"></a>DI-D-77: how the delay events are built and timed
+
+**What is decided.** The choices [DI-12.1.1](COMPLETED-CHECKLIST.md#di-1211) left to its implementation, made by the
+assistant under [DI-D-26](#di-d-26) and [DI-D-76](#di-d-76). None is an answer the engineer was asked for, and each is
+open to a ruling.
+
+- **The epoch is rendered through its `Debug` form.** A seal's events carry the epoch it is through as
+  `fmt::Arguments`, built from `EpochId`'s existing `Debug` bound, so the trait gained no bound and an event allocates
+  nothing. A sink that wants a structured epoch has only text; that is the cost of the bound being left alone.
+- **What a flush part is named by.** A file by its key. A provider's domain by the name the consumer gave it, shown as
+  text with invalid bytes replaced, and held by the event as the bytes.
+- **Flush and seal durations are measured by the instance's own `StampClock`**, which gained a required method,
+  `elapsed(earlier, later)`, because a reading cannot be subtracted without knowing its unit. This breaks every
+  implementor of the trait, which is why the change is a major one for `durable-ioring`. A reading is taken only for a
+  kind the sink `wants`, and what was stamped is dropped when its answer arrives, when its lineage retires, and with
+  the instance.
+- **One secondary event for a seal's wait.** `SealWaited` is reported once, when a seal that was waiting for the writes
+  at or below it is issued. Writes in flight and writes held for a gate block a seal alike, and the event does not
+  tell them apart. A seal that did not wait reports nothing.
+- **Lock waits are timed outside the engine.** The sink and the clock live inside the engine, which sits behind the lock
+  being timed, so the core cannot time its own wait. A `LockWatch` holds its own handles to the sink and to a timer,
+  and a lock taken through it is `try_lock`ed first: an immediate acquisition reads no clock and builds no event, and
+  only a wait the sink wants is timed. The report is made after the guard is released. A poisoned lock is taken as the
+  panic left it, as `lock` does ([DI-D-46](#di-d-46)).
+- **The Windows driver times its lock waits in interrupt time whatever clock the instance stamps with**
+  ([DI-D-37](#di-d-37)), because the watch is built from the driver's own clock and not from the instance's, which
+  the core owns.
+- **The lock watched is the engine's slot.** Every path that reaches the engine takes it: a consumer's call, a pump or
+  a pool drain, and the hub a lineage handle or a provider's answer goes through. The Windows hub's other mutex counts
+  unanswered provider completions and is held for an increment; it is not watched, and whether it should be is a
+  question for the engineer.
+
+**Scheduled work.** None beyond [DI-12.1.2](CHECKLIST.md) onward, which carry these events to the sinks.

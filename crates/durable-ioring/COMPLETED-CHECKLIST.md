@@ -3621,3 +3621,24 @@ merged into the script nor deleted, and the duplicate-then-decide rule's decisio
 not a duplicate to be collapsed. The account of why, and the one question left unruled (whether tests that only check
 the core's answer to a failure move to the portable crate), are [DI-D-75](DESIGN-NOTES.md#di-d-75). Nothing in the code
 changed beyond the pointer in `Dioring::fail_next_flush`'s documentation.
+
+## Moved 2026-10-20 20:46:51 -04:00 -- DI-12.1.1: the delay events in the portable core
+
+### <a id="di-1211"></a>DI-12.1.1 -- The delay events are in the portable core: lock waits, flush issue and answer, and a seal's wait, built only for a sink that wants them. *(completed 2026-10-20 20:46:51 -04:00)*
+
+The item as written:
+
+**DI-12.1.1** -- **The delay events in the portable core.** New `DiagnosticKind` and `Diagnostic` variants
+  (both are `#[non_exhaustive]`), reported to the instance's sink and built only when the sink `wants` the kind, with
+  no clock read before that answer. *Lock waits* follow the engineer's pattern ([DI-D-26](DESIGN-NOTES.md#di-d-26)):
+  try-lock; only if that fails, read the clock, block, and on acquiring record the wait; emit after releasing, so the
+  event does not lengthen the hold it measures; one wrapper type, a name per lock, poisoning handled separately.
+  *Flushes* are timed at the durability-provider boundary: the call issued, and each domain's outcome with how long
+  it took, so an event names the slow domain. *A seal's other phases*, waiting for covered writes and for gated writes
+  to be released, are the secondary events the engineer allowed. How the generic epoch id is rendered is settled in
+  this step and recorded. `StderrDiagnostics` prints each. Tests: each event with a recording sink, the lock-wait
+  pattern by an uncontended lock (no event, no clock read) and a contended one, and a sink that wants nothing costing
+  no clock read.
+
+What was built, and the choices it left to its implementation, are [DI-D-77](DESIGN-NOTES.md#di-d-77). The lock waits are
+timed by a `LockWatch` beside the engine's slot, and `StampClock` gained a required `elapsed` method, a breaking change.

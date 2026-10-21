@@ -2,10 +2,13 @@
 //! The diagnostic sinks (DI-D-51): what each wants, and where a fan-out sends an event.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use super::{
-    Diagnostic, DiagnosticKind, DiagnosticSink, FanOutDiagnostics, NoDiagnostics, StderrDiagnostics,
+    Diagnostic, DiagnosticKind, DiagnosticSink, FanOutDiagnostics, FlushPart, NoDiagnostics,
+    StderrDiagnostics,
 };
+use crate::types::{FlushDomain, IoTargetKey};
 
 /// A sink that keeps each event it is given, as text, and wants only what it was told to.
 #[derive(Default)]
@@ -79,6 +82,90 @@ fn an_event_is_of_its_kind() {
         detail: format_args!(""),
     };
     assert_eq!(event.kind(), DiagnosticKind::Inconsistency);
+}
+
+#[test]
+fn each_delay_event_is_of_its_kind() {
+    let issued = Diagnostic::FlushIssued {
+        instance: 1,
+        lineage: 0,
+        through: format_args!("3"),
+        files: 1,
+        domains: 0,
+    };
+    let answered = Diagnostic::FlushAnswered {
+        instance: 1,
+        lineage: 0,
+        through: format_args!("3"),
+        part: FlushPart::File(IoTargetKey(2)),
+        elapsed: Duration::from_nanos(4),
+        succeeded: true,
+    };
+    let waited = Diagnostic::SealWaited {
+        instance: 1,
+        lineage: 0,
+        through: format_args!("3"),
+        waited: Duration::from_nanos(5),
+    };
+    let lock = Diagnostic::LockWait {
+        instance: 1,
+        lock: "engine",
+        waited: Duration::from_nanos(6),
+    };
+    assert_eq!(issued.kind(), DiagnosticKind::FlushIssued);
+    assert_eq!(answered.kind(), DiagnosticKind::FlushAnswered);
+    assert_eq!(waited.kind(), DiagnosticKind::SealWaited);
+    assert_eq!(lock.kind(), DiagnosticKind::LockWait);
+}
+
+#[test]
+fn a_flush_answer_names_its_part_its_outcome_and_its_time() {
+    let file = Diagnostic::FlushAnswered {
+        instance: 2,
+        lineage: 1,
+        through: format_args!("9"),
+        part: FlushPart::File(IoTargetKey(7)),
+        elapsed: Duration::from_nanos(15),
+        succeeded: false,
+    };
+    assert_eq!(
+        file.to_string(),
+        "instance 2 lineage 1 seal through 9: flush of file 7 failed after 15ns"
+    );
+    let domain = FlushDomain::new(b"ssd".to_vec());
+    let part = Diagnostic::FlushAnswered {
+        instance: 2,
+        lineage: 1,
+        through: format_args!("9"),
+        part: FlushPart::Domain(&domain),
+        elapsed: Duration::from_nanos(1),
+        succeeded: true,
+    };
+    assert_eq!(
+        part.to_string(),
+        "instance 2 lineage 1 seal through 9: flush of domain \"ssd\" succeeded after 1ns"
+    );
+}
+
+#[test]
+fn a_domain_whose_name_is_not_text_is_shown_with_the_replacement_character() {
+    let domain = FlushDomain::new(vec![0xff, b'a']);
+    assert_eq!(
+        FlushPart::Domain(&domain).to_string(),
+        "domain \"\u{fffd}a\""
+    );
+}
+
+#[test]
+fn stderr_diagnostics_wants_every_delay_kind() {
+    for kind in [
+        DiagnosticKind::LockWait,
+        DiagnosticKind::FlushIssued,
+        DiagnosticKind::FlushAnswered,
+        DiagnosticKind::SealWaited,
+    ] {
+        assert!(StderrDiagnostics.wants(kind), "{kind:?}");
+    }
 }
 
 #[test]

@@ -25,6 +25,7 @@ mod ids;
 mod io_core;
 mod io_target;
 mod key;
+mod lock_watch;
 pub mod memory;
 pub mod oracle;
 mod provider;

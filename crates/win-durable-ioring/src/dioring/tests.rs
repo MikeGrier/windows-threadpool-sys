@@ -49,6 +49,8 @@ mod raw_volume;
 mod unbuffered;
 // A typed key at registration and at construction: DI-13.10.
 mod keys;
+// The delay events through the driver: DI-12.1.1.
+mod delays;
 
 type Ring = Dioring<Vec<u8>>;
 type V = crate::WindowsIds<u64>;
@@ -95,6 +97,14 @@ impl StampClock for MockClock {
 
     fn now(&self) -> TimePoint<InterruptTime> {
         TimePoint::from_ticks(self.0.load(Ordering::SeqCst))
+    }
+
+    fn elapsed(
+        &self,
+        earlier: TimePoint<InterruptTime>,
+        later: TimePoint<InterruptTime>,
+    ) -> std::time::Duration {
+        super::elapsed(earlier, later)
     }
 }
 

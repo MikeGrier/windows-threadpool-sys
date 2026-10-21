@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
-use win_time_sys::{Clock, InterruptClock, InterruptTime, Steady, TimePoint};
+use win_time_sys::{Clock, InterruptClock, InterruptTime, Steady, Ticks, TimePoint};
 use windows_ioring_sys::{
     Batch, Completion, IoBuf, IoBufMut, IoRing, PushRefused, RegisteredBuffers, RegisteredFiles,
     RegisteredSpan,
@@ -48,6 +48,7 @@ use durable_ioring::IoTarget;
 use durable_ioring::StampClock;
 use durable_ioring::backend::{IoBackend, RegisteredRegion, SubmissionData};
 use durable_ioring::driver::Home;
+use durable_ioring::driver::LockWatch;
 use durable_ioring::driver::PumpedDelivery;
 use durable_ioring::driver::first_repeat;
 use durable_ioring::driver::{Answer, DomainCall};
@@ -105,6 +106,19 @@ impl StampClock for InterruptStamps {
     fn now(&self) -> WinInstant {
         Clock::now(&InterruptClock)
     }
+
+    fn elapsed(&self, earlier: WinInstant, later: WinInstant) -> Duration {
+        elapsed(earlier, later)
+    }
+}
+
+/// How long it was from `earlier` to `later`, in interrupt time: zero when `later` is not after
+/// `earlier`, or the span is not one a [`Duration`] holds.
+pub(crate) fn elapsed(earlier: WinInstant, later: WinInstant) -> Duration {
+    later
+        .checked_since(earlier)
+        .and_then(Ticks::to_duration)
+        .unwrap_or(Duration::ZERO)
 }
 
 /// A `win-time-sys` clock on interrupt time, given to dioring as the clock it stamps with: the
@@ -119,6 +133,10 @@ impl<K: Clock<Timeline = InterruptTime> + Steady + Send + 'static> StampClock fo
 
     fn now(&self) -> WinInstant {
         Clock::now(&self.0)
+    }
+
+    fn elapsed(&self, earlier: WinInstant, later: WinInstant) -> Duration {
+        elapsed(earlier, later)
     }
 }
 
@@ -440,6 +458,13 @@ where
         };
 
         let default_lineage = core.default_lineage();
+        // Lock waits are timed in interrupt time whatever the instance stamps with: it is the
+        // time base the driver reports in (DI-D-37).
+        let watch = LockWatch::new(
+            default_lineage.instance.number(),
+            Arc::clone(&diagnostics),
+            Arc::new(InterruptStamps),
+        );
         let on_ready = move || {
             // Setting an event this instance created, with full access, does not fail.
             let set = ready.set();
@@ -448,13 +473,15 @@ where
         let engine = Engine::new(core, backend);
         let delivered = match delivery {
             DeliveryMode::Pool(environment) => {
-                PoolDelivery::new(engine, on_ready, environment).map(Delivery::Pool)
+                PoolDelivery::new(engine, on_ready, environment, watch.clone()).map(Delivery::Pool)
             }
             // Nothing sets the signal the pool's wake would: entries are made poppable by the
             // pump, which sets the readiness event itself, as every other path does.
-            DeliveryMode::Pumped => PumpedDelivery::new(engine).map(Delivery::Pumped),
+            DeliveryMode::Pumped => PumpedDelivery::new(engine)
+                .map(|pumped| pumped.with_lock_watch(watch.clone()))
+                .map(Delivery::Pumped),
             DeliveryMode::Signalled(environment) => {
-                SignalledDelivery::new(engine, environment).map(Delivery::Signalled)
+                SignalledDelivery::new(engine, environment, watch.clone()).map(Delivery::Signalled)
             }
         };
         let delivery = match delivered {
@@ -484,6 +511,7 @@ where
             readiness,
             default_lineage.instance,
             diagnostics,
+            watch,
         ));
         let default = LineageHandle::mint(default_lineage, home(&hub));
         let handle = default.clone();

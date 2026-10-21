@@ -28,7 +28,7 @@ use durable_ioring::StampClock;
 use super::CompletionEvent;
 use durable_ioring::EpochId;
 use durable_ioring::driver::EngineGuard;
-use durable_ioring::driver::{Pumped, PumpedDelivery};
+use durable_ioring::driver::{LockWatch, Pumped, PumpedDelivery};
 
 /// A failed construction: why, and the engine it was given.
 pub(crate) type SignalledSetup<E, B, C, K, R> =
@@ -70,6 +70,7 @@ where
     pub(crate) fn new(
         mut engine: PoolEngine<E, B, C, K, R>,
         env: Option<&mut CallbackEnviron<'_>>,
+        watch: LockWatch,
     ) -> SignalledSetup<E, B, C, K, R> {
         let made = Event::new(ResetMode::Auto, false).and_then(|signal| {
             let waker = signal.clone();
@@ -93,7 +94,7 @@ where
         };
         Ok(Self {
             wake,
-            pumped: PumpedDelivery::with_notification(engine, notification),
+            pumped: PumpedDelivery::with_notification(engine, notification).with_lock_watch(watch),
             signal,
         })
     }

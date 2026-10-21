@@ -793,15 +793,15 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The delivery chosen at construction is the one the instance has: a pool drains an instance nothing is meant to drain.",
-      "find": ["            DeliveryMode::Pumped => PumpedDelivery::new(engine).map(Delivery::Pumped),"],
-      "replace": ["            DeliveryMode::Pumped => PoolDelivery::new(engine, on_ready, None).map(Delivery::Pool),"]
+      "find": ["            DeliveryMode::Pumped => PumpedDelivery::new(engine)\n                .map(|pumped| pumped.with_lock_watch(watch.clone()))\n                .map(Delivery::Pumped),"],
+      "replace": ["            DeliveryMode::Pumped => PoolDelivery::new(engine, on_ready, None, watch.clone()).map(Delivery::Pool),"]
     },
     {
       "name": "DI-7.3: an instance set up with a pool is built for pumping",
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The other direction: an instance given a pool that nothing drains delivers nothing, to every consumer that waits for its readiness.",
-      "find": ["                PoolDelivery::new(engine, on_ready, environment).map(Delivery::Pool)"],
+      "find": ["                PoolDelivery::new(engine, on_ready, environment, watch.clone()).map(Delivery::Pool)"],
       "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
     },
     {
@@ -833,7 +833,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The delivery chosen at construction is the one the instance has: a pumped instance has no pool wake, so nothing sets a signal for the consumer.",
-      "find": ["                SignalledDelivery::new(engine, environment).map(Delivery::Signalled)"],
+      "find": ["                SignalledDelivery::new(engine, environment, watch.clone()).map(Delivery::Signalled)"],
       "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
     },
     {
@@ -2029,6 +2029,30 @@
       "why": "A control: the same refinement through a differently named binding, which no test can tell apart.",
       "find": ["        let handle = self.request.perform().map_err(|error| {\n            refine_sharing_by(\n                error.to_io_error(),"],
       "replace": ["        let handle = self.request.perform().map_err(|failure| {\n            refine_sharing_by(\n                failure.to_io_error(),"]
+    },
+    {
+      "name": "DI-12.1.1: a pool delivery's consumer calls lock the engine unwatched",
+      "file": "src/windows_backend/pool.rs",
+      "expect": "caught",
+      "why": "The engine's lock is timed on every path that takes it, so a wait for it on a consumer's call is reported.",
+      "find": ["        present_watched(self.watch.lock(&self.engine, ENGINE_LOCK))"],
+      "replace": ["        present(lock(&self.engine))"]
+    },
+    {
+      "name": "DI-12.1.1: the hub locks the engine unwatched",
+      "file": "src/dioring/hub.rs",
+      "expect": "caught",
+      "why": "A lineage handle's release, and a provider's answer, take the engine's lock through the hub, and a wait there is as much a delay as a consumer's.",
+      "find": ["        let deliver = self\n            .watch\n            .lock(&self.engine, ENGINE_LOCK)\n            .as_mut()\n            .is_some_and(act);"],
+      "replace": ["        let deliver = lock(&self.engine).as_mut().is_some_and(act);"]
+    },
+    {
+      "name": "DI-12.1.1: a pumped delivery is given no lock watch",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A pumped instance's consumer calls and its pump take the engine's lock through the delivery, which reports only if it was given the watch.",
+      "find": ["                .map(|pumped| pumped.with_lock_watch(watch.clone()))"],
+      "replace": ["                .map(|pumped| pumped)"]
     }
   ]
 }

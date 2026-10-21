@@ -47,8 +47,19 @@ fn call<'a>(due: &'a Due<u64, &'static str, Stamp>) -> &'a ProviderCall {
     &due.calls[0]
 }
 
+/// The name the consumer gave domain `id`, which the core reports in a delay event.
+fn name(id: u32) -> crate::types::FlushDomain {
+    crate::types::FlushDomain::new(format!("domain-{id}").into_bytes())
+}
+
 fn succeeded(lineage: &mut Lineage, seal: u64, domain: u32) -> Due<u64, &'static str, Stamp> {
-    lineage.provided(DEFAULT_LINEAGE, seal, DomainId(domain), Ok(()))
+    lineage.provided(
+        DEFAULT_LINEAGE,
+        seal,
+        DomainId(domain),
+        &name(domain),
+        Ok(()),
+    )
 }
 
 fn provider_failure(domain: u32) -> FailureCause<V<u64, Stamp>> {
@@ -63,6 +74,7 @@ fn failed(lineage: &mut Lineage, seal: u64, domain: u32) -> Due<u64, &'static st
         DEFAULT_LINEAGE,
         seal,
         DomainId(domain),
+        &name(domain),
         Err(provider_failure(domain)),
     )
 }
@@ -290,7 +302,7 @@ fn a_completion_dropped_unanswered_is_a_failure_of_its_domain() {
     let abandoned = FailureCause::ProviderAbandoned {
         domain: FlushDomain::new(*b"one"),
     };
-    let due = lineage.provided(DEFAULT_LINEAGE, seal, DomainId(1), Err(abandoned));
+    let due = lineage.provided(DEFAULT_LINEAGE, seal, DomainId(1), &name(1), Err(abandoned));
     assert_eq!(seen(&due), [Seen::Failed(0, vec![write.seq])]);
     assert!(matches!(
         &lineage.failures()[0].cause,
@@ -310,10 +322,10 @@ fn a_minted_lineages_seal_asks_with_its_own_key() {
     let asked = call(&submitted(lineage.0.seal(minted, 1))).clone();
     assert_eq!(asked.lineage, minted);
     inconsistent("a provider answered for a seal that does not exist", || {
-        lineage.provided(DEFAULT_LINEAGE, asked.seal, DomainId(1), Ok(()))
+        lineage.provided(DEFAULT_LINEAGE, asked.seal, DomainId(1), &name(1), Ok(()))
     });
     assert_eq!(
-        seen(&lineage.provided(minted, asked.seal, DomainId(1), Ok(()))),
+        seen(&lineage.provided(minted, asked.seal, DomainId(1), &name(1), Ok(()))),
         [Seen::DurableIn(minted, 1)]
     );
 }
@@ -332,7 +344,13 @@ fn an_answer_for_a_lineage_that_has_ended_reports_nothing() {
     ops.push_to(&mut lineage, minted, 2, A, PROVIDER, &[1]);
     lineage.end(minted);
     let failure = Err(provider_failure(1));
-    assert!(quiet(&lineage.provided(minted, seal, DomainId(1), failure)));
+    assert!(quiet(&lineage.provided(
+        minted,
+        seal,
+        DomainId(1),
+        &name(1),
+        failure
+    )));
     assert!(
         lineage.failures().is_empty(),
         "an ended lineage's answer is not observed: it is late, not inconsistent"

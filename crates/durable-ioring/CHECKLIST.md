@@ -23,17 +23,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
   - **The time base** is interrupt time, dioring's one ([DI-D-37](DESIGN-NOTES.md#di-d-37)).
   - **The provider** is `win-dioring`, in a crate of its own, and records whether or not its manifest is installed.
 
-- [ ] **DI-12.1.1** -- **The delay events in the portable core.** New `DiagnosticKind` and `Diagnostic` variants
-  (both are `#[non_exhaustive]`), reported to the instance's sink and built only when the sink `wants` the kind, with
-  no clock read before that answer. *Lock waits* follow the engineer's pattern ([DI-D-26](DESIGN-NOTES.md#di-d-26)):
-  try-lock; only if that fails, read the clock, block, and on acquiring record the wait; emit after releasing, so the
-  event does not lengthen the hold it measures; one wrapper type, a name per lock, poisoning handled separately.
-  *Flushes* are timed at the durability-provider boundary: the call issued, and each domain's outcome with how long
-  it took, so an event names the slow domain. *A seal's other phases*, waiting for covered writes and for gated writes
-  to be released, are the secondary events the engineer allowed. How the generic epoch id is rendered is settled in
-  this step and recorded. `StderrDiagnostics` prints each. Tests: each event with a recording sink, the lock-wait
-  pattern by an uncontended lock (no event, no clock read) and a contended one, and a sink that wants nothing costing
-  no clock read.
+- [x] **DI-12.1.1** -- The delay events are in the portable core: lock waits, flush issue and answer, and a seal's wait, built only for a sink that wants them. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1211)
 
 - [ ] **DI-12.1.2** -- **Create `win-debugging-sys`, with `OutputDebugStringW`.** The name is the engineer's,
   2026-10-20 ("how about win-debugging-sys?"). The crate's notes record, at creation, the naming decision with that

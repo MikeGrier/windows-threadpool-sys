@@ -41,6 +41,8 @@ mod gates;
 mod providers;
 // What holds a file, for `remove_target`: DI-3.2.7.
 mod files;
+// The delay events: DI-12.1.1.
+mod delays;
 
 /// The core, answering for its default lineage: the one every test here exercises unless it mints
 /// another. Every other method is the core's own, through `Deref`.
@@ -62,11 +64,12 @@ impl<K> DerefMut for One<K> {
 
 impl<K: StampClocked> One<K> {
     fn with_clock(clock: K) -> Self {
-        Self(Durability::new(
-            InstanceId::next(),
-            clock,
-            Arc::new(NoDiagnostics),
-        ))
+        Self::reporting(clock, Arc::new(NoDiagnostics))
+    }
+
+    /// A core reporting to `sink`.
+    fn reporting(clock: K, sink: Arc<dyn crate::diagnostics::DiagnosticSink>) -> Self {
+        Self(Durability::new(InstanceId::next(), clock, sink))
     }
 
     fn sealed_through(&self) -> Option<u64> {

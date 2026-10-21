@@ -23,8 +23,8 @@ use durable_ioring::EpochId;
 use durable_ioring::Lineage;
 use durable_ioring::StampClock;
 use durable_ioring::driver::inconsistent;
-use durable_ioring::driver::lock;
 use durable_ioring::driver::{Answer, DomainCall};
+use durable_ioring::driver::{ENGINE_LOCK, LockWatch, lock};
 use durable_ioring::driver::{Home, InstanceId};
 
 /// What an instance shares with its paths off the consumer's thread.
@@ -42,6 +42,8 @@ where
     /// The instance, for what an inconsistency names.
     instance: InstanceId,
     diagnostics: Arc<dyn DiagnosticSink>,
+    /// Times the waits for `engine`'s lock.
+    watch: LockWatch,
     /// Provider completions made and not yet answered, dropped ones included.
     unanswered: Mutex<usize>,
     /// Notified when the last unanswered completion is answered.
@@ -61,12 +63,14 @@ where
         readiness: Event,
         instance: InstanceId,
         diagnostics: Arc<dyn DiagnosticSink>,
+        watch: LockWatch,
     ) -> Self {
         Self {
             engine,
             readiness,
             instance,
             diagnostics,
+            watch,
             unanswered: Mutex::new(0),
             answered: Condvar::new(),
         }
@@ -106,7 +110,11 @@ where
     /// Act on the engine, if the instance has not ended, and signal if that made entries
     /// poppable.
     fn reach(&self, act: impl FnOnce(&mut PoolEngine<E, B, C, K, R>) -> bool) {
-        let deliver = lock(&self.engine).as_mut().is_some_and(act);
+        let deliver = self
+            .watch
+            .lock(&self.engine, ENGINE_LOCK)
+            .as_mut()
+            .is_some_and(act);
         if deliver {
             self.signal();
         }
