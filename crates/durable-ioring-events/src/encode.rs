@@ -1,8 +1,6 @@
 // Copyright (c) 2026 Mike Grier
 //! What is written to an event, from an event of durable-ioring, and the write of it (DE-D-2).
 
-use std::time::Duration;
-
 use durable_ioring::{Diagnostic, FlushPart};
 use win_etw_sys::Field;
 
@@ -59,20 +57,40 @@ impl Value {
 pub fn schema_of(event: &Diagnostic<'_>) -> Option<&'static EventSchema> {
     let wanted = match event {
         Diagnostic::Inconsistency { .. } => id::INCONSISTENCY,
-        Diagnostic::LockWait { .. } => id::LOCK_WAIT,
-        Diagnostic::FlushIssued { .. } => id::FLUSH_ISSUED,
-        Diagnostic::FlushAnswered {
-            part: FlushPart::File(_),
-            ..
-        } => id::FLUSH_ANSWERED_FILE,
-        Diagnostic::FlushAnswered {
-            part: FlushPart::Domain(_),
-            ..
-        } => id::FLUSH_ANSWERED_DOMAIN,
-        Diagnostic::SealWaited { .. } => id::SEAL_WAITED,
+        Diagnostic::SealBegan { .. } => id::SEAL_BEGAN,
+        Diagnostic::SealEnded { .. } => id::SEAL_ENDED,
+        Diagnostic::FlushBegan { part, .. } => match part {
+            FlushPart::File(_) => id::FLUSH_BEGAN_FILE,
+            FlushPart::Domain(_) => id::FLUSH_BEGAN_DOMAIN,
+            _ => return None,
+        },
+        Diagnostic::FlushEnded { part, .. } => match part {
+            FlushPart::File(_) => id::FLUSH_ENDED_FILE,
+            FlushPart::Domain(_) => id::FLUSH_ENDED_DOMAIN,
+            _ => return None,
+        },
+        Diagnostic::LockWaitBegan { .. } => id::LOCK_WAIT_BEGAN,
+        Diagnostic::LockWaitEnded { .. } => id::LOCK_WAIT_ENDED,
         _ => return None,
     };
     EVENTS.iter().find(|schema| schema.id == wanted)
+}
+
+/// The values of a flush part's columns: a file's key, or a domain's length and bytes.
+fn part_values(part: &FlushPart<'_>) -> Option<Vec<Value>> {
+    Some(match part {
+        FlushPart::File(key) => vec![Value::UInt64(key.0)],
+        FlushPart::Domain(domain) => {
+            let bytes = domain.bytes();
+            // A length that does not fit the column cuts the bytes to what it can say, so the two agree.
+            let kept = &bytes[..bytes.len().min(u32::MAX as usize)];
+            vec![
+                Value::UInt32(kept.len() as u32),
+                Value::Bytes(kept.to_vec()),
+            ]
+        }
+        _ => return None,
+    })
 }
 
 /// The values of an event's fields, in the order of the schema's columns, or `None` for an event this crate does not know.
@@ -82,9 +100,6 @@ pub fn schema_of(event: &Diagnostic<'_>) -> Option<&'static EventSchema> {
 #[must_use]
 pub fn encode(event: &Diagnostic<'_>) -> Option<Vec<Value>> {
     let units = |text: &str| Value::Text(text.encode_utf16().collect());
-    let nanos =
-        |duration: Duration| Value::UInt64(u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX));
-    let count = |n: usize| Value::UInt64(n as u64);
     Some(match event {
         Diagnostic::Inconsistency {
             instance,
@@ -95,63 +110,72 @@ pub fn encode(event: &Diagnostic<'_>) -> Option<Vec<Value>> {
             units(what),
             units(&detail.to_string()),
         ],
-        Diagnostic::LockWait {
-            instance,
-            lock,
-            waited,
-        } => vec![Value::UInt64(*instance), units(lock), nanos(*waited)],
-        Diagnostic::FlushIssued {
+        Diagnostic::SealBegan {
             instance,
             lineage,
             through,
-            files,
-            domains,
+            id,
         } => vec![
             Value::UInt64(*instance),
             Value::UInt64(*lineage),
             units(&through.to_string()),
-            count(*files),
-            count(*domains),
+            Value::UInt64(id.get()),
         ],
-        Diagnostic::FlushAnswered {
+        Diagnostic::SealEnded {
+            instance,
+            lineage,
+            through,
+            id,
+            outcome,
+        } => vec![
+            Value::UInt64(*instance),
+            Value::UInt64(*lineage),
+            units(&through.to_string()),
+            Value::UInt64(id.get()),
+            units(&outcome.to_string()),
+        ],
+        Diagnostic::FlushBegan {
             instance,
             lineage,
             through,
             part,
-            elapsed,
-            succeeded,
+            id,
         } => {
             let mut values = vec![
                 Value::UInt64(*instance),
                 Value::UInt64(*lineage),
                 units(&through.to_string()),
             ];
-            match part {
-                FlushPart::File(key) => values.push(Value::UInt64(key.0)),
-                FlushPart::Domain(domain) => {
-                    let bytes = domain.bytes();
-                    // A length that does not fit the column cuts the bytes to what it can say, so the two agree.
-                    let kept = &bytes[..bytes.len().min(u32::MAX as usize)];
-                    values.push(Value::UInt32(kept.len() as u32));
-                    values.push(Value::Bytes(kept.to_vec()));
-                }
-                _ => return None,
-            }
-            values.push(nanos(*elapsed));
-            values.push(Value::Boolean(*succeeded));
+            values.extend(part_values(part)?);
+            values.push(Value::UInt64(id.get()));
             values
         }
-        Diagnostic::SealWaited {
+        Diagnostic::FlushEnded {
             instance,
             lineage,
             through,
-            waited,
-        } => vec![
-            Value::UInt64(*instance),
-            Value::UInt64(*lineage),
-            units(&through.to_string()),
-            nanos(*waited),
-        ],
+            part,
+            id,
+            outcome,
+        } => {
+            let mut values = vec![
+                Value::UInt64(*instance),
+                Value::UInt64(*lineage),
+                units(&through.to_string()),
+            ];
+            values.extend(part_values(part)?);
+            values.push(Value::UInt64(id.get()));
+            values.push(units(&outcome.to_string()));
+            values
+        }
+        Diagnostic::LockWaitBegan { instance, lock, id }
+        | Diagnostic::LockWaitEnded { instance, lock, id } => {
+            vec![
+                Value::UInt64(*instance),
+                units(lock),
+                Value::UInt64(id.get()),
+            ]
+        }
         _ => return None,
     })
 }

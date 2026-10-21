@@ -1628,3 +1628,23 @@ The choices [DI-19.2.3](COMPLETED-CHECKLIST.md#di-1923) left to its implementati
 
 **Scheduled work.** None beyond [DI-19.2.4](CHECKLIST.md) and `DI-19.2.5`.
 
+## <a id="di-d-91"></a>DI-D-91: the old delay events and the core's timing are gone, and the driver's lock-wait tests bind to the checker
+
+The choices [DI-19.2.4](COMPLETED-CHECKLIST.md#di-1924) left to its implementation, made by the assistant under
+[DI-D-87](#di-d-87) and open to a ruling.
+
+- **Removed**: `Diagnostic::FlushIssued`, `FlushAnswered`, `SealWaited` and the old `LockWait`, their kinds, the stamps the
+  durability state kept to time them, `StampClock::elapsed`, and the lock watch's `LockTimer`. The kinds are `Inconsistency`,
+  `Seal`, `Flush` and `LockWait`. The durability state's provider answer no longer takes the domain's name, which only the
+  old event used. This is a major change to `durable-ioring`.
+- **The lock watch is a sink and an instance number.** A wait is one `try_lock`; when it fails, one `for_pair` decides
+  whether the pair is written, and with it the begin is written before blocking and the end with the lock taken, as
+  [DI-D-90](#di-d-90) placed them. Nothing reads a clock.
+- **The driver's lock-wait tests bind to `PairingChecker`**: their sink passes every event to it, and records each edge with
+  the thread that wrote it. A test asserts that its own thread wrote a begin and then an end, and does not finish the whole
+  stream, because the pool's own thread may still be inside a wait of its own when the test's ends, which would make a finish
+  race. The checker still holds every event it is given, so an end that names another pair is caught there and nowhere else,
+  which a sabotage in the driver's manifest shows.
+- **The ETW provider's schema follows** ([DE-D-5](../durable-ioring-events/DESIGN-NOTES.md#de-d-5)).
+
+**Scheduled work.** None beyond [DI-19.2.5](CHECKLIST.md).

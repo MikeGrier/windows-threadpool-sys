@@ -12,12 +12,12 @@
       "replace": ["pub const PROVIDER_ID: Guid = Guid::from_u128(0x4706_7f6f_8f2b_4278_9b92_092d_fb33_85e7);\n"]
     },
     {
-      "name": "DE-D-2: the lock wait's id is changed",
+      "name": "DE-D-5: the lock wait's begin takes a retired id",
       "file": "src/schema.rs",
       "expect": "caught",
-      "why": "A reader decodes by an event's id, so each is pinned, and none may share another's.",
-      "find": ["    pub const LOCK_WAIT: u16 = 2;\n"],
-      "replace": ["    pub const LOCK_WAIT: u16 = 3;\n"]
+      "why": "A reader decodes by an event's id, so each is pinned; the ids the delay events had are retired and are not given again, or an old trace decodes as the wrong event.",
+      "find": ["    pub const LOCK_WAIT_BEGAN: u16 = 13;\n"],
+      "replace": ["    pub const LOCK_WAIT_BEGAN: u16 = 3;\n"]
     },
     {
       "name": "DE-D-2: two keywords share a bit",
@@ -28,28 +28,28 @@
       "replace": ["    mask: 0x2,\n"]
     },
     {
-      "name": "DE-D-2: a lock wait is written with no time",
+      "name": "DE-D-5: a lock wait's pair is written as zero",
       "file": "src/encode.rs",
       "expect": "caught",
-      "why": "The time a wait took is the event's whole purpose.",
-      "find": ["        } => vec![Value::UInt64(*instance), units(lock), nanos(*waited)],\n"],
-      "replace": ["        } => vec![Value::UInt64(*instance), units(lock), Value::UInt64(0)],\n"]
+      "why": "The pair id is what a reader joins a begin to its end by, so a wait written without it cannot be paired.",
+      "find": ["                Value::UInt64(id.get()),\n"],
+      "replace": ["                Value::UInt64(0),\n"]
     },
     {
       "name": "DE-D-2: a domain's length is written as zero",
       "file": "src/encode.rs",
       "expect": "caught",
       "why": "The length is what a reader takes the domain's bytes by, so a length that does not match them misreads every field after.",
-      "find": ["                    values.push(Value::UInt32(kept.len() as u32));\n"],
-      "replace": ["                    values.push(Value::UInt32(0));\n"]
+      "find": ["                Value::UInt32(kept.len() as u32),\n"],
+      "replace": ["                Value::UInt32(0),\n"]
     },
     {
-      "name": "DE-D-2: whether a flush succeeded is reported backwards",
+      "name": "DE-D-5: every flush's end is written as succeeded",
       "file": "src/encode.rs",
       "expect": "caught",
-      "why": "A failed flush reported as a success hides the failure the event exists to show.",
-      "find": ["            values.push(Value::Boolean(*succeeded));\n"],
-      "replace": ["            values.push(Value::Boolean(!*succeeded));\n"]
+      "why": "A failed or abandoned flush reported as a success hides what the end exists to show.",
+      "find": ["            values.push(units(&outcome.to_string()));\n"],
+      "replace": ["            values.push(units(\"succeeded\"));\n"]
     },
     {
       "name": "DE-D-2: text is cut to its first unit",
@@ -84,12 +84,36 @@
       "replace": ["    if let Some(registration) = None::<Arc<Registration>> {\n"]
     },
     {
-      "name": "DE-D-2 control: a count is converted by another spelling that gives the same value",
+      "name": "DE-D-2 control: a domain's kept length is bounded by another spelling of the same bound",
       "file": "src/encode.rs",
       "expect": "survives",
-      "why": "A control: the same value by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
-      "find": ["    let count = |n: usize| Value::UInt64(n as u64);\n"],
-      "replace": ["    let count = |n: usize| Value::UInt64(u64::try_from(n).unwrap_or(u64::MAX));\n"]
+      "why": "A control: the same bound by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["            let kept = &bytes[..bytes.len().min(u32::MAX as usize)];\n"],
+      "replace": ["            let kept = &bytes[..bytes.len().min(usize::try_from(u32::MAX).unwrap_or(usize::MAX))];\n"]
+    },
+    {
+      "name": "DE-D-5: a pair's end is written as a start",
+      "file": "src/schema.rs",
+      "expect": "caught",
+      "why": "A reader pairs a begin with its end by the Start and Stop opcodes; an end written as a start opens a second activity that never closes.",
+      "find": ["        Some(Edge::End) => opcode::STOP,\n"],
+      "replace": ["        Some(Edge::End) => opcode::START,\n"]
+    },
+    {
+      "name": "DE-D-5: the flush task takes the seal task's value",
+      "file": "src/schema.rs",
+      "expect": "caught",
+      "why": "A reader groups a pair's events by task, so two kinds of pair under one task value are read as one.",
+      "find": ["    value: 2,\n"],
+      "replace": ["    value: 1,\n"]
+    },
+    {
+      "name": "DE-D-5: the manifest names a stop as a start",
+      "file": "src/manifest.rs",
+      "expect": "caught",
+      "why": "The manifest is rendered from the table, and an opcode it names wrong disagrees with the descriptor the sink writes.",
+      "find": ["        opcode::STOP => \"win:Stop\",\n"],
+      "replace": ["        opcode::STOP => \"win:Start\",\n"]
     }
   ]
 }

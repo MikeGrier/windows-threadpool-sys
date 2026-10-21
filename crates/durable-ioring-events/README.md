@@ -10,8 +10,11 @@ describes them, and `EtwDiagnostics`, a diagnostic sink that writes each event t
   gives the registration back when the last sink is dropped.
 - It records whether or not the provider's manifest is installed. **A reader needs the manifest**, to see an event's name and
   its fields and not only its bytes; the application that writes the events does not.
-- `EVENTS` is each event as data: its id, name, level, keyword and fields with their types, and `manifest()` renders the
-  manifest from it, so the two cannot disagree. The manifest is kept with the crate as `durable-ioring-events.man`, and a test
+- `EVENTS` is each event as data: its id, name, level, keyword, task, opcode and fields with their types, and `manifest()`
+  renders the manifest from it, so the two cannot disagree.
+- durable-ioring's begin and end events are written as pairs: a begin with the `win:Start` opcode and its end with
+  `win:Stop`, under a task for each kind -- a seal, a flush, a lock wait -- and both carrying the pair's id. A wait's length
+  is the gap between the two records' timestamps. The manifest is kept with the crate as `durable-ioring-events.man`, and a test
   holds the file equal to what is rendered.
 
 ```rust
@@ -42,4 +45,5 @@ uninstalls it. An event's fields are written in the order the manifest gives, wi
 first zero unit, so a zero in a message cuts it short for a reader.
 
 See [DE-D-1](DESIGN-NOTES.md#de-d-1) for the name and the GUID, [DE-D-2](DESIGN-NOTES.md#de-d-2) for the events,
-[DE-D-3](DESIGN-NOTES.md#de-d-3) for the manifest and [DE-D-4](DESIGN-NOTES.md#de-d-4) for the sink.
+[DE-D-3](DESIGN-NOTES.md#de-d-3) for the manifest, [DE-D-4](DESIGN-NOTES.md#de-d-4) for the sink and
+[DE-D-5](DESIGN-NOTES.md#de-d-5) for the pairs.

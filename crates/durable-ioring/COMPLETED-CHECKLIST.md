@@ -4081,3 +4081,16 @@ Three test sinks -- `durable-ioring`'s pump tests and two in `win-durable-ioring
 pair's begin had made two of them hang, waiting for a signal the panicking thread never sent; a sweep's baseline found it.
 The choices are [DI-D-90](DESIGN-NOTES.md#di-d-90).
 
+## Moved 2026-10-21 19:51:07 -04:00 -- DI-19.2.4: the sinks follow the pairs and the old delay events go
+
+### <a id="di-1924"></a>DI-19.2.4 -- The sinks and the ETW provider's schema follow the pairs, with Start and Stop opcodes and a task for each kind, the driver's lock-wait tests bind to the checker, and the old delay events and the core's timing are gone. *(completed 2026-10-21 19:51:07 -04:00)*
+
+`Diagnostic::FlushIssued`, `FlushAnswered`, `SealWaited` and the old `LockWait` are removed with their kinds, and with them
+the durability state's stamps, `StampClock::elapsed` and `LockTimer`; this is the major change to `durable-ioring`. The
+standard-error and debugger lines carry each pair's id. `durable-ioring-events` writes the pairs as events 7 to 14 with
+`win:Start` and `win:Stop` opcodes and a task per kind, retires ids 2 to 6, renders and holds the manifest, and was verified
+as `DI-12.1.5` was: compiled, installed, traced and decoded by `tracerpt`, with the session tests run elevated. The driver's
+lock-wait tests pass every event to `PairingChecker`, and a sabotage in the driver's manifest shows an end naming another
+pair is caught there. Seven sabotages of the removed timing were deleted, the rest re-pointed, and the new claims swept with
+their controls. The choices are [DI-D-91](DESIGN-NOTES.md#di-d-91) and
+[DE-D-5](../durable-ioring-events/DESIGN-NOTES.md#de-d-5).

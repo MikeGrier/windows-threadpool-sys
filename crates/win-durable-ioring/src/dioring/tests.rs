@@ -100,14 +100,6 @@ impl StampClock for MockClock {
     fn now(&self) -> TimePoint<InterruptTime> {
         TimePoint::from_ticks(self.0.load(Ordering::SeqCst))
     }
-
-    fn elapsed(
-        &self,
-        earlier: TimePoint<InterruptTime>,
-        later: TimePoint<InterruptTime>,
-    ) -> std::time::Duration {
-        super::elapsed(earlier, later)
-    }
 }
 
 /// An instance given nothing.

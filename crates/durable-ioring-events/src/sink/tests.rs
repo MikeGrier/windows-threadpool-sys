@@ -2,24 +2,37 @@
 //! The sink with no session listening (DE-D-4): it wants nothing, builds nothing, and shares one registration. What it does for
 //! a session that is listening is `tests/session.rs`.
 
+use durable_ioring::{
+    CorrelationId, Diagnostic, DiagnosticKind, DiagnosticSink, FlushDomain, FlushOutcome,
+    FlushPart, IoTargetKey, SealOutcome,
+};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
-
-use durable_ioring::{
-    Diagnostic, DiagnosticKind, DiagnosticSink, FlushDomain, FlushPart, IoTargetKey,
-};
 
 use super::EtwDiagnostics;
 
-const KINDS: [DiagnosticKind; 5] = [
+const KINDS: [DiagnosticKind; 4] = [
     DiagnosticKind::Inconsistency,
     DiagnosticKind::LockWait,
-    DiagnosticKind::FlushIssued,
-    DiagnosticKind::FlushAnswered,
-    DiagnosticKind::SealWaited,
+    DiagnosticKind::Seal,
+    DiagnosticKind::Flush,
 ];
+
+/// A sink that wants every kind, to mint pair ids from: the ETW sink with no session wants none.
+struct Wanting;
+
+impl DiagnosticSink for Wanting {
+    fn wants(&self, _: DiagnosticKind) -> bool {
+        true
+    }
+
+    fn report(&self, _: &Diagnostic<'_>) {}
+}
+
+fn minted() -> CorrelationId {
+    CorrelationId::for_pair(&Wanting, DiagnosticKind::Seal).expect("wanted")
+}
 
 /// Counts how many times it is formatted: text that is built for an event that no one wants would show here.
 struct Counted(Arc<AtomicU32>);
@@ -57,18 +70,18 @@ fn with_no_session_reporting_builds_no_text_and_writes_nothing() {
         what: "x",
         detail: format_args!("{detail}"),
     });
-    sink.report(&Diagnostic::FlushIssued {
+    sink.report(&Diagnostic::SealBegan {
         instance: 1,
         lineage: 0,
         through: format_args!("{through}"),
-        files: 1,
-        domains: 0,
+        id: minted(),
     });
-    sink.report(&Diagnostic::SealWaited {
+    sink.report(&Diagnostic::FlushBegan {
         instance: 1,
         lineage: 0,
         through: format_args!("{through}"),
-        waited: Duration::ZERO,
+        part: FlushPart::File(IoTargetKey(1)),
+        id: minted(),
     });
     assert_eq!(
         formatted.load(Ordering::Relaxed),
@@ -81,26 +94,46 @@ fn with_no_session_reporting_builds_no_text_and_writes_nothing() {
 fn with_no_session_every_kind_of_event_is_reported_with_no_failure() {
     let sink = EtwDiagnostics::new();
     let domain = FlushDomain::new(b"d".to_vec());
-    sink.report(&Diagnostic::LockWait {
+    let id = minted();
+    sink.report(&Diagnostic::LockWaitBegan {
         instance: 1,
         lock: "engine",
-        waited: Duration::ZERO,
+        id,
     });
-    sink.report(&Diagnostic::FlushAnswered {
+    sink.report(&Diagnostic::LockWaitEnded {
+        instance: 1,
+        lock: "engine",
+        id,
+    });
+    sink.report(&Diagnostic::SealEnded {
+        instance: 1,
+        lineage: 0,
+        through: format_args!("1"),
+        id,
+        outcome: SealOutcome::Durable,
+    });
+    sink.report(&Diagnostic::FlushEnded {
         instance: 1,
         lineage: 0,
         through: format_args!("1"),
         part: FlushPart::File(IoTargetKey(1)),
-        elapsed: Duration::ZERO,
-        succeeded: true,
+        id,
+        outcome: FlushOutcome::Succeeded,
     });
-    sink.report(&Diagnostic::FlushAnswered {
+    sink.report(&Diagnostic::FlushBegan {
         instance: 1,
         lineage: 0,
         through: format_args!("1"),
         part: FlushPart::Domain(&domain),
-        elapsed: Duration::ZERO,
-        succeeded: false,
+        id,
+    });
+    sink.report(&Diagnostic::FlushEnded {
+        instance: 1,
+        lineage: 0,
+        through: format_args!("1"),
+        part: FlushPart::Domain(&domain),
+        id,
+        outcome: FlushOutcome::Failed,
     });
 }
 
@@ -125,10 +158,10 @@ fn a_sink_that_could_not_register_wants_nothing_and_writes_nothing() {
     for kind in KINDS {
         assert!(!sink.wants(kind));
     }
-    sink.report(&Diagnostic::LockWait {
+    sink.report(&Diagnostic::LockWaitBegan {
         instance: 1,
         lock: "engine",
-        waited: Duration::ZERO,
+        id: minted(),
     });
 }
 

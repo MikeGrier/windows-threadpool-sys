@@ -32,8 +32,10 @@ use as it stands or adapt ([DI-D-56](../durable-ioring/DESIGN-NOTES.md#di-d-56))
 
 ## Diagnostics
 
-An instance reports the delays it sees, a wait for one of its locks and a seal's flushes and how long each took, to a
-`DiagnosticSink` given in `Setup::diagnostics`. **Given none, it writes them to ETW**, to the provider
+An instance reports what it waits on as pairs of events, a begin and an end sharing an id -- a seal, from its being asked
+for to its answer; each flush of a file or a domain; and a wait for one of its locks -- and its inconsistencies, to a
+`DiagnosticSink` given in `Setup::diagnostics`. How long each took is the gap between its begin and its end, which the reader
+measures; the instance times nothing. **Given none, it writes them to ETW**, to the provider
 `durable-ioring-events` ([durable-ioring-events](../durable-ioring-events/README.md)), through `EtwDiagnostics`. That costs a
 test of whether a session is listening when none is, and no event is built; the first such instance registers the provider
 for the process, and the last gives it back. Any other sink is given in its place: `NoDiagnostics` for none, `StderrDiagnostics`

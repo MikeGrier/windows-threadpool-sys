@@ -54,18 +54,16 @@ fn a_chosen_sink_receives_the_instances_events_in_place_of_the_default() {
     harness.finish();
 
     let lines = sink.0.lock().expect("the record").clone();
-    assert!(
+    // Pair ids are minted per process, so each event is found by its shape around one.
+    let found = |before: &str, after: &str| {
         lines
             .iter()
-            .any(|line| line.contains("issued flushes of 1 files and 0 domains")),
-        "{lines:?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("flush of file 2 succeeded after")),
-        "{lines:?}"
-    );
+            .any(|line| line.contains(before) && line.ends_with(after))
+    };
+    assert!(found("seal through 1 (pair ", "): began"), "{lines:?}");
+    assert!(found("flush of file 2 (pair ", ") began"), "{lines:?}");
+    assert!(found("flush of file 2 (pair ", ") succeeded"), "{lines:?}");
+    assert!(found("seal through 1 (pair ", "): durable"), "{lines:?}");
     let me = instance_named_by(&lines);
     assert!(
         lines
@@ -132,7 +130,7 @@ fn an_instance_with_no_chosen_sink_writes_its_events_to_etw() {
     // Other tests of this process share the provider's registration, which may have been made before the session was
     // enabled, so the session's arrival is waited for.
     let probe = EtwDiagnostics::new();
-    assert!(becomes(|| probe.wants(DiagnosticKind::FlushIssued)));
+    assert!(becomes(|| probe.wants(DiagnosticKind::Flush)));
 
     let temp = temp(&[0; 64]);
     let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], Vec::new()));
@@ -147,6 +145,12 @@ fn an_instance_with_no_chosen_sink_writes_its_events_to_etw() {
         .filter(|event| u64::from_ne_bytes(event.data[..8].try_into().expect("an instance")) == me)
         .map(|event| event.descriptor.id)
         .collect();
-    assert!(ours.contains(&id::FLUSH_ISSUED), "{ours:?}");
-    assert!(ours.contains(&id::FLUSH_ANSWERED_FILE), "{ours:?}");
+    for event in [
+        id::SEAL_BEGAN,
+        id::FLUSH_BEGAN_FILE,
+        id::FLUSH_ENDED_FILE,
+        id::SEAL_ENDED,
+    ] {
+        assert!(ours.contains(&event), "{event} in {ours:?}");
+    }
 }

@@ -16,7 +16,7 @@ use super::{
 };
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
-use crate::diagnostics::{Diagnostic, FlushOutcome, FlushPart};
+use crate::diagnostics::FlushOutcome;
 use crate::domains::DomainId;
 use crate::ids::OpId;
 use crate::types::{FailureCause, FlushDomain, IoTargetKey};
@@ -63,21 +63,15 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// its failure -- `FailureCause::Provider`, or `FailureCause::ProviderAbandoned` for a completion dropped
     /// unanswered. Success covers what it completes; a failure is observed at once, and is the
     /// seal's answer. An answer for a lineage no longer live reports nothing, as a late flush does
-    /// (DI-D-42); one no request asked for is an inconsistency (DI-D-44, DI-D-46). `name` is the
-    /// domain as the consumer named it, which a delay event reports.
+    /// (DI-D-42); one no request asked for is an inconsistency (DI-D-44, DI-D-46).
     pub(crate) fn provided(
         &mut self,
         lineage: Key,
         seal: u64,
         domain: DomainId,
-        name: &FlushDomain,
         outcome: Result<(), FailureCause<V<E, I>>>,
     ) -> Due<E, T, I> {
         let mut due = Due::default();
-        // Taken before anything returns, so an answer for a lineage since ended leaves nothing kept.
-        let issued = self
-            .flush_issued
-            .remove(&(lineage, seal, Part::Domain(domain)));
         let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {
             return due;
         };
@@ -114,22 +108,6 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 format_args!("lineage {lineage}, seal {seal}, domain {domain:?}, {outcome:?}"),
             );
             return due;
-        }
-        if let Some(issued) = issued
-            && let Some(through) = self
-                .lineages
-                .get(&lineage)
-                .and_then(|state| state.seals.iter().find(|candidate| candidate.seq == seal))
-                .map(|candidate| candidate.through)
-        {
-            self.diagnostics.report(&Diagnostic::FlushAnswered {
-                instance: self.instance.number(),
-                lineage,
-                through: format_args!("{through:?}"),
-                part: FlushPart::Domain(name),
-                elapsed: self.clock.elapsed(issued, self.clock.now()),
-                succeeded: outcome.is_ok(),
-            });
         }
         let ended = match &outcome {
             Ok(()) => FlushOutcome::Succeeded,

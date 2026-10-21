@@ -2,7 +2,6 @@
 //! The diagnostic sinks (DI-D-51): what each wants, and where a fan-out sends an event.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use super::{
     Diagnostic, DiagnosticKind, DiagnosticSink, FanOutDiagnostics, FlushPart, NoDiagnostics,
@@ -85,65 +84,61 @@ fn an_event_is_of_its_kind() {
 }
 
 #[test]
-fn each_delay_event_is_of_its_kind() {
-    let issued = Diagnostic::FlushIssued {
+fn each_pair_event_is_of_its_kind() {
+    use crate::correlation::CorrelationId;
+    let id = CorrelationId::chosen(1);
+    let seal = Diagnostic::SealBegan {
         instance: 1,
         lineage: 0,
         through: format_args!("3"),
-        files: 1,
-        domains: 0,
+        id,
     };
-    let answered = Diagnostic::FlushAnswered {
+    let flush = Diagnostic::FlushBegan {
         instance: 1,
         lineage: 0,
         through: format_args!("3"),
         part: FlushPart::File(IoTargetKey(2)),
-        elapsed: Duration::from_nanos(4),
-        succeeded: true,
+        id,
     };
-    let waited = Diagnostic::SealWaited {
-        instance: 1,
-        lineage: 0,
-        through: format_args!("3"),
-        waited: Duration::from_nanos(5),
-    };
-    let lock = Diagnostic::LockWait {
+    let lock = Diagnostic::LockWaitEnded {
         instance: 1,
         lock: "engine",
-        waited: Duration::from_nanos(6),
+        id,
     };
-    assert_eq!(issued.kind(), DiagnosticKind::FlushIssued);
-    assert_eq!(answered.kind(), DiagnosticKind::FlushAnswered);
-    assert_eq!(waited.kind(), DiagnosticKind::SealWaited);
+    assert_eq!(seal.kind(), DiagnosticKind::Seal);
+    assert_eq!(flush.kind(), DiagnosticKind::Flush);
     assert_eq!(lock.kind(), DiagnosticKind::LockWait);
 }
 
 #[test]
-fn a_flush_answer_names_its_part_its_outcome_and_its_time() {
-    let file = Diagnostic::FlushAnswered {
+fn a_flush_end_names_its_part_its_pair_and_how_it_ended() {
+    use super::FlushOutcome;
+    use crate::correlation::CorrelationId;
+    let id = CorrelationId::chosen(4);
+    let file = Diagnostic::FlushEnded {
         instance: 2,
         lineage: 1,
         through: format_args!("9"),
         part: FlushPart::File(IoTargetKey(7)),
-        elapsed: Duration::from_nanos(15),
-        succeeded: false,
+        id,
+        outcome: FlushOutcome::Failed,
     };
     assert_eq!(
         file.to_string(),
-        "instance 2 lineage 1 seal through 9: flush of file 7 failed after 15ns"
+        "instance 2 lineage 1 seal through 9: flush of file 7 (pair 4) failed"
     );
     let domain = FlushDomain::new(b"ssd".to_vec());
-    let part = Diagnostic::FlushAnswered {
+    let part = Diagnostic::FlushEnded {
         instance: 2,
         lineage: 1,
         through: format_args!("9"),
         part: FlushPart::Domain(&domain),
-        elapsed: Duration::from_nanos(1),
-        succeeded: true,
+        id,
+        outcome: FlushOutcome::Succeeded,
     };
     assert_eq!(
         part.to_string(),
-        "instance 2 lineage 1 seal through 9: flush of domain \"ssd\" succeeded after 1ns"
+        "instance 2 lineage 1 seal through 9: flush of domain \"ssd\" (pair 4) succeeded"
     );
 }
 
@@ -162,12 +157,11 @@ fn a_line_is_prefixed_dioring_colon_and_a_space() {
 }
 
 #[test]
-fn stderr_diagnostics_wants_every_delay_kind() {
+fn stderr_diagnostics_wants_every_pair_kind() {
     for kind in [
         DiagnosticKind::LockWait,
-        DiagnosticKind::FlushIssued,
-        DiagnosticKind::FlushAnswered,
-        DiagnosticKind::SealWaited,
+        DiagnosticKind::Seal,
+        DiagnosticKind::Flush,
     ] {
         assert!(StderrDiagnostics.wants(kind), "{kind:?}");
     }
@@ -277,23 +271,6 @@ fn each_end_of_a_pair_says_its_kind_id_and_edge_and_nothing_else_is_a_pair() {
             instance: 1,
             what: "x",
             detail: format_args!("y")
-        }),
-        None
-    );
-    assert_eq!(
-        pairing(&Diagnostic::LockWait {
-            instance: 1,
-            lock: "engine",
-            waited: Duration::ZERO
-        }),
-        None
-    );
-    assert_eq!(
-        pairing(&Diagnostic::SealWaited {
-            instance: 1,
-            lineage: 0,
-            through: format_args!("1"),
-            waited: Duration::ZERO
         }),
         None
     );

@@ -2,9 +2,10 @@
 //! What an event of durable-ioring is written as (DE-D-2): the event it becomes, the values of its fields in the order the table
 //! gives, and that those agree with the table in type and in the length a `Binary` field is told.
 
-use std::time::Duration;
-
-use durable_ioring::{Diagnostic, FlushDomain, FlushPart, IoTargetKey};
+use durable_ioring::{
+    CorrelationId, Diagnostic, DiagnosticKind, DiagnosticSink, FlushDomain, FlushOutcome,
+    FlushPart, IoTargetKey, SealOutcome,
+};
 
 use super::{Value, encode, schema_of};
 use crate::schema::{ColumnType, id};
@@ -58,112 +59,194 @@ fn an_inconsistency_is_its_instance_what_and_detail() {
     );
 }
 
-#[test]
-fn a_lock_wait_is_its_instance_lock_and_nanoseconds() {
-    let event = Diagnostic::LockWait {
-        instance: 4,
-        lock: "engine",
-        waited: Duration::from_nanos(12),
-    };
-    agrees(&event);
-    assert_eq!(schema_of(&event).map(|s| s.id), Some(id::LOCK_WAIT));
+/// A sink that wants every kind, to mint ids from.
+struct Wanting;
+
+impl DiagnosticSink for Wanting {
+    fn wants(&self, _: DiagnosticKind) -> bool {
+        true
+    }
+
+    fn report(&self, _: &Diagnostic<'_>) {}
+}
+
+fn minted() -> CorrelationId {
+    CorrelationId::for_pair(&Wanting, DiagnosticKind::Seal).expect("wanted")
+}
+
+/// The schema says which end of a pair an event is exactly as durable-ioring does, since the opcode follows from it.
+fn edge_agrees(event: &Diagnostic<'_>) {
+    let schema = schema_of(event).expect("an event this crate knows");
     assert_eq!(
-        encode(&event),
-        Some(vec![Value::UInt64(4), text("engine"), Value::UInt64(12)])
+        schema.edge,
+        event.pairing().map(|pairing| pairing.edge),
+        "{}",
+        schema.name
     );
+    assert_eq!(Some(schema.kind), Some(event.kind()), "{}", schema.name);
 }
 
 #[test]
-fn a_flush_issued_is_its_identity_the_epoch_as_text_and_the_counts() {
-    let event = Diagnostic::FlushIssued {
+fn a_seals_begin_is_its_identity_the_epoch_as_text_and_its_pair() {
+    let pair = minted();
+    let event = Diagnostic::SealBegan {
         instance: 2,
         lineage: 1,
         through: format_args!("{:?}", 5_u64),
-        files: 3,
-        domains: 1,
+        id: pair,
     };
     agrees(&event);
-    assert_eq!(schema_of(&event).map(|s| s.id), Some(id::FLUSH_ISSUED));
+    edge_agrees(&event);
+    assert_eq!(schema_of(&event).map(|s| s.id), Some(id::SEAL_BEGAN));
     assert_eq!(
         encode(&event),
         Some(vec![
             Value::UInt64(2),
             Value::UInt64(1),
             text("5"),
-            Value::UInt64(3),
-            Value::UInt64(1)
+            Value::UInt64(pair.get())
         ])
     );
 }
 
 #[test]
-fn a_file_flush_answered_is_the_file_key_the_time_and_whether_it_succeeded() {
-    let event = Diagnostic::FlushAnswered {
+fn a_seals_end_is_its_identity_its_pair_and_how_it_ended() {
+    let pair = minted();
+    for (outcome, said) in [
+        (SealOutcome::Durable, "durable"),
+        (SealOutcome::Failed, "failed"),
+        (SealOutcome::Blocked, "blocked"),
+        (SealOutcome::Ended, "ended unanswered"),
+    ] {
+        let event = Diagnostic::SealEnded {
+            instance: 2,
+            lineage: 1,
+            through: format_args!("5"),
+            id: pair,
+            outcome,
+        };
+        agrees(&event);
+        edge_agrees(&event);
+        assert_eq!(schema_of(&event).map(|s| s.id), Some(id::SEAL_ENDED));
+        assert_eq!(
+            encode(&event),
+            Some(vec![
+                Value::UInt64(2),
+                Value::UInt64(1),
+                text("5"),
+                Value::UInt64(pair.get()),
+                text(said)
+            ])
+        );
+    }
+}
+
+#[test]
+fn a_files_flush_is_a_pair_naming_the_file_key() {
+    let pair = minted();
+    let began = Diagnostic::FlushBegan {
         instance: 2,
         lineage: 1,
         through: format_args!("9"),
         part: FlushPart::File(IoTargetKey(77)),
-        elapsed: Duration::from_nanos(15),
-        succeeded: false,
+        id: pair,
     };
-    agrees(&event);
+    agrees(&began);
+    edge_agrees(&began);
+    assert_eq!(schema_of(&began).map(|s| s.id), Some(id::FLUSH_BEGAN_FILE));
     assert_eq!(
-        schema_of(&event).map(|s| s.id),
-        Some(id::FLUSH_ANSWERED_FILE)
-    );
-    assert_eq!(
-        encode(&event),
+        encode(&began),
         Some(vec![
             Value::UInt64(2),
             Value::UInt64(1),
             text("9"),
             Value::UInt64(77),
-            Value::UInt64(15),
-            Value::Boolean(false)
+            Value::UInt64(pair.get())
+        ])
+    );
+    let ended = Diagnostic::FlushEnded {
+        instance: 2,
+        lineage: 1,
+        through: format_args!("9"),
+        part: FlushPart::File(IoTargetKey(77)),
+        id: pair,
+        outcome: FlushOutcome::Failed,
+    };
+    agrees(&ended);
+    edge_agrees(&ended);
+    assert_eq!(schema_of(&ended).map(|s| s.id), Some(id::FLUSH_ENDED_FILE));
+    assert_eq!(
+        encode(&ended),
+        Some(vec![
+            Value::UInt64(2),
+            Value::UInt64(1),
+            text("9"),
+            Value::UInt64(77),
+            Value::UInt64(pair.get()),
+            text("failed")
         ])
     );
 }
 
 #[test]
-fn a_domain_flush_answered_is_the_domains_bytes_with_their_length_first() {
+fn a_domains_flush_is_a_pair_naming_the_domains_bytes_with_their_length_first() {
+    let pair = minted();
     let domain = FlushDomain::new(b"ssd-4".to_vec());
-    let event = Diagnostic::FlushAnswered {
+    let began = Diagnostic::FlushBegan {
         instance: 2,
         lineage: 1,
         through: format_args!("9"),
         part: FlushPart::Domain(&domain),
-        elapsed: Duration::from_nanos(40),
-        succeeded: true,
+        id: pair,
     };
-    agrees(&event);
+    agrees(&began);
+    edge_agrees(&began);
     assert_eq!(
-        schema_of(&event).map(|s| s.id),
-        Some(id::FLUSH_ANSWERED_DOMAIN)
+        schema_of(&began).map(|s| s.id),
+        Some(id::FLUSH_BEGAN_DOMAIN)
     );
     assert_eq!(
-        encode(&event),
+        encode(&began),
         Some(vec![
             Value::UInt64(2),
             Value::UInt64(1),
             text("9"),
             Value::UInt32(5),
             Value::Bytes(b"ssd-4".to_vec()),
-            Value::UInt64(40),
-            Value::Boolean(true)
+            Value::UInt64(pair.get())
         ])
     );
+    for (outcome, said) in [
+        (FlushOutcome::Succeeded, "succeeded"),
+        (FlushOutcome::Abandoned, "abandoned"),
+    ] {
+        let ended = Diagnostic::FlushEnded {
+            instance: 2,
+            lineage: 1,
+            through: format_args!("9"),
+            part: FlushPart::Domain(&domain),
+            id: pair,
+            outcome,
+        };
+        agrees(&ended);
+        edge_agrees(&ended);
+        assert_eq!(
+            schema_of(&ended).map(|s| s.id),
+            Some(id::FLUSH_ENDED_DOMAIN)
+        );
+        assert_eq!(encode(&ended).expect("values")[6], text(said));
+    }
 }
 
 #[test]
 fn a_domain_whose_name_is_not_text_is_written_as_the_bytes_it_is() {
     let domain = FlushDomain::new(vec![0xff, 0, 0x61]);
-    let event = Diagnostic::FlushAnswered {
+    let event = Diagnostic::FlushBegan {
         instance: 1,
         lineage: 0,
         through: format_args!("1"),
         part: FlushPart::Domain(&domain),
-        elapsed: Duration::ZERO,
-        succeeded: true,
+        id: minted(),
     };
     agrees(&event);
     let values = encode(&event).expect("values");
@@ -174,13 +257,13 @@ fn a_domain_whose_name_is_not_text_is_written_as_the_bytes_it_is() {
 #[test]
 fn an_empty_domain_name_is_a_length_of_zero_and_no_bytes() {
     let domain = FlushDomain::new(Vec::new());
-    let event = Diagnostic::FlushAnswered {
+    let event = Diagnostic::FlushEnded {
         instance: 1,
         lineage: 0,
         through: format_args!("1"),
         part: FlushPart::Domain(&domain),
-        elapsed: Duration::ZERO,
-        succeeded: true,
+        id: minted(),
+        outcome: FlushOutcome::Succeeded,
     };
     agrees(&event);
     let values = encode(&event).expect("values");
@@ -189,24 +272,41 @@ fn an_empty_domain_name_is_a_length_of_zero_and_no_bytes() {
 }
 
 #[test]
-fn a_seal_waited_is_its_identity_the_epoch_as_text_and_the_time() {
-    let event = Diagnostic::SealWaited {
-        instance: 2,
-        lineage: 0,
-        through: format_args!("1"),
-        waited: Duration::from_nanos(30),
+fn a_lock_waits_pair_is_its_instance_its_lock_and_its_pair() {
+    let pair = minted();
+    let began = Diagnostic::LockWaitBegan {
+        instance: 4,
+        lock: "engine",
+        id: pair,
     };
-    agrees(&event);
-    assert_eq!(schema_of(&event).map(|s| s.id), Some(id::SEAL_WAITED));
-    assert_eq!(
-        encode(&event),
-        Some(vec![
-            Value::UInt64(2),
-            Value::UInt64(0),
-            text("1"),
-            Value::UInt64(30)
-        ])
-    );
+    let ended = Diagnostic::LockWaitEnded {
+        instance: 4,
+        lock: "engine",
+        id: pair,
+    };
+    for (event, expected) in [(&began, id::LOCK_WAIT_BEGAN), (&ended, id::LOCK_WAIT_ENDED)] {
+        agrees(event);
+        edge_agrees(event);
+        assert_eq!(schema_of(event).map(|s| s.id), Some(expected));
+        assert_eq!(
+            encode(event),
+            Some(vec![
+                Value::UInt64(4),
+                text("engine"),
+                Value::UInt64(pair.get())
+            ])
+        );
+    }
+}
+
+#[test]
+fn an_inconsistency_is_no_end_of_a_pair() {
+    let event = Diagnostic::Inconsistency {
+        instance: 1,
+        what: "x",
+        detail: format_args!("y"),
+    };
+    edge_agrees(&event);
 }
 
 #[test]
@@ -223,38 +323,19 @@ fn text_outside_the_basic_plane_is_its_surrogate_pairs() {
 }
 
 #[test]
-fn a_duration_too_long_for_a_u64_of_nanoseconds_is_the_largest() {
-    let event = Diagnostic::LockWait {
-        instance: 1,
-        lock: "engine",
-        waited: Duration::MAX,
-    };
-    assert_eq!(encode(&event).expect("values")[2], Value::UInt64(u64::MAX));
-}
-
-#[test]
-fn a_zero_duration_is_zero_nanoseconds() {
-    let event = Diagnostic::LockWait {
-        instance: 1,
-        lock: "engine",
-        waited: Duration::ZERO,
-    };
-    assert_eq!(encode(&event).expect("values")[2], Value::UInt64(0));
-}
-
-#[test]
-fn a_counts_largest_value_is_kept() {
-    let event = Diagnostic::FlushIssued {
+fn a_largest_identity_and_pair_are_kept() {
+    let event = Diagnostic::SealBegan {
         instance: u64::MAX,
         lineage: u64::MAX,
         through: format_args!(""),
-        files: usize::MAX,
-        domains: 0,
+        id: minted(),
     };
     agrees(&event);
     let values = encode(&event).expect("values");
-    assert_eq!(values[0], Value::UInt64(u64::MAX));
-    assert_eq!(values[3], Value::UInt64(usize::MAX as u64));
+    assert_eq!(
+        (values[0].clone(), values[1].clone()),
+        (Value::UInt64(u64::MAX), Value::UInt64(u64::MAX))
+    );
 }
 
 #[test]

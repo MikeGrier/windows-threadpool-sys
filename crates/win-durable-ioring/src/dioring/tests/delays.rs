@@ -12,6 +12,7 @@ use std::time::Duration;
 use super::{Ring, setup};
 use crate::dioring::{DeliveryMode, Setup};
 use durable_ioring::driver::{ENGINE_LOCK, Home, lock};
+use durable_ioring::oracle::PairingChecker;
 use durable_ioring::{Diagnostic, DiagnosticKind, DiagnosticSink, Lineage};
 
 const BOUND: Duration = Duration::from_secs(5);
@@ -23,7 +24,9 @@ const BOUND: Duration = Duration::from_secs(5);
 struct Contended {
     test_thread: ThreadId,
     found_held: Mutex<Sender<()>>,
-    waits: Mutex<Vec<(ThreadId, u64, String)>>,
+    waits: Mutex<Vec<(ThreadId, u64, String, &'static str)>>,
+    /// The pairing rule over every event reported (DI-D-87).
+    checker: Mutex<PairingChecker>,
 }
 
 impl DiagnosticSink for Contended {
@@ -35,19 +38,30 @@ impl DiagnosticSink for Contended {
     }
 
     fn report(&self, event: &Diagnostic<'_>) {
-        // The wait's pair (DI-D-87) is passed over here until these tests bind to the pairing
-        // checker in DI-19.2.4; the wait reported after the lock is let go is what they check.
-        if event.pairing().is_some() {
-            return;
+        self.checker
+            .lock()
+            .expect("the checker")
+            .observe(event)
+            .expect("the pairing rule");
+        match event {
+            Diagnostic::LockWaitBegan { instance, lock, .. } => {
+                self.waits.lock().expect("the record").push((
+                    thread::current().id(),
+                    *instance,
+                    (*lock).to_owned(),
+                    "began",
+                ));
+            }
+            Diagnostic::LockWaitEnded { instance, lock, .. } => {
+                self.waits.lock().expect("the record").push((
+                    thread::current().id(),
+                    *instance,
+                    (*lock).to_owned(),
+                    "ended",
+                ));
+            }
+            other => panic!("reported {other}"),
         }
-        let Diagnostic::LockWait { instance, lock, .. } = event else {
-            panic!("reported {event}");
-        };
-        self.waits.lock().expect("the record").push((
-            thread::current().id(),
-            *instance,
-            (*lock).to_owned(),
-        ));
     }
 }
 
@@ -57,6 +71,7 @@ fn watched(delivery: DeliveryMode<'static, 'static>) -> (Ring, Arc<Contended>, m
         test_thread: thread::current().id(),
         found_held: Mutex::new(found_held),
         waits: Mutex::default(),
+        checker: Mutex::default(),
     });
     let ring = Ring::new(Setup {
         delivery,
@@ -94,8 +109,19 @@ fn waits_reported(delivery: DeliveryMode<'static, 'static>, act: impl Fn(&Ring, 
         .iter()
         .filter(|(waiter, ..)| *waiter == thread::current().id())
         .collect();
-    assert_eq!(ours.len(), 1, "{waits:?}");
-    assert_eq!((ours[0].1, ours[0].2.as_str()), (instance, ENGINE_LOCK));
+    // The pair's end is written on the thread that waited, and its identity is the checker's to hold.
+    let ours: Vec<_> = ours
+        .iter()
+        .map(|(_, instance, lock, edge)| (*instance, lock.as_str(), *edge))
+        .collect();
+    assert_eq!(
+        ours,
+        [
+            (instance, ENGINE_LOCK, "began"),
+            (instance, ENGINE_LOCK, "ended")
+        ],
+        "{waits:?}"
+    );
 }
 
 fn each_delivery(act: impl Fn(&Ring, Lineage)) {

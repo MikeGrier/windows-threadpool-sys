@@ -21,7 +21,7 @@ use durable_ioring::IoTarget;
 use durable_ioring::NoDiagnostics;
 use durable_ioring::backend::SubmissionData;
 use durable_ioring::driver::{ENGINE_LOCK, Engine, LockWatch, lock};
-use durable_ioring::oracle::ConformanceOracle;
+use durable_ioring::oracle::{ConformanceOracle, PairingChecker};
 use durable_ioring::{Diagnostic, DiagnosticKind, DiagnosticSink};
 use durable_ioring::{DurabilityRequest, Entry, Epoch, IoTargetKey, OpKind, WriteOptions};
 
@@ -56,11 +56,7 @@ fn engine(file: &TempFile) -> Eng {
 
 /// A pool delivery of `engine` that sends on every readiness.
 fn delivered(engine: Eng, env: Option<&mut CallbackEnviron<'_>>) -> (Pool, Receiver<()>) {
-    delivered_watched(
-        engine,
-        env,
-        LockWatch::new(0, Arc::new(NoDiagnostics), Arc::new(InterruptStamps)),
-    )
+    delivered_watched(engine, env, LockWatch::new(0, Arc::new(NoDiagnostics)))
 }
 
 /// As [`delivered`], with the waits for the engine's lock reported through `watch`.
@@ -268,7 +264,9 @@ fn the_engine_comes_back_once_delivery_stops() {
 struct Contended {
     test_thread: ThreadId,
     found_held: Mutex<Sender<()>>,
-    waits: Mutex<Vec<(ThreadId, u64, String)>>,
+    waits: Mutex<Vec<(ThreadId, u64, String, &'static str)>>,
+    /// The pairing rule over every event reported (DI-D-87).
+    checker: Mutex<PairingChecker>,
 }
 
 impl DiagnosticSink for Contended {
@@ -280,19 +278,30 @@ impl DiagnosticSink for Contended {
     }
 
     fn report(&self, event: &Diagnostic<'_>) {
-        // The wait's pair (DI-D-87) is passed over here until these tests bind to the pairing
-        // checker in DI-19.2.4; the wait reported after the lock is let go is what they check.
-        if event.pairing().is_some() {
-            return;
+        self.checker
+            .lock()
+            .expect("the checker")
+            .observe(event)
+            .expect("the pairing rule");
+        match event {
+            Diagnostic::LockWaitBegan { instance, lock, .. } => {
+                self.waits.lock().expect("the record").push((
+                    thread::current().id(),
+                    *instance,
+                    (*lock).to_owned(),
+                    "began",
+                ));
+            }
+            Diagnostic::LockWaitEnded { instance, lock, .. } => {
+                self.waits.lock().expect("the record").push((
+                    thread::current().id(),
+                    *instance,
+                    (*lock).to_owned(),
+                    "ended",
+                ));
+            }
+            other => panic!("reported {other}"),
         }
-        let Diagnostic::LockWait { instance, lock, .. } = event else {
-            panic!("reported {event}");
-        };
-        self.waits.lock().expect("the record").push((
-            thread::current().id(),
-            *instance,
-            (*lock).to_owned(),
-        ));
     }
 }
 
@@ -304,8 +313,9 @@ fn a_consumer_call_that_waits_for_the_engine_reports_the_wait() {
         test_thread: thread::current().id(),
         found_held: Mutex::new(found_held),
         waits: Mutex::default(),
+        checker: Mutex::default(),
     });
-    let watch = LockWatch::new(5, sink.clone(), Arc::new(InterruptStamps));
+    let watch = LockWatch::new(5, sink.clone());
     let (pool, _ready) = delivered_watched(engine(&file), None, watch);
 
     // Another thread holds the slot until this one's call has found it held.
@@ -329,8 +339,16 @@ fn a_consumer_call_that_waits_for_the_engine_reports_the_wait() {
         .iter()
         .filter(|(waiter, ..)| *waiter == thread::current().id())
         .collect();
-    assert_eq!(ours.len(), 1, "{waits:?}");
-    assert_eq!((ours[0].1, ours[0].2.as_str()), (5, ENGINE_LOCK));
+    // The pair's end is written on the thread that waited, and its identity is the checker's to hold.
+    let ours: Vec<_> = ours
+        .iter()
+        .map(|(_, instance, lock, edge)| (*instance, lock.as_str(), *edge))
+        .collect();
+    assert_eq!(
+        ours,
+        [(5, ENGINE_LOCK, "began"), (5, ENGINE_LOCK, "ended")],
+        "{waits:?}"
+    );
     drop(waits);
     let _ = pool.into_engine();
 }

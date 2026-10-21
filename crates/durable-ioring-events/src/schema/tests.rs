@@ -2,19 +2,18 @@
 //! The table of events (DE-D-2): that it is consistent with itself, and the facts that identify the provider and its events and
 //! that a reader decodes by.
 
-use durable_ioring::DiagnosticKind;
+use durable_ioring::{DiagnosticKind, Edge};
 
 use super::{
-    ColumnType, EVENTS, KEYWORDS, PROVIDER_ID, PROVIDER_NAME, VERSION, id, schema_of_id,
-    schema_of_kind,
+    ColumnType, EVENTS, KEYWORDS, PROVIDER_ID, PROVIDER_NAME, TASKS, VERSION, id, opcode,
+    schema_of_id, schema_of_kind,
 };
 
-const KINDS: [DiagnosticKind; 5] = [
+const KINDS: [DiagnosticKind; 4] = [
     DiagnosticKind::Inconsistency,
+    DiagnosticKind::Seal,
+    DiagnosticKind::Flush,
     DiagnosticKind::LockWait,
-    DiagnosticKind::FlushIssued,
-    DiagnosticKind::FlushAnswered,
-    DiagnosticKind::SealWaited,
 ];
 
 #[test]
@@ -35,14 +34,24 @@ fn the_ids_are_the_published_numbers_in_ascending_order() {
         ids,
         [
             id::INCONSISTENCY,
-            id::LOCK_WAIT,
-            id::FLUSH_ISSUED,
-            id::FLUSH_ANSWERED_FILE,
-            id::FLUSH_ANSWERED_DOMAIN,
-            id::SEAL_WAITED
+            id::SEAL_BEGAN,
+            id::SEAL_ENDED,
+            id::FLUSH_BEGAN_FILE,
+            id::FLUSH_ENDED_FILE,
+            id::FLUSH_BEGAN_DOMAIN,
+            id::FLUSH_ENDED_DOMAIN,
+            id::LOCK_WAIT_BEGAN,
+            id::LOCK_WAIT_ENDED
         ]
     );
-    assert_eq!(ids, [1, 2, 3, 4, 5, 6]);
+    assert_eq!(ids, [1, 7, 8, 9, 10, 11, 12, 13, 14]);
+}
+
+#[test]
+fn the_ids_of_the_retired_delay_events_are_not_used_again() {
+    for retired in 2..=6 {
+        assert!(schema_of_id(retired).is_none(), "id {retired} is in use");
+    }
 }
 
 #[test]
@@ -113,7 +122,7 @@ fn every_keyword_is_used_by_an_event() {
 }
 
 #[test]
-fn the_events_of_one_kind_share_a_level_and_a_keyword() {
+fn the_events_of_one_kind_share_a_level_a_keyword_and_a_task() {
     // The sink asks about a kind by its first event, so the others must agree with it.
     for kind in KINDS {
         let of_kind: Vec<_> = EVENTS.iter().filter(|event| event.kind == kind).collect();
@@ -125,6 +134,7 @@ fn the_events_of_one_kind_share_a_level_and_a_keyword() {
                 "{}",
                 event.name
             );
+            assert_eq!(event.task, of_kind[0].task, "{}", event.name);
         }
     }
 }
@@ -156,7 +166,7 @@ fn an_event_is_found_by_its_id_and_an_unknown_id_is_none() {
         );
     }
     assert!(schema_of_id(0).is_none());
-    assert!(schema_of_id(7).is_none());
+    assert!(schema_of_id(15).is_none());
     assert!(schema_of_id(u16::MAX).is_none());
 }
 
@@ -197,17 +207,115 @@ fn every_event_starts_with_the_instance_so_a_reader_can_tell_instances_apart() {
 }
 
 #[test]
-fn the_descriptor_is_the_events_id_level_and_keyword_with_the_defaults_the_page_names() {
+fn the_descriptor_is_the_events_id_level_keyword_task_and_opcode() {
     for event in &EVENTS {
         let descriptor = event.descriptor();
         assert_eq!(descriptor.id, event.id);
         assert_eq!(descriptor.level, event.level);
         assert_eq!(descriptor.keyword, event.keyword.mask);
         assert_eq!(descriptor.version, VERSION);
-        assert_eq!(
-            (descriptor.channel, descriptor.opcode, descriptor.task),
-            (0, 0, 0)
+        assert_eq!(descriptor.channel, 0);
+        assert_eq!(descriptor.task, event.task.map_or(0, |task| task.value));
+        assert_eq!(descriptor.opcode, super::opcode(event.edge));
+    }
+}
+
+#[test]
+fn a_begin_is_written_as_start_an_end_as_stop_and_anything_else_as_info() {
+    assert_eq!(super::opcode(None), opcode::INFO);
+    assert_eq!(super::opcode(Some(Edge::Begin)), opcode::START);
+    assert_eq!(super::opcode(Some(Edge::End)), opcode::STOP);
+    assert_eq!(
+        (opcode::INFO, opcode::START, opcode::STOP),
+        (0, 1, 2),
+        "as winmeta.xml defines them"
+    );
+}
+
+#[test]
+fn every_pair_kind_has_a_begin_and_an_end_with_a_task_and_nothing_else_has_either() {
+    for kind in KINDS {
+        let of_kind: Vec<_> = EVENTS.iter().filter(|event| event.kind == kind).collect();
+        if kind == DiagnosticKind::Inconsistency {
+            assert!(
+                of_kind
+                    .iter()
+                    .all(|event| event.edge.is_none() && event.task.is_none())
+            );
+            continue;
+        }
+        assert!(
+            of_kind.iter().any(|event| event.edge == Some(Edge::Begin)),
+            "{kind:?}"
         );
+        assert!(
+            of_kind.iter().any(|event| event.edge == Some(Edge::End)),
+            "{kind:?}"
+        );
+        assert!(of_kind.iter().all(|event| event.task.is_some()), "{kind:?}");
+    }
+}
+
+#[test]
+fn a_kind_is_asked_about_by_its_begin() {
+    for kind in [
+        DiagnosticKind::Seal,
+        DiagnosticKind::Flush,
+        DiagnosticKind::LockWait,
+    ] {
+        assert_eq!(
+            schema_of_kind(kind).and_then(|event| event.edge),
+            Some(Edge::Begin)
+        );
+    }
+}
+
+#[test]
+fn every_tasks_value_is_its_own_and_not_the_default() {
+    for (i, a) in TASKS.iter().enumerate() {
+        assert_ne!(a.value, 0, "{}", a.name);
+        for b in &TASKS[i + 1..] {
+            assert_ne!(a.value, b.value);
+            assert_ne!(a.name, b.name);
+        }
+    }
+}
+
+#[test]
+fn every_events_task_is_one_of_the_listed_tasks_and_every_task_is_used() {
+    for event in &EVENTS {
+        if let Some(task) = event.task {
+            assert!(
+                TASKS.iter().any(|listed| std::ptr::eq(*listed, task)),
+                "{}",
+                event.name
+            );
+        }
+    }
+    for task in TASKS {
+        assert!(
+            EVENTS
+                .iter()
+                .any(|event| event.task.is_some_and(|t| std::ptr::eq(t, task))),
+            "{}",
+            task.name
+        );
+    }
+}
+
+#[test]
+fn every_end_of_a_pair_carries_the_pair_and_every_end_says_how_it_ended_but_a_lock_waits() {
+    for event in &EVENTS {
+        let names: Vec<&str> = event.columns.iter().map(|c| c.name).collect();
+        match event.edge {
+            None => assert!(!names.contains(&"Pair"), "{}", event.name),
+            Some(edge) => {
+                assert!(names.contains(&"Pair"), "{}", event.name);
+                let says = names.contains(&"Outcome");
+                let should = edge == Edge::End && event.kind != DiagnosticKind::LockWait;
+                assert_eq!(says, should, "{}", event.name);
+            }
+        }
     }
 }
 

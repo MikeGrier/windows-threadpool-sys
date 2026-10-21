@@ -2,8 +2,8 @@
 //! The manifest (DE-D-3): that the file kept with the crate is what the table renders, and that the rendering says what the table
 //! does. That the manifest compiles and decodes is `tests/session.rs` and the steps in the README.
 
-use super::{MANIFEST_FILE, level_name, manifest};
-use crate::schema::{ColumnType, EVENTS, KEYWORDS, PROVIDER_ID, PROVIDER_NAME};
+use super::{MANIFEST_FILE, level_name, manifest, opcode_name};
+use crate::schema::{ColumnType, EVENTS, KEYWORDS, PROVIDER_ID, PROVIDER_NAME, TASKS, opcode};
 
 /// The file kept beside the crate's `Cargo.toml`.
 const FILE: &str = include_str!("../../durable-ioring-events.man");
@@ -57,7 +57,45 @@ fn the_manifest_has_each_event_with_its_id_level_keyword_and_template() {
             "{line}"
         );
         assert!(line.contains("version=\"0\""), "{line}");
+        assert!(
+            line.contains(&format!(
+                "opcode=\"{}\"",
+                opcode_name(event.descriptor().opcode)
+            )),
+            "{line}"
+        );
+        match event.task {
+            Some(task) => assert!(line.contains(&format!("task=\"{}\"", task.name)), "{line}"),
+            None => assert!(!line.contains("task="), "{line}"),
+        }
     }
+}
+
+#[test]
+fn the_manifest_has_each_task_with_its_value() {
+    let text = manifest();
+    for task in TASKS {
+        assert!(
+            text.contains(&format!(
+                "<task name=\"{}\" value=\"{}\"/>",
+                task.name, task.value
+            )),
+            "{}",
+            task.name
+        );
+    }
+    assert_eq!(text.matches("<task ").count(), TASKS.len());
+    assert!(
+        text.find("<tasks>") < text.find("<keywords>"),
+        "tasks come before keywords, as the schema orders them"
+    );
+}
+
+#[test]
+fn the_opcodes_written_have_their_winmeta_names() {
+    assert_eq!(opcode_name(opcode::INFO), "win:Info");
+    assert_eq!(opcode_name(opcode::START), "win:Start");
+    assert_eq!(opcode_name(opcode::STOP), "win:Stop");
 }
 
 #[test]
@@ -131,7 +169,12 @@ fn each_template_has_the_events_fields_in_order_with_their_types() {
 fn a_binary_field_names_its_length_field() {
     let text = manifest();
     assert!(text.contains("<data name=\"Domain\" inType=\"win:Binary\" length=\"DomainLength\"/>"));
-    assert_eq!(text.matches("length=\"").count(), 1);
+    let binaries = EVENTS
+        .iter()
+        .flat_map(|event| event.columns)
+        .filter(|column| matches!(column.ty, ColumnType::Binary { .. }))
+        .count();
+    assert_eq!(text.matches("length=\"").count(), binaries);
 }
 
 #[test]

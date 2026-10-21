@@ -7,7 +7,6 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::correlation::CorrelationId;
 use crate::types::{FlushDomain, IoTargetKey};
@@ -22,14 +21,8 @@ pub(crate) mod tests;
 pub enum DiagnosticKind {
     /// dioring found its own state inconsistent (DI-D-46).
     Inconsistency,
-    /// A wait for one of an instance's locks that was not immediate (DI-D-26).
+    /// A wait for one of an instance's locks that was not immediate: a pair (DI-D-26, DI-D-87).
     LockWait,
-    /// A seal's flushes, and its request to the consumer's provider, were issued (DI-D-26).
-    FlushIssued,
-    /// One part of a seal's flush answered (DI-D-26).
-    FlushAnswered,
-    /// A seal left waiting for the writes at or below it (DI-D-26).
-    SealWaited,
     /// A seal, from its being asked for to its being answered: a pair (DI-D-80, DI-D-87).
     Seal,
     /// One part of a seal's flush, from its issue to its answer: a pair (DI-D-80, DI-D-87).
@@ -142,59 +135,6 @@ pub enum Diagnostic<'a> {
         /// What was in hand when it was found: lineage, seal or epoch, operation, target or domain.
         detail: fmt::Arguments<'a>,
     },
-    /// An acquisition of one of an instance's locks had to wait for it (DI-D-26). Reported after
-    /// the lock was released, so the report does not lengthen the hold it measures. An
-    /// acquisition that was immediate reports nothing.
-    LockWait {
-        /// The instance, by the number it was minted with.
-        instance: u64,
-        /// Which lock: a name per lock.
-        lock: &'static str,
-        /// How long the wait was.
-        waited: Duration,
-    },
-    /// A seal's flushes, and its request to the consumer's provider, were issued: the work that
-    /// is a flush's delay when it is slow (DI-D-26).
-    FlushIssued {
-        /// The instance, by the number it was minted with.
-        instance: u64,
-        /// The lineage, by its place among the instance's lineages: the default is 0.
-        lineage: u64,
-        /// The epoch the seal is through, as its identity renders itself.
-        through: fmt::Arguments<'a>,
-        /// How many targets the built-in default is asked to flush.
-        files: usize,
-        /// How many domains the consumer's provider is asked about.
-        domains: usize,
-    },
-    /// One part of a seal's flush answered, which names the slow domain or target (DI-D-26).
-    FlushAnswered {
-        /// The instance, by the number it was minted with.
-        instance: u64,
-        /// The lineage, by its place among the instance's lineages: the default is 0.
-        lineage: u64,
-        /// The epoch the seal is through, as its identity renders itself.
-        through: fmt::Arguments<'a>,
-        /// Which part answered.
-        part: FlushPart<'a>,
-        /// How long it took, from the part's being issued to its answer reaching the core.
-        elapsed: Duration,
-        /// Whether it answered with success.
-        succeeded: bool,
-    },
-    /// A seal that had to wait for the writes at or below it -- those in flight and those held
-    /// for a gate, which block it alike -- is no longer waiting, and its flushes are issued
-    /// (DI-D-26's secondary event).
-    SealWaited {
-        /// The instance, by the number it was minted with.
-        instance: u64,
-        /// The lineage, by its place among the instance's lineages: the default is 0.
-        lineage: u64,
-        /// The epoch the seal is through, as its identity renders itself.
-        through: fmt::Arguments<'a>,
-        /// How long from the seal's being asked for to its flushes being issued.
-        waited: Duration,
-    },
     /// A seal was asked for: the begin of its pair (DI-D-87).
     SealBegan {
         /// The instance, by the number it was minted with.
@@ -274,10 +214,6 @@ impl Diagnostic<'_> {
     pub fn kind(&self) -> DiagnosticKind {
         match self {
             Self::Inconsistency { .. } => DiagnosticKind::Inconsistency,
-            Self::LockWait { .. } => DiagnosticKind::LockWait,
-            Self::FlushIssued { .. } => DiagnosticKind::FlushIssued,
-            Self::FlushAnswered { .. } => DiagnosticKind::FlushAnswered,
-            Self::SealWaited { .. } => DiagnosticKind::SealWaited,
             Self::SealBegan { .. } | Self::SealEnded { .. } => DiagnosticKind::Seal,
             Self::FlushBegan { .. } | Self::FlushEnded { .. } => DiagnosticKind::Flush,
             Self::LockWaitBegan { .. } | Self::LockWaitEnded { .. } => DiagnosticKind::LockWait,
@@ -294,11 +230,7 @@ impl Diagnostic<'_> {
             Self::SealEnded { id, .. }
             | Self::FlushEnded { id, .. }
             | Self::LockWaitEnded { id, .. } => (*id, Edge::End),
-            Self::Inconsistency { .. }
-            | Self::LockWait { .. }
-            | Self::FlushIssued { .. }
-            | Self::FlushAnswered { .. }
-            | Self::SealWaited { .. } => return None,
+            Self::Inconsistency { .. } => return None,
         };
         Some(Pairing {
             kind: self.kind(),
@@ -318,48 +250,6 @@ impl fmt::Display for Diagnostic<'_> {
             } => write!(
                 f,
                 "instance {instance} found its own state inconsistent: {what} ({detail})"
-            ),
-            Self::LockWait {
-                instance,
-                lock,
-                waited,
-            } => write!(
-                f,
-                "instance {instance} waited {waited:?} for its {lock} lock"
-            ),
-            Self::FlushIssued {
-                instance,
-                lineage,
-                through,
-                files,
-                domains,
-            } => write!(
-                f,
-                "instance {instance} lineage {lineage} seal through {through}: issued flushes of \
-                 {files} files and {domains} domains"
-            ),
-            Self::FlushAnswered {
-                instance,
-                lineage,
-                through,
-                part,
-                elapsed,
-                succeeded,
-            } => write!(
-                f,
-                "instance {instance} lineage {lineage} seal through {through}: flush of {part} \
-                 {} after {elapsed:?}",
-                if *succeeded { "succeeded" } else { "failed" }
-            ),
-            Self::SealWaited {
-                instance,
-                lineage,
-                through,
-                waited,
-            } => write!(
-                f,
-                "instance {instance} lineage {lineage} seal through {through}: waited {waited:?} \
-                 for its writes"
             ),
             Self::SealBegan {
                 instance,

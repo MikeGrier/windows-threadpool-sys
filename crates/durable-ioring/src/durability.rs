@@ -544,12 +544,6 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     /// Where an inconsistency is reported before the panic (DI-D-51), and the delay events
     /// (DI-D-26).
     diagnostics: Arc<dyn DiagnosticSink>,
-    /// When each part of a seal's flush was issued, kept only while the sink wants to hear how
-    /// long it took, and dropped as the part answers.
-    flush_issued: HashMap<(Key, u64, Part), I>,
-    /// When each seal that is waiting for the writes at or below it was first seen to be,
-    /// kept only while the sink wants to hear how long it waited.
-    seal_waiting: HashMap<(Key, u64), I>,
     /// Each part of a seal's flush whose pair is open, kept only while the sink wants the pair, and
     /// removed as the pair ends (DI-D-87).
     flush_pairs: HashMap<(Key, u64, Part), FlushPair<E>>,
@@ -637,8 +631,6 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             served: Arc::from([]),
             clock,
             diagnostics,
-            flush_issued: HashMap::new(),
-            seal_waiting: HashMap::new(),
             flush_pairs: HashMap::new(),
             served_names: HashMap::new(),
         }
@@ -902,15 +894,6 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         result: Result<(), IoFault>,
     ) -> Due<E, T, I> {
         let mut due = Due::default();
-        // Taken before anything returns, so a flush of a lineage since ended leaves nothing kept.
-        let issued = self
-            .lineages
-            .get(&lineage)
-            .and_then(|state| state.seals.iter().find(|seal| seal.through == through))
-            .and_then(|seal| {
-                self.flush_issued
-                    .remove(&(lineage, seal.seq, Part::File(file)))
-            });
         let answered = match self.lineages.get_mut(&lineage) {
             Some(state) if !state.ended => state.answer(through, file, result.is_err()),
             _ => return due,
@@ -927,16 +910,6 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 return due;
             }
         };
-        if let Some(issued) = issued {
-            self.diagnostics.report(&Diagnostic::FlushAnswered {
-                instance: self.instance.number(),
-                lineage,
-                through: format_args!("{through:?}"),
-                part: FlushPart::File(file),
-                elapsed: self.clock.elapsed(issued, self.clock.now()),
-                succeeded: result.is_ok(),
-            });
-        }
         let outcome = if result.is_ok() {
             FlushOutcome::Succeeded
         } else {
@@ -1288,18 +1261,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             }
             let through = state.seals[index].through;
             if oldest_in_flight.is_some_and(|oldest| oldest <= through) {
-                // Seals are in ascending order, so no later one is ready either. Each that is
-                // waiting is noted as having begun to, if the sink wants to hear how long.
-                if self.diagnostics.wants(DiagnosticKind::SealWaited) {
-                    let now = self.clock.now();
-                    for waiting in state.seals.iter().skip(index) {
-                        if matches!(waiting.stage, SealStage::Waiting) {
-                            self.seal_waiting
-                                .entry((lineage, waiting.seq))
-                                .or_insert(now);
-                        }
-                    }
-                }
+                // Seals are in ascending order, so no later one is ready either.
                 break;
             }
             let seq = state.seals[index].seq;
@@ -1346,37 +1308,6 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     ok: false,
                 })
                 .collect();
-            if let Some(began) = self.seal_waiting.remove(&(lineage, seq)) {
-                let now = self.clock.now();
-                self.diagnostics.report(&Diagnostic::SealWaited {
-                    instance: self.instance.number(),
-                    lineage,
-                    through: format_args!("{through:?}"),
-                    waited: self.clock.elapsed(began, now),
-                });
-            }
-            if (!files.is_empty() || !parts.is_empty())
-                && self.diagnostics.wants(DiagnosticKind::FlushIssued)
-            {
-                self.diagnostics.report(&Diagnostic::FlushIssued {
-                    instance: self.instance.number(),
-                    lineage,
-                    through: format_args!("{through:?}"),
-                    files: files.len(),
-                    domains: parts.len(),
-                });
-            }
-            if self.diagnostics.wants(DiagnosticKind::FlushAnswered) {
-                let now = self.clock.now();
-                for file in &files {
-                    self.flush_issued
-                        .insert((lineage, seq, Part::File(file.file)), now);
-                }
-                for part in &parts {
-                    self.flush_issued
-                        .insert((lineage, seq, Part::Domain(part.domain)), now);
-                }
-            }
             let issued = files
                 .iter()
                 .map(|file| Part::File(file.file))
@@ -1458,9 +1389,6 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             .is_some_and(|state| state.ended && state.in_flight_by_epoch.is_empty())
         {
             self.lineages.remove(&lineage);
-            // An answer to a retired lineage's flush is dropped unread, so its stamps would stay.
-            self.flush_issued.retain(|(key, ..), _| *key != lineage);
-            self.seal_waiting.retain(|(key, _), _| *key != lineage);
         }
     }
 

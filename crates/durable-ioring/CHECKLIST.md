@@ -61,12 +61,7 @@ would allow.
 
 - [x] **DI-19.2.3** -- A lock wait is a pair, begun when the immediate try fails and ended as the lock is taken with it held, and `DiagnosticSink` states the leaf-lock rule the shipped sinks keep. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1923)
 
-- [ ] **DI-19.2.4** -- **The sinks follow, and the old variants go.** The standard-error and debugger lines carry the id.
-  `durable-ioring-events`' table maps the pairs to events with Start and Stop opcodes, the manifest is rendered and held
-  equal, and it is verified as `DI-12.1.5` was, compiled, installed and read back by `tracerpt`; the activity id is
-  `DI-19.4`'s. The driver's tests bind to the checker. `FlushIssued`, `FlushAnswered`, `SealWaited` and the old `LockWait`
-  are removed, and `StampClock::elapsed` and the lock watch's `LockTimer` with them (DI-D-87), the timer having stayed
-  through `DI-19.2.3` to time the old wait. This is the major change to `durable-ioring`.
+- [x] **DI-19.2.4** -- The sinks and the ETW provider's schema follow the pairs, with Start and Stop opcodes and a task for each kind, the driver's lock-wait tests bind to the checker, and the old delay events and the core's timing are gone. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1924)
 
 - [ ] **DI-19.2.5** -- **The sweep, the sabotage and the record.** A sweep for the delay events' old shape, of `DI-D-26`,
   `DI-D-51`, `DI-D-77`, the README and the crates' docs, is recorded with it; sabotage shows the checker is the one place

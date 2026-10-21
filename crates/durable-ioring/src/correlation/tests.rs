@@ -24,9 +24,8 @@ fn everything() -> Wants {
     Wants(vec![
         DiagnosticKind::Inconsistency,
         DiagnosticKind::LockWait,
-        DiagnosticKind::FlushIssued,
-        DiagnosticKind::FlushAnswered,
-        DiagnosticKind::SealWaited,
+        DiagnosticKind::Seal,
+        DiagnosticKind::Flush,
     ])
 }
 
@@ -43,7 +42,7 @@ fn ids_minted_on_one_thread_rise() {
     let sink = everything();
     let ids: Vec<u64> = (0..100)
         .map(|_| {
-            mint_for(&counter, &sink, DiagnosticKind::FlushIssued)
+            mint_for(&counter, &sink, DiagnosticKind::Flush)
                 .expect("wanted")
                 .get()
         })
@@ -76,7 +75,7 @@ fn ids_minted_on_many_threads_at_once_are_all_distinct() {
                     let sink = everything();
                     (0..EACH)
                         .map(|_| {
-                            mint_for(&counter, &sink, DiagnosticKind::SealWaited)
+                            mint_for(&counter, &sink, DiagnosticKind::Seal)
                                 .expect("wanted")
                                 .get()
                         })
@@ -104,8 +103,7 @@ fn the_process_counter_gives_distinct_ids_to_many_threads() {
                     let sink = everything();
                     (0..250)
                         .map(|_| {
-                            CorrelationId::for_pair(&sink, DiagnosticKind::FlushAnswered)
-                                .expect("wanted")
+                            CorrelationId::for_pair(&sink, DiagnosticKind::Flush).expect("wanted")
                         })
                         .collect::<Vec<_>>()
                 })
@@ -133,11 +131,11 @@ fn a_sink_that_wants_nothing_takes_no_id() {
 #[test]
 fn a_sink_that_wants_some_kinds_takes_ids_only_for_those() {
     let counter = AtomicU64::new(FIRST);
-    let sink = Wants(vec![DiagnosticKind::FlushIssued]);
+    let sink = Wants(vec![DiagnosticKind::Flush]);
     assert_eq!(mint_for(&counter, &sink, DiagnosticKind::LockWait), None);
-    let wanted = mint_for(&counter, &sink, DiagnosticKind::FlushIssued).expect("wanted");
-    assert_eq!(mint_for(&counter, &sink, DiagnosticKind::SealWaited), None);
-    let again = mint_for(&counter, &sink, DiagnosticKind::FlushIssued).expect("wanted");
+    let wanted = mint_for(&counter, &sink, DiagnosticKind::Flush).expect("wanted");
+    assert_eq!(mint_for(&counter, &sink, DiagnosticKind::Seal), None);
+    let again = mint_for(&counter, &sink, DiagnosticKind::Flush).expect("wanted");
     assert_eq!(
         (wanted.get(), again.get()),
         (1, 2),

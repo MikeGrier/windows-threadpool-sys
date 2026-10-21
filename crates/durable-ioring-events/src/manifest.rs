@@ -6,7 +6,9 @@
 
 use std::fmt::Write;
 
-use crate::schema::{ColumnType, EVENTS, EventSchema, KEYWORDS, PROVIDER_ID, PROVIDER_NAME};
+use crate::schema::{
+    ColumnType, EVENTS, EventSchema, KEYWORDS, PROVIDER_ID, PROVIDER_NAME, TASKS, opcode,
+};
 use win_etw_sys::level;
 
 #[cfg(test)]
@@ -20,8 +22,8 @@ const RESOURCE_FILE: &str = "durable-ioring-events.dll";
 
 /// The manifest, as the text of an instrumentation manifest file.
 ///
-/// It names the provider and its GUID, its keywords, each event with its id, level, keyword and template, and each template
-/// with the types of its fields. An event's fields are what the sink writes, in that order, with no padding.
+/// It names the provider and its GUID, its tasks, its keywords, each event with its id, level, keyword, task, opcode and
+/// template, and each template with the types of its fields. An event's fields are what the sink writes, in that order, with no padding.
 #[must_use]
 pub fn manifest() -> String {
     let mut xml = String::new();
@@ -37,6 +39,16 @@ pub fn manifest() -> String {
         "      <provider name=\"{PROVIDER_NAME}\" guid=\"{guid}\" symbol=\"DURABLE_IORING_EVENTS\"\n          resourceFileName=\"{RESOURCE_FILE}\" messageFileName=\"{RESOURCE_FILE}\">"
     );
 
+    xml.push_str("        <tasks>\n");
+    for task in TASKS {
+        let _ = writeln!(
+            xml,
+            "          <task name=\"{}\" value=\"{}\"/>",
+            task.name, task.value
+        );
+    }
+    xml.push_str("        </tasks>\n");
+
     xml.push_str("        <keywords>\n");
     for keyword in KEYWORDS {
         let _ = writeln!(
@@ -49,14 +61,19 @@ pub fn manifest() -> String {
 
     xml.push_str("        <events>\n");
     for event in &EVENTS {
+        let task = event
+            .task
+            .map(|task| format!(" task=\"{}\"", task.name))
+            .unwrap_or_default();
         let _ = writeln!(
             xml,
-            "          <event value=\"{}\" symbol=\"{}\" version=\"{}\" level=\"{}\" keywords=\"{}\" template=\"{}\"/>",
+            "          <event value=\"{}\" symbol=\"{}\" version=\"{}\" level=\"{}\" keywords=\"{}\"{task} opcode=\"{}\" template=\"{}\"/>",
             event.id,
             event.name,
             event.descriptor().version,
             level_name(event.level),
             event.keyword.name,
+            opcode_name(event.descriptor().opcode),
             template_name(event)
         );
     }
@@ -111,6 +128,18 @@ fn level_name(value: u8) -> &'static str {
         other => panic!(
             "level {other} has no name in a manifest: the table uses only the levels the page defines"
         ),
+    }
+}
+
+/// The manifest's name for an opcode.
+fn opcode_name(value: u8) -> &'static str {
+    match value {
+        opcode::INFO => "win:Info",
+        opcode::START => "win:Start",
+        opcode::STOP => "win:Stop",
+        other => {
+            panic!("opcode {other} has no name here: the table uses only Info, Start and Stop")
+        }
     }
 }
 

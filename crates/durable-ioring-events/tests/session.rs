@@ -27,13 +27,32 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use durable_ioring::{
-    Diagnostic, DiagnosticKind, DiagnosticSink, FlushDomain, FlushPart, IoTargetKey,
+    CorrelationId, Diagnostic, DiagnosticKind, DiagnosticSink, FlushDomain, FlushOutcome,
+    FlushPart, IoTargetKey, SealOutcome,
 };
 use durable_ioring_events::{
     ColumnType, EVENTS, EtwDiagnostics, EventSchema, INCONSISTENCIES, LOCKS, PROVIDER_ID, Value,
     encode, schema_of, schema_of_id,
 };
 use win_etw_sys::{Recorded, Session, level};
+
+/// A sink that wants every kind, to mint pair ids from.
+struct Wanting;
+
+impl DiagnosticSink for Wanting {
+    fn wants(&self, _: DiagnosticKind) -> bool {
+        true
+    }
+
+    fn report(&self, _: &Diagnostic<'_>) {}
+}
+
+fn minted() -> CorrelationId {
+    CorrelationId::for_pair(&Wanting, DiagnosticKind::Seal).expect("wanted")
+}
+
+/// The id of a lock wait's begin, which several tests write as a plain event to look for.
+const LOCK_WAIT_BEGAN: u16 = 13;
 
 /// Held by each test: they share one provider, and a session records every event of it.
 fn serial() -> MutexGuard<'static, ()> {
@@ -157,53 +176,73 @@ fn every_event_reaches_a_session_as_the_values_it_was_reported_with() {
     let session = listening();
     let sink = EtwDiagnostics::new();
     assert!(becomes(|| sink.wants(DiagnosticKind::LockWait)));
-    let events: [Diagnostic<'_>; 7] = [
+    let (seal, file, part, other, lock) = (minted(), minted(), minted(), minted(), minted());
+    let events: [Diagnostic<'_>; 10] = [
         Diagnostic::Inconsistency {
             instance: 7,
             what: "a write completed twice",
             detail: format_args!("lineage {}", 3),
         },
-        Diagnostic::LockWait {
+        Diagnostic::LockWaitBegan {
             instance: 4,
             lock: "engine",
-            waited: Duration::from_nanos(12),
+            id: lock,
         },
-        Diagnostic::FlushIssued {
+        Diagnostic::LockWaitEnded {
+            instance: 4,
+            lock: "engine",
+            id: lock,
+        },
+        Diagnostic::SealBegan {
             instance: 2,
             lineage: 1,
-            through: format_args!("{:?}", 5_u64),
-            files: 3,
-            domains: 1,
+            through: format_args!("{:?}", 9_u64),
+            id: seal,
         },
-        Diagnostic::FlushAnswered {
+        Diagnostic::FlushBegan {
             instance: 2,
             lineage: 1,
             through: format_args!("9"),
             part: FlushPart::File(IoTargetKey(77)),
-            elapsed: Duration::from_nanos(15),
-            succeeded: false,
+            id: file,
         },
-        Diagnostic::FlushAnswered {
+        Diagnostic::FlushBegan {
             instance: 2,
             lineage: 1,
             through: format_args!("9"),
             part: FlushPart::Domain(&domain),
-            elapsed: Duration::from_nanos(40),
-            succeeded: true,
+            id: part,
         },
-        Diagnostic::FlushAnswered {
+        Diagnostic::FlushEnded {
+            instance: 2,
+            lineage: 1,
+            through: format_args!("9"),
+            part: FlushPart::File(IoTargetKey(77)),
+            id: file,
+            outcome: FlushOutcome::Failed,
+        },
+        Diagnostic::FlushEnded {
+            instance: 2,
+            lineage: 1,
+            through: format_args!("9"),
+            part: FlushPart::Domain(&domain),
+            id: part,
+            outcome: FlushOutcome::Succeeded,
+        },
+        Diagnostic::FlushEnded {
             instance: 2,
             lineage: 1,
             through: format_args!("9"),
             part: FlushPart::Domain(&odd),
-            elapsed: Duration::from_nanos(1),
-            succeeded: true,
+            id: other,
+            outcome: FlushOutcome::Abandoned,
         },
-        Diagnostic::SealWaited {
+        Diagnostic::SealEnded {
             instance: 2,
-            lineage: 0,
-            through: format_args!("1"),
-            waited: Duration::from_nanos(30),
+            lineage: 1,
+            through: format_args!("9"),
+            id: seal,
+            outcome: SealOutcome::Failed,
         },
     ];
     for event in &events {
@@ -235,34 +274,33 @@ fn a_session_with_one_keyword_is_asked_for_that_kind_and_no_other() {
     let sink = EtwDiagnostics::new();
     assert!(becomes(|| sink.wants(DiagnosticKind::LockWait)));
     for kind in [
-        DiagnosticKind::FlushIssued,
-        DiagnosticKind::FlushAnswered,
-        DiagnosticKind::SealWaited,
+        DiagnosticKind::Seal,
+        DiagnosticKind::Flush,
         DiagnosticKind::Inconsistency,
     ] {
         assert!(!sink.wants(kind), "{kind:?}");
     }
     let formatted = Arc::new(AtomicU32::new(0));
     let through = Counted(formatted.clone());
-    sink.report(&Diagnostic::FlushIssued {
+    sink.report(&Diagnostic::FlushBegan {
         instance: 1,
         lineage: 0,
         through: format_args!("{through}"),
-        files: 1,
-        domains: 0,
+        part: FlushPart::File(IoTargetKey(1)),
+        id: minted(),
     });
     assert_eq!(
         formatted.load(Ordering::Relaxed),
         0,
         "built for a keyword no session listens to"
     );
-    sink.report(&Diagnostic::LockWait {
+    sink.report(&Diagnostic::LockWaitBegan {
         instance: 1,
         lock: "engine",
-        waited: Duration::from_nanos(5),
+        id: minted(),
     });
     let event = only(session.stop().expect("stopped"));
-    assert_eq!(event.descriptor.id, schema_of_id(2).expect("lock wait").id);
+    assert_eq!(event.descriptor.id, LOCK_WAIT_BEGAN);
 }
 
 #[test]
@@ -277,9 +315,8 @@ fn a_session_at_the_error_level_is_asked_for_an_inconsistency_and_for_no_delay()
     assert!(becomes(|| sink.wants(DiagnosticKind::Inconsistency)));
     for kind in [
         DiagnosticKind::LockWait,
-        DiagnosticKind::FlushIssued,
-        DiagnosticKind::FlushAnswered,
-        DiagnosticKind::SealWaited,
+        DiagnosticKind::Seal,
+        DiagnosticKind::Flush,
     ] {
         assert!(!sink.wants(kind), "{kind:?}");
     }
@@ -288,10 +325,10 @@ fn a_session_at_the_error_level_is_asked_for_an_inconsistency_and_for_no_delay()
         what: "x",
         detail: format_args!("y"),
     });
-    sink.report(&Diagnostic::LockWait {
+    sink.report(&Diagnostic::LockWaitBegan {
         instance: 1,
         lock: "engine",
-        waited: Duration::ZERO,
+        id: minted(),
     });
     let event = only(session.stop().expect("stopped"));
     assert_eq!(event.descriptor.keyword, INCONSISTENCIES.mask);
@@ -341,14 +378,14 @@ fn two_sinks_each_write_through_the_one_registration_and_each_event_is_recorded_
     let (a, b) = (EtwDiagnostics::new(), EtwDiagnostics::new());
     assert!(becomes(|| a.wants(DiagnosticKind::LockWait)));
     for (sink, instance) in [(&a, 1_u64), (&b, 2)] {
-        sink.report(&Diagnostic::LockWait {
+        sink.report(&Diagnostic::LockWaitBegan {
             instance,
             lock: "engine",
-            waited: Duration::ZERO,
+            id: minted(),
         });
     }
     let recorded = session.stop().expect("stopped");
-    let schema = schema_of_id(2).expect("lock wait");
+    let schema = schema_of_id(LOCK_WAIT_BEGAN).expect("a lock wait's begin");
     let instances: Vec<Value> = recorded
         .iter()
         .map(|r| decode(schema, &r.data)[0].clone())
@@ -367,32 +404,39 @@ fn threads_report_through_one_sink_and_every_event_is_recorded() {
         for t in 0..4_u64 {
             let sink = &sink;
             scope.spawn(move || {
-                for i in 0..25_u64 {
-                    sink.report(&Diagnostic::LockWait {
+                for _ in 0..25_u64 {
+                    sink.report(&Diagnostic::LockWaitBegan {
                         instance: t,
                         lock: "engine",
-                        waited: Duration::from_nanos(i),
+                        id: minted(),
                     });
                 }
             });
         }
     });
-    let schema = schema_of_id(2).expect("lock wait");
-    let mut seen: Vec<(u64, u64)> = session
+    let schema = schema_of_id(LOCK_WAIT_BEGAN).expect("a lock wait's begin");
+    let seen: Vec<(u64, u64)> = session
         .stop()
         .expect("stopped")
         .iter()
         .map(|r| {
             let values = decode(schema, &r.data);
             match (&values[0], &values[2]) {
-                (Value::UInt64(t), Value::UInt64(i)) => (*t, *i),
+                (Value::UInt64(t), Value::UInt64(pair)) => (*t, *pair),
                 other => panic!("{other:?}"),
             }
         })
         .collect();
-    seen.sort_unstable();
-    let expected: Vec<(u64, u64)> = (0..4).flat_map(|t| (0..25).map(move |i| (t, i))).collect();
-    assert_eq!(seen, expected);
+    assert_eq!(seen.len(), 100);
+    for t in 0..4 {
+        assert_eq!(
+            seen.iter().filter(|(of, _)| *of == t).count(),
+            25,
+            "thread {t}"
+        );
+    }
+    let pairs: std::collections::HashSet<u64> = seen.iter().map(|(_, pair)| *pair).collect();
+    assert_eq!(pairs.len(), 100, "every pair id distinct");
 }
 
 #[test]
@@ -430,11 +474,11 @@ fn an_event_too_large_for_the_session_is_dropped_without_a_failure_and_the_next_
         what: "x",
         detail: format_args!("{huge}"),
     });
-    sink.report(&Diagnostic::LockWait {
+    sink.report(&Diagnostic::LockWaitBegan {
         instance: 9,
         lock: "engine",
-        waited: Duration::ZERO,
+        id: minted(),
     });
     let event = only(session.stop().expect("stopped"));
-    assert_eq!(event.descriptor.id, 2);
+    assert_eq!(event.descriptor.id, LOCK_WAIT_BEGAN);
 }

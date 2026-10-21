@@ -89,9 +89,9 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             );
             return self.act(Due::default(), was_empty);
         };
-        let due =
-            self.durability
-                .provided(lineage.seq, seal, id, domain, outcome.into_result(domain));
+        let due = self
+            .durability
+            .provided(lineage.seq, seal, id, outcome.into_result(domain));
         self.act(due, was_empty)
     }
 

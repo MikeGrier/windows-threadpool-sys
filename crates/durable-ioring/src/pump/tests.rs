@@ -21,8 +21,9 @@ use crate::diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink, NoDiagnosti
 use crate::engine::{Engine, Slot, lock};
 use crate::io_core::DurableIoCore;
 use crate::io_target::IoTarget;
-use crate::lock_watch::{LockTimer, LockWatch};
+use crate::lock_watch::LockWatch;
 use crate::memory::{MemoryBackend, MemoryNotification, MemoryTarget};
+use crate::oracle::PairingChecker;
 use crate::test_support::Ticks;
 use crate::types::{Entry, Epoch, FlushDomain, IoFault, IoTargetKey, Outcome, WriteOptions};
 
@@ -503,10 +504,28 @@ fn a_wait_that_fails_still_drains_what_completed_during_it_and_reports_why() {
     assert_eq!(written(&mut pump.engine()), vec![15]);
 }
 
-/// Keeps the lock waits it is given, and says when a wait is about to block.
+/// Keeps the lock waits it is given, by their begins, holds them to the pairing rule, and says when
+/// a wait is about to block: its begin is reported just before.
 struct Waits {
     seen: Mutex<Vec<(u64, String)>>,
+    checker: Mutex<PairingChecker>,
     about_to_block: std::sync::mpsc::Sender<()>,
+}
+
+impl Waits {
+    fn new(about_to_block: std::sync::mpsc::Sender<()>) -> Arc<Self> {
+        Arc::new(Self {
+            seen: Mutex::default(),
+            checker: Mutex::default(),
+            about_to_block,
+        })
+    }
+
+    /// Every wait's pair ended, and the stream kept the rule.
+    fn finished(&self) {
+        let checker = std::mem::take(&mut *self.checker.lock().expect("the checker"));
+        checker.finish(&[]).expect("every wait's pair ended");
+    }
 }
 
 impl DiagnosticSink for Waits {
@@ -515,37 +534,30 @@ impl DiagnosticSink for Waits {
     }
 
     fn report(&self, event: &Diagnostic<'_>) {
-        // The wait's pair (DI-D-87) is passed over here until these tests bind to the pairing
-        // checker in DI-19.2.4; the wait reported after the lock is let go is what they check.
-        if event.pairing().is_some() {
-            return;
-        }
-        let Diagnostic::LockWait { instance, lock, .. } = event else {
-            panic!("reported {event}");
-        };
-        self.seen
+        self.checker
             .lock()
-            .expect("the record")
-            .push((*instance, (*lock).to_owned()));
-    }
-}
-
-impl LockTimer for Waits {
-    fn time(&self, blocking: &mut dyn FnMut()) -> Duration {
-        self.about_to_block.send(()).expect("the test is listening");
-        blocking();
-        Duration::from_nanos(1)
+            .expect("the checker")
+            .observe(event)
+            .expect("the pairing rule");
+        match event {
+            Diagnostic::LockWaitBegan { instance, lock, .. } => {
+                self.seen
+                    .lock()
+                    .expect("the record")
+                    .push((*instance, (*lock).to_owned()));
+                self.about_to_block.send(()).expect("the test is listening");
+            }
+            Diagnostic::LockWaitEnded { .. } => {}
+            other => panic!("reported {other}"),
+        }
     }
 }
 
 #[test]
 fn a_consumer_call_that_waits_for_the_engine_reports_the_wait_and_one_that_does_not_reports_none() {
     let (signal, about_to_block) = std::sync::mpsc::channel();
-    let waits = Arc::new(Waits {
-        seen: Mutex::default(),
-        about_to_block: signal,
-    });
-    let watch = LockWatch::new(11, waits.clone(), waits.clone());
+    let waits = Waits::new(signal);
+    let watch = LockWatch::new(11, waits.clone());
     let pump = pump().with_lock_watch(watch);
 
     drop(pump.engine());
@@ -565,16 +577,14 @@ fn a_consumer_call_that_waits_for_the_engine_reports_the_wait_and_one_that_does_
         *waits.seen.lock().expect("the record"),
         [(11, "engine".to_owned())]
     );
+    waits.finished();
 }
 
 #[test]
 fn a_pumps_drain_that_waits_for_the_engine_reports_the_wait() {
     let (signal, about_to_block) = std::sync::mpsc::channel();
-    let waits = Arc::new(Waits {
-        seen: Mutex::default(),
-        about_to_block: signal,
-    });
-    let watch = LockWatch::new(12, waits.clone(), waits.clone());
+    let waits = Waits::new(signal);
+    let watch = LockWatch::new(12, waits.clone());
     let mut pump = pump().with_lock_watch(watch);
 
     let slot = pump.shared();
@@ -589,4 +599,5 @@ fn a_pumps_drain_that_waits_for_the_engine_reports_the_wait() {
         *waits.seen.lock().expect("the record"),
         [(12, "engine".to_owned())]
     );
+    waits.finished();
 }

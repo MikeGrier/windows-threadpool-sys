@@ -22,6 +22,8 @@ from the question of its scope and is built as that: it is not a ruling.
 
 ## <a id="de-d-2"></a>DE-D-2: the events are one table, an event of durable-ioring is one event of the provider, and a flush answered is two
 
+**Partly superseded by [DE-D-5](#de-d-5):** the delay events, their ids 2 to 6, the duration and boolean fields, and opcode and task 0 gave way to the pairs; the table, the split of a flush by its part, and the rest stand.
+
 **The table is the one description of an event.** `EVENTS` holds, for each event, its id, name, the kind of event of
 durable-ioring that becomes it, its level, its keyword and its fields with their types. The manifest is rendered from it
 ([DE-D-3](#de-d-3)), the sink encodes each event to its columns, and a test reads an event back from the bytes by it, so the
@@ -109,3 +111,40 @@ failure. Starting a session needs privilege, so those tests are ignored by defau
 ([WE-D-3](../win-etw-sys/DESIGN-NOTES.md#we-d-3)). They were run elevated on 2026-10-20 and all nine pass.
 
 **Scheduled work.** None beyond [DI-12.1.6](../durable-ioring/CHECKLIST.md), which makes this the Windows driver's default.
+
+## <a id="de-d-5"></a>DE-D-5: the pairs are events with Start and Stop opcodes, a task for each kind, and new ids
+
+Made by the assistant under [DI-D-87](../durable-ioring/DESIGN-NOTES.md#di-d-87), whose ruling brought the opcodes into
+[DI-19.2.4](../durable-ioring/CHECKLIST.md) with the pairs; open to a ruling.
+
+**The events.** durable-ioring's begin and end events ([DI-D-80](../durable-ioring/DESIGN-NOTES.md#di-d-80)) replace its
+delay events, and each end is an event of its own: `SealBegan` and `SealEnded`, `FlushBeganFile` and `FlushEndedFile`,
+`FlushBeganDomain` and `FlushEndedDomain`, and `LockWaitBegan` and `LockWaitEnded`, beside `Inconsistency`. A flush is still
+split by its part, for [DE-D-2](#de-d-2)'s reason. An end repeats its begin's identity fields, so one record can be read alone.
+
+**The ids are 7 to 14, and 2 to 6 are retired.** A reader decodes by id, and a trace written before this change carries the
+delay events under 2 to 6, so those ids are not given again and no record of an old trace is decoded as one of these. `Inconsistency` keeps 1. A test pins every id.
+
+**Opcodes come from `Diagnostic::pairing`.** Each event's row says which end of a pair it is, a begin is written as
+`win:Start`, an end as `win:Stop`, and an event that is not a pair as `win:Info`. The row restates what `Diagnostic::pairing`
+defines ([DI-D-88](../durable-ioring/DESIGN-NOTES.md#di-d-88)), so a test encodes an event of each variant and holds its row's
+end equal to what `pairing` says of it; a variant that changes ends cannot leave its row behind.
+
+**A task for each kind of pair**: `Seal` 1, `Flush` 2 and `LockWait` 3, so a reader groups a Start with its Stop by task,
+and the activity id that joins them is [DI-19.4](../durable-ioring/CHECKLIST.md)'s. `Inconsistency` has no task. The manifest
+renders the tasks before the keywords and names each event's task and opcode.
+
+**Fields.** A pair's id is `Pair`, a 64-bit number. An end's outcome is `Outcome`, text, the word durable-ioring's `Display`
+gives it -- durable, failed, blocked or ended for a seal, succeeded, failed or abandoned for a flush -- so a reader sees the
+word and an outcome added later needs no new field. No event carries a duration: it is the gap between a Start's and its
+Stop's timestamps, which ETW writes on every record.
+
+**Checked, 2026-10-21**, as [DE-D-3](#de-d-3) was. `mc -um` accepted the rendered manifest with its `<tasks>` element and
+the events' `task` and `opcode` attributes, `rc` and `link` made the resource library, and `wevtutil im` installed it. A
+session recorded the events the example writes, and `tracerpt` showed each of the nine by name with its task by name and its
+opcode as `win:Info`, `win:Start` or `win:Stop`, and every field by name: the pair ids shared by each begin and its end, an
+end's outcome as its word, and a domain's bytes with their length. The same "Some events do not match the schema" warning
+as before was about the trace's header events. The manifest was uninstalled afterwards. The nine session tests and the
+Windows driver's ETW test were run elevated the same day and pass.
+
+**Scheduled work.** None beyond [DI-19.4](../durable-ioring/CHECKLIST.md).

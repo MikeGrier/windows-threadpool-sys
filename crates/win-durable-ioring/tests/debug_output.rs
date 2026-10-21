@@ -16,7 +16,8 @@ use std::time::Duration;
 
 use win_debugging_sys::run_debugged;
 use win_durable_ioring::{
-    DebugOutputDiagnostics, Diagnostic, DiagnosticSink, FlushDomain, FlushPart, IoTargetKey,
+    CorrelationId, DebugOutputDiagnostics, Diagnostic, DiagnosticKind, DiagnosticSink, FlushDomain,
+    FlushOutcome, FlushPart, IoTargetKey, SealOutcome,
 };
 
 /// The name of the test the process being debugged runs.
@@ -25,10 +26,12 @@ const REPORTER: &str = "a_process_that_reports_events";
 const BOUND: Duration = Duration::from_secs(30);
 
 /// Run in the process being debugged: reports one event of each kind, and two whose text has a NUL. Run on its own,
-/// with no debugger, the call does nothing, so this is harmless in an ordinary run of the tests.
+/// with no debugger, the call does nothing, so this is harmless in an ordinary run of the tests. It is the only code
+/// that mints pair ids in its process, so they are 1 to 5, in the order minted here, which the expected lines say.
 #[test]
 fn a_process_that_reports_events() {
     let sink = DebugOutputDiagnostics;
+    let mint = || CorrelationId::for_pair(&sink, DiagnosticKind::Seal).expect("wanted");
     let domain = FlushDomain::new(b"ssd-4".to_vec());
     let nul_domain = FlushDomain::new(vec![b'a', 0, b'b']);
     sink.report(&Diagnostic::Inconsistency {
@@ -36,52 +39,83 @@ fn a_process_that_reports_events() {
         what: "a write completed twice",
         detail: format_args!("lineage 3"),
     });
-    sink.report(&Diagnostic::LockWait {
+    let lock = mint();
+    sink.report(&Diagnostic::LockWaitBegan {
         instance: 4,
         lock: "engine",
-        waited: Duration::from_nanos(12),
+        id: lock,
     });
-    sink.report(&Diagnostic::FlushIssued {
+    sink.report(&Diagnostic::LockWaitEnded {
+        instance: 4,
+        lock: "engine",
+        id: lock,
+    });
+    let seal = mint();
+    sink.report(&Diagnostic::SealBegan {
         instance: 2,
-        lineage: 0,
-        through: format_args!("5"),
-        files: 3,
-        domains: 1,
+        lineage: 1,
+        through: format_args!("9"),
+        id: seal,
     });
-    sink.report(&Diagnostic::FlushAnswered {
+    let flush = mint();
+    sink.report(&Diagnostic::FlushBegan {
         instance: 2,
         lineage: 1,
         through: format_args!("9"),
         part: FlushPart::File(IoTargetKey(7)),
-        elapsed: Duration::from_nanos(15),
-        succeeded: false,
+        id: flush,
     });
-    sink.report(&Diagnostic::FlushAnswered {
+    sink.report(&Diagnostic::FlushEnded {
+        instance: 2,
+        lineage: 1,
+        through: format_args!("9"),
+        part: FlushPart::File(IoTargetKey(7)),
+        id: flush,
+        outcome: FlushOutcome::Failed,
+    });
+    let part = mint();
+    sink.report(&Diagnostic::FlushBegan {
         instance: 2,
         lineage: 1,
         through: format_args!("9"),
         part: FlushPart::Domain(&domain),
-        elapsed: Duration::from_nanos(40),
-        succeeded: true,
+        id: part,
     });
-    sink.report(&Diagnostic::SealWaited {
+    sink.report(&Diagnostic::FlushEnded {
         instance: 2,
-        lineage: 0,
-        through: format_args!("1"),
-        waited: Duration::from_nanos(30),
+        lineage: 1,
+        through: format_args!("9"),
+        part: FlushPart::Domain(&domain),
+        id: part,
+        outcome: FlushOutcome::Succeeded,
+    });
+    sink.report(&Diagnostic::SealEnded {
+        instance: 2,
+        lineage: 1,
+        through: format_args!("9"),
+        id: seal,
+        outcome: SealOutcome::Failed,
     });
     sink.report(&Diagnostic::Inconsistency {
         instance: 1,
         what: "x",
         detail: format_args!("a\0b"),
     });
-    sink.report(&Diagnostic::FlushAnswered {
+    let odd = mint();
+    sink.report(&Diagnostic::FlushBegan {
         instance: 1,
         lineage: 0,
         through: format_args!("1"),
         part: FlushPart::Domain(&nul_domain),
-        elapsed: Duration::from_nanos(1),
-        succeeded: true,
+        id: odd,
+    });
+    sink.report(&Diagnostic::FlushEnded {
+        instance: 1,
+        lineage: 0,
+        through: format_args!("1"),
+        part: FlushPart::Domain(&nul_domain),
+        id: odd,
+        outcome: FlushOutcome::Abandoned,
     });
 }
 
@@ -97,13 +131,17 @@ fn a_debugger_receives_each_event_as_a_dioring_line_in_order() {
         received,
         [
             "dioring: instance 7 found its own state inconsistent: a write completed twice (lineage 3)",
-            "dioring: instance 4 waited 12ns for its engine lock",
-            "dioring: instance 2 lineage 0 seal through 5: issued flushes of 3 files and 1 domains",
-            "dioring: instance 2 lineage 1 seal through 9: flush of file 7 failed after 15ns",
-            "dioring: instance 2 lineage 1 seal through 9: flush of domain \"ssd-4\" succeeded after 40ns",
-            "dioring: instance 2 lineage 0 seal through 1: waited 30ns for its writes",
+            "dioring: instance 4 (pair 1): waits for its engine lock",
+            "dioring: instance 4 (pair 1): took its engine lock",
+            "dioring: instance 2 lineage 1 seal through 9 (pair 2): began",
+            "dioring: instance 2 lineage 1 seal through 9: flush of file 7 (pair 3) began",
+            "dioring: instance 2 lineage 1 seal through 9: flush of file 7 (pair 3) failed",
+            "dioring: instance 2 lineage 1 seal through 9: flush of domain \"ssd-4\" (pair 4) began",
+            "dioring: instance 2 lineage 1 seal through 9: flush of domain \"ssd-4\" (pair 4) succeeded",
+            "dioring: instance 2 lineage 1 seal through 9 (pair 2): failed",
             "dioring: instance 1 found its own state inconsistent: x (a\\0b)",
-            "dioring: instance 1 lineage 0 seal through 1: flush of domain \"a\\0b\" succeeded after 1ns",
+            "dioring: instance 1 lineage 0 seal through 1: flush of domain \"a\\0b\" (pair 5) began",
+            "dioring: instance 1 lineage 0 seal through 1: flush of domain \"a\\0b\" (pair 5) abandoned",
         ]
     );
     assert!(observed.strings.iter().all(|line| line.unicode));

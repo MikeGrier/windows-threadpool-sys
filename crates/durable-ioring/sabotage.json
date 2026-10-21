@@ -1330,8 +1330,8 @@
       "file": "src/io_core/provider.rs",
       "expect": "caught",
       "why": "DI-D-27: a provider's failure is a failure of its domain; taking it as success reports durable what was lost.",
-      "find": ["                .provided(lineage.seq, seal, id, domain, outcome.into_result(domain));\n"],
-      "replace": ["                .provided(lineage.seq, seal, id, domain, DomainOutcome::Succeeded.into_result(domain));\n"]
+      "find": ["            .provided(lineage.seq, seal, id, outcome.into_result(domain));\n"],
+      "replace": ["            .provided(lineage.seq, seal, id, DomainOutcome::Succeeded.into_result(domain));\n"]
     },
     {
       "name": "DI-3.10.3.5.3: an answer for a domain the provider does not serve is accepted",
@@ -1940,84 +1940,45 @@
       "replace": ["    match short {\n        Some(count) => length.min(position(count)),\n        None => length,\n    }\n"]
     },
     {
-      "name": "DI-12.1.1: a seal's wait is stamped though no sink wants it",
-      "file": "src/durability.rs",
-      "expect": "caught",
-      "why": "A sink that does not want SealWaited must cost no clock read (DI-D-26): the stamp is taken only when the kind is wanted.",
-      "find": ["                if self.diagnostics.wants(DiagnosticKind::SealWaited) {"],
-      "replace": ["                if true {"]
-    },
-    {
-      "name": "DI-12.1.1: a flush is stamped though no sink wants its answer",
-      "file": "src/durability.rs",
-      "expect": "caught",
-      "why": "A sink that wants only the issue must leave nothing kept for the answer, which would otherwise be stamped and kept for good.",
-      "find": ["            if self.diagnostics.wants(DiagnosticKind::FlushAnswered) {"],
-      "replace": ["            if true {"]
-    },
-    {
-      "name": "DI-12.1.1: a retired lineage's flush stamps are kept",
-      "file": "src/durability.rs",
-      "expect": "caught",
-      "why": "An answer to a retired lineage's flush is dropped unread, so the stamps its seals left would stay for the life of the instance.",
-      "find": ["            self.flush_issued.retain(|(key, ..), _| *key != lineage);"],
-      "replace": [""]
-    },
-    {
-      "name": "DI-12.1.1: a seal's wait stamp is read and not removed",
-      "file": "src/durability.rs",
-      "expect": "caught",
-      "why": "The stamp is taken out when the seal is reported, so a seal reported once is not reported again and nothing is kept for it.",
-      "find": ["            if let Some(began) = self.seal_waiting.remove(&(lineage, seq)) {"],
-      "replace": ["            if let Some(began) = self.seal_waiting.get(&(lineage, seq)).copied() {"]
-    },
-    {
-      "name": "DI-12.1.1: a flush's elapsed time is taken backwards",
-      "file": "src/durability.rs",
-      "expect": "caught",
-      "why": "The time a file's flush took is from its issue to its answer; the other way round is zero, and so says nothing.",
-      "find": ["                elapsed: self.clock.elapsed(issued, self.clock.now()),"],
-      "replace": ["                elapsed: self.clock.elapsed(self.clock.now(), issued),"]
-    },
-    {
-      "name": "DI-12.1.1: a provider domain's elapsed time is taken backwards",
-      "file": "src/durability/providers.rs",
-      "expect": "caught",
-      "why": "As a file's: from the seal's issue to the domain's answer.",
-      "find": ["                elapsed: self.clock.elapsed(issued, self.clock.now()),"],
-      "replace": ["                elapsed: self.clock.elapsed(self.clock.now(), issued),"]
-    },
-    {
-      "name": "DI-12.1.1: every lock is timed, waited for or not",
+      "name": "DI-12.1.1: every lock is reported as waited for, held or not",
       "file": "src/lock_watch.rs",
       "expect": "caught",
-      "why": "An immediate acquisition is a try_lock and nothing else (DI-D-26): no clock read and no event. Timing every one reads the clock on the path the pattern exists to keep free.",
-      "find": ["        let (guard, waited) = match mutex.try_lock() {"],
-      "replace": ["        let (guard, waited) = match Err::<MutexGuard<'a, T>, TryLockError<MutexGuard<'a, T>>>(TryLockError::WouldBlock) {"]
+      "why": "An immediate acquisition is a try_lock and nothing else (DI-D-26, DI-D-87): no id minted and no event. Reporting every one as a wait builds two events on the path the pattern exists to keep free, and reports waits that never happened.",
+      "find": ["        let guard = match mutex.try_lock() {"],
+      "replace": ["        let guard = match Err::<MutexGuard<'a, T>, TryLockError<MutexGuard<'a, T>>>(TryLockError::WouldBlock) {"]
     },
     {
-      "name": "DI-12.1.1: a wait is timed though no sink wants it",
+      "name": "DI-12.1.1: a wait's pair is minted though no sink wants it",
       "file": "src/lock_watch.rs",
       "expect": "caught",
-      "why": "A sink that does not want lock waits must cost a blocked acquisition no clock read.",
+      "why": "A sink that does not want lock waits must cost a blocked acquisition no id and no event (DI-D-87).",
       "find": ["                let Some(id) = CorrelationId::for_pair(&*self.sink, DiagnosticKind::LockWait)"],
       "replace": ["                let Some(id) = CorrelationId::for_pair(&crate::diagnostics::StderrDiagnostics, DiagnosticKind::LockWait)"]
     },
     {
-      "name": "DI-12.1.1: a wait is reported before the lock is let go",
+      "name": "DI-19.2.4: a lock wait's end is written before the lock is taken",
       "file": "src/lock_watch.rs",
       "expect": "caught",
-      "why": "The report must not lengthen the hold it measures, so the guard is released first; a sink that takes its time would otherwise be holding the engine.",
-      "find": ["        drop(self.guard.take());"],
-      "replace": [""]
-    },
-    {
-      "name": "DI-12.1.1 control: a seal's wait stamp is kept by another spelling of the same entry",
-      "file": "src/durability.rs",
-      "expect": "survives",
-      "why": "A control: the same stamp by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
-      "find": ["                                .or_insert(now);"],
-      "replace": ["                                .or_insert_with(|| now);"]
+      "why": "The end says the lock was taken (DI-D-80): written first, it closes the pair while the thread is still waiting, and a wait that never ends reads as one that did.",
+      "find": [
+        "                let taken = mutex.lock().unwrap_or_else(PoisonError::into_inner);",
+        "                // Written with the lock held, as the engineer ruled (DI-D-80): the sink's own",
+        "                // synchronization is a leaf beneath it, which `DiagnosticSink` requires.",
+        "                self.sink.report(&Diagnostic::LockWaitEnded {",
+        "                    instance: self.instance,",
+        "                    lock: name,",
+        "                    id,",
+        "                });",
+        "                taken"
+      ],
+      "replace": [
+        "                self.sink.report(&Diagnostic::LockWaitEnded {",
+        "                    instance: self.instance,",
+        "                    lock: name,",
+        "                    id,",
+        "                });",
+        "                mutex.lock().unwrap_or_else(PoisonError::into_inner)"
+      ]
     },
     {
       "name": "DI-12.1.3: the line prefix drops its space",
@@ -2240,8 +2201,24 @@
       "file": "src/lock_watch.rs",
       "expect": "survives",
       "why": "A control: the same binding with its type written out, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
-      "find": ["                let mut taken = None;"],
-      "replace": ["                let mut taken: Option<MutexGuard<'_, T>> = None;"]
+      "find": ["                let taken = mutex.lock().unwrap_or_else(PoisonError::into_inner);"],
+      "replace": ["                let taken: MutexGuard<'_, T> = mutex.lock().unwrap_or_else(PoisonError::into_inner);"]
+    },
+    {
+      "name": "DI-19.2.4: a provider's abandoned domain ends as failed",
+      "file": "src/durability/providers.rs",
+      "expect": "caught",
+      "why": "A flush's end says how it ended (DI-D-87): a domain its provider abandoned did not fail, and an end that says it did sends a reader after a failure that did not happen.",
+      "find": ["            Err(FailureCause::ProviderAbandoned { .. }) => FlushOutcome::Abandoned,"],
+      "replace": ["            Err(FailureCause::ProviderAbandoned { .. }) => FlushOutcome::Failed,"]
+    },
+    {
+      "name": "DI-19.2.4: a provider's failed domain ends as succeeded",
+      "file": "src/durability/providers.rs",
+      "expect": "caught",
+      "why": "A failed domain whose end says it succeeded hides the failure the pair exists to show.",
+      "find": ["            Err(_) => FlushOutcome::Failed,"],
+      "replace": ["            Err(_) => FlushOutcome::Succeeded,"]
     }
   ]
 }

@@ -443,3 +443,63 @@ fn many_seals_each_end_once() {
     );
     sink.finished();
 }
+
+#[test]
+fn a_seal_with_a_file_and_a_domain_is_a_flush_pair_for_each_part() {
+    let sink = Checked::pairs();
+    let mut rig = rig(&sink, FaultScript::new(), &["log"], &["log", "disk"]);
+    rig.write(1, 0, b"x").expect("accepted");
+    rig.run();
+    rig.seal(1);
+    rig.run();
+    let request = rig.requests.pop().expect("a request");
+    let actions = rig.core.provided(
+        request.lineage,
+        request.seal,
+        &domain("log"),
+        DomainOutcome::Succeeded,
+    );
+    rig.act(actions);
+    rig.run();
+    rig.entries();
+    let lines = sink.lines();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("flush of file 1") && l.ends_with("succeeded")),
+        "{lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("flush of domain \"log\"") && l.ends_with("succeeded")),
+        "{lines:#?}"
+    );
+    assert!(
+        lines.last().is_some_and(|l| l.ends_with("durable")),
+        "{lines:#?}"
+    );
+    sink.finished();
+}
+
+#[test]
+fn a_minted_lineages_pairs_name_its_lineage() {
+    let sink = Checked::pairs();
+    let mut rig = plain(&sink);
+    let minted = rig.core.mint_lineage(None);
+    rig.write_with(KEY, Epoch::new(minted, 3), 0, b"x", Default::default())
+        .expect("accepted");
+    rig.run();
+    rig.seal_in(minted, 3);
+    rig.run();
+    rig.entries();
+    let lines = sink.lines();
+    assert!(!lines.is_empty());
+    assert!(
+        lines
+            .iter()
+            .all(|l| l.contains(&format!("lineage {} seal through 3", minted.seq))),
+        "{lines:#?}"
+    );
+    sink.finished();
+}

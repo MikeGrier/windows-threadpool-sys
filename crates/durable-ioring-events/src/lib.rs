@@ -13,8 +13,9 @@ mod sink;
 pub use encode::{Value, encode, schema_of};
 pub use manifest::{MANIFEST_FILE, manifest};
 pub use schema::{
-    Column, ColumnType, EVENTS, EventSchema, FLUSHES, INCONSISTENCIES, KEYWORDS, Keyword, LOCKS,
-    PROVIDER_ID, PROVIDER_NAME, SEALS, VERSION, id, schema_of_id, schema_of_kind,
+    Column, ColumnType, EVENTS, EventSchema, FLUSH_TASK, FLUSHES, INCONSISTENCIES, KEYWORDS,
+    Keyword, LOCK_WAIT_TASK, LOCKS, PROVIDER_ID, PROVIDER_NAME, SEAL_TASK, SEALS, TASKS, Task,
+    VERSION, id, opcode, schema_of_id, schema_of_kind,
 };
 pub use sink::EtwDiagnostics;
 pub use win_etw_sys::{EventDescriptor, Guid};

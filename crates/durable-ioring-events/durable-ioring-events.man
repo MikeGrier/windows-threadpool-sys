@@ -7,6 +7,11 @@
     <events>
       <provider name="durable-ioring-events" guid="{47067f6f-8f2b-4278-9b92-092dfb3385e6}" symbol="DURABLE_IORING_EVENTS"
           resourceFileName="durable-ioring-events.dll" messageFileName="durable-ioring-events.dll">
+        <tasks>
+          <task name="Seal" value="1"/>
+          <task name="Flush" value="2"/>
+          <task name="LockWait" value="3"/>
+        </tasks>
         <keywords>
           <keyword name="Locks" mask="0x1"/>
           <keyword name="Flushes" mask="0x2"/>
@@ -14,12 +19,15 @@
           <keyword name="Inconsistencies" mask="0x8"/>
         </keywords>
         <events>
-          <event value="1" symbol="Inconsistency" version="0" level="win:Error" keywords="Inconsistencies" template="InconsistencyTemplate"/>
-          <event value="2" symbol="LockWait" version="0" level="win:Informational" keywords="Locks" template="LockWaitTemplate"/>
-          <event value="3" symbol="FlushIssued" version="0" level="win:Informational" keywords="Flushes" template="FlushIssuedTemplate"/>
-          <event value="4" symbol="FlushAnsweredFile" version="0" level="win:Informational" keywords="Flushes" template="FlushAnsweredFileTemplate"/>
-          <event value="5" symbol="FlushAnsweredDomain" version="0" level="win:Informational" keywords="Flushes" template="FlushAnsweredDomainTemplate"/>
-          <event value="6" symbol="SealWaited" version="0" level="win:Informational" keywords="Seals" template="SealWaitedTemplate"/>
+          <event value="1" symbol="Inconsistency" version="0" level="win:Error" keywords="Inconsistencies" opcode="win:Info" template="InconsistencyTemplate"/>
+          <event value="7" symbol="SealBegan" version="0" level="win:Informational" keywords="Seals" task="Seal" opcode="win:Start" template="SealBeganTemplate"/>
+          <event value="8" symbol="SealEnded" version="0" level="win:Informational" keywords="Seals" task="Seal" opcode="win:Stop" template="SealEndedTemplate"/>
+          <event value="9" symbol="FlushBeganFile" version="0" level="win:Informational" keywords="Flushes" task="Flush" opcode="win:Start" template="FlushBeganFileTemplate"/>
+          <event value="10" symbol="FlushEndedFile" version="0" level="win:Informational" keywords="Flushes" task="Flush" opcode="win:Stop" template="FlushEndedFileTemplate"/>
+          <event value="11" symbol="FlushBeganDomain" version="0" level="win:Informational" keywords="Flushes" task="Flush" opcode="win:Start" template="FlushBeganDomainTemplate"/>
+          <event value="12" symbol="FlushEndedDomain" version="0" level="win:Informational" keywords="Flushes" task="Flush" opcode="win:Stop" template="FlushEndedDomainTemplate"/>
+          <event value="13" symbol="LockWaitBegan" version="0" level="win:Informational" keywords="Locks" task="LockWait" opcode="win:Start" template="LockWaitBeganTemplate"/>
+          <event value="14" symbol="LockWaitEnded" version="0" level="win:Informational" keywords="Locks" task="LockWait" opcode="win:Stop" template="LockWaitEndedTemplate"/>
         </events>
         <templates>
           <template tid="InconsistencyTemplate">
@@ -27,40 +35,60 @@
             <data name="What" inType="win:UnicodeString"/>
             <data name="Detail" inType="win:UnicodeString"/>
           </template>
-          <template tid="LockWaitTemplate">
-            <data name="Instance" inType="win:UInt64"/>
-            <data name="Lock" inType="win:UnicodeString"/>
-            <data name="WaitedNanoseconds" inType="win:UInt64"/>
-          </template>
-          <template tid="FlushIssuedTemplate">
+          <template tid="SealBeganTemplate">
             <data name="Instance" inType="win:UInt64"/>
             <data name="Lineage" inType="win:UInt64"/>
             <data name="Through" inType="win:UnicodeString"/>
-            <data name="Files" inType="win:UInt64"/>
-            <data name="Domains" inType="win:UInt64"/>
+            <data name="Pair" inType="win:UInt64"/>
           </template>
-          <template tid="FlushAnsweredFileTemplate">
+          <template tid="SealEndedTemplate">
+            <data name="Instance" inType="win:UInt64"/>
+            <data name="Lineage" inType="win:UInt64"/>
+            <data name="Through" inType="win:UnicodeString"/>
+            <data name="Pair" inType="win:UInt64"/>
+            <data name="Outcome" inType="win:UnicodeString"/>
+          </template>
+          <template tid="FlushBeganFileTemplate">
             <data name="Instance" inType="win:UInt64"/>
             <data name="Lineage" inType="win:UInt64"/>
             <data name="Through" inType="win:UnicodeString"/>
             <data name="File" inType="win:UInt64"/>
-            <data name="ElapsedNanoseconds" inType="win:UInt64"/>
-            <data name="Succeeded" inType="win:Boolean"/>
+            <data name="Pair" inType="win:UInt64"/>
           </template>
-          <template tid="FlushAnsweredDomainTemplate">
+          <template tid="FlushEndedFileTemplate">
+            <data name="Instance" inType="win:UInt64"/>
+            <data name="Lineage" inType="win:UInt64"/>
+            <data name="Through" inType="win:UnicodeString"/>
+            <data name="File" inType="win:UInt64"/>
+            <data name="Pair" inType="win:UInt64"/>
+            <data name="Outcome" inType="win:UnicodeString"/>
+          </template>
+          <template tid="FlushBeganDomainTemplate">
             <data name="Instance" inType="win:UInt64"/>
             <data name="Lineage" inType="win:UInt64"/>
             <data name="Through" inType="win:UnicodeString"/>
             <data name="DomainLength" inType="win:UInt32"/>
             <data name="Domain" inType="win:Binary" length="DomainLength"/>
-            <data name="ElapsedNanoseconds" inType="win:UInt64"/>
-            <data name="Succeeded" inType="win:Boolean"/>
+            <data name="Pair" inType="win:UInt64"/>
           </template>
-          <template tid="SealWaitedTemplate">
+          <template tid="FlushEndedDomainTemplate">
             <data name="Instance" inType="win:UInt64"/>
             <data name="Lineage" inType="win:UInt64"/>
             <data name="Through" inType="win:UnicodeString"/>
-            <data name="WaitedNanoseconds" inType="win:UInt64"/>
+            <data name="DomainLength" inType="win:UInt32"/>
+            <data name="Domain" inType="win:Binary" length="DomainLength"/>
+            <data name="Pair" inType="win:UInt64"/>
+            <data name="Outcome" inType="win:UnicodeString"/>
+          </template>
+          <template tid="LockWaitBeganTemplate">
+            <data name="Instance" inType="win:UInt64"/>
+            <data name="Lock" inType="win:UnicodeString"/>
+            <data name="Pair" inType="win:UInt64"/>
+          </template>
+          <template tid="LockWaitEndedTemplate">
+            <data name="Instance" inType="win:UInt64"/>
+            <data name="Lock" inType="win:UnicodeString"/>
+            <data name="Pair" inType="win:UInt64"/>
           </template>
         </templates>
       </provider>

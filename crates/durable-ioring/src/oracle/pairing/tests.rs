@@ -228,10 +228,10 @@ fn an_event_that_is_no_pair_is_passed_over() {
     seal_began(&mut checker, 1, 0, 1).expect("a begin");
     feed!(
         checker,
-        Diagnostic::LockWait {
-            instance: 1,
-            lock: "engine",
-            waited: std::time::Duration::ZERO
+        Diagnostic::Inconsistency {
+            instance: 2,
+            what: "z",
+            detail: format_args!("between")
         }
     )
     .expect("no pair");

@@ -2034,7 +2034,7 @@
       "name": "DI-12.1.1: a pool delivery's consumer calls lock the engine unwatched",
       "file": "src/windows_backend/pool.rs",
       "expect": "caught",
-      "why": "The engine's lock is timed on every path that takes it, so a wait for it on a consumer's call is reported.",
+      "why": "The engine's lock is watched on every path that takes it, so a wait for it on a consumer's call is reported.",
       "find": ["        present_watched(self.watch.lock(&self.engine, ENGINE_LOCK))"],
       "replace": ["        present(lock(&self.engine))"]
     },
@@ -2141,6 +2141,48 @@
       "why": "A control: the same empty parts made by counting the routes instead of walking them, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["            self.routes.iter().map(|_| Vec::new()).collect();"],
       "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect();"]
+    },
+    {
+      "name": "DI-19.2.4: a lock wait's end names a pair of its own, as the driver's tests see it",
+      "file": "../durable-ioring/src/lock_watch.rs",
+      "expect": "caught",
+      "why": "The driver's lock-wait tests bind to PairingChecker (DI-D-87), the one definition of the pairing rule; an end whose id is not its begin's is visible to the checker alone, so this is caught only if the binding is real.",
+      "find": [
+        "                self.sink.report(&Diagnostic::LockWaitEnded {",
+        "                    instance: self.instance,",
+        "                    lock: name,",
+        "                    id,"
+      ],
+      "replace": [
+        "                self.sink.report(&Diagnostic::LockWaitEnded {",
+        "                    instance: self.instance,",
+        "                    lock: name,",
+        "                    id: CorrelationId::for_pair(&*self.sink, DiagnosticKind::LockWait).unwrap_or(id),"
+      ]
+    },
+    {
+      "name": "DI-19.2.4: a lock wait's end is not reported, as the driver's tests see it",
+      "file": "../durable-ioring/src/lock_watch.rs",
+      "expect": "caught",
+      "why": "Each driver test that waits for the engine's lock expects its thread's begin and its end.",
+      "find": [
+        "                self.sink.report(&Diagnostic::LockWaitEnded {"
+      ],
+      "replace": [
+        "                let _ = &(Diagnostic::LockWaitEnded {"
+      ]
+    },
+    {
+      "name": "DI-19.2.4 control: the taken guard is declared with its type spelled, as the driver's tests see it",
+      "file": "../durable-ioring/src/lock_watch.rs",
+      "expect": "survives",
+      "why": "A control: the same binding with its type written out, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": [
+        "                let taken = mutex.lock().unwrap_or_else(PoisonError::into_inner);"
+      ],
+      "replace": [
+        "                let taken: MutexGuard<'_, T> = mutex.lock().unwrap_or_else(PoisonError::into_inner);"
+      ]
     }
   ]
 }

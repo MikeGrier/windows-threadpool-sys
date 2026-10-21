@@ -4,7 +4,6 @@
 //! mock it advances by hand.
 
 use std::fmt::Debug;
-use std::time::Duration;
 
 /// What a stamp is: a reading of a [`StampClock`], ordered, and cheap to copy and share.
 pub trait Instant: Copy + Ord + Debug + Send + Sync + 'static {}
@@ -22,9 +21,4 @@ pub trait StampClock: Send + 'static {
 
     /// A reading: never before one taken earlier.
     fn now(&self) -> Self::Instant;
-
-    /// How long it was from the reading `earlier` to the reading `later`, which a delay event
-    /// reports (DI-12.1.1). A reading cannot be subtracted without knowing its unit, so the clock,
-    /// which does, says. Zero if `later` is not after `earlier`.
-    fn elapsed(&self, earlier: Self::Instant, later: Self::Instant) -> Duration;
 }

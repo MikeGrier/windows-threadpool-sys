@@ -5,7 +5,7 @@
 //! The table is the one place an event is described. The manifest is rendered from it, the sink encodes each event to it, and
 //! a reader's decoder can be written from it, so the three cannot disagree about a field.
 
-use durable_ioring::DiagnosticKind;
+use durable_ioring::{DiagnosticKind, Edge};
 use win_etw_sys::{EventDescriptor, Guid, level};
 
 #[cfg(test)]
@@ -56,6 +56,15 @@ pub struct Keyword {
     pub mask: u64,
 }
 
+/// A task: what a pair of events is about, which a reader groups a begin and its end by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Task {
+    /// The task's name in the manifest.
+    pub name: &'static str,
+    /// Its value, which is an event's `EVENT_DESCRIPTOR`'s `Task`. Zero is the default and names none.
+    pub value: u16,
+}
+
 /// One event of the provider.
 #[derive(Clone, Copy, Debug)]
 pub struct EventSchema {
@@ -63,9 +72,14 @@ pub struct EventSchema {
     pub id: u16,
     /// The event's name in the manifest.
     pub name: &'static str,
-    /// The kind of event of durable-ioring that becomes this one. A kind with two events, a flush answered by a file or by a
-    /// domain, names both, and they share a level and a keyword.
+    /// The kind of event of durable-ioring that becomes this one. A kind with several events -- a pair's begin and end, and a
+    /// flush's for a file or a domain -- names them all, and they share a level, a keyword and a task.
     pub kind: DiagnosticKind,
+    /// Which end of a pair the event is, as [`Diagnostic::pairing`](durable_ioring::Diagnostic::pairing) says; `None` for an
+    /// event that is no end of one. It decides the event's opcode.
+    pub edge: Option<Edge>,
+    /// The task a pair's events share; `None` for an event that is no end of one.
+    pub task: Option<&'static Task>,
     /// The level: see [`win_etw_sys::level`].
     pub level: u8,
     /// The keyword.
@@ -83,33 +97,71 @@ impl EventSchema {
             version: VERSION,
             channel: CHANNEL,
             level: self.level,
-            opcode: OPCODE,
-            task: TASK,
+            opcode: opcode(self.edge),
+            task: match self.task {
+                Some(task) => task.value,
+                None => NO_TASK,
+            },
             keyword: self.keyword.mask,
         }
     }
+}
+
+/// The opcode an event is written with: a pair's begin is `win:Start` and its end `win:Stop`, which a reader pairs by task and
+/// activity, and any other event `win:Info`.
+#[must_use]
+pub const fn opcode(edge: Option<Edge>) -> u8 {
+    match edge {
+        None => opcode::INFO,
+        Some(Edge::Begin) => opcode::START,
+        Some(Edge::End) => opcode::STOP,
+    }
+}
+
+/// The opcodes the provider writes, as `winmeta.xml` defines them.
+pub mod opcode {
+    /// `win:Info`: "Most events use INFO (0)."
+    pub const INFO: u8 = 0;
+    /// `win:Start`: the beginning of an activity.
+    pub const START: u8 = 1;
+    /// `win:Stop`: the end of an activity.
+    pub const STOP: u8 = 2;
 }
 
 /// Every event is version 0: this is the first definition, and a change to an event's fields is a new version (DE-D-2).
 pub const VERSION: u8 = 0;
 /// "Manifest-based events normally use channel 0."
 const CHANNEL: u8 = 0;
-/// "Most events use INFO (0)."
-const OPCODE: u8 = 0;
 /// "The task code 0 is the default."
-const TASK: u16 = 0;
+const NO_TASK: u16 = 0;
+
+/// A seal, from its being asked for to its answer.
+pub static SEAL_TASK: Task = Task {
+    name: "Seal",
+    value: 1,
+};
+/// One part of a seal's flush, from its issue to its answer.
+pub static FLUSH_TASK: Task = Task {
+    name: "Flush",
+    value: 2,
+};
+/// A wait for one of an instance's locks.
+pub static LOCK_WAIT_TASK: Task = Task {
+    name: "LockWait",
+    value: 3,
+};
 
 /// Waits for the instance's locks.
 pub static LOCKS: Keyword = Keyword {
     name: "Locks",
     mask: 0x1,
 };
-/// A seal's flushes, and how long each took.
+/// Each part of a seal's flush.
 pub static FLUSHES: Keyword = Keyword {
     name: "Flushes",
     mask: 0x2,
 };
-/// A seal waiting for the writes at or below it.
+/// Each seal.
 pub static SEALS: Keyword = Keyword {
     name: "Seals",
     mask: 0x4,
@@ -127,31 +179,71 @@ const fn column(name: &'static str, ty: ColumnType) -> Column {
 const INSTANCE: Column = column("Instance", ColumnType::UInt64);
 const LINEAGE: Column = column("Lineage", ColumnType::UInt64);
 const THROUGH: Column = column("Through", ColumnType::UnicodeString);
-const ELAPSED: Column = column("ElapsedNanoseconds", ColumnType::UInt64);
-const SUCCEEDED: Column = column("Succeeded", ColumnType::Boolean);
+const FILE: Column = column("File", ColumnType::UInt64);
+const DOMAIN_LENGTH: Column = column("DomainLength", ColumnType::UInt32);
+const DOMAIN: Column = column(
+    "Domain",
+    ColumnType::Binary {
+        length: "DomainLength",
+    },
+);
+const LOCK: Column = column("Lock", ColumnType::UnicodeString);
+const PAIR: Column = column("Pair", ColumnType::UInt64);
+const OUTCOME: Column = column("Outcome", ColumnType::UnicodeString);
 
-/// The id of each event. Changing one is a breaking change to every reader that decodes by it.
+/// The id of each event. Changing one is a breaking change to every reader that decodes by it. Ids 2 to 6 were the delay events
+/// that preceded the pairs, and are not used again, so a trace recorded with them is never read as one of these (DE-D-5).
 pub mod id {
     /// An instance found its own state inconsistent.
     pub const INCONSISTENCY: u16 = 1;
-    /// A wait for one of an instance's locks that was not immediate.
-    pub const LOCK_WAIT: u16 = 2;
-    /// A seal's flushes, and its request to the consumer's provider, were issued.
-    pub const FLUSH_ISSUED: u16 = 3;
-    /// A flush of a file answered.
-    pub const FLUSH_ANSWERED_FILE: u16 = 4;
-    /// A flush of a domain answered.
-    pub const FLUSH_ANSWERED_DOMAIN: u16 = 5;
-    /// A seal that waited for the writes at or below it is issued.
-    pub const SEAL_WAITED: u16 = 6;
+    /// A seal was asked for.
+    pub const SEAL_BEGAN: u16 = 7;
+    /// A seal was answered, or never will be.
+    pub const SEAL_ENDED: u16 = 8;
+    /// A file's flush was issued.
+    pub const FLUSH_BEGAN_FILE: u16 = 9;
+    /// A file's flush answered, or never will.
+    pub const FLUSH_ENDED_FILE: u16 = 10;
+    /// A domain's part of a flush was issued.
+    pub const FLUSH_BEGAN_DOMAIN: u16 = 11;
+    /// A domain's part of a flush answered, or never will.
+    pub const FLUSH_ENDED_DOMAIN: u16 = 12;
+    /// A wait for one of an instance's locks began.
+    pub const LOCK_WAIT_BEGAN: u16 = 13;
+    /// The wait took the lock.
+    pub const LOCK_WAIT_ENDED: u16 = 14;
+}
+
+/// One end of a pair: its id, name, kind, end and columns, at the information level, with its kind's keyword and task.
+const fn pair_end(
+    id: u16,
+    name: &'static str,
+    kind: DiagnosticKind,
+    edge: Edge,
+    keyword: &'static Keyword,
+    task: &'static Task,
+    columns: &'static [Column],
+) -> EventSchema {
+    EventSchema {
+        id,
+        name,
+        kind,
+        edge: Some(edge),
+        task: Some(task),
+        level: level::INFO,
+        keyword,
+        columns,
+    }
 }
 
 /// The events of the provider, in the order of their ids.
-pub static EVENTS: [EventSchema; 6] = [
+pub static EVENTS: [EventSchema; 9] = [
     EventSchema {
         id: id::INCONSISTENCY,
         name: "Inconsistency",
         kind: DiagnosticKind::Inconsistency,
+        edge: None,
+        task: None,
         level: level::ERROR,
         keyword: &INCONSISTENCIES,
         columns: &[
@@ -160,82 +252,90 @@ pub static EVENTS: [EventSchema; 6] = [
             column("Detail", ColumnType::UnicodeString),
         ],
     },
-    EventSchema {
-        id: id::LOCK_WAIT,
-        name: "LockWait",
-        kind: DiagnosticKind::LockWait,
-        level: level::INFO,
-        keyword: &LOCKS,
-        columns: &[
-            INSTANCE,
-            column("Lock", ColumnType::UnicodeString),
-            column("WaitedNanoseconds", ColumnType::UInt64),
-        ],
-    },
-    EventSchema {
-        id: id::FLUSH_ISSUED,
-        name: "FlushIssued",
-        kind: DiagnosticKind::FlushIssued,
-        level: level::INFO,
-        keyword: &FLUSHES,
-        columns: &[
-            INSTANCE,
-            LINEAGE,
-            THROUGH,
-            column("Files", ColumnType::UInt64),
-            column("Domains", ColumnType::UInt64),
-        ],
-    },
-    EventSchema {
-        id: id::FLUSH_ANSWERED_FILE,
-        name: "FlushAnsweredFile",
-        kind: DiagnosticKind::FlushAnswered,
-        level: level::INFO,
-        keyword: &FLUSHES,
-        columns: &[
-            INSTANCE,
-            LINEAGE,
-            THROUGH,
-            column("File", ColumnType::UInt64),
-            ELAPSED,
-            SUCCEEDED,
-        ],
-    },
-    EventSchema {
-        id: id::FLUSH_ANSWERED_DOMAIN,
-        name: "FlushAnsweredDomain",
-        kind: DiagnosticKind::FlushAnswered,
-        level: level::INFO,
-        keyword: &FLUSHES,
-        columns: &[
-            INSTANCE,
-            LINEAGE,
-            THROUGH,
-            column("DomainLength", ColumnType::UInt32),
-            column(
-                "Domain",
-                ColumnType::Binary {
-                    length: "DomainLength",
-                },
-            ),
-            ELAPSED,
-            SUCCEEDED,
-        ],
-    },
-    EventSchema {
-        id: id::SEAL_WAITED,
-        name: "SealWaited",
-        kind: DiagnosticKind::SealWaited,
-        level: level::INFO,
-        keyword: &SEALS,
-        columns: &[
+    pair_end(
+        id::SEAL_BEGAN,
+        "SealBegan",
+        DiagnosticKind::Seal,
+        Edge::Begin,
+        &SEALS,
+        &SEAL_TASK,
+        &[INSTANCE, LINEAGE, THROUGH, PAIR],
+    ),
+    pair_end(
+        id::SEAL_ENDED,
+        "SealEnded",
+        DiagnosticKind::Seal,
+        Edge::End,
+        &SEALS,
+        &SEAL_TASK,
+        &[INSTANCE, LINEAGE, THROUGH, PAIR, OUTCOME],
+    ),
+    pair_end(
+        id::FLUSH_BEGAN_FILE,
+        "FlushBeganFile",
+        DiagnosticKind::Flush,
+        Edge::Begin,
+        &FLUSHES,
+        &FLUSH_TASK,
+        &[INSTANCE, LINEAGE, THROUGH, FILE, PAIR],
+    ),
+    pair_end(
+        id::FLUSH_ENDED_FILE,
+        "FlushEndedFile",
+        DiagnosticKind::Flush,
+        Edge::End,
+        &FLUSHES,
+        &FLUSH_TASK,
+        &[INSTANCE, LINEAGE, THROUGH, FILE, PAIR, OUTCOME],
+    ),
+    pair_end(
+        id::FLUSH_BEGAN_DOMAIN,
+        "FlushBeganDomain",
+        DiagnosticKind::Flush,
+        Edge::Begin,
+        &FLUSHES,
+        &FLUSH_TASK,
+        &[INSTANCE, LINEAGE, THROUGH, DOMAIN_LENGTH, DOMAIN, PAIR],
+    ),
+    pair_end(
+        id::FLUSH_ENDED_DOMAIN,
+        "FlushEndedDomain",
+        DiagnosticKind::Flush,
+        Edge::End,
+        &FLUSHES,
+        &FLUSH_TASK,
+        &[
             INSTANCE,
             LINEAGE,
             THROUGH,
-            column("WaitedNanoseconds", ColumnType::UInt64),
+            DOMAIN_LENGTH,
+            DOMAIN,
+            PAIR,
+            OUTCOME,
         ],
-    },
+    ),
+    pair_end(
+        id::LOCK_WAIT_BEGAN,
+        "LockWaitBegan",
+        DiagnosticKind::LockWait,
+        Edge::Begin,
+        &LOCKS,
+        &LOCK_WAIT_TASK,
+        &[INSTANCE, LOCK, PAIR],
+    ),
+    pair_end(
+        id::LOCK_WAIT_ENDED,
+        "LockWaitEnded",
+        DiagnosticKind::LockWait,
+        Edge::End,
+        &LOCKS,
+        &LOCK_WAIT_TASK,
+        &[INSTANCE, LOCK, PAIR],
+    ),
 ];
+
+/// The tasks of the provider.
+pub static TASKS: [&Task; 3] = [&SEAL_TASK, &FLUSH_TASK, &LOCK_WAIT_TASK];
 
 /// The keywords of the provider.
 pub static KEYWORDS: [&Keyword; 4] = [&LOCKS, &FLUSHES, &SEALS, &INCONSISTENCIES];
