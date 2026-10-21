@@ -118,8 +118,9 @@ with relaxed increments. The shipped delay events ([DI-12.1](COMPLETED-CHECKLIST
 issue once for a whole seal and its answer once for each part; and the ETW write takes the current thread's activity id,
 which a begin and an end on different threads do not share, since a provider answers from any thread.
 
-Ruled by the engineer, 2026-10-21, and recorded in [DI-D-80](DESIGN-NOTES.md#di-d-80): there are pairs for seals, which a sink may
-decline, and for the weightier actions such as a flush; a flush is asynchronous in the provider, as with `io_uring`, so
+Ruled by the engineer, 2026-10-21, and recorded in [DI-D-80](DESIGN-NOTES.md#di-d-80): there are pairs for seals and for the
+weightier actions such as a flush, and a sink may decline any pair; a flush is asynchronous in the provider, as with
+`io_uring`, so
 its pairing matters; an end carries no `elapsed`, and a sink that wants a duration of its own is enhanced in the sink, not
 in the core or the router; and the pairs are a seal, a flush of a file or a domain, and a lock wait.
 
@@ -136,7 +137,7 @@ makes two processes' ids the same, which a counter that starts again would allow
   mint with no sink wanting an event takes none.
 
 - [ ] **DI-19.2** -- **Begin and end events in the core, and one oracle for their pairing.** Three pairs: a seal, each flush
-  of a file or a domain, and a lock wait, each pair one kind of event so a sink cannot want a begin and not its end. An end
+  of a file or a domain, and a lock wait, each pair one kind of event so a sink wants a pair or declines it, and cannot want a begin and not its end. An end
   is reported if and only if its begin was, whatever the sink wants by then, and on every path a begin can leave by: an
   answer, a failure, a completion dropped unanswered, a lineage that retires, and an instance that is dropped; any it cannot
   be reported on is documented. The two open points of the section above that name this step are answered and recorded: a

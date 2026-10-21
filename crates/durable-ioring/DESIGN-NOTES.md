@@ -1379,9 +1379,10 @@ no id; a seal's flush is issued once and answered once for each part, so an answ
 not share, and a provider's answer may come from any thread. These are why the work is more than the id.
 
 **Ruled, 2026-10-21, by the engineer.**
-- **There are pairs for seals and for the weightier actions such as a flush.** The seal's pair is one a sink may trivially
-  decline. "For the portable ring, I assume that flushes are modeled as asynchronous operations by the provider (since they
-  are with Linux iouring) so the begin/end pairing is important there."
+- **There are pairs for seals and for the weightier actions such as a flush, and a sink may decline any pair.** The seal's
+  pair is the one the engineer first named as trivially declined, and the engineer then made the point general: "sinks may
+  decline any pair, to be clear". "For the portable ring, I assume that flushes are modeled as asynchronous operations by the
+  provider (since they are with Linux iouring) so the begin/end pairing is important there."
 - **An end carries no `elapsed`:** "I say no, and this is something we can choose to enhance in the sinks rather than pushing
   it into the router." A sink that wants a duration computes it itself.
 - **The pairs are a seal, a flush of a file or a domain, and a lock wait**, in answer to the assistant's three candidates:
