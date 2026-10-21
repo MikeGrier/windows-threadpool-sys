@@ -1255,8 +1255,8 @@ names, the provider's identity, installing the manifest, identity per event), an
 **The assistant's reading of 2, a working position and not a decision.** `win-dioring` is both the provider's name and
 the name of the new crate that holds the provider, its manifest and `EtwDiagnostics`, which [DI-D-51](#di-d-51) had in
 `win-durable-ioring`. That crate depends on `durable-ioring` for the sink trait and on a wrapper of the event-tracing
-functions, and `win-durable-ioring` depends on it for its default sink. The wrapper's crate name was not ruled; `win-etw-sys`
-is proposed and stands until the engineer names it. The provider's GUID is generated once when the crate is built and is
+functions, and `win-durable-ioring` depends on it for its default sink. The wrapper's crate name is `win-etw-sys`: the
+assistant proposed it and the engineer, 2026-10-20, answered "win-etw-sys is good". The provider's GUID is generated once when the crate is built and is
 recorded in that crate's notes, because changing it later breaks every session that enabled it.
 
 **What the placement rule says about the wrapper, so the step does not assume it.** The Learn snapshot
@@ -1297,7 +1297,8 @@ open to a ruling.
   the core owns.
 - **The lock watched is the engine's slot.** Every path that reaches the engine takes it: a consumer's call, a pump or
   a pool drain, and the hub a lineage handle or a provider's answer goes through. The Windows hub's other mutex counts
-  unanswered provider completions and is held for an increment; it is not watched, and whether it should be is a
-  question for the engineer.
+  unanswered provider completions and is held for an increment, and it is not watched. The engineer, 2026-10-20: "no,
+  since it's only held for an increment I don't think there is a need, but add comments that if there were more content
+  added with the mutex held, that might warrant it." The comment is on the field.
 
 **Scheduled work.** None beyond [DI-12.1.2](CHECKLIST.md) onward, which carry these events to the sinks.

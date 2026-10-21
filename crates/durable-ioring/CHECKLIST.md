@@ -39,14 +39,10 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
   documented route, which this step records.
 
 - [ ] **DI-12.1.4** -- **A safe wrapper for the event-tracing provider functions** (register, unregister, whether a
-  session is listening, write an event), in a crate whose name the engineer has not ruled; `win-etw-sys` is the working
-  position. The step reads each function's page and records where it is documented before it names a section
+  session is listening, write an event), in `win-etw-sys` (the engineer, 2026-10-20: "win-etw-sys is good"). The step reads each function's page and records where it is documented before it names a section
   ([DI-D-76](DESIGN-NOTES.md#di-d-76)). The registration is owned and unregistered when dropped, and an event's data is
   built from typed fields without `unsafe` for the caller. Tests: against a real session started by a documented
   route, or by what the pages let a test observe, which the step records.
-
-  > **-> CROSS-COMPONENT HANDOFF:** the crate's name is the engineer's to rule, as `win-text-sys`'s and
-  > `win-debugging-sys`'s were; the step starts there.
 
 - [ ] **DI-12.1.5** -- **Create `win-dioring`: the provider, its manifest and `EtwDiagnostics`.** The provider is
   named `win-dioring` (the engineer, 2026-10-20: "win-dioring, I'd put it in its own crate"), with a GUID generated

@@ -45,6 +45,10 @@ where
     /// Times the waits for `engine`'s lock.
     watch: LockWatch,
     /// Provider completions made and not yet answered, dropped ones included.
+    ///
+    /// Not taken through `watch`: it is held only for an increment or a decrement, so a wait for it
+    /// is not a delay worth reporting (the engineer, 2026-10-20). If more work comes to be done
+    /// with it held, that changes, and the wait for it may then warrant a lock name of its own.
     unanswered: Mutex<usize>,
     /// Notified when the last unanswered completion is answered.
     answered: Condvar,
