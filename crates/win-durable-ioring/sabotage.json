@@ -2093,6 +2093,30 @@
       "why": "A control: the same answer by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        true\n"],
       "replace": ["        !false\n"]
+    },
+    {
+      "name": "DI-12.1.6: the default sink is none",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A consumer who chooses nothing is to get the events (DI-D-51 T4); a default that writes nowhere is the driver before the provider existed.",
+      "find": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::new()));\n"],
+      "replace": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(durable_ioring::NoDiagnostics));\n"]
+    },
+    {
+      "name": "DI-12.1.6: a chosen sink is replaced by the default",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "Any sink can be given when the driver is built, and the default is only for an instance that gave none.",
+      "find": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::new()));\n"],
+      "replace": ["        let _ = diagnostics;\n        let diagnostics: Arc<dyn DiagnosticSink> = Arc::new(EtwDiagnostics::new());\n"]
+    },
+    {
+      "name": "DI-12.1.6 control: the default sink is built by its Default",
+      "file": "src/dioring.rs",
+      "expect": "survives",
+      "why": "A control: the same sink by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::new()));\n"],
+      "replace": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::default()));\n"]
     }
   ]
 }

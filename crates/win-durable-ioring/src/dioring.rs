@@ -43,6 +43,7 @@ use crate::windows_backend::{
     Construction, Win32FileTarget, WindowsBackend, WindowsBackendError, WindowsBackendRefusal,
     WindowsBackendSetup,
 };
+use durable_ioring::DiagnosticSink;
 use durable_ioring::DurableIoCore;
 use durable_ioring::IoTarget;
 use durable_ioring::StampClock;
@@ -59,7 +60,6 @@ use durable_ioring::{
     LineageInfo, ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
     RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
-use durable_ioring::{DiagnosticSink, NoDiagnostics};
 use durable_ioring::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle};
 use durable_ioring::{
     DomainCompletion, DomainRequest, DurabilityProvider, FlushRequest, ProviderPart,
@@ -67,6 +67,7 @@ use durable_ioring::{
 };
 use durable_ioring::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
 use durable_ioring::{ReadKey, TargetKey, WriteKey};
+use durable_ioring_events::EtwDiagnostics;
 
 mod delivery;
 mod hub;
@@ -161,8 +162,10 @@ pub struct Setup<'env, 'pool, E: EpochId + 'static, R> {
     /// The consumer's durability provider, if any. `None` leaves every domain to the built-in
     /// default.
     pub provider: Option<Box<dyn DurabilityProvider<WindowsIds<E>>>>,
-    /// Where the instance's diagnostics go (DI-D-51). `None` is the driver's default, which is
-    /// [`NoDiagnostics`] until `DI-12.1` makes it ETW.
+    /// Where the instance's diagnostics go (DI-D-51). `None` is the driver's default, [`EtwDiagnostics`]: the instance's delay
+    /// events go to the ETW provider `durable-ioring-events`, for a session that is listening, and cost a test of whether one
+    /// is when none is. Any sink can be given in its place, [`NoDiagnostics`](durable_ioring::NoDiagnostics) among them.
+    /// Building an instance with the default registers the provider for the process, if no instance has.
     pub diagnostics: Option<Arc<dyn DiagnosticSink>>,
     /// How the instance's completions are drained (DI-D-52, DI-D-55).
     pub delivery: DeliveryMode<'env, 'pool>,
@@ -368,7 +371,7 @@ where
             diagnostics,
             delivery,
         } = setup;
-        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(NoDiagnostics));
+        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::new()));
 
         if let Some(key) = first_repeat(files.iter().map(|f| f.key)) {
             return Err(SetupError {

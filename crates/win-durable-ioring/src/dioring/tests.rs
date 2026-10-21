@@ -51,6 +51,8 @@ mod unbuffered;
 mod keys;
 // The delay events through the driver: DI-12.1.1.
 mod delays;
+// The default diagnostic sink, and a chosen one in its place: DI-12.1.6.
+mod diagnostics;
 
 type Ring = Dioring<Vec<u8>>;
 type V = crate::WindowsIds<u64>;

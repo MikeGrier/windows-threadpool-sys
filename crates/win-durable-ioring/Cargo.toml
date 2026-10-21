@@ -56,6 +56,10 @@ win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 # make the call itself.
 win-debugging-sys = { version = "0.0.1", path = "../win-debugging-sys" }
 
+# The default diagnostic sink (DI-12.1.6): the ETW provider for dioring's delay events, which an instance built with no sink
+# of its own writes to. A crate of its own, so that this one needs no unsafe code to register a provider.
+durable-ioring-events = { version = "0.0.1", path = "../durable-ioring-events" }
+
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
@@ -73,6 +77,9 @@ features = [
 fault-injection = ["windows-ioring-sys/fault-injection"]
 
 [dev-dependencies]
+# A trace session, for the test that shows the default sink's events reach ETW (DI-12.1.6). It needs privilege, so that test is
+# ignored by default. A dev-dependency's features reach test builds only.
+win-etw-sys = { path = "../win-etw-sys", features = ["test-util"] }
 # A debugger that runs a program and keeps the strings it sends, which the debugger sink's tests observe it with
 # (DI-12.1.3). The debugging crate's own `test-util` feature: this crate forbids `unsafe`, so the debugger is
 # written there. A dev-dependency's features reach test builds only.

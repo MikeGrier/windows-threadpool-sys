@@ -363,6 +363,14 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p durable-ioring-events --locked --test session -- --include-ignored
+      # The driver's default sink writes to that provider (DI-12.1.6): an instance built with no sink
+      # of its own, run against a session that is listening. Ignored by default for the same reason.
+      - name: cargo test (win-durable-ioring, default sink reaches a trace session)
+        if: ${{ matrix.isolated }}
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p win-durable-ioring --locked --lib -- --include-ignored an_instance_with_no_chosen_sink_writes_its_events_to_etw
       # windows-file-watcher-example-test-harness is a normal workspace member
       # that depends on windows-file-watcher with the test-util feature, so
       # the `--workspace` steps above unify that feature onto

@@ -30,6 +30,8 @@ pub use readiness::{ReadinessFailure, check_readiness};
 
 // The portable crate's API, so a consumer needs no direct dependency on it to use this driver.
 pub use durable_ioring::*;
+// The default diagnostic sink, so a consumer can name it, or build one to share, without a direct dependency.
+pub use durable_ioring_events::EtwDiagnostics;
 // The types the driver's signatures name from the crates it is built on, so a consumer needs no
 // direct dependency on them to call it.
 pub use win_shared_os_owned_handle::SharedHandle;

@@ -147,11 +147,13 @@ name = "win-durable-ioring"
 version = "0.3.2"
 dependencies = [
  "durable-ioring",
+ "durable-ioring-events",
  "io-buffers",
  "win-authorization-sys",
  "win-debugging-sys",
  "win-durable-ioring",
  "win-error-codes",
+ "win-etw-sys",
  "win-handles-sys",
  "win-shared-os-owned-handle",
  "win-sync-sys",
