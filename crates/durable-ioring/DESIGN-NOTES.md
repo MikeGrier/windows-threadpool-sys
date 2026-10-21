@@ -1378,9 +1378,21 @@ no id; a seal's flush is issued once and answered once for each part, so an answ
 `win-etw-sys`' write uses `EventWrite`, which takes the current thread's activity id, which two events on different threads do
 not share, and a provider's answer may come from any thread. These are why the work is more than the id.
 
-**Not decided, and not to be taken as decided.** Whether a begin is for each part or each seal; whether an end keeps
-`elapsed` ([DI-D-77](#di-d-77) has the core measure it for the text sinks, which have no analysis tool); which of the delay
-events pair; and how a `u64` becomes an activity id.
+**Ruled, 2026-10-21, by the engineer.**
+- **There are pairs for seals and for the weightier actions such as a flush.** The seal's pair is one a sink may trivially
+  decline. "For the portable ring, I assume that flushes are modeled as asynchronous operations by the provider (since they
+  are with Linux iouring) so the begin/end pairing is important there."
+- **An end carries no `elapsed`:** "I say no, and this is something we can choose to enhance in the sinks rather than pushing
+  it into the router." A sink that wants a duration computes it itself.
+- **The pairs are a seal, a flush of a file or a domain, and a lock wait**, in answer to the assistant's three candidates:
+  "those seem like the required ones".
+
+**A working position, not a decision.** The engineer, 2026-10-21, on the 128-bit activity id: "true, perhaps we use the
+process id as the upper 64 bits and the u64 as the lower?" It is held as a position until [DI-19.4](CHECKLIST.md) builds it,
+and a process id reused within one trace is a case the assistant has not settled.
+
+**Not decided, and not to be taken as decided.** What span a seal's pair covers; and where a lock wait's end is written, since
+an event is stamped when it is written and [DI-D-77](#di-d-77) has the lock wait reported after the guard is released.
 
 **Scheduled work.** [DI-M19](CHECKLIST.md#di-m19----paired-begin-and-end-events-with-correlation-ids). The router
 reports no timing, and what it reports otherwise is the open question of [DI-12.2.3](CHECKLIST.md).
