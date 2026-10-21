@@ -14,19 +14,63 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 ## DI-M12 -- Beside the core: diagnostics, routing, and release
 
-- [ ] **DI-12.1** -- **Emit the delay events** DI-2.11 designs, as typed events the core reports to
-  its diagnostic sink, and **the Windows sinks** in `win-durable-ioring`: `EtwDiagnostics`, from a
-  manifest-based ETW provider that dioring owns and the Windows driver's default, and
-  `DebugOutputDiagnostics`, through `OutputDebugStringW` ([DI-D-51](DESIGN-NOTES.md#di-d-51)).
-  Gated on `DI-8.2`, which creates `win-durable-ioring`. Carries what DI-2.11 deliberately left to
-  implementation:
-  - **Identity per event** -- what each event names (instance, lineage, epoch id, domain, lock),
-    "going to depend on the event" (the engineer), and how the generic epoch id is rendered.
-  - **The time base** is settled: interrupt time, dioring's one time base
-    ([DI-D-37](DESIGN-NOTES.md#di-d-37)), until a requirement for finer resolution appears.
-  - **The provider's name and GUID**, and whether it stands alone or joins a workspace scheme.
-  - **Installing the manifest**: how an application shipping dioring registers it, or documents
-    that it must.
+- [ ] **DI-12.1** -- **Emit the delay events** DI-2.11 designs, as typed events the core reports to its diagnostic
+  sink, and **the Windows sinks** ([DI-D-51](DESIGN-NOTES.md#di-d-51)). Restructured on 2026-10-20 into `DI-12.1.1` to
+  `DI-12.1.6` after the engineer's answers ([DI-D-76](DESIGN-NOTES.md#di-d-76)); it is done when they all are. What
+  DI-2.11 left to implementation is settled, and each step carries its part:
+  - **Identity per event** is the instance plus what the event is about: a lock wait names the lock, a flush the
+    lineage, the epoch and the domain.
+  - **The time base** is interrupt time, dioring's one ([DI-D-37](DESIGN-NOTES.md#di-d-37)).
+  - **The provider** is `win-dioring`, in a crate of its own, and records whether or not its manifest is installed.
+
+- [ ] **DI-12.1.1** -- **The delay events in the portable core.** New `DiagnosticKind` and `Diagnostic` variants
+  (both are `#[non_exhaustive]`), reported to the instance's sink and built only when the sink `wants` the kind, with
+  no clock read before that answer. *Lock waits* follow the engineer's pattern ([DI-D-26](DESIGN-NOTES.md#di-d-26)):
+  try-lock; only if that fails, read the clock, block, and on acquiring record the wait; emit after releasing, so the
+  event does not lengthen the hold it measures; one wrapper type, a name per lock, poisoning handled separately.
+  *Flushes* are timed at the durability-provider boundary: the call issued, and each domain's outcome with how long
+  it took, so an event names the slow domain. *A seal's other phases*, waiting for covered writes and for gated writes
+  to be released, are the secondary events the engineer allowed. How the generic epoch id is rendered is settled in
+  this step and recorded. `StderrDiagnostics` prints each. Tests: each event with a recording sink, the lock-wait
+  pattern by an uncontended lock (no event, no clock read) and a contended one, and a sink that wants nothing costing
+  no clock read.
+
+- [ ] **DI-12.1.2** -- **Create `win-debugging-sys`, with `OutputDebugStringW`.** The name is the engineer's,
+  2026-10-20 ("how about win-debugging-sys?"). The crate's notes record, at creation, the naming decision with that
+  quotation, the Learn section the snapshot files `OutputDebugString` under (*Debugging Functions*, in
+  [DI-D-76](DESIGN-NOTES.md#di-d-76)), and that a `-sys` crate here is memory-safe over the call and adds no
+  policy. The first wrapper takes a string and writes it. A NUL cannot be passed in the call's terminated string, so a
+  string holding one is refused as the crate's own narrowing, with an error kind of its own and not framed as the call's
+  refusal. Registered with the workspace, release-please and the publish workflow, as `win-text-sys` was. Tests:
+  ordinary and empty strings, a NUL, a long string, and the call made.
+
+- [ ] **DI-12.1.3** -- **`DebugOutputDiagnostics` in `win-durable-ioring`**, through `win-debugging-sys`: each event as
+  a `dioring:` line, wanting every kind. Tests: the formatting apart from the emission, and the emission observed by a
+  documented route, which this step records.
+
+- [ ] **DI-12.1.4** -- **A safe wrapper for the event-tracing provider functions** (register, unregister, whether a
+  session is listening, write an event), in a crate whose name the engineer has not ruled; `win-etw-sys` is the working
+  position. The step reads each function's page and records where it is documented before it names a section
+  ([DI-D-76](DESIGN-NOTES.md#di-d-76)). The registration is owned and unregistered when dropped, and an event's data is
+  built from typed fields without `unsafe` for the caller. Tests: against a real session started by a documented
+  route, or by what the pages let a test observe, which the step records.
+
+  > **-> CROSS-COMPONENT HANDOFF:** the crate's name is the engineer's to rule, as `win-text-sys`'s and
+  > `win-debugging-sys`'s were; the step starts there.
+
+- [ ] **DI-12.1.5** -- **Create `win-dioring`: the provider, its manifest and `EtwDiagnostics`.** The provider is
+  named `win-dioring` (the engineer, 2026-10-20: "win-dioring, I'd put it in its own crate"), with a GUID generated
+  once and recorded in the crate's notes. Its manifest ships with the crate and maps each event of `DI-12.1.1`
+  one-to-one. It records whether or not the manifest is installed ("you don't actually have to install the manifest to
+  record events"); the crate's documentation says that a reader needs it to see names and fields, and how to install it.
+  An event is built only when a session is listening, so it costs nothing otherwise. Registered with the workspace,
+  release-please and the publish workflow. Tests: each event reaches a session, and none is built when nobody listens.
+
+  > **CROSS-COMPONENT PREREQUISITE:** `DI-12.1.1` and `DI-12.1.4`, in this checklist.
+
+- [ ] **DI-12.1.6** -- **`win-durable-ioring`'s default sink is `EtwDiagnostics`**, so a consumer who chooses nothing
+  still gets the events ([DI-D-51](DESIGN-NOTES.md#di-d-51) T4), and any sink, `NoDiagnostics` included, can be passed
+  when the driver is built. Tests: the default, and a chosen sink replacing it.
 
 - [ ] **DI-12.2** -- **The routing provider** (DI-2.12 point 1): a provider dioring ships that
   dispatches each seal's work by flush domain to providers registered with it when it is built,
