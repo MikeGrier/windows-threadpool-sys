@@ -21,12 +21,7 @@ Windows ring. What stays at the Windows level is what the Windows driver adds.
 
 - [x] **DI-18.1** -- Every test and example in `win-durable-ioring` that arms the Windows fault seam is censused by a recorded search and classified *core*, *windows* or *both*, with the reason for each. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-181)
 
-- [ ] **DI-18.2** -- **Move each *core* test to `durable-ioring` over the script, with the same assertions.** The
-  census and its classification are [DI-18.1's record](COMPLETED-CHECKLIST.md#di-181). It goes
-  where the behaviour lives (`io_core/tests` or `durability/tests`), built on the in-memory backend's script and not on
-  a detached target. A *both* test keeps its Windows half where it is. Nothing is deleted yet: the moved test must pass
-  in its new place first. For each, the sabotage entries it was the catching test for, in either crate's manifest, are
-  still caught once it has moved, by it or by another test, which is run and not assumed.
+- [x] **DI-18.2** -- Each *core* test that armed the Windows fault seam is moved to `durable-ioring` over the in-memory script with its name and assertions, and every sabotage entry the originals caught is still caught without them. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-182)
 
 - [ ] **DI-18.3** -- **Delete the moved tests from `win-durable-ioring`.** What remains there is the *windows* set. The
   seam itself and the README's examples stay ([DI-D-75](DESIGN-NOTES.md#di-d-75)). Both crates' tests pass, and the

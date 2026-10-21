@@ -3941,3 +3941,34 @@ the driver adds. *windows*: they are about what the driver adds. *both*: split, 
 
 This is a record of the tree at `8ae3780e`. `DI-18.2` works from it, and re-runs the search first, since a test added since is
 not in it.
+
+## Moved 2026-10-21 17:12:31 -04:00 -- DI-18.2: the core's failure tests, over the script
+
+### <a id="di-182"></a>DI-18.2 -- Each *core* test that armed the Windows fault seam is moved to `durable-ioring` over the in-memory script with its name and assertions, and every sabotage entry the originals caught is still caught without them. *(completed 2026-10-21 17:12:31 -04:00)*
+
+The item as written:
+
+**DI-18.2** -- **Move each *core* test to `durable-ioring` over the script, with the same assertions.** The
+  census and its classification are [DI-18.1's record](COMPLETED-CHECKLIST.md#di-181). It goes
+  where the behaviour lives (`io_core/tests` or `durability/tests`), built on the in-memory backend's script and not on
+  a detached target. A *both* test keeps its Windows half where it is. Nothing is deleted yet: the moved test must pass
+  in its new place first. For each, the sabotage entries it was the catching test for, in either crate's manifest, are
+  still caught once it has moved, by it or by another test, which is run and not assumed.
+
+**What moved.** The search of [DI-18.1](COMPLETED-CHECKLIST.md#di-181) was re-run first and found the census unchanged. The
+eleven *core* tests and the core half of the one *both* test are in `src/io_core/tests/flush_failures.rs`, each named as it
+was and each saying which file it came from. Each flush fails by the script's step for the named file's first commit, which
+is the seam's "fail the next flush of this file" for every test here, since in each the armed flush was the file's first.
+Where the Windows harness supplied a value of its own the rig's stands in -- the operations' contexts, and the fault's source --
+and the stamp test drives a core over the hand-moved clock directly, since the rig's clock counts its own readings. The
+registered-buffer half of the abandoned-epoch test runs on the in-memory backend's registered buffers, and the core's `close`
+hands back what the driver's did. Nothing was deleted.
+
+**The sabotage check, run.** Both crates' manifests were swept in full at commit `306d8cfb`, with the moved tests and the
+originals both present, so that each entry's record names every test that failed under it. `durable-ioring`'s manifest runs
+both crates' suites; `win-durable-ioring`'s runs only its own, where the moved tests are not. Every entry in both behaved as
+declared. Of the entries an original catches, every one is caught by some other test too, so deleting the originals loses none;
+one of them -- `DI-3.2.7: close hands back no failure` -- is caught by no test but the original and its moved copy, so the move
+is what keeps it caught. The entries whose record names no test were each read: those that failed to build are caught before any
+test runs, and in the transcript of each that hung or crashed, every original reported `ok`, so none of them was caught by an
+original either.
