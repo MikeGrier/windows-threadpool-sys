@@ -24,6 +24,7 @@ use crate::types::{
 };
 
 mod failures;
+mod flush_failures;
 mod gates;
 mod lineages;
 mod provider;
