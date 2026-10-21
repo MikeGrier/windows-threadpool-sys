@@ -1358,3 +1358,29 @@ The choices [DI-12.1.6](COMPLETED-CHECKLIST.md#di-1216) left to its implementati
   passed five times in a row.
 
 **Scheduled work.** None.
+
+## <a id="di-d-80"></a>DI-D-80: durations come from paired begin and end events with correlation ids, never from a component's own timing
+
+**What is decided.** The engineer, 2026-10-21, on what the routing provider ([DI-12.2](CHECKLIST.md)) should report: "I
+don't think that the core router should implement any of this timing infrastructure, it should come in via the
+diagnostics and tracing. ETW has the ability to pair begin/end events and then the analysis tools will compute times from
+those events. We can depend on other diagnostic sinks to do similar if we can simply establish (a) correlation IDs and (b)
+reliable begin/end pairings." And on the ids: "our correlation ids are scoped to a process and so may be u64s generated from
+an atomic u64 using relaxed increments."
+
+- **The router measures nothing.** A duration is for the sink's tools to compute from a begin and an end, and not for a
+  component to compute and report, so the router adds no timing event and keeps no start time.
+- **A correlation id is a process-scoped `u64`**, minted from one atomic with relaxed increments.
+- **What it takes.** A correlation id on a begin and its end, and a pairing that holds on every path a begin can leave by.
+
+**What was found, in the assistant's reading of the shipped events.** [DI-12.1](COMPLETED-CHECKLIST.md#di-121)'s events have
+no id; a seal's flush is issued once and answered once for each part, so an answer has no begin of its own; and
+`win-etw-sys`' write uses `EventWrite`, which takes the current thread's activity id, which two events on different threads do
+not share, and a provider's answer may come from any thread. These are why the work is more than the id.
+
+**Not decided, and not to be taken as decided.** Whether a begin is for each part or each seal; whether an end keeps
+`elapsed` ([DI-D-77](#di-d-77) has the core measure it for the text sinks, which have no analysis tool); which of the delay
+events pair; and how a `u64` becomes an activity id.
+
+**Scheduled work.** [DI-M19](CHECKLIST.md#di-m19----paired-begin-and-end-events-with-correlation-ids). The router
+reports no timing, and what it reports otherwise is the open question of [DI-12.2.3](CHECKLIST.md).

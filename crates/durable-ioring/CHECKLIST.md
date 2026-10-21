@@ -37,13 +37,12 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
   b"), so the router is that one provider, composed of others; it is portable and lives in `durable-ioring`. Restructured on
   2026-10-20 into `DI-12.2.1` to `DI-12.2.4`, because it is four pieces that can each be built and checked alone and one of
   them is blocked; it is done when they all are. The gate this item carried, the provider trait, is met: `DurabilityProvider`
-  and `DomainCompletion` exist. Two questions are open and are not decided, and each step says which it waits on:
-  - **What the router reports.** The core already reports each domain's flush issued and answered, with its name and how long it
-    took ([DI-D-77](DESIGN-NOTES.md#di-d-77)), so what a router would add is not settled; and a router is built before the
-    instance, so it does not know the instance number an `Inconsistency` event carries. Candidate answers: nothing but an
-    inconsistency for a domain no provider owns; or a per-provider event for how long that provider's call took, from dispatch
-    to its last domain answering; or leave it coarse until the router exists and the core's events show whether anything is
-    missing, which is a legitimate answer.
+  and `DomainCompletion` exist. The router measures nothing: timing comes from paired begin and end events with correlation
+  ids, which the sinks and their analysis tools use ([DI-D-80](DESIGN-NOTES.md#di-d-80), [DI-M19](#di-m19----paired-begin-and-end-events-with-correlation-ids)).
+  Two questions are open and are not decided, and each step says which it waits on:
+  - **Whether the router reports an inconsistency for a domain no provider owns,** which the core should never send it, or
+    reports nothing at all, which is a legitimate answer. A router is built before the instance, so it does not know the
+    instance number an `Inconsistency` event carries.
   - **What decides the domains a registered provider serves.** The provider's own `domains()`, which the trait already has, or
     domains named to the router at registration, which would let one provider be registered for a subset and let a router's
     domains disagree with what the provider says it serves.
@@ -64,10 +63,10 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
   domain and is not a panic. Tested alone against fake providers that answer inline, answer late from another thread, never
   answer, drop their completions, and panic, with fake completion homes, and with several domains per provider.
 
-- [ ] **DI-12.2.3** -- **What the router reports.** BLOCKED on the first open question of `DI-12.2`: what, if anything, the
-  router adds to the diagnostics the core already reports, and how it knows the instance's number. When answered this becomes
-  the router's events or the decision that it reports only the one inconsistency; until then nothing is built, and this is
-  recorded as a blocker and not as "no consumer".
+- [ ] **DI-12.2.3** -- **What the router reports.** BLOCKED on the first open question of `DI-12.2`: whether it reports an
+  inconsistency for a domain no provider owns, and how it knows the instance's number. When answered this becomes that one
+  report or the decision that it reports nothing; until then nothing is built, and this is recorded as a blocker and not as
+  "no consumer". It reports no timing ([DI-D-80](DESIGN-NOTES.md#di-d-80)).
 
 - [ ] **DI-12.2.4** -- **The router through the driver, and its record.** A router given as `Setup::provider` to a real
   instance over two fake providers: a seal that touches both is one call to each; a file whose domains span providers is durable
@@ -109,6 +108,45 @@ Windows ring. What stays at the Windows level is what the Windows driver adds.
 - [ ] **DI-18.3** -- **Delete the moved tests from `win-durable-ioring`.** What remains there is the *windows* set. The
   seam itself and the README's examples stay ([DI-D-75](DESIGN-NOTES.md#di-d-75)). Both crates' tests pass, and the
   sabotage entries checked in `DI-18.2` are still caught.
+
+## DI-M19 -- Paired begin and end events with correlation ids
+
+Queued by the engineer, 2026-10-21 ([DI-D-80](DESIGN-NOTES.md#di-d-80)): durations are computed by the analysis tools from
+paired begin and end events, which the sinks can all do given a correlation id and a reliable pairing, and no component
+such as the router builds timing of its own. A correlation id is scoped to a process, and is a `u64` minted from an atomic
+with relaxed increments. The shipped delay events ([DI-12.1](COMPLETED-CHECKLIST.md#di-121)) carry no id; they report a flush's
+issue once for a whole seal and its answer once for each part; and the ETW write takes the current thread's activity id,
+which a begin and an end on different threads do not share, since a provider answers from any thread.
+
+Not decided, and each step says where it is met: whether a begin is reported for each part of a seal's flush or one for
+the seal; whether an end keeps the `elapsed` the core measures, which the text sinks have no analysis tool to compute;
+which of the delay events pair, of a flush part, a seal's wait and a lock wait; and how a `u64` becomes the 128-bit activity
+id, which a trace spanning processes would see collide if the process were not part of it.
+
+- [ ] **DI-19.1** -- **A process-scoped correlation id in the core.** A `u64` minted from one static `AtomicU64` by a
+  `fetch_add` of one with relaxed ordering, in `durable-ioring`, minted only when a begin is built, so a sink that wants
+  nothing mints nothing. Tests: ids minted from many threads at once are all distinct, ids from one thread rise, and a
+  mint with no sink wanting an event takes none.
+
+- [ ] **DI-19.2** -- **Begin and end events in the core, and one oracle for their pairing.** Each paired delay event
+  becomes a begin and an end carrying the same id, with the working positions of the section above met and recorded. The end
+  is reported on every path a begin can leave by: an answer, a failure, a completion dropped unanswered, a lineage that
+  retires, and an instance that is dropped; any it cannot be reported on is documented. The pairing rule is defined once, as
+  a checker over a sink's stream in `durable-ioring`, and the sinks' tests, the in-memory ones and the instance's, use
+  it and do not restate it. The text of every event carries its id, so the standard-error and debugger lines can be paired
+  by eye. This changes `Diagnostic` and is a major change for `durable-ioring`. A sweep of `DI-D-26`, `DI-D-51`, `DI-D-77`
+  and the README for the delay events' old shape is recorded with it, and the sabotage that shows the checker is the one
+  place the rule lives.
+
+- [ ] **DI-19.3** -- **`win-etw-sys` writes an event with an explicit activity id.** `EventWriteTransfer` with an activity
+  id, and a related one, taken from the caller and not from the thread, so a begin and an end written on different threads
+  carry the same one. The call's page is read first, and its conditions on the arguments are the only ones refused. A session
+  test, elevated and `#[ignore]`d as the crate's others are, reads the activity id of a record written from two threads.
+
+- [ ] **DI-19.4** -- **The ETW provider pairs.** Waits on `DI-19.2` and `DI-19.3`. `durable-ioring-events`' table gives each
+  paired event a Start or Stop opcode, writes the id as the activity id by the mapping the section above leaves open, and
+  the manifest is rendered and held equal as it is now. Verified as `DI-12.1.5` was: compiled and installed, then a trace
+  recorded and read by `tracerpt`, which this time must show the begin and end paired and their duration computed.
 
 ## DI-M4 -- Evidence: Windows' flush-failure behaviour (ungated; gates nothing)
 
