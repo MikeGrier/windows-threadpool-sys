@@ -9,6 +9,8 @@ WORK` callout.
 
 ## DI-M5+ -- The retention layer (parked behind DI-M12)
 
+**Gate met 2026-10-21: `DI-M12` is complete. Each item here now waits for the engineer to choose it for a milestone.**
+
 - [ ] **DI-5+.1** -- **A separate crate that retains written data until it is durable and can rewrite
   it after a failure**, built on DI-1.2's resolution protocol and the inventory, and resolving
   overlapping suspect writes newest-wins, and resolving at the granularity of individual buffers it
@@ -17,6 +19,8 @@ WORK` callout.
   component when it begins.
 
 ## DI-M6+ -- Deliberately coarse (parked behind DI-M12)
+
+**Gate met 2026-10-21: `DI-M12` is complete. Each item here now waits for the engineer to choose it for a milestone.**
 
 Left coarse on purpose, per the workspace's resolution-gradient rule: each needs a working
 implementation before it is answerable.
@@ -130,6 +134,12 @@ implementation before it is answerable.
   [WS-1+.3](../win-sync-sys/CHECKLIST.md). Working position, not a decision: each is a change to a crate that
   is not this one, and what the seam should look like is shaped by the first failure it has to produce.
   Gated on a consumer, or this crate's own review, wanting those paths tested.
+
+## DI-M21+ -- Promoting the sample log (parked behind DI-M21)
+
+- [ ] **DI-21+.1** -- **Promote the sample log to a library, if it proves out.** The engineer, 2026-10-21: "I agree once the
+  sample proves out it's a good candidate to promote". Gated on [DI-21.3](CHECKLIST.md#di-m21----a-sample-log-on-durable-ioring),
+  the sample itself; what "proves out" means, and where a library would live, are for the engineer when it is done.
 
 ## DI-M-inf -- The horizon (parked, no gating deliverable)
 

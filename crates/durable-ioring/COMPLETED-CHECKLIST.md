@@ -3857,3 +3857,33 @@ Its four steps are archived: the build ([DI-12.2.1](COMPLETED-CHECKLIST.md#di-12
 dispatch ([DI-12.2.2](COMPLETED-CHECKLIST.md#di-1222)), what it reports ([DI-12.2.3](COMPLETED-CHECKLIST.md#di-1223),
 [DI-D-83](DESIGN-NOTES.md#di-d-83)), and the router through the driver ([DI-12.2.4](COMPLETED-CHECKLIST.md#di-1224),
 [DI-D-84](DESIGN-NOTES.md#di-d-84)).
+
+## Moved 2026-10-21 15:28:42 -04:00 -- DI-12.3 withdrawn, and DI-M12 is complete
+
+### <a id="di-123"></a>DI-12.3 -- Withdrawn: there is no merge-or-delete decision between the `epoch_log` sample and this crate, and a sample log built on this crate is queued as DI-M21. *(completed 2026-10-21 15:28:42 -04:00)*
+
+The item as written:
+
+**DI-12.3** -- **The `epoch_log` merge-or-delete decision**, once DI-3.2 is proven
+  ([DI-D-7](DESIGN-NOTES.md#di-d-7)).
+
+  > **-> UNBLOCKS PARKED WORK:** completing `DI-M12` (this item, `DI-12.1` and `DI-12.2`) unblocks
+  > [DI-M5+](PARKED.md#di-m5----the-retention-layer-parked-behind-di-m12) and
+  > [DI-M6+](PARKED.md#di-m6----deliberately-coarse-parked-behind-di-m12) in [PARKED.md](PARKED.md).
+
+Withdrawn by the engineer, 2026-10-21, after explaining how the sample came to be: "I meant to be developing the durable
+ioring as an example. there was a miscommunication [...] and instead the epoch_log example was developed which was
+interesting. [...] I preserved it because while a common log driven by epoch based durability notations is useful it's not
+what I wanted at the time and I assumed we could revisit it and retarget the effort onto the durabliity ioring". Asked
+whether to map the sample onto this crate: "I don't think you need to really refer back to epoch_log at all other than
+incidentally for any common log facility based on the durable ioring. Just survey common practices for database/filesystem
+[...] logs and provide it as a sample." The decision is [DI-D-85](DESIGN-NOTES.md#di-d-85); the work is
+[DI-M21](CHECKLIST.md#di-m21----a-sample-log-on-durable-ioring).
+
+### DI-M12 is complete
+
+Every item of `DI-M12` is archived: the delay events and their sinks ([DI-12.1](COMPLETED-CHECKLIST.md#di-121)), the routing
+provider ([DI-12.2](COMPLETED-CHECKLIST.md#di-122)), this withdrawal, and the pinned dependencies
+([DI-12.4](COMPLETED-CHECKLIST.md#di-124)). Its completion met the gate on `DI-M5+` and `DI-M6+` in
+[PARKED.md](PARKED.md); no item there was graduated, since which to take up is the engineer's to choose, and each section now
+says so.

@@ -12,43 +12,6 @@ new milestones are numbered after the parked DI-M5+ and DI-M6+, which are cited 
 renumber. The flush-failure spike (DI-M4) runs alongside and gates nothing. This file holds only work in
 scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARKED.md](PARKED.md).
 
-## DI-M12 -- Beside the core: diagnostics, routing, and release
-
-- [x] **DI-12.1** -- The delay events are emitted as typed events the core reports to its sink, and the Windows sinks exist: the debugger sink, the ETW provider in its own crate, and the ETW sink as the driver's default. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-121)
-
-- [x] **DI-12.1.1** -- The delay events are in the portable core: lock waits, flush issue and answer, and a seal's wait, built only for a sink that wants them. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1211)
-
-- [x] **DI-12.1.2** -- `win-debugging-sys` is created, with `output_debug_string` and `output_debug_str` over `OutputDebugStringW`, and a NUL refused as the crate's own error. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1212)
-
-- [x] **DI-12.1.3** -- `DebugOutputDiagnostics` writes each event as a `dioring:` line to the debugger, through `win-debugging-sys`, and wants every kind. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1213)
-
-- [x] **DI-12.1.4** -- `win-etw-sys` is created: a `Registration` over `EventRegister`, `EventUnregister`, `EventEnabled`, `EventProviderEnabled` and `EventWrite`, with an event's data built from typed fields. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1214)
-
-- [x] **DI-12.1.4.1** -- `win-etw-sys`' session tests were run elevated and pass, and what they observed is recorded in the crate's notes. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-12141)
-
-- [x] **DI-12.1.5** -- `durable-ioring-events` is created: the provider, its manifest rendered from one table of events, and `EtwDiagnostics`, which wants a kind only when a session listens. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1215)
-
-- [x] **DI-12.1.6** -- `win-durable-ioring`'s default sink is `EtwDiagnostics`, so an instance built with none writes its delay events to ETW, and a sink given replaces it. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1216)
-
-- [x] **DI-12.2** -- The routing provider: `RoutingProvider`, which composes several providers as the instance's one, each serving the domains it declares. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-122)
-
-- [x] **DI-12.2.1** -- `RoutingProvider` is built by `RouterBuilder` from registered providers, serving the union of their own domains, and a domain claimed twice refuses the build naming both registrations. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1221)
-
-- [x] **DI-12.2.2** -- `RoutingProvider` is a `DurabilityProvider`: each provider with a part of a seal is called once, in registration order, with its completions untouched, a panic abandons the parts not yet handed on, and a domain no provider serves is failed with `Unrouted`. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1222)
-
-- [x] **DI-12.2.3** -- The router reports to no diagnostic sink: a domain no provider serves is a caller breaking the protocol, panicked on where it is found, and the panic is its only report. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1223)
-
-- [x] **DI-12.2.4** -- `RoutingProvider` is proven through a real instance over two providers, and the driver's README and API.md say how to build one. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1224)
-
-- [ ] **DI-12.3** -- **The `epoch_log` merge-or-delete decision**, once DI-3.2 is proven
-  ([DI-D-7](DESIGN-NOTES.md#di-d-7)).
-
-  > **-> UNBLOCKS PARKED WORK:** completing `DI-M12` (this item, `DI-12.1` and `DI-12.2`) unblocks
-  > [DI-M5+](PARKED.md#di-m5----the-retention-layer-parked-behind-di-m12) and
-  > [DI-M6+](PARKED.md#di-m6----deliberately-coarse-parked-behind-di-m12) in [PARKED.md](PARKED.md).
-
-- [x] **DI-12.4** -- The five path-only dependencies of `win-durable-ioring` are pinned by version, keeping the path. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#di-124)
-
 ## DI-M18 -- Each failure test at the layer that owns what it checks
 
 Queued by the engineer, 2026-10-20, from the question [DI-D-75](DESIGN-NOTES.md#di-d-75) left unruled: both paths for
@@ -155,6 +118,36 @@ anything, follows from what the pages say.
 - [ ] **DI-20.2** -- **Bring the findings to the engineer for a design discussion.** Whether dioring makes a directory
   entry durable, whether a consumer must, and whether a directory is a target a seal can cover, are decided there; the work
   that follows is queued from that discussion and not before it.
+
+## DI-M21 -- A sample log on durable-ioring
+
+Queued by the engineer, 2026-10-21 ([DI-D-85](DESIGN-NOTES.md#di-d-85)): survey common practice in database and file-system
+logs and provide a log built on the durable ring as a sample; once it proves out it is a candidate to promote, which is parked
+as [DI-21+.1](PARKED.md#di-m21----promoting-the-sample-log-parked-behind-di-m21). It does not start from the `epoch_log`
+sample, which it may cite only incidentally. The engineer: "I don't see it as being important to me personally in the
+immediate future" -- a statement of priority, not a deferral. Beyond the first two items this milestone is deliberately
+coarse: what the sample is follows from the survey.
+
+- [ ] **DI-21.1** -- **Survey common practice in database and file-system logs.** Write-ahead logging and its recovery
+  (redo and undo, log sequence numbers and a page's own LSN, fuzzy checkpoints, compensation records -- ARIES and what
+  followed it); file-system journaling (physical block journals and their ordering modes, metadata-only journals, a log
+  with restart areas); and what every log faces: group commit, detecting a torn or partial record, a record's identity
+  across a crash, reclaiming log space, and how a log and the data it protects are ordered. Each point is cited to its
+  source, published papers and the systems' own documentation, and recorded as a design session in
+  [design-sessions/](../../design-sessions/). The survey says what is common to both kinds of log, what differs and why,
+  and, for each, which `durable-ioring` facility a log built on it would use -- epochs and seals, lineages, gates across
+  lineages, flush domains, failures and their suspects -- or that none does.
+
+- [ ] **DI-21.2** -- **Bring the survey to the engineer, to settle the sample's scope.** Which practices the sample
+  shows, which it names and leaves out, and where it lives -- an example of `win-durable-ioring`, or a portable example of
+  `durable-ioring` over its in-memory backend that a Windows run also exercises -- are decided there. A gap the survey
+  finds in `durable-ioring` is queued as work on the crate, not worked around in the sample.
+
+- [ ] **DI-21.3** -- **Build the sample log** to the scope `DI-21.2` sets, with its own contract written first, tests,
+  and a run that shows recovery after a crash it stages.
+
+  > **-> UNBLOCKS PARKED WORK:** completing this unblocks `DI-M21+` in
+  > [PARKED.md](PARKED.md#di-m21----promoting-the-sample-log-parked-behind-di-m21).
 
 ## DI-M4 -- Evidence: Windows' flush-failure behaviour (ungated; gates nothing)
 
