@@ -2018,6 +2018,14 @@
       "why": "A control: the same stamp by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["                                .or_insert(now);"],
       "replace": ["                                .or_insert_with(|| now);"]
+    },
+    {
+      "name": "DI-12.1.3: the line prefix drops its space",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "The prefix is what a reader of a line, and every sink that writes one, relies on being the same: `dioring:`, a space, and the event.",
+      "find": ["pub const LINE_PREFIX: &str = \"dioring: \";"],
+      "replace": ["pub const LINE_PREFIX: &str = \"dioring:\";"]
     }
   ]
 }

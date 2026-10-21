@@ -43,7 +43,8 @@ pub use contract::{
     PushResult, RegisteredBufferRing, TokenOf,
 };
 pub use diagnostics::{
-    Diagnostic, DiagnosticKind, DiagnosticSink, FanOutDiagnostics, NoDiagnostics, StderrDiagnostics,
+    Diagnostic, DiagnosticKind, DiagnosticSink, FanOutDiagnostics, FlushPart, LINE_PREFIX,
+    NoDiagnostics, StderrDiagnostics,
 };
 pub use error_code::ErrorCode;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};

@@ -216,7 +216,11 @@ impl DiagnosticSink for NoDiagnostics {
     fn report(&self, _: &Diagnostic<'_>) {}
 }
 
-/// A sink that writes every event as a line on standard error, prefixed `dioring:`.
+/// What a sink that writes an event as a line puts before it: the sinks that ship each write `dioring:`, a
+/// space, and the event's text.
+pub const LINE_PREFIX: &str = "dioring: ";
+
+/// A sink that writes every event as a line on standard error, prefixed [`LINE_PREFIX`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StderrDiagnostics;
 
@@ -226,7 +230,7 @@ impl DiagnosticSink for StderrDiagnostics {
     }
 
     fn report(&self, event: &Diagnostic<'_>) {
-        eprintln!("dioring: {event}");
+        eprintln!("{LINE_PREFIX}{event}");
     }
 }
 

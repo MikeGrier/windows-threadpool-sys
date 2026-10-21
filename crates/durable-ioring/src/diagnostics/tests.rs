@@ -157,6 +157,11 @@ fn a_domain_whose_name_is_not_text_is_shown_with_the_replacement_character() {
 }
 
 #[test]
+fn a_line_is_prefixed_dioring_colon_and_a_space() {
+    assert_eq!(super::LINE_PREFIX, "dioring: ");
+}
+
+#[test]
 fn stderr_diagnostics_wants_every_delay_kind() {
     for kind in [
         DiagnosticKind::LockWait,
