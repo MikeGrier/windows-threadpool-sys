@@ -52,6 +52,10 @@ win-handles-sys = { version = "0.1.0", path = "../win-handles-sys" }
 # owns the numbering of the codes it reports, and that crate owns the rule.
 win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 
+# The debugger sink's call (DI-12.1.3): `OutputDebugStringW`, made safe. The crate forbids `unsafe`, so it cannot
+# make the call itself.
+win-debugging-sys = { version = "0.0.1", path = "../win-debugging-sys" }
+
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
@@ -69,6 +73,10 @@ features = [
 fault-injection = ["windows-ioring-sys/fault-injection"]
 
 [dev-dependencies]
+# A debugger that runs a program and keeps the strings it sends, which the debugger sink's tests observe it with
+# (DI-12.1.3). The debugging crate's own `test-util` feature: this crate forbids `unsafe`, so the debugger is
+# written there. A dev-dependency's features reach test builds only.
+win-debugging-sys = { path = "../win-debugging-sys", features = ["test-util"] }
 # This crate's own tests, and the worked examples in README.md -- compiled as doctests -- drive
 # failures through the seam, so every test build enables it: a feature gate a plain `cargo test`
 # skips would leave those examples unrun.

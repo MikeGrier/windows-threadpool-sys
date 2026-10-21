@@ -2053,6 +2053,46 @@
       "why": "A pumped instance's consumer calls and its pump take the engine's lock through the delivery, which reports only if it was given the watch.",
       "find": ["                .map(|pumped| pumped.with_lock_watch(watch.clone()))"],
       "replace": ["                .map(|pumped| pumped)"]
+    },
+    {
+      "name": "DI-12.1.3: the debugger sink wants nothing",
+      "file": "src/debug_output.rs",
+      "expect": "caught",
+      "why": "The sink states that it wants every kind; a consumer who chose it would otherwise see nothing and have no error to say so.",
+      "find": ["        true\n"],
+      "replace": ["        false\n"]
+    },
+    {
+      "name": "DI-12.1.3: a NUL in an event's text is not written as backslash zero",
+      "file": "src/debug_output.rs",
+      "expect": "caught",
+      "why": "The call's string ends at a NUL, and the crate refuses a string that has one, so a line with a NUL must not reach it: the sink escapes the NUL and sends the line.",
+      "find": ["    format!(\"{LINE_PREFIX}{event}\").replace('\\0', \"\\\\0\")\n"],
+      "replace": ["    format!(\"{LINE_PREFIX}{event}\")\n"]
+    },
+    {
+      "name": "DI-12.1.3: a line is written without the dioring prefix",
+      "file": "src/debug_output.rs",
+      "expect": "caught",
+      "why": "A line is the prefix and the event's text, as the standard-error sink's is.",
+      "find": ["    format!(\"{LINE_PREFIX}{event}\").replace('\\0', \"\\\\0\")\n"],
+      "replace": ["    format!(\"{event}\").replace('\\0', \"\\\\0\")\n"]
+    },
+    {
+      "name": "DI-12.1.3: the line is not sent",
+      "file": "src/debug_output.rs",
+      "expect": "caught",
+      "why": "Only a debugger can tell that the call was made, which is why the test of it starts one.",
+      "find": ["        let sent = output_debug_str(&line(event));\n"],
+      "replace": ["        let sent = output_debug_str(&line(event)[..0]);\n"]
+    },
+    {
+      "name": "DI-12.1.3 control: the debugger sink wants every kind by negation",
+      "file": "src/debug_output.rs",
+      "expect": "survives",
+      "why": "A control: the same answer by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        true\n"],
+      "replace": ["        !false\n"]
     }
   ]
 }

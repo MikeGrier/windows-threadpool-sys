@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod debug_output;
 mod delivery;
 mod dioring;
 mod error_code;
@@ -18,6 +19,7 @@ pub mod readiness;
 mod scratch_volume;
 pub mod windows_backend;
 
+pub use debug_output::DebugOutputDiagnostics;
 pub use delivery::{DeliveryEvent, DeliveryHandle, DeliverySetupError, EntryDelivery};
 pub use dioring::{
     DeliveryMode, Dioring, FromClock, InterruptStamps, Setup, SetupError, SetupRefusal,
