@@ -2058,6 +2058,38 @@
       "why": "A control: the same routes gathered without reserving room first, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        let mut routes = Vec::with_capacity(self.providers.len());"],
       "replace": ["        let mut routes = Vec::new();"]
+    },
+    {
+      "name": "DI-12.2.2: every part goes to the first registration",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "Each domain's part goes to the provider that serves it (DI-D-81); a part given to another provider is flushed by something that never said it could.",
+      "find": ["                Some(&registration) => parts[registration].push(part),"],
+      "replace": ["                Some(_) => parts[0].push(part),"]
+    },
+    {
+      "name": "DI-12.2.2: a provider with no part is called anyway",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "One call per provider that has parts: a provider called with an empty request is asked for work it was never given, and a provider that rejects that would fail a seal it had no part in.",
+      "find": ["            if !domains.is_empty() {"],
+      "replace": ["            if domains.len() < usize::MAX {"]
+    },
+    {
+      "name": "DI-12.2.2: an unrouted domain is dropped rather than failed",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "A domain no provider serves is failed with Unrouted, so the consumer is told what happened; dropping it reports an abandoned provider that never existed.",
+      "find": ["                    part.completion.fail(error);"],
+      "replace": ["                    drop((part, error));"]
+    },
+    {
+      "name": "DI-12.2.2 control: the per-provider parts are made by counting",
+      "file": "src/router.rs",
+      "expect": "survives",
+      "why": "A control: the same empty parts made by counting the routes instead of walking them, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["            self.routes.iter().map(|_| Vec::new()).collect();"],
+      "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect();"]
     }
   ]
 }

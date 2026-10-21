@@ -3783,3 +3783,21 @@ The item as written:
 
 Built in `src/router.rs`; the choices are [DI-D-82](DESIGN-NOTES.md#di-d-82). The router does not yet implement
 `DurabilityProvider`, whose `make_durable` is [DI-12.2.2](CHECKLIST.md)'s dispatch, so the trait impl moved to that step.
+
+## Moved 2026-10-21 14:09:11 -04:00 -- DI-12.2.2: the router's dispatch
+
+### <a id="di-1222"></a>DI-12.2.2 -- `RoutingProvider` is a `DurabilityProvider`: each provider with a part of a seal is called once, in registration order, with its completions untouched, a panic abandons the parts not yet handed on, and a domain no provider serves is failed with `Unrouted`. *(completed 2026-10-21 14:09:11 -04:00)*
+
+The item as written:
+
+**DI-12.2.2** -- **Dispatch, and the router as a provider.** `RoutingProvider` implements `DurabilityProvider`, its
+  `domains()` the union `DI-12.2.1` built; it was not implemented there, because `make_durable` is this step's dispatch. `make_durable` splits a request by the provider that owns each domain and makes one call
+  per provider that has parts, in registration order and with each provider's parts in the request's order. Each
+  `DomainCompletion` is handed to its owner unchanged, so a domain's outcome returns as it arrives and nothing is buffered or
+  re-answered. A panic in one provider propagates, as the trait says, and the providers not yet called have their completions
+  dropped, which is `ProviderAbandoned` for their domains. A domain no provider owns cannot come from the core; it fails that
+  domain and is not a panic. Tested alone against fake providers that answer inline, answer late from another thread, never
+  answer, drop their completions, and panic, with fake completion homes, and with several domains per provider.
+
+Built in `src/router.rs`, tested against fake providers and a fake completion home in `src/router/tests/dispatch.rs`;
+the choices are [DI-D-83](DESIGN-NOTES.md#di-d-83).

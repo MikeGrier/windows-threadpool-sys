@@ -59,7 +59,7 @@ pub use provider::{
     IoTargetWrites, ProviderPart, ProviderRequest,
 };
 pub use pump::Waitable;
-pub use router::{RoutedTwice, RouterBuilder, RoutingProvider};
+pub use router::{RoutedTwice, RouterBuilder, RoutingProvider, Unrouted};
 pub use types::{
     AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,
     Epoch, EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportScope,

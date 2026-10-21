@@ -47,14 +47,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 - [x] **DI-12.2.1** -- `RoutingProvider` is built by `RouterBuilder` from registered providers, serving the union of their own domains, and a domain claimed twice refuses the build naming both registrations. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1221)
 
-- [ ] **DI-12.2.2** -- **Dispatch, and the router as a provider.** `RoutingProvider` implements `DurabilityProvider`, its
-  `domains()` the union `DI-12.2.1` built; it was not implemented there, because `make_durable` is this step's dispatch. `make_durable` splits a request by the provider that owns each domain and makes one call
-  per provider that has parts, in registration order and with each provider's parts in the request's order. Each
-  `DomainCompletion` is handed to its owner unchanged, so a domain's outcome returns as it arrives and nothing is buffered or
-  re-answered. A panic in one provider propagates, as the trait says, and the providers not yet called have their completions
-  dropped, which is `ProviderAbandoned` for their domains. A domain no provider owns cannot come from the core; it fails that
-  domain and is not a panic. Tested alone against fake providers that answer inline, answer late from another thread, never
-  answer, drop their completions, and panic, with fake completion homes, and with several domains per provider.
+- [x] **DI-12.2.2** -- `RoutingProvider` is a `DurabilityProvider`: each provider with a part of a seal is called once, in registration order, with its completions untouched, a panic abandons the parts not yet handed on, and a domain no provider serves is failed with `Unrouted`. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1222)
 
 - [ ] **DI-12.2.3** -- **What the router reports.** BLOCKED on the first open question of `DI-12.2`: whether it reports an
   inconsistency for a domain no provider owns, and how it knows the instance's number. When answered this becomes that one

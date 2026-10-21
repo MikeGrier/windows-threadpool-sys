@@ -5,13 +5,19 @@
 //! Each provider registered with the router serves exactly the flush domains its own
 //! [`domains`](DurabilityProvider::domains) returns, read once when the router is built. A domain
 //! claimed twice -- by two registrations, or twice by one -- refuses the build.
+//!
+//! A seal's request is split by the provider that serves each domain, and each provider with a part
+//! is called once, in registration order. Each domain's completion is handed to its provider as it
+//! came, so its answer goes straight back to the instance; the router answers nothing itself but a
+//! domain no provider serves.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt;
+use std::io;
 
 use crate::contract::Identities;
-use crate::provider::DurabilityProvider;
+use crate::provider::{DomainRequest, DurabilityProvider, FlushRequest};
 use crate::types::FlushDomain;
 
 /// Builds a [`RoutingProvider`] from providers registered with it in turn. Registrations are
@@ -65,7 +71,7 @@ impl<V: Identities> RouterBuilder<V> {
             }
             routes.push(Route { provider, domains });
         }
-        Ok(RoutingProvider { routes })
+        Ok(RoutingProvider { routes, owners })
     }
 }
 
@@ -85,8 +91,19 @@ impl<V: Identities> fmt::Debug for RouterBuilder<V> {
 
 /// A provider that serves the domains of the providers registered with it, each its own, and
 /// itself no other. Built by [`RouterBuilder`].
+///
+/// Its [`domains`](DurabilityProvider::domains) are the registrations in order, and each one's
+/// domains in the order it gave them when the router was built; no domain appears twice, which the
+/// build refused. [`make_durable`](DurabilityProvider::make_durable) calls each provider that has a
+/// part of the request, once, in registration order, with its parts in the request's order and each
+/// part's completion untouched. A panic in one provider propagates, as the trait says, and the
+/// parts not yet handed on are dropped with it, so their completions are abandoned, which fails
+/// their domains. A domain no provider serves -- which the instance, having read the router's
+/// domains, does not send -- is failed with [`Unrouted`] before any provider is called.
 pub struct RoutingProvider<V: Identities> {
     routes: Vec<Route<V>>,
+    /// Each domain's registration.
+    owners: HashMap<FlushDomain, usize>,
 }
 
 /// One registration: the provider and the domains it declared when the router was built.
@@ -101,16 +118,35 @@ impl<V: Identities> RoutingProvider<V> {
     pub fn builder() -> RouterBuilder<V> {
         RouterBuilder::new()
     }
+}
 
-    /// Every domain a registered provider serves: the registrations in order, and each one's
-    /// domains in the order it gave them when the router was built. No domain appears twice, which
-    /// the build refused.
-    #[must_use]
-    pub fn domains(&self) -> Vec<FlushDomain> {
+impl<V: Identities> DurabilityProvider<V> for RoutingProvider<V> {
+    fn domains(&self) -> Vec<FlushDomain> {
         self.routes
             .iter()
             .flat_map(|route| route.domains.iter().cloned())
             .collect()
+    }
+
+    fn make_durable(&mut self, request: FlushRequest<V>) {
+        let mut parts: Vec<Vec<DomainRequest<V>>> =
+            self.routes.iter().map(|_| Vec::new()).collect();
+        for part in request.domains {
+            match self.owners.get(&part.domain) {
+                Some(&registration) => parts[registration].push(part),
+                None => {
+                    let error = io::Error::other(Unrouted(part.domain.clone()));
+                    part.completion.fail(error);
+                }
+            }
+        }
+        // A panic here unwinds through `parts`, dropping the parts of the providers not yet called,
+        // whose completions then answer as abandoned.
+        for (route, domains) in self.routes.iter_mut().zip(parts) {
+            if !domains.is_empty() {
+                route.provider.make_durable(FlushRequest { domains });
+            }
+        }
     }
 }
 
@@ -118,7 +154,7 @@ impl<V: Identities> fmt::Debug for RoutingProvider<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RoutingProvider")
             .field("routes", &self.routes)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -163,6 +199,25 @@ impl fmt::Display for RoutedTwice {
 }
 
 impl std::error::Error for RoutedTwice {}
+
+/// A router was asked to make a domain durable that no provider registered with it serves: the
+/// domain. The router fails the domain with this inside an [`io::Error`], whose kind is
+/// [`Other`](io::ErrorKind::Other), so the failure's cause is `FailureCause::Provider` with it; the
+/// instance does not send such a domain to a router it built over.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unrouted(pub FlushDomain);
+
+impl fmt::Display for Unrouted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "no provider registered with the router serves the flush domain {:?}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for Unrouted {}
 
 #[cfg(test)]
 mod tests;

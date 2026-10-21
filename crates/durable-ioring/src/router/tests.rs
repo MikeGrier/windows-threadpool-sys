@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Mike Grier
 //! The router's build (DI-12.2.1, DI-D-81): the union of its providers' domains, and a domain
-//! claimed twice refused.
+//! claimed twice refused. Its dispatch is in `dispatch`.
+
+mod dispatch;
 
 use std::error::Error;
 use std::sync::Arc;

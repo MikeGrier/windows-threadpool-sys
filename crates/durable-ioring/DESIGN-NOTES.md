@@ -1444,4 +1444,27 @@ The choices [DI-12.2.1](COMPLETED-CHECKLIST.md#di-1221) left to its implementati
 - **`RoutedTwice` is dioring's own refusal**, of the rule [DI-2.12](COMPLETED-CHECKLIST.md#di-212) point 1 sets, and not a
   prediction of the core's `DuplicateDomain`, which it makes unreachable for a router: the union it builds has no repeat.
 
-**Scheduled work.** [DI-12.2.2](CHECKLIST.md), which implements `DurabilityProvider` for the router with its dispatch.
+**Scheduled work.** None: [DI-12.2.2](COMPLETED-CHECKLIST.md#di-1222) implemented `DurabilityProvider` for the router, with
+its dispatch ([DI-D-83](#di-d-83)).
+
+## <a id="di-d-83"></a>DI-D-83: how the router dispatches, and how it fails a domain it does not route
+
+The choices [DI-12.2.2](COMPLETED-CHECKLIST.md#di-1222) left to its implementation, made by the assistant under
+[DI-D-81](#di-d-81) and open to a ruling.
+
+- **`domains()` is the trait's, not an inherent method.** The router's union, built in [DI-D-82](#di-d-82), is answered
+  through `DurabilityProvider::domains`, so a consumer that reads it names the trait, as it would for any provider.
+- **The request is split before any provider is called**, into one list of parts per registration, each in the request's
+  order; then each registration with a part is called once, in registration order. Nothing is buffered beyond the call:
+  each part's completion goes on as it came, so its answer reaches the instance directly, from whatever thread gives it.
+- **A panic is not caught.** It propagates out of `make_durable`, as the trait says, and the unwinding drops the parts not
+  yet handed on, whose completions then answer as abandoned; the provider that panicked drops its own the same way. So a
+  panic fails exactly the domains of the providers it stopped, and the ones already called answer as they would have.
+- **A domain no provider serves is failed with `Unrouted`, inside an `io::Error` of kind `Other`,** and is not a panic.
+  The instance sends a provider only the domains it serves, read from the router at build, so the case needs a driver
+  that breaks that, or a router used outside an instance. Failing the domain keeps a defect elsewhere from taking down the
+  caller; the typed error lets a consumer tell it from a provider's own failure by downcasting. Such a domain is failed
+  before any provider is called, so a panic later in the same call does not hide it. Whether the router also reports it to a
+  diagnostic sink is [DI-12.2.3](CHECKLIST.md)'s open question.
+
+**Scheduled work.** None.
