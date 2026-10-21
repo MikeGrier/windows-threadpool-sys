@@ -3642,3 +3642,24 @@ The item as written:
 
 What was built, and the choices it left to its implementation, are [DI-D-77](DESIGN-NOTES.md#di-d-77). The lock waits are
 timed by a `LockWatch` beside the engine's slot, and `StampClock` gained a required `elapsed` method, a breaking change.
+
+## Moved 2026-10-20 22:17:44 -04:00 -- DI-12.1.2: win-debugging-sys is created
+
+### <a id="di-1212"></a>DI-12.1.2 -- `win-debugging-sys` is created, with `output_debug_string` and `output_debug_str` over `OutputDebugStringW`, and a NUL refused as the crate's own error. *(completed 2026-10-20 22:17:44 -04:00)*
+
+The item as written:
+
+**DI-12.1.2** -- **Create `win-debugging-sys`, with `OutputDebugStringW`.** The name is the engineer's,
+  2026-10-20 ("how about win-debugging-sys?"). The crate's notes record, at creation, the naming decision with that
+  quotation, the Learn section the snapshot files `OutputDebugString` under (*Debugging Functions*, in
+  [DI-D-76](DESIGN-NOTES.md#di-d-76)), and that a `-sys` crate here is memory-safe over the call and adds no
+  policy. The first wrapper takes a string and writes it. A NUL cannot be passed in the call's terminated string, so a
+  string holding one is refused as the crate's own narrowing, with an error kind of its own and not framed as the call's
+  refusal. Registered with the workspace, release-please and the publish workflow, as `win-text-sys` was. Tests:
+  ordinary and empty strings, a NUL, a long string, and the call made.
+
+What was built is in the crate's [DESIGN-NOTES.md](../win-debugging-sys/DESIGN-NOTES.md): the name and where the function is
+filed are [WD-D-1](../win-debugging-sys/DESIGN-NOTES.md#wd-d-1), and the shape, the one refusal and how the call is
+observed are [WD-D-2](../win-debugging-sys/DESIGN-NOTES.md#wd-d-2). The call is observed by a debugger the test starts,
+over the documented debugger functions, and not by the shared-section protocol that no page describes. The crate is a new
+workspace member, registered for release-please and the publish workflow as `win-text-sys` was.

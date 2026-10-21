@@ -25,14 +25,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 - [x] **DI-12.1.1** -- The delay events are in the portable core: lock waits, flush issue and answer, and a seal's wait, built only for a sink that wants them. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1211)
 
-- [ ] **DI-12.1.2** -- **Create `win-debugging-sys`, with `OutputDebugStringW`.** The name is the engineer's,
-  2026-10-20 ("how about win-debugging-sys?"). The crate's notes record, at creation, the naming decision with that
-  quotation, the Learn section the snapshot files `OutputDebugString` under (*Debugging Functions*, in
-  [DI-D-76](DESIGN-NOTES.md#di-d-76)), and that a `-sys` crate here is memory-safe over the call and adds no
-  policy. The first wrapper takes a string and writes it. A NUL cannot be passed in the call's terminated string, so a
-  string holding one is refused as the crate's own narrowing, with an error kind of its own and not framed as the call's
-  refusal. Registered with the workspace, release-please and the publish workflow, as `win-text-sys` was. Tests:
-  ordinary and empty strings, a NUL, a long string, and the call made.
+- [x] **DI-12.1.2** -- `win-debugging-sys` is created, with `output_debug_string` and `output_debug_str` over `OutputDebugStringW`, and a NUL refused as the crate's own error. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1212)
 
 - [ ] **DI-12.1.3** -- **`DebugOutputDiagnostics` in `win-durable-ioring`**, through `win-debugging-sys`: each event as
   a `dioring:` line, wanting every kind. Tests: the formatting apart from the emission, and the emission observed by a
