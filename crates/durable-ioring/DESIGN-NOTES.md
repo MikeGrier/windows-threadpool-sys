@@ -1230,7 +1230,7 @@ README examples fail a flush. The seam is one mechanism: `fail_next_flush` forwa
 not what the Windows driver adds, should move to the portable crate and use a script. The assistant proposed it and the
 engineer, 2026-10-20, asked for it to be queued.
 
-**Scheduled work.** [DI-18.1](CHECKLIST.md) to `DI-18.3`: classify the tests that arm the seam, move the ones that check
+**Scheduled work.** Done: [DI-18.1](COMPLETED-CHECKLIST.md#di-181) to [DI-18.3](COMPLETED-CHECKLIST.md#di-183): classify the tests that arm the seam, move the ones that check
 the core to the script, and delete them from `win-durable-ioring`. The seam and the README's examples stay.
 
 ## <a id="di-d-76"></a>DI-D-76: the delay events' sinks: one provider in its own crate, a debugging crate beside it, and no manifest needed to record

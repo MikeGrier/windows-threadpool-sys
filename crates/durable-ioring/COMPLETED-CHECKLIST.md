@@ -3972,3 +3972,32 @@ one of them -- `DI-3.2.7: close hands back no failure` -- is caught by no test b
 is what keeps it caught. The entries whose record names no test were each read: those that failed to build are caught before any
 test runs, and in the transcript of each that hung or crashed, every original reported `ok`, so none of them was caught by an
 original either.
+
+## Moved 2026-10-21 17:36:11 -04:00 -- DI-18.3, and DI-M18 is complete
+
+### <a id="di-183"></a>DI-18.3 -- The moved tests are deleted from `win-durable-ioring`, the *both* test keeps its Windows half, and every sabotage entry the originals caught is still caught. *(completed 2026-10-21 17:36:11 -04:00)*
+
+The item as written:
+
+**DI-18.3** -- **Delete the moved tests from `win-durable-ioring`.** What remains there is the *windows* set. The
+  seam itself and the README's examples stay ([DI-D-75](DESIGN-NOTES.md#di-d-75)). Both crates' tests pass, and the
+  sabotage entries checked in `DI-18.2` are still caught.
+
+The eleven *core* tests of [DI-18.1](COMPLETED-CHECKLIST.md#di-181)'s census are deleted from `win-durable-ioring`, with the
+helpers and imports only they used. The *both* test keeps its Windows half -- the flush's failure relayed from the ring, its
+source and its `HRESULT` -- as `a_failed_flush_is_reported_with_the_rings_cause`. Re-running the census search finds the seam
+armed only by the *windows* set, that test's helper, and the README's examples, which stay with the seam
+([DI-D-75](DESIGN-NOTES.md#di-d-75)). Both crates' tests pass.
+
+**The sabotage check, run.** Every entry [DI-18.2](COMPLETED-CHECKLIST.md#di-182) found an original catching, in either crate's
+manifest, was swept again with the originals gone, with each manifest's controls beside them, from filtered copies of the two
+manifests so as not to sweep the rest. Every entry behaved as declared: each is still caught, and each control survived.
+`DI-3.2.7: close hands back no failure` is now caught by `io_core::tests::flush_failures::closing_hands_back_the_unresolved_failures`
+alone, the moved copy.
+
+### DI-M18 is complete
+
+Its three items are archived: the census ([DI-18.1](COMPLETED-CHECKLIST.md#di-181)), the move
+([DI-18.2](COMPLETED-CHECKLIST.md#di-182)) and the deletion ([DI-18.3](COMPLETED-CHECKLIST.md#di-183)). A failure test now lives
+at the layer that owns what it checks: how the core answers a failed flush, in `durable-ioring` over its in-memory script; what
+the Windows driver adds, in `win-durable-ioring` over its seam.

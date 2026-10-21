@@ -12,21 +12,6 @@ new milestones are numbered after the parked DI-M5+ and DI-M6+, which are cited 
 renumber. The flush-failure spike (DI-M4) runs alongside and gates nothing. This file holds only work in
 scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARKED.md](PARKED.md).
 
-## DI-M18 -- Each failure test at the layer that owns what it checks
-
-Queued by the engineer, 2026-10-20, from the question [DI-D-75](DESIGN-NOTES.md#di-d-75) left unruled: both paths for
-fault injection stay, and the tests in `win-durable-ioring` that only check how the core answers a failure move to the
-portable crate, where the in-memory backend's script ([DI-D-74](DESIGN-NOTES.md#di-d-74)) produces it without a
-Windows ring. What stays at the Windows level is what the Windows driver adds.
-
-- [x] **DI-18.1** -- Every test and example in `win-durable-ioring` that arms the Windows fault seam is censused by a recorded search and classified *core*, *windows* or *both*, with the reason for each. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-181)
-
-- [x] **DI-18.2** -- Each *core* test that armed the Windows fault seam is moved to `durable-ioring` over the in-memory script with its name and assertions, and every sabotage entry the originals caught is still caught without them. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-182)
-
-- [ ] **DI-18.3** -- **Delete the moved tests from `win-durable-ioring`.** What remains there is the *windows* set. The
-  seam itself and the README's examples stay ([DI-D-75](DESIGN-NOTES.md#di-d-75)). Both crates' tests pass, and the
-  sabotage entries checked in `DI-18.2` are still caught.
-
 ## DI-M19 -- Paired begin and end events with correlation ids
 
 Queued by the engineer, 2026-10-21 ([DI-D-80](DESIGN-NOTES.md#di-d-80)): durations are computed by the analysis tools from
