@@ -42,6 +42,11 @@ impl CorrelationId {
     pub const fn get(self) -> u64 {
         self.0
     }
+    /// An id with the number a test chose, which no counter minted.
+    #[cfg(test)]
+    pub(crate) const fn chosen(n: u64) -> Self {
+        Self(n)
+    }
 }
 
 impl fmt::Display for CorrelationId {

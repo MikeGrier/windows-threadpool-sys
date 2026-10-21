@@ -9,6 +9,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::correlation::CorrelationId;
 use crate::types::{FlushDomain, IoTargetKey};
 
 #[cfg(test)]
@@ -29,6 +30,80 @@ pub enum DiagnosticKind {
     FlushAnswered,
     /// A seal left waiting for the writes at or below it (DI-D-26).
     SealWaited,
+    /// A seal, from its being asked for to its being answered: a pair (DI-D-80, DI-D-87).
+    Seal,
+    /// One part of a seal's flush, from its issue to its answer: a pair (DI-D-80, DI-D-87).
+    Flush,
+}
+
+/// Which end of a pair an event is (DI-D-80).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Edge {
+    /// The pair's first event.
+    Begin,
+    /// The pair's last event: nothing of the pair follows it.
+    End,
+}
+
+/// What makes an event one end of a pair: the pair's kind, its id, and which end. The one
+/// definition of which events pair, which the pairing checker and a sink that marks the ends
+/// both read (DI-D-87).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Pairing {
+    /// The pair's kind, which its begin and its end share.
+    pub kind: DiagnosticKind,
+    /// The pair's id, which its begin and its end share.
+    pub id: CorrelationId,
+    /// Which end this is.
+    pub edge: Edge,
+}
+
+/// How a seal's pair ended (DI-D-87).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SealOutcome {
+    /// The seal was answered durable.
+    Durable,
+    /// The seal was answered with a failure of its own flush.
+    Failed,
+    /// The seal was answered blocked by an earlier failure.
+    Blocked,
+    /// The seal was never answered: its lineage ended, or its instance was closed or dropped.
+    Ended,
+}
+
+impl fmt::Display for SealOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Durable => "durable",
+            Self::Failed => "failed",
+            Self::Blocked => "blocked",
+            Self::Ended => "ended unanswered",
+        })
+    }
+}
+
+/// How a flush's pair ended (DI-D-87).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FlushOutcome {
+    /// The part answered success.
+    Succeeded,
+    /// The part answered a failure.
+    Failed,
+    /// The part was never answered: its completion was dropped, its lineage ended, or its
+    /// instance was closed or dropped.
+    Abandoned,
+}
+
+impl fmt::Display for FlushOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Abandoned => "abandoned",
+        })
+    }
 }
 
 /// Which part of a seal's flush an event is about.
@@ -120,6 +195,77 @@ pub enum Diagnostic<'a> {
         /// How long from the seal's being asked for to its flushes being issued.
         waited: Duration,
     },
+    /// A seal was asked for: the begin of its pair (DI-D-87).
+    SealBegan {
+        /// The instance, by the number it was minted with.
+        instance: u64,
+        /// The lineage, by its place among the instance's lineages: the default is 0.
+        lineage: u64,
+        /// The epoch the seal is through, as its identity renders itself.
+        through: fmt::Arguments<'a>,
+        /// The pair's id.
+        id: CorrelationId,
+    },
+    /// A seal was answered, or will never be: the end of its pair (DI-D-87).
+    SealEnded {
+        /// The instance, by the number it was minted with.
+        instance: u64,
+        /// The lineage, by its place among the instance's lineages: the default is 0.
+        lineage: u64,
+        /// The epoch the seal is through, as its identity renders itself.
+        through: fmt::Arguments<'a>,
+        /// The pair's id.
+        id: CorrelationId,
+        /// How it ended.
+        outcome: SealOutcome,
+    },
+    /// One part of a seal's flush was issued: the begin of its pair (DI-D-87).
+    FlushBegan {
+        /// The instance, by the number it was minted with.
+        instance: u64,
+        /// The lineage, by its place among the instance's lineages: the default is 0.
+        lineage: u64,
+        /// The epoch the seal is through, as its identity renders itself.
+        through: fmt::Arguments<'a>,
+        /// Which part.
+        part: FlushPart<'a>,
+        /// The pair's id.
+        id: CorrelationId,
+    },
+    /// One part of a seal's flush answered, or will never: the end of its pair (DI-D-87).
+    FlushEnded {
+        /// The instance, by the number it was minted with.
+        instance: u64,
+        /// The lineage, by its place among the instance's lineages: the default is 0.
+        lineage: u64,
+        /// The epoch the seal is through, as its identity renders itself.
+        through: fmt::Arguments<'a>,
+        /// Which part.
+        part: FlushPart<'a>,
+        /// The pair's id.
+        id: CorrelationId,
+        /// How it ended.
+        outcome: FlushOutcome,
+    },
+    /// An acquisition of one of an instance's locks found it held, and waits: the begin of its
+    /// pair (DI-D-87).
+    LockWaitBegan {
+        /// The instance, by the number it was minted with.
+        instance: u64,
+        /// Which lock: a name per lock.
+        lock: &'static str,
+        /// The pair's id.
+        id: CorrelationId,
+    },
+    /// The waiting acquisition took the lock, and holds it: the end of its pair (DI-D-87).
+    LockWaitEnded {
+        /// The instance, by the number it was minted with.
+        instance: u64,
+        /// Which lock: a name per lock.
+        lock: &'static str,
+        /// The pair's id.
+        id: CorrelationId,
+    },
 }
 
 impl Diagnostic<'_> {
@@ -132,7 +278,33 @@ impl Diagnostic<'_> {
             Self::FlushIssued { .. } => DiagnosticKind::FlushIssued,
             Self::FlushAnswered { .. } => DiagnosticKind::FlushAnswered,
             Self::SealWaited { .. } => DiagnosticKind::SealWaited,
+            Self::SealBegan { .. } | Self::SealEnded { .. } => DiagnosticKind::Seal,
+            Self::FlushBegan { .. } | Self::FlushEnded { .. } => DiagnosticKind::Flush,
+            Self::LockWaitBegan { .. } | Self::LockWaitEnded { .. } => DiagnosticKind::LockWait,
         }
+    }
+
+    /// Which end of which pair the event is, or `None` for an event that is not one.
+    #[must_use]
+    pub fn pairing(&self) -> Option<Pairing> {
+        let (id, edge) = match self {
+            Self::SealBegan { id, .. }
+            | Self::FlushBegan { id, .. }
+            | Self::LockWaitBegan { id, .. } => (*id, Edge::Begin),
+            Self::SealEnded { id, .. }
+            | Self::FlushEnded { id, .. }
+            | Self::LockWaitEnded { id, .. } => (*id, Edge::End),
+            Self::Inconsistency { .. }
+            | Self::LockWait { .. }
+            | Self::FlushIssued { .. }
+            | Self::FlushAnswered { .. }
+            | Self::SealWaited { .. } => return None,
+        };
+        Some(Pairing {
+            kind: self.kind(),
+            id,
+            edge,
+        })
     }
 }
 
@@ -189,6 +361,57 @@ impl fmt::Display for Diagnostic<'_> {
                 "instance {instance} lineage {lineage} seal through {through}: waited {waited:?} \
                  for its writes"
             ),
+            Self::SealBegan {
+                instance,
+                lineage,
+                through,
+                id,
+            } => write!(
+                f,
+                "instance {instance} lineage {lineage} seal through {through} (pair {id}): began"
+            ),
+            Self::SealEnded {
+                instance,
+                lineage,
+                through,
+                id,
+                outcome,
+            } => write!(
+                f,
+                "instance {instance} lineage {lineage} seal through {through} (pair {id}): {outcome}"
+            ),
+            Self::FlushBegan {
+                instance,
+                lineage,
+                through,
+                part,
+                id,
+            } => write!(
+                f,
+                "instance {instance} lineage {lineage} seal through {through}: flush of {part} \
+                 (pair {id}) began"
+            ),
+            Self::FlushEnded {
+                instance,
+                lineage,
+                through,
+                part,
+                id,
+                outcome,
+            } => write!(
+                f,
+                "instance {instance} lineage {lineage} seal through {through}: flush of {part} \
+                 (pair {id}) {outcome}"
+            ),
+            Self::LockWaitBegan { instance, lock, id } => {
+                write!(
+                    f,
+                    "instance {instance} (pair {id}): waits for its {lock} lock"
+                )
+            }
+            Self::LockWaitEnded { instance, lock, id } => {
+                write!(f, "instance {instance} (pair {id}): took its {lock} lock")
+            }
         }
     }
 }

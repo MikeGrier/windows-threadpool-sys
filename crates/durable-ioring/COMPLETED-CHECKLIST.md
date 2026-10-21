@@ -4016,3 +4016,20 @@ The item as written:
 Built in `src/correlation.rs` and exported from the crate. Nothing builds a begin yet, so the rule that an id is minted only
 when a begin is built is carried by the one way to mint, which asks the sink whether it wants the kind; [DI-19.2](CHECKLIST.md)
 calls it as it builds each begin. The choices are [DI-D-86](DESIGN-NOTES.md#di-d-86).
+
+## Moved 2026-10-21 18:18:31 -04:00 -- DI-19.2.1: the pair variants and the pairing checker
+
+### <a id="di-1921"></a>DI-19.2.1 -- The seal, flush and lock-wait pair variants and kinds are in `Diagnostic` beside the old ones, `Diagnostic::pairing` says which end of which pair an event is, and `PairingChecker` holds the pairing rule. *(completed 2026-10-21 18:18:31 -04:00)*
+
+The item as written:
+
+**DI-19.2.1** -- **The pair variants and kinds, and `PairingChecker`.** The new variants and kinds beside the old ones,
+  which stay until `DI-19.2.4` moves the sinks, so each step compiles. `PairingChecker`, public in `durable_ioring::oracle`
+  beside the conformance oracle: every end follows a begin of the same id and kind; no id is begun twice; nothing follows an
+  end; and at the stream's end no begin is left open but those a test names. Tested in memory against hand-built streams it
+  must accept and streams it must refuse, each rule in both directions.
+
+The variants, `SealOutcome`, `FlushOutcome`, `Edge` and `Pairing` are in `src/diagnostics.rs`; the checker and
+`PairingViolation` in `src/oracle/pairing.rs`, exported from `durable_ioring::oracle`. Nothing emits a pair yet. The choices
+are [DI-D-88](DESIGN-NOTES.md#di-d-88).
+

@@ -2122,6 +2122,54 @@
       "why": "A control: a stronger ordering than relaxed, which mints the same distinct ids and no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        .then(|| CorrelationId(counter.fetch_add(1, Ordering::Relaxed)))"],
       "replace": ["        .then(|| CorrelationId(counter.fetch_add(1, Ordering::SeqCst)))"]
+    },
+    {
+      "name": "DI-19.2.1: an end of another kind than its begin is accepted",
+      "file": "src/oracle/pairing.rs",
+      "expect": "caught",
+      "why": "A pair's begin and end are one kind, so a sink wants both or neither (DI-D-87); an end of another kind is a different pair's, or a defect.",
+      "find": ["                if begun.kind != pairing.kind {"],
+      "replace": ["                if begun.kind != pairing.kind && false {"]
+    },
+    {
+      "name": "DI-19.2.1: an end that does not repeat its begin's identity is accepted",
+      "file": "src/oracle/pairing.rs",
+      "expect": "caught",
+      "why": "An end repeats its begin's identity fields (DI-D-87), so a reader of one line knows what ended; the checker is where that is held.",
+      "find": ["                if begun.subject != subject {"],
+      "replace": ["                if begun.subject != subject && false {"]
+    },
+    {
+      "name": "DI-19.2.1: an ended pair is forgotten",
+      "file": "src/oracle/pairing.rs",
+      "expect": "caught",
+      "why": "Nothing of a pair follows its end; a checker that forgets the end lets a second end, or a begin again, pass as something else.",
+      "find": ["                self.ended.insert(id);"],
+      "replace": ["                let _ = id;"]
+    },
+    {
+      "name": "DI-19.2.1: a pair named as left open need not be open",
+      "file": "src/oracle/pairing.rs",
+      "expect": "caught",
+      "why": "The finish is bidirectional: every open pair is named, and every named pair is open, so a test cannot excuse a pair that never began.",
+      "find": ["            Some(&id) => Err(PairingViolation::NamedNotOpen { id }),"],
+      "replace": ["            Some(_) => Ok(()),"]
+    },
+    {
+      "name": "DI-19.2.1: a lock wait's end is taken for a begin",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "Which events open and close a pair is defined once, by Diagnostic::pairing (DI-D-87), which the checker and the ETW sink both read.",
+      "find": ["            | Self::LockWaitEnded { id, .. } => (*id, Edge::End),"],
+      "replace": ["            | Self::LockWaitEnded { id, .. } => (*id, Edge::Begin),"]
+    },
+    {
+      "name": "DI-19.2.1 control: the open pairs are gathered by cloning",
+      "file": "src/oracle/pairing.rs",
+      "expect": "survives",
+      "why": "A control: the same ids gathered by clone instead of copy, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        let mut open: Vec<CorrelationId> = self.open.keys().copied().collect();"],
+      "replace": ["        let mut open: Vec<CorrelationId> = self.open.keys().cloned().collect();"]
     }
   ]
 }

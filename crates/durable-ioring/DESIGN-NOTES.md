@@ -1569,3 +1569,22 @@ The choices [DI-19.1](COMPLETED-CHECKLIST.md#di-191) left to its implementation,
 
 **Scheduled work.** [DI-19.2.1](CHECKLIST.md) to `DI-19.2.5`, and `DI-19.4`, narrowed.
 
+## <a id="di-d-88"></a>DI-D-88: which events pair is defined once, on `Diagnostic`, and the checker holds the rest
+
+The choices [DI-19.2.1](COMPLETED-CHECKLIST.md#di-1921) left to its implementation, made by the assistant under
+[DI-D-87](#di-d-87) and open to a ruling.
+
+- **`Diagnostic::pairing` is the one definition of which events are the ends of which pairs.** It returns the pair's kind,
+  its id, and whether the event is the begin or the end, or `None`. The checker reads it, and the ETW sink will read it to
+  choose a Start or a Stop opcode, so neither restates which variants pair; a variant added later is placed once.
+- **The checker also holds that an end repeats its begin's identity**: the instance, and the lineage and epoch, the part, or
+  the lock. DI-D-87 promises it, and the checker is the one place a stream can be held to it. It compares the identity as
+  text, so an epoch rendered by its own `Debug` is compared as the reader sees it.
+- **The finish is bidirectional**: every pair open must be named as left open, and every pair named must be open, so a test
+  cannot excuse a pair that never began or has ended.
+- **A violation is the first one met**, and the checker is not meant to go on past it; a test stops there.
+- **Ids a test chooses** come from a constructor that exists only under `cfg(test)`, so a test can say which pair it means;
+  everything else mints through `CorrelationId::for_pair` ([DI-D-86](#di-d-86)).
+
+**Scheduled work.** [DI-19.2.2](CHECKLIST.md) onward, which emit the pairs and bind each sink's tests to the checker.
+

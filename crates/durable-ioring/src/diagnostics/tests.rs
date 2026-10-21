@@ -207,3 +207,166 @@ fn a_fan_out_debugs_by_its_count() {
     let fan = FanOutDiagnostics::new(vec![Arc::new(NoDiagnostics), Arc::new(StderrDiagnostics)]);
     assert_eq!(format!("{fan:?}"), "FanOutDiagnostics { sinks: 2 }");
 }
+
+#[test]
+fn each_end_of_a_pair_says_its_kind_id_and_edge_and_nothing_else_is_a_pair() {
+    use super::{Edge, FlushOutcome, Pairing, SealOutcome};
+    use crate::correlation::CorrelationId;
+    let id = CorrelationId::chosen(42);
+    let domain = FlushDomain::new(b"log".as_slice());
+    let pairing = |event: &Diagnostic<'_>| event.pairing();
+    let expect = |kind, edge| Some(Pairing { kind, id, edge });
+    assert_eq!(
+        pairing(&Diagnostic::SealBegan {
+            instance: 1,
+            lineage: 0,
+            through: format_args!("1"),
+            id
+        }),
+        expect(DiagnosticKind::Seal, Edge::Begin)
+    );
+    assert_eq!(
+        pairing(&Diagnostic::SealEnded {
+            instance: 1,
+            lineage: 0,
+            through: format_args!("1"),
+            id,
+            outcome: SealOutcome::Durable
+        }),
+        expect(DiagnosticKind::Seal, Edge::End)
+    );
+    assert_eq!(
+        pairing(&Diagnostic::FlushBegan {
+            instance: 1,
+            lineage: 0,
+            through: format_args!("1"),
+            part: FlushPart::Domain(&domain),
+            id
+        }),
+        expect(DiagnosticKind::Flush, Edge::Begin)
+    );
+    assert_eq!(
+        pairing(&Diagnostic::FlushEnded {
+            instance: 1,
+            lineage: 0,
+            through: format_args!("1"),
+            part: FlushPart::File(IoTargetKey(3)),
+            id,
+            outcome: FlushOutcome::Abandoned
+        }),
+        expect(DiagnosticKind::Flush, Edge::End)
+    );
+    assert_eq!(
+        pairing(&Diagnostic::LockWaitBegan {
+            instance: 1,
+            lock: "engine",
+            id
+        }),
+        expect(DiagnosticKind::LockWait, Edge::Begin)
+    );
+    assert_eq!(
+        pairing(&Diagnostic::LockWaitEnded {
+            instance: 1,
+            lock: "engine",
+            id
+        }),
+        expect(DiagnosticKind::LockWait, Edge::End)
+    );
+    assert_eq!(
+        pairing(&Diagnostic::Inconsistency {
+            instance: 1,
+            what: "x",
+            detail: format_args!("y")
+        }),
+        None
+    );
+    assert_eq!(
+        pairing(&Diagnostic::LockWait {
+            instance: 1,
+            lock: "engine",
+            waited: Duration::ZERO
+        }),
+        None
+    );
+    assert_eq!(
+        pairing(&Diagnostic::SealWaited {
+            instance: 1,
+            lineage: 0,
+            through: format_args!("1"),
+            waited: Duration::ZERO
+        }),
+        None
+    );
+}
+
+#[test]
+fn every_end_of_a_pair_shows_its_id_and_how_it_ended() {
+    use super::{FlushOutcome, SealOutcome};
+    use crate::correlation::CorrelationId;
+    let id = CorrelationId::chosen(17);
+    let lines = [
+        Diagnostic::SealBegan {
+            instance: 2,
+            lineage: 1,
+            through: format_args!("9"),
+            id,
+        }
+        .to_string(),
+        Diagnostic::SealEnded {
+            instance: 2,
+            lineage: 1,
+            through: format_args!("9"),
+            id,
+            outcome: SealOutcome::Blocked,
+        }
+        .to_string(),
+        Diagnostic::SealEnded {
+            instance: 2,
+            lineage: 1,
+            through: format_args!("9"),
+            id,
+            outcome: SealOutcome::Ended,
+        }
+        .to_string(),
+        Diagnostic::FlushBegan {
+            instance: 2,
+            lineage: 1,
+            through: format_args!("9"),
+            part: FlushPart::File(IoTargetKey(4)),
+            id,
+        }
+        .to_string(),
+        Diagnostic::FlushEnded {
+            instance: 2,
+            lineage: 1,
+            through: format_args!("9"),
+            part: FlushPart::File(IoTargetKey(4)),
+            id,
+            outcome: FlushOutcome::Failed,
+        }
+        .to_string(),
+        Diagnostic::LockWaitBegan {
+            instance: 2,
+            lock: "engine",
+            id,
+        }
+        .to_string(),
+        Diagnostic::LockWaitEnded {
+            instance: 2,
+            lock: "engine",
+            id,
+        }
+        .to_string(),
+    ];
+    for line in &lines {
+        assert!(line.contains("(pair 17)"), "{line}");
+        assert!(line.starts_with("instance 2"), "{line}");
+    }
+    assert!(lines[0].ends_with("began"));
+    assert!(lines[1].ends_with("blocked"));
+    assert!(lines[2].ends_with("ended unanswered"));
+    assert!(lines[3].contains("flush of file 4") && lines[3].ends_with("began"));
+    assert!(lines[4].ends_with("failed"));
+    assert!(lines[5].contains("waits for its engine lock"));
+    assert!(lines[6].contains("took its engine lock"));
+}
