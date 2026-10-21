@@ -1278,6 +1278,8 @@ where they are documented before it names a section.
 
 ## <a id="di-d-77"></a>DI-D-77: how the delay events are built and timed
 
+**Amended in part by [DI-D-80](#di-d-80): the flush, seal and lock-wait durations become paired begin and end events, with the lock wait's end written with the lock held, and the core's own `elapsed` is dropped; scheduled in [DI-19.2](CHECKLIST.md).**
+
 **What is decided.** The choices [DI-12.1.1](COMPLETED-CHECKLIST.md#di-1211) left to its implementation, made by the
 assistant under [DI-D-26](#di-d-26) and [DI-D-76](#di-d-76). None is an answer the engineer was asked for, and each is
 open to a ruling.
@@ -1388,12 +1390,20 @@ not share, and a provider's answer may come from any thread. These are why the w
 - **The pairs are a seal, a flush of a file or a domain, and a lock wait**, in answer to the assistant's three candidates:
   "those seem like the required ones".
 
+- **A seal's pair runs from its being asked for to its becoming durable or failing.** The engineer, 2026-10-21, to the
+  assistant's two candidates: "asked-for to durable-or-failed". The flush pairs lie inside it, and the wait before the first
+  flush is the gap before its begin.
+- **A lock wait's end is written with the lock held, and a sink's synchronization must not interfere with dioring's.** The
+  engineer, 2026-10-21: "The lock wait end is written with the lock held. Any synchronization within the diagnostics
+  platform must not interfere with the synchronization in the durable-ioring." This reverses [DI-D-77](#di-d-77)'s report
+  after the guard is released, which is how the report avoided lengthening the hold it measured; the cost is that the sink's
+  time is inside the hold, which `DiagnosticSink`'s existing rule that a sink "returns promptly and never calls back into the
+  instance" already bounds. The rule that the sink's locks are leaves is the assistant's statement of the second sentence, and
+  is open to the engineer's correction.
+
 **A working position, not a decision.** The engineer, 2026-10-21, on the 128-bit activity id: "true, perhaps we use the
 process id as the upper 64 bits and the u64 as the lower?" It is held as a position until [DI-19.4](CHECKLIST.md) builds it,
 and a process id reused within one trace is a case the assistant has not settled.
-
-**Not decided, and not to be taken as decided.** What span a seal's pair covers; and where a lock wait's end is written, since
-an event is stamped when it is written and [DI-D-77](#di-d-77) has the lock wait reported after the guard is released.
 
 **Scheduled work.** [DI-M19](CHECKLIST.md#di-m19----paired-begin-and-end-events-with-correlation-ids). The router
 reports no timing, and what it reports otherwise is the open question of [DI-12.2.3](CHECKLIST.md).
