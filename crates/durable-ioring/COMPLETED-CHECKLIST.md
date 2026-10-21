@@ -3887,3 +3887,57 @@ provider ([DI-12.2](COMPLETED-CHECKLIST.md#di-122)), this withdrawal, and the pi
 ([DI-12.4](COMPLETED-CHECKLIST.md#di-124)). Its completion met the gate on `DI-M5+` and `DI-M6+` in
 [PARKED.md](PARKED.md); no item there was graduated, since which to take up is the engineer's to choose, and each section now
 says so.
+
+## Moved 2026-10-21 15:36:54 -04:00 -- DI-18.1: the fault seam's census
+
+### <a id="di-181"></a>DI-18.1 -- Every test and example in `win-durable-ioring` that arms the Windows fault seam is censused by a recorded search and classified *core*, *windows* or *both*, with the reason for each. *(completed 2026-10-21 15:36:54 -04:00)*
+
+The item as written:
+
+**DI-18.1** -- **Census every test and example that arms the Windows fault seam, and classify each.** The census is
+  produced by a search recorded with it, for `fail_next_flush` and `fail_next_commit` across `win-durable-ioring`'s
+  source, tests and README, and not from recollection. Each is one of: *core* -- its assertions are about how the core
+  answers a failed flush (an epoch blocks, which writes are suspect, a heal, a lineage, a marking, a stamp, how a
+  lineage ends) and name nothing the Windows driver adds; *windows* -- its assertions are about what the driver adds (a
+  Win32 code reaching its `ErrorCode` and back through `win32_code_of`, the real ring, the delivery, a worked example in
+  the README); or *both*, which is split. The classification is recorded beside the census, with the reason for each.
+
+**The search**, run at commit `8ae3780e` and recorded so it can be run again, not trusted:
+
+```
+git --no-pager grep -n -E "fail_next_flush|fail_next_commit" -- crates/win-durable-ioring
+git --no-pager grep -n -w failed_seal -- crates/win-durable-ioring/src
+```
+
+The first finds each call; a call inside a helper was followed to the tests that call the helper with the second, since
+`failed_seal` in `failures.rs` arms the seam for five tests. The hits that are not a use are the seam itself --
+`Dioring::fail_next_flush` in `dioring.rs` and `fail_next_commit` in `windows_backend.rs` -- and a comment in `Cargo.toml`. No
+crate outside `win-durable-ioring` arms it.
+
+**The census and its classification.** *core*: the assertions are about how the core answers a failed flush and name nothing
+the driver adds. *windows*: they are about what the driver adds. *both*: split, the Windows half staying.
+
+| File (under `crates/win-durable-ioring/src/`) | Test | Class | Why |
+|---|---|---|---|
+| `dioring/tests/failures.rs` | `a_failed_flush_is_reported_with_its_cause_and_holds_the_mark` | *both* | Windows half: the cause is relayed from the ring, `source` `"windows-ioring"` and the `HRESULT` read back through `as_ioring_error`. Core half: the suspects, no high-water mark, the epoch `Blocked`, a re-seal `AlreadySealed`, the inventory, one answer. |
+| `dioring/tests/failures.rs` | `a_healed_failure_is_passed_at_the_first_seal_after_the_heal` | *core* | A write to a sealed epoch refused, then `Healed` before any `Durable` at the next seal and the inventory empty: CONTRACT.md's healing example, nothing Windows adds. |
+| `dioring/tests/failures.rs` | `without_the_heal_a_later_seal_is_answered_blocked` | *core* | A later seal answered `Blocked` by the failure, then `Abandoned` and both epochs' `Durable`: how the core answers. |
+| `dioring/tests/failures.rs` | `a_failed_flush_reaches_only_files_sharing_a_declared_domain` | *core* | Which writes a failure suspects, by declared domain. |
+| `dioring/tests/failures.rs` | `a_resolution_naming_another_instances_failure_is_refused_whole` | *core* | A resolution naming a foreign token refused whole, nothing abandoned. The seam only makes a failure to hold; an import would do. |
+| `dioring/tests/failures.rs` | `a_closed_failure_stays_and_its_token_can_be_taken_again` | *core* | A closed token, the inventory's `token_live`, `take_token`, then abandoning. |
+| `dioring/tests/failures.rs` | `a_write_into_an_abandoned_epoch_is_refused_with_what_it_took` | *core* | Pushes into an abandoned or sealed epoch refused with their buffer and context. Its registered-buffer half needs the in-memory backend to take registered buffers, which `DI-18.2` checks. |
+| `dioring/tests/failures.rs` | `an_armed_failure_is_used_by_its_own_file_only` | *windows* | It checks the seam itself: an armed failure is used by the flush of its own file and no other. The seam stays (DI-D-75). |
+| `dioring/tests/ending.rs` | `a_failure_suspecting_a_write_holds_its_file_until_it_is_resolved` | *core* | `remove_target` refused while a failure suspects a write to the file, and allowed once it is abandoned. |
+| `dioring/tests/ending.rs` | `closing_hands_back_the_unresolved_failures` | *core* | What `close` hands back: the unresolved failure and the lineage's high-water mark. `DI-18.2` checks that the in-memory driver's close hands back the same. |
+| `delivery/tests.rs` | `a_failure_resolved_through_the_handle_is_delivered_with_what_follows_it` | *windows* | It checks `EntryDelivery`, the driver's delivery on the thread pool, and resolving through its handle from the handler; the failure is only the vehicle. |
+| `dioring/tests/lineages.rs` | `a_failure_spanning_two_lineages_heals_in_each_at_its_own_seal` | *core* | A failure suspecting a write of each of two lineages, healed in each at its own seal (DI-D-41). |
+| `dioring/tests/markings.rs` | `a_heal_reports_its_record_with_the_markings_its_failure_gained` | *core* | A healing failure gains a `Covered` marking for a later flushed write, and `Healed` reports it. |
+| `dioring/tests/markings.rs` | `a_failed_flushs_code_reads_without_the_ring_crate` | *windows* | `win32_code_of` and `error_code_of` read the Win32 code back from the fault without the ring crate. |
+| `dioring/tests/stamps.rs` | `an_instance_given_a_clock_stamps_a_failed_flush_with_its_reading_when_observed` | *core* | A failure's `observed` stamp is the clock's reading when it was observed, in the event and in the inventory. The core's test clock serves in place of the driver's interrupt-time one. |
+| `windows_backend/tests.rs` | `an_armed_commit_failure_reports_the_code` | *windows* | The backend's own seam, `fail_next_commit`: only a commit is failed, its source and code, used once. |
+| `crates/win-durable-ioring/README.md` | "Healing a failure" | *windows* | A worked example of the driver; the README's examples stay (DI-D-75). |
+| `crates/win-durable-ioring/README.md` | "Failures and epochs are many-to-many" | *windows* | As above. |
+| `crates/win-durable-ioring/README.md` | "Failures and epochs are many-to-many", its second ending (heal F1, abandon F2) | *windows* | As above; it arms the seam in hidden lines. |
+
+This is a record of the tree at `8ae3780e`. `DI-18.2` works from it, and re-runs the search first, since a test added since is
+not in it.

@@ -19,15 +19,10 @@ fault injection stay, and the tests in `win-durable-ioring` that only check how 
 portable crate, where the in-memory backend's script ([DI-D-74](DESIGN-NOTES.md#di-d-74)) produces it without a
 Windows ring. What stays at the Windows level is what the Windows driver adds.
 
-- [ ] **DI-18.1** -- **Census every test and example that arms the Windows fault seam, and classify each.** The census is
-  produced by a search recorded with it, for `fail_next_flush` and `fail_next_commit` across `win-durable-ioring`'s
-  source, tests and README, and not from recollection. Each is one of: *core* -- its assertions are about how the core
-  answers a failed flush (an epoch blocks, which writes are suspect, a heal, a lineage, a marking, a stamp, how a
-  lineage ends) and name nothing the Windows driver adds; *windows* -- its assertions are about what the driver adds (a
-  Win32 code reaching its `ErrorCode` and back through `win32_code_of`, the real ring, the delivery, a worked example in
-  the README); or *both*, which is split. The classification is recorded beside the census, with the reason for each.
+- [x] **DI-18.1** -- Every test and example in `win-durable-ioring` that arms the Windows fault seam is censused by a recorded search and classified *core*, *windows* or *both*, with the reason for each. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-181)
 
-- [ ] **DI-18.2** -- **Move each *core* test to `durable-ioring` over the script, with the same assertions.** It goes
+- [ ] **DI-18.2** -- **Move each *core* test to `durable-ioring` over the script, with the same assertions.** The
+  census and its classification are [DI-18.1's record](COMPLETED-CHECKLIST.md#di-181). It goes
   where the behaviour lives (`io_core/tests` or `durability/tests`), built on the in-memory backend's script and not on
   a detached target. A *both* test keeps its Windows half where it is. Nothing is deleted yet: the moved test must pass
   in its new place first. For each, the sabotage entries it was the catching test for, in either crate's manifest, are
