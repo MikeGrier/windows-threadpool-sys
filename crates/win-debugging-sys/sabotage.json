@@ -52,6 +52,22 @@
       "replace": ["    let _ = units.as_ptr();\n"]
     },
     {
+      "name": "WD-D-3: every string is taken as ANSI",
+      "file": "src/capture.rs",
+      "expect": "caught",
+      "why": "Whether a string arrived as Unicode is what the opt-in of WaitForDebugEventEx changes, and the observation of it is the point of the facility.",
+      "find": ["    let unicode = info.fUnicode != 0;\n"],
+      "replace": ["    let unicode = false;\n"]
+    },
+    {
+      "name": "WD-D-3: the terminator is kept in a received string",
+      "file": "src/capture.rs",
+      "expect": "caught",
+      "why": "The length an event carries counts the terminator the call sends; a string is what comes before it, so an empty one is empty.",
+      "find": ["        units.truncate(end);\n"],
+      "replace": ["        units.truncate(end + 1);\n"]
+    },
+    {
       "name": "WD-D-2 control: the NUL is looked for by its literal value",
       "file": "src/output.rs",
       "expect": "survives",

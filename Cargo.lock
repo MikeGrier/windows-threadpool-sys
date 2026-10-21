@@ -129,6 +129,7 @@ dependencies = [
 name = "win-debugging-sys"
 version = "0.0.1"
 dependencies = [
+ "win-debugging-sys",
  "windows-sys",
 ]
 

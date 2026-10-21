@@ -26,5 +26,9 @@ assert_eq!(
 # Ok::<(), OutputDebugStringError>(())
 ```
 
+With the off-by-default `test-util` feature the crate also holds `run_debugged`, a debugger that runs a program and
+returns the strings it sent, for a test to see that what a crate sends reaches a debugger. It is a test facility and not a
+wrapper of the debugging functions. See [WD-D-3](DESIGN-NOTES.md#wd-d-3).
+
 The crate was made so that the diagnostic sink of `win-durable-ioring` that writes to the debugger has a safe call to
 make. See [WD-D-1](DESIGN-NOTES.md#wd-d-1) for the name and where the function is filed.

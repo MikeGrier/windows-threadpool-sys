@@ -65,9 +65,36 @@ the length of the string in bytes", with the terminator counted. The
 tests state each of these as what happened on the machine they ran on, and the crate's documentation does not promise
 any of it: the page says the string is shown by the debugger, not how it arrives.
 
-**What the debugger side uses.** The tests call `windows-sys` directly for the debugger's functions, under their own
-`unsafe`, because wrapping them is not this step's ([WD-D-1](#wd-d-1)). They are a dev-dependency feature set and no part
-of the crate's own.
+**What the debugger side uses.** The debugger's functions are called by the `test-util` facility of
+[WD-D-3](#wd-d-3), which this test uses.
 
 **Scheduled work.** None: the crate's one function is done, and its first caller is
 [DI-12.1.3](../durable-ioring/CHECKLIST.md).
+
+## <a id="wd-d-3"></a>WD-D-3: a `test-util` feature holds a debugger that runs a program and keeps what it sends, and is not a wrapper of the debugging functions
+
+**Why it is here and not in each test.** The first debugger written for the observation of [WD-D-2](#wd-d-2) was a test
+of this crate, in about a hundred lines of `unsafe`. `win-durable-ioring` forbids unsafe code and says a Win32 call
+no lower crate wraps safely is added to that crate and never written there (DI-D-4 in
+[durable-ioring's notes](../durable-ioring/DESIGN-NOTES.md)), and its debugger sink needs the same observation. A second
+copy in that crate would be the thing the rule forbids, and two copies of a harness are two places for it to drift. So
+there is one, here, in the crate that owns the debugging functions, and both crates' tests use it.
+
+**What it is.** `run_debugged(program, arguments, bound)` starts a process with `CreateProcessW` and
+`DEBUG_ONLY_THIS_PROCESS`, waits for each event with `WaitForDebugEventEx`, reads each string out of the process with
+`ReadProcessMemory`, continues the event, and returns a `Captured`: the strings, each with whether it arrived as Unicode,
+and the exit code. A process that has not exited by the bound is ended and has no exit code, and a process that could not
+be started, or a string that could not be read, is an `io::Error` after the process has been ended and its handles
+closed. The process runs without a console, so what its test harness prints reaches no one.
+
+**What it is not.** It is not the safe wrapper of the debugger's functions the placement rule would give this crate, and it
+is not offered as one: it runs a process, and carries a test's policy, a bound, ending the process, and closing handles. It
+is behind the off-by-default `test-util` feature for that reason, as `win-durable-ioring` keeps `fault-injection` and the
+file watcher keeps `test-util`, and this crate's own tests take the feature through a dev-dependency on itself, as
+`win-durable-ioring`'s do. Whether the debugger's functions should be wrapped one by one is
+[WD-D-1](#wd-d-1)'s open question, and this does not answer it.
+
+**Its own tests** are the integration test of [WD-D-2](#wd-d-2): a process that sends strings and the strings it is
+sent, a program that is not there, and a process that outlives its bound.
+
+**Scheduled work.** None beyond [DI-12.1.3](../durable-ioring/CHECKLIST.md), which is its second user.

@@ -28,24 +28,23 @@ version = "0.61.2"
 default-features = false
 features = ["Win32_System_Diagnostics_Debug"]
 
-[dev-dependencies]
-# The debugger side of `tests/debugger.rs`, which starts the test binary as a process being debugged and
-# reads what it sends. The crate itself wraps only the sending side (WD-D-2).
+[features]
+# A debugger that runs a program and keeps the strings it sends (WD-D-3), for a test to see that what is sent
+# reaches a debugger. Off by default: it is a test facility and not a wrapper of the debugging functions.
 #
 # `Win32_Foundation` is `CloseHandle`, the debug status codes and the handle types.
 # `Win32_Security` is the security-attributes type `CreateProcessW` takes.
-# `Win32_System_Diagnostics_Debug` is `WaitForDebugEventEx`, `ContinueDebugEvent`, `ReadProcessMemory` and the
-# event structures.
-# `Win32_System_Threading` is `CreateProcessW`, `TerminateProcess` and the debug creation flag.
-[dev-dependencies.windows-sys]
-version = "0.61.2"
-default-features = false
-features = [
-	"Win32_Foundation",
-	"Win32_Security",
-	"Win32_System_Diagnostics_Debug",
-	"Win32_System_Threading",
+# `Win32_System_Threading` is `CreateProcessW`, `TerminateProcess` and the debug creation flags.
+# The debug functions and event structures are `Win32_System_Diagnostics_Debug`, which the crate has already.
+test-util = [
+	"windows-sys/Win32_Foundation",
+	"windows-sys/Win32_Security",
+	"windows-sys/Win32_System_Threading",
 ]
+
+[dev-dependencies]
+# The crate's own tests use its `test-util` feature, as `win-durable-ioring` does for `fault-injection`.
+win-debugging-sys = { path = ".", features = ["test-util"] }
 
 [package.metadata.docs.rs]
 # The crate is Windows-only, so docs.rs must build on a Windows target or it
