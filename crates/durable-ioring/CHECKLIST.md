@@ -45,15 +45,10 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
     reports nothing at all, which is a legitimate answer. A router is built before the instance, so it does not know the
     instance number an `Inconsistency` event carries.
 
-- [ ] **DI-12.2.1** -- **The router and its build.** A `RoutingProvider` in `durable-ioring`, itself a `DurabilityProvider`,
-  built from providers registered with it; its `domains()` is the union of theirs, read once as the trait says. A domain
-  routed to two providers is refused at build, naming the domain and both registrations: earlier and clearer than the core's
-  `DuplicateDomain` for a single provider. A registration takes a provider and no domains: what it serves is its own
-  `domains()` ([DI-D-81](DESIGN-NOTES.md#di-d-81)). Tests: each of one,
-  two and many providers, a provider that serves no domain, a router with no provider, a domain routed twice by adjacent and by
-  distant registrations, and the union's order.
+- [x] **DI-12.2.1** -- `RoutingProvider` is built by `RouterBuilder` from registered providers, serving the union of their own domains, and a domain claimed twice refuses the build naming both registrations. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1221)
 
-- [ ] **DI-12.2.2** -- **Dispatch.** `make_durable` splits a request by the provider that owns each domain and makes one call
+- [ ] **DI-12.2.2** -- **Dispatch, and the router as a provider.** `RoutingProvider` implements `DurabilityProvider`, its
+  `domains()` the union `DI-12.2.1` built; it was not implemented there, because `make_durable` is this step's dispatch. `make_durable` splits a request by the provider that owns each domain and makes one call
   per provider that has parts, in registration order and with each provider's parts in the request's order. Each
   `DomainCompletion` is handed to its owner unchanged, so a domain's outcome returns as it arrives and nothing is buffered or
   re-answered. A panic in one provider propagates, as the trait says, and the providers not yet called have their completions

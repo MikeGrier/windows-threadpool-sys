@@ -30,6 +30,7 @@ pub mod memory;
 pub mod oracle;
 mod provider;
 mod pump;
+mod router;
 #[cfg(test)]
 mod test_support;
 mod types;
@@ -58,6 +59,7 @@ pub use provider::{
     IoTargetWrites, ProviderPart, ProviderRequest,
 };
 pub use pump::Waitable;
+pub use router::{RoutedTwice, RouterBuilder, RoutingProvider};
 pub use types::{
     AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,
     Epoch, EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportScope,

@@ -1424,3 +1424,24 @@ argument came, is in
 [the design session](../../design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#the-real-world-model).
 
 **Scheduled work.** [DI-12.2.1](CHECKLIST.md), which builds the router this way.
+
+## <a id="di-d-82"></a>DI-D-82: how the router is built, and what its refusal names
+
+The choices [DI-12.2.1](COMPLETED-CHECKLIST.md#di-1221) left to its implementation, made by the assistant under
+[DI-D-81](#di-d-81) and open to a ruling.
+
+- **A builder, consumed by `build`.** `RouterBuilder::register` takes a provider by value and reads nothing; `build` reads each
+  provider's `domains()` once, in registration order, and the router answers its own `domains()` from what it read. So a
+  provider's declaration is read once, as the trait says of the instance's read of the router's.
+- **Registrations are numbered from 0 in the order made**, and the refusal, `RoutedTwice`, names the domain and the two
+  registrations that claimed it. A provider that declares one domain twice is refused the same way, with both numbers its
+  own, rather than by a refusal of a second kind: the fault is the same, a domain the router would not know where to send.
+- **The first repeat in reading order is the one refused.** The build reads registrations in order and each one's domains in
+  the order it gave them, and stops at the first domain met a second time, so the providers after it are not asked for
+  their domains. A consumer with several repeats sees them one build at a time.
+- **The router's domains are the registrations in order, each in its own order.** That is the order the core interns them in,
+  and the order a consumer reading them back sees.
+- **`RoutedTwice` is dioring's own refusal**, of the rule [DI-2.12](COMPLETED-CHECKLIST.md#di-212) point 1 sets, and not a
+  prediction of the core's `DuplicateDomain`, which it makes unreachable for a router: the union it builds has no repeat.
+
+**Scheduled work.** [DI-12.2.2](CHECKLIST.md), which implements `DurabilityProvider` for the router with its dispatch.

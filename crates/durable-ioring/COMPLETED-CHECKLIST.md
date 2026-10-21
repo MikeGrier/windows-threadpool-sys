@@ -3766,3 +3766,20 @@ It was restructured into six steps on 2026-10-20 after the engineer's answers
 ([DI-12.1.2](COMPLETED-CHECKLIST.md#di-1212), [DI-12.1.3](COMPLETED-CHECKLIST.md#di-1213), [DI-D-78](DESIGN-NOTES.md#di-d-78)),
 the ETW wrapper ([DI-12.1.4](COMPLETED-CHECKLIST.md#di-1214)), the provider crate
 ([DI-12.1.5](COMPLETED-CHECKLIST.md#di-1215)) and the default ([DI-12.1.6](COMPLETED-CHECKLIST.md#di-1216)).
+
+## Moved 2026-10-21 13:57:42 -04:00 -- DI-12.2.1: the router's build
+
+### <a id="di-1221"></a>DI-12.2.1 -- `RoutingProvider` is built by `RouterBuilder` from registered providers, serving the union of their own domains, and a domain claimed twice refuses the build naming both registrations. *(completed 2026-10-21 13:57:42 -04:00)*
+
+The item as written:
+
+**DI-12.2.1** -- **The router and its build.** A `RoutingProvider` in `durable-ioring`, itself a `DurabilityProvider`,
+  built from providers registered with it; its `domains()` is the union of theirs, read once as the trait says. A domain
+  routed to two providers is refused at build, naming the domain and both registrations: earlier and clearer than the core's
+  `DuplicateDomain` for a single provider. A registration takes a provider and no domains: what it serves is its own
+  `domains()` ([DI-D-81](DESIGN-NOTES.md#di-d-81)). Tests: each of one,
+  two and many providers, a provider that serves no domain, a router with no provider, a domain routed twice by adjacent and by
+  distant registrations, and the union's order.
+
+Built in `src/router.rs`; the choices are [DI-D-82](DESIGN-NOTES.md#di-d-82). The router does not yet implement
+`DurabilityProvider`, whose `make_durable` is [DI-12.2.2](CHECKLIST.md)'s dispatch, so the trait impl moved to that step.

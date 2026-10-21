@@ -2026,6 +2026,38 @@
       "why": "The prefix is what a reader of a line, and every sink that writes one, relies on being the same: `dioring:`, a space, and the event.",
       "find": ["pub const LINE_PREFIX: &str = \"dioring: \";"],
       "replace": ["pub const LINE_PREFIX: &str = \"dioring:\";"]
+    },
+    {
+      "name": "DI-12.2.1: a domain claimed twice is not refused",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "A domain routed to two providers is refused at build (DI-2.12 point 1): with no refusal the router would serve it twice and the core would refuse the whole instance with less to go on.",
+      "find": ["                        vacant.insert(registration);"],
+      "replace": ["                        drop(vacant);"]
+    },
+    {
+      "name": "DI-12.2.1: the refusal names the second registration twice",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "The refusal names both registrations, so a consumer can find the two that claim the domain; naming one twice reads as a provider that declared it twice.",
+      "find": ["                            first: *owner.get(),"],
+      "replace": ["                            first: registration,"]
+    },
+    {
+      "name": "DI-12.2.1: the union is read in reverse registration order",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "The router's domains are the registrations in order, each in its own order, which is what a consumer reading them back, and the core interning them, see.",
+      "find": ["            .flat_map(|route| route.domains.iter().cloned())"],
+      "replace": ["            .rev().flat_map(|route| route.domains.iter().cloned())"]
+    },
+    {
+      "name": "DI-12.2.1 control: the routes are gathered without a capacity",
+      "file": "src/router.rs",
+      "expect": "survives",
+      "why": "A control: the same routes gathered without reserving room first, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        let mut routes = Vec::with_capacity(self.providers.len());"],
+      "replace": ["        let mut routes = Vec::new();"]
     }
   ]
 }
