@@ -1,0 +1,95 @@
+{
+  "package": "durable-ioring-events",
+  "description": "Sabotages for durable-ioring-events. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "What only a trace session can show is not swept here: that the sink wants a kind only when a session listens to it, that the level and keyword filters hold, and that each event reaches a session as its values are tests/session.rs, which are ignored without elevation (DE-D-4), so a sweep on a machine that cannot start a session would report a sabotage of those as surviving for a reason that is not a hole. That the manifest decodes is checked by hand with mc, rc, wevtutil and tracerpt (DE-D-3).",
+  "sabotages": [
+    {
+      "name": "DE-D-1: the provider's GUID is changed",
+      "file": "src/schema.rs",
+      "expect": "caught",
+      "why": "A GUID is what a session enables the provider by; changing it breaks every session that enabled it, so it is pinned.",
+      "find": ["pub const PROVIDER_ID: Guid = Guid::from_u128(0x4706_7f6f_8f2b_4278_9b92_092d_fb33_85e6);\n"],
+      "replace": ["pub const PROVIDER_ID: Guid = Guid::from_u128(0x4706_7f6f_8f2b_4278_9b92_092d_fb33_85e7);\n"]
+    },
+    {
+      "name": "DE-D-2: the lock wait's id is changed",
+      "file": "src/schema.rs",
+      "expect": "caught",
+      "why": "A reader decodes by an event's id, so each is pinned, and none may share another's.",
+      "find": ["    pub const LOCK_WAIT: u16 = 2;\n"],
+      "replace": ["    pub const LOCK_WAIT: u16 = 3;\n"]
+    },
+    {
+      "name": "DE-D-2: two keywords share a bit",
+      "file": "src/schema.rs",
+      "expect": "caught",
+      "why": "A session filters by keyword bits, so a bit shared by two categories enables both together.",
+      "find": ["    mask: 0x1,\n"],
+      "replace": ["    mask: 0x2,\n"]
+    },
+    {
+      "name": "DE-D-2: a lock wait is written with no time",
+      "file": "src/encode.rs",
+      "expect": "caught",
+      "why": "The time a wait took is the event's whole purpose.",
+      "find": ["        } => vec![Value::UInt64(*instance), units(lock), nanos(*waited)],\n"],
+      "replace": ["        } => vec![Value::UInt64(*instance), units(lock), Value::UInt64(0)],\n"]
+    },
+    {
+      "name": "DE-D-2: a domain's length is written as zero",
+      "file": "src/encode.rs",
+      "expect": "caught",
+      "why": "The length is what a reader takes the domain's bytes by, so a length that does not match them misreads every field after.",
+      "find": ["                    values.push(Value::UInt32(kept.len() as u32));\n"],
+      "replace": ["                    values.push(Value::UInt32(0));\n"]
+    },
+    {
+      "name": "DE-D-2: whether a flush succeeded is reported backwards",
+      "file": "src/encode.rs",
+      "expect": "caught",
+      "why": "A failed flush reported as a success hides the failure the event exists to show.",
+      "find": ["            values.push(Value::Boolean(*succeeded));\n"],
+      "replace": ["            values.push(Value::Boolean(!*succeeded));\n"]
+    },
+    {
+      "name": "DE-D-2: text is cut to its first unit",
+      "file": "src/encode.rs",
+      "expect": "caught",
+      "why": "A name or a detail written as one unit is no name.",
+      "find": ["    let units = |text: &str| Value::Text(text.encode_utf16().collect());\n"],
+      "replace": ["    let units = |text: &str| Value::Text(text.encode_utf16().take(1).collect());\n"]
+    },
+    {
+      "name": "DE-D-3: the manifest names an error as a warning",
+      "file": "src/manifest.rs",
+      "expect": "caught",
+      "why": "The manifest is rendered from the table, and a level it names wrong disagrees with the descriptor the sink writes.",
+      "find": ["        level::ERROR => \"win:Error\",\n"],
+      "replace": ["        level::ERROR => \"win:Warning\",\n"]
+    },
+    {
+      "name": "DE-D-4: an event is built though no session is listening to it",
+      "file": "src/sink.rs",
+      "expect": "caught",
+      "why": "A sink that does not check the event itself before building it formats text for an event no one wants: the cost the sink exists to avoid.",
+      "find": ["        if !registration.is_enabled(&descriptor) {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "DE-D-4: each sink registers the provider of its own",
+      "file": "src/sink.rs",
+      "expect": "caught",
+      "why": "The page asks that a component register one or two providers; a registration for each sink would use a process's up.",
+      "find": ["    if let Some(registration) = slot.upgrade() {\n"],
+      "replace": ["    if let Some(registration) = None::<Arc<Registration>> {\n"]
+    },
+    {
+      "name": "DE-D-2 control: a count is converted by another spelling that gives the same value",
+      "file": "src/encode.rs",
+      "expect": "survives",
+      "why": "A control: the same value by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    let count = |n: usize| Value::UInt64(n as u64);\n"],
+      "replace": ["    let count = |n: usize| Value::UInt64(u64::try_from(n).unwrap_or(u64::MAX));\n"]
+    }
+  ]
+}

@@ -2,6 +2,7 @@
 
 Master tracker for every active checklist in the repository. Each source-component also keeps its own
 plans tracker: [crates/durable-ioring/PLANS.md](crates/durable-ioring/PLANS.md),
+[crates/durable-ioring-events/PLANS.md](crates/durable-ioring-events/PLANS.md),
 [crates/io-buffers/PLANS.md](crates/io-buffers/PLANS.md),
 [crates/win-authorization-sys/PLANS.md](crates/win-authorization-sys/PLANS.md),
 [crates/win-debugging-sys/PLANS.md](crates/win-debugging-sys/PLANS.md),

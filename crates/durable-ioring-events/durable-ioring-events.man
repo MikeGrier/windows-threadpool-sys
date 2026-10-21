@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<instrumentationManifest
+    xmlns="http://schemas.microsoft.com/win/2004/08/events"
+    xmlns:win="http://manifests.microsoft.com/win/2004/08/windows/events"
+    xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <instrumentation>
+    <events>
+      <provider name="durable-ioring-events" guid="{47067f6f-8f2b-4278-9b92-092dfb3385e6}" symbol="DURABLE_IORING_EVENTS"
+          resourceFileName="durable-ioring-events.dll" messageFileName="durable-ioring-events.dll">
+        <keywords>
+          <keyword name="Locks" mask="0x1"/>
+          <keyword name="Flushes" mask="0x2"/>
+          <keyword name="Seals" mask="0x4"/>
+          <keyword name="Inconsistencies" mask="0x8"/>
+        </keywords>
+        <events>
+          <event value="1" symbol="Inconsistency" version="0" level="win:Error" keywords="Inconsistencies" template="InconsistencyTemplate"/>
+          <event value="2" symbol="LockWait" version="0" level="win:Informational" keywords="Locks" template="LockWaitTemplate"/>
+          <event value="3" symbol="FlushIssued" version="0" level="win:Informational" keywords="Flushes" template="FlushIssuedTemplate"/>
+          <event value="4" symbol="FlushAnsweredFile" version="0" level="win:Informational" keywords="Flushes" template="FlushAnsweredFileTemplate"/>
+          <event value="5" symbol="FlushAnsweredDomain" version="0" level="win:Informational" keywords="Flushes" template="FlushAnsweredDomainTemplate"/>
+          <event value="6" symbol="SealWaited" version="0" level="win:Informational" keywords="Seals" template="SealWaitedTemplate"/>
+        </events>
+        <templates>
+          <template tid="InconsistencyTemplate">
+            <data name="Instance" inType="win:UInt64"/>
+            <data name="What" inType="win:UnicodeString"/>
+            <data name="Detail" inType="win:UnicodeString"/>
+          </template>
+          <template tid="LockWaitTemplate">
+            <data name="Instance" inType="win:UInt64"/>
+            <data name="Lock" inType="win:UnicodeString"/>
+            <data name="WaitedNanoseconds" inType="win:UInt64"/>
+          </template>
+          <template tid="FlushIssuedTemplate">
+            <data name="Instance" inType="win:UInt64"/>
+            <data name="Lineage" inType="win:UInt64"/>
+            <data name="Through" inType="win:UnicodeString"/>
+            <data name="Files" inType="win:UInt64"/>
+            <data name="Domains" inType="win:UInt64"/>
+          </template>
+          <template tid="FlushAnsweredFileTemplate">
+            <data name="Instance" inType="win:UInt64"/>
+            <data name="Lineage" inType="win:UInt64"/>
+            <data name="Through" inType="win:UnicodeString"/>
+            <data name="File" inType="win:UInt64"/>
+            <data name="ElapsedNanoseconds" inType="win:UInt64"/>
+            <data name="Succeeded" inType="win:Boolean"/>
+          </template>
+          <template tid="FlushAnsweredDomainTemplate">
+            <data name="Instance" inType="win:UInt64"/>
+            <data name="Lineage" inType="win:UInt64"/>
+            <data name="Through" inType="win:UnicodeString"/>
+            <data name="DomainLength" inType="win:UInt32"/>
+            <data name="Domain" inType="win:Binary" length="DomainLength"/>
+            <data name="ElapsedNanoseconds" inType="win:UInt64"/>
+            <data name="Succeeded" inType="win:Boolean"/>
+          </template>
+          <template tid="SealWaitedTemplate">
+            <data name="Instance" inType="win:UInt64"/>
+            <data name="Lineage" inType="win:UInt64"/>
+            <data name="Through" inType="win:UnicodeString"/>
+            <data name="WaitedNanoseconds" inType="win:UInt64"/>
+          </template>
+        </templates>
+      </provider>
+    </events>
+  </instrumentation>
+</instrumentationManifest>

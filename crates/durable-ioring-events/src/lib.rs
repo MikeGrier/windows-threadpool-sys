@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Mike Grier
+#![doc = include_str!("../README.md")]
+#![cfg(windows)]
+#![deny(missing_docs)]
+// This crate has no unsafe code: the calls are `win-etw-sys`'.
+#![forbid(unsafe_code)]
+
+mod encode;
+mod manifest;
+mod schema;
+mod sink;
+
+pub use encode::{Value, encode, schema_of};
+pub use manifest::{MANIFEST_FILE, manifest};
+pub use schema::{
+    Column, ColumnType, EVENTS, EventSchema, FLUSHES, INCONSISTENCIES, KEYWORDS, Keyword, LOCKS,
+    PROVIDER_ID, PROVIDER_NAME, SEALS, VERSION, id, schema_of_id, schema_of_kind,
+};
+pub use sink::EtwDiagnostics;
+pub use win_etw_sys::{EventDescriptor, Guid};

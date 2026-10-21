@@ -10,6 +10,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "durable-ioring-events"
+version = "0.0.1"
+dependencies = [
+ "durable-ioring",
+ "win-error-codes",
+ "win-etw-sys",
+]
+
+[[package]]
 name = "io-buffers"
 version = "0.1.0"
 

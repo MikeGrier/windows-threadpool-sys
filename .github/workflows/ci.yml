@@ -354,6 +354,15 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p win-etw-sys --locked --test session -- --include-ignored
+      # The same, for the provider's sink (DE-D-4): each test starts a session, enables the
+      # provider in it, reports through the sink and decodes what the session recorded. They share
+      # the one provider, so they serialize themselves.
+      - name: cargo test (durable-ioring-events, trace sessions)
+        if: ${{ matrix.isolated }}
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p durable-ioring-events --locked --test session -- --include-ignored
       # windows-file-watcher-example-test-harness is a normal workspace member
       # that depends on windows-file-watcher with the test-util feature, so
       # the `--workspace` steps above unify that feature onto
