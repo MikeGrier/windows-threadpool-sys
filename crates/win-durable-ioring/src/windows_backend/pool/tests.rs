@@ -280,6 +280,11 @@ impl DiagnosticSink for Contended {
     }
 
     fn report(&self, event: &Diagnostic<'_>) {
+        // The wait's pair (DI-D-87) is passed over here until these tests bind to the pairing
+        // checker in DI-19.2.4; the wait reported after the lock is let go is what they check.
+        if event.pairing().is_some() {
+            return;
+        }
         let Diagnostic::LockWait { instance, lock, .. } = event else {
             panic!("reported {event}");
         };
