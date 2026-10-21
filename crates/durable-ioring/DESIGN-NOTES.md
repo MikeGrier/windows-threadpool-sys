@@ -1588,3 +1588,26 @@ The choices [DI-19.2.1](COMPLETED-CHECKLIST.md#di-1921) left to its implementati
 
 **Scheduled work.** [DI-19.2.2](CHECKLIST.md) onward, which emit the pairs and bind each sink's tests to the checker.
 
+## <a id="di-d-89"></a>DI-D-89: where the core's seal and flush pairs begin and end
+
+The choices [DI-19.2.2](COMPLETED-CHECKLIST.md#di-1922) left to its implementation, made by the assistant under
+[DI-D-87](#di-d-87) and open to a ruling.
+
+- **A seal's pair begins when the seal is accepted as new**, in the same call, and not for a seal answered `AlreadySealed`,
+  which makes none. Its id is kept on the seal, and taken as the pair ends, so it ends once.
+- **It ends at the seal's first answer.** `Failed`, when one of its own flush's parts fails; `Blocked`, when an earlier
+  failure holds it; `Durable`, when the mark passes it unanswered. A seal answered `Failed` or `Blocked` that later becomes
+  durable, after a heal or an abandonment, ends nothing more: its pair said its answer already.
+- **A flush pair is one part**: the default's flush of one file, or the provider's part for one domain, from its issue to its
+  answer. A domain is reported by the consumer's name for it, which the core is now given with the domains the provider
+  serves; a served domain always has one.
+- **Ending a lineage ends its pairs**: each flush still out as abandoned, and each seal unanswered as ended unanswered. The
+  flush's answer, when it comes, reports nothing, as it did. **Retiring a lineage cannot leave a pair open**, since a seal with
+  flushes out holds uncovered writes and a lineage holding any is refused retirement.
+- **Closing or dropping the core ends every pair still open**, in its durability state's `Drop`: the seals unanswered and the
+  flushes abandoned. So a pair ends on every path, including a panic that unwinds through the instance.
+- **The old delay events are still emitted beside the pairs**, until [DI-19.2.4](CHECKLIST.md) moves the sinks and removes
+  them; stopping them here would leave the ETW sink writing no flush events in between.
+
+**Scheduled work.** None beyond [DI-19.2.3](CHECKLIST.md) onward.
+

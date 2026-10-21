@@ -27,6 +27,7 @@ mod failures;
 mod flush_failures;
 mod gates;
 mod lineages;
+mod pairs;
 mod provider;
 mod refusals;
 mod scripted;

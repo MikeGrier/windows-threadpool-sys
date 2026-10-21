@@ -4033,3 +4033,21 @@ The variants, `SealOutcome`, `FlushOutcome`, `Edge` and `Pairing` are in `src/di
 `PairingViolation` in `src/oracle/pairing.rs`, exported from `durable_ioring::oracle`. Nothing emits a pair yet. The choices
 are [DI-D-88](DESIGN-NOTES.md#di-d-88).
 
+## Moved 2026-10-21 18:29:12 -04:00 -- DI-19.2.2: the core's seal and flush pairs
+
+### <a id="di-1922"></a>DI-19.2.2 -- The core emits the seal and flush pairs, beside the old delay events until `DI-19.2.4`, each ending on every path its begin can leave by. *(completed 2026-10-21 18:29:12 -04:00)*
+
+The item as written:
+
+**DI-19.2.2** -- **The core emits the seal and flush pairs.** In place of `SealWaited`, `FlushIssued` and
+  `FlushAnswered`, each pair's id minted by `CorrelationId::for_pair` as its begin is built. An end on every path a begin can
+  leave by: an answer, a failure, a completion dropped unanswered, a lineage that ends or retires, and the core closed or
+  dropped; any that cannot be reached is documented at its definition. Tested over the in-memory backend and its script,
+  through the checker.
+
+Built in `src/durability.rs`, `src/durability/providers.rs` and `src/durability/lineages.rs`, and tested over the in-memory
+backend and its script in `src/io_core/tests/pairs.rs`, whose sink hands every event to `PairingChecker`. The old events are
+still emitted beside the pairs, not in their place as the item said: had the core stopped, the ETW sink would write no flush
+events until it maps the pairs in `DI-19.2.4`, and the driver's elevated session test in CI would fail meanwhile. The choices
+are [DI-D-89](DESIGN-NOTES.md#di-d-89).
+

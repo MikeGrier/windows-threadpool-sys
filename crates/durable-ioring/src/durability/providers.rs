@@ -16,7 +16,7 @@ use super::{
 };
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
-use crate::diagnostics::{Diagnostic, FlushPart};
+use crate::diagnostics::{Diagnostic, FlushOutcome, FlushPart};
 use crate::domains::DomainId;
 use crate::ids::OpId;
 use crate::types::{FailureCause, FlushDomain, IoTargetKey};
@@ -52,8 +52,10 @@ pub(super) fn name(
 impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     Durability<E, T, I, K>
 {
-    /// The domains the consumer's provider serves, sorted, as interned when the instance was built.
-    pub(crate) fn serve(&mut self, domains: Arc<[DomainId]>) {
+    /// The domains the consumer's provider serves, sorted, as interned when the instance was built,
+    /// and the consumer's name for each, in the same order, which a flush pair reports.
+    pub(crate) fn serve(&mut self, domains: Arc<[DomainId]>, names: Vec<FlushDomain>) {
+        self.served_names = domains.iter().copied().zip(names).collect();
         self.served = domains;
     }
 
@@ -129,6 +131,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 succeeded: outcome.is_ok(),
             });
         }
+        let ended = match &outcome {
+            Ok(()) => FlushOutcome::Succeeded,
+            Err(FailureCause::ProviderAbandoned { .. }) => FlushOutcome::Abandoned,
+            Err(_) => FlushOutcome::Failed,
+        };
+        self.part_answered(lineage, seal, Part::Domain(domain), ended);
         match outcome {
             Ok(()) => self.cover(lineage, seal, &mut due),
             Err(cause) => {

@@ -120,7 +120,10 @@ fn a_failed_flush_is_reported_as_failed_with_how_long_it_took() {
 fn a_providers_domain_is_reported_by_the_name_the_consumer_gave_it() {
     let (clock, sink) = (ManualClock::at(0), Only::everything());
     let mut core = core(&clock, &sink);
-    core.serve(Arc::from([DomainId(4)]));
+    core.serve(
+        Arc::from([DomainId(4)]),
+        vec![crate::types::FlushDomain::new(b"d4".as_slice())],
+    );
     let mut ops = Ops::new();
     let write = ops.push_in(&mut core, 1, A, PROVIDER, &[4]);
     core.completed(write, FULL);
@@ -151,7 +154,10 @@ fn a_providers_domain_is_reported_by_the_name_the_consumer_gave_it() {
 fn a_seal_with_a_file_and_a_domain_reports_both_parts_each_with_its_own_time() {
     let (clock, sink) = (ManualClock::at(0), Only::everything());
     let mut core = core(&clock, &sink);
-    core.serve(Arc::from([DomainId(1)]));
+    core.serve(
+        Arc::from([DomainId(1)]),
+        vec![crate::types::FlushDomain::new(b"d1".as_slice())],
+    );
     let mut ops = Ops::new();
     let mixed = ops.push_in(
         &mut core,

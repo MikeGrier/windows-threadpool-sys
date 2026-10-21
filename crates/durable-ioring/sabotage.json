@@ -138,8 +138,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "The prefix property (guarantee 2): Durable through 2 covers 1, so it must wait for 1. Caught by the I/O test whose first seal a provider holds, and by the unit tests.",
-      "find": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.front()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            state.seals.pop_front();\n"],
-      "replace": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.back()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            state.seals.pop_back();\n"]
+      "find": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.front()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            let popped = state.seals.pop_front().expect(\"found above\");\n"],
+      "replace": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.back()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            let popped = state.seals.pop_back().expect(\"found above\");\n"]
     },
     {
       "name": "DI-3.2.3: a write a provider serves does not hold its seal",
@@ -1346,7 +1346,7 @@
       "file": "src/io_core/provider.rs",
       "expect": "caught",
       "why": "DI-D-27: the durability core asks the provider only for the domains it serves; without them a served target's seal waits for an answer never requested.",
-      "find": ["        core.durability.serve(Arc::clone(&served));\n"],
+      "find": ["        core.durability\n            .serve(Arc::clone(&served), core.served_names.clone());\n"],
       "replace": [""]
     },
     {
@@ -2170,6 +2170,54 @@
       "why": "A control: the same ids gathered by clone instead of copy, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        let mut open: Vec<CorrelationId> = self.open.keys().copied().collect();"],
       "replace": ["        let mut open: Vec<CorrelationId> = self.open.keys().cloned().collect();"]
+    },
+    {
+      "name": "DI-19.2.2: a seal answered durable leaves its pair open",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A seal's pair ends at its first answer (DI-D-87); one left open is a begin with no end, which the pairing checker refuses.",
+      "find": ["                popped.pair,"],
+      "replace": ["                None,"]
+    },
+    {
+      "name": "DI-19.2.2: a seal answered blocked leaves its pair open",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Blocked is an answer, so it ends the seal's pair; left open, the pair would end later as durable, saying the wrong answer.",
+      "find": ["                let pair = state.seals[index].pair.take();"],
+      "replace": ["                let pair: Option<crate::correlation::CorrelationId> = None;"]
+    },
+    {
+      "name": "DI-19.2.2: a seal whose flush failed ends as durable",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A failure of a seal's own flush is its answer, and its pair ends saying so.",
+      "find": ["                SealOutcome::Failed,"],
+      "replace": ["                SealOutcome::Durable,"]
+    },
+    {
+      "name": "DI-19.2.2: a lineage that ends leaves its pairs open",
+      "file": "src/durability/lineages.rs",
+      "expect": "caught",
+      "why": "An end is reported on every path a begin can leave by (DI-D-87); a lineage that ends answers nothing more, so its pairs end with it.",
+      "find": ["        self.end_pairs(Some(lineage));"],
+      "replace": ["        let _ = lineage;"]
+    },
+    {
+      "name": "DI-19.2.2: the core dropped leaves its pairs open",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "An instance closed or dropped answers nothing more, so every pair still open ends as it does.",
+      "find": ["        self.end_pairs(None);"],
+      "replace": ["        let _ = self;"]
+    },
+    {
+      "name": "DI-19.2.2 control: the abandoned flushes are ordered by a stable sort",
+      "file": "src/durability.rs",
+      "expect": "survives",
+      "why": "A control: the same order by a stable sort, which no test can tell apart since the keys are distinct. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        flushes.sort_unstable_by_key(|((key, seq, _), pair)| (*key, *seq, pair.id));"],
+      "replace": ["        flushes.sort_by_key(|((key, seq, _), pair)| (*key, *seq, pair.id));"]
     }
   ]
 }

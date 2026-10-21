@@ -57,11 +57,7 @@ would allow.
 
 - [x] **DI-19.2.1** -- The seal, flush and lock-wait pair variants and kinds are in `Diagnostic` beside the old ones, `Diagnostic::pairing` says which end of which pair an event is, and `PairingChecker` holds the pairing rule. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1921)
 
-- [ ] **DI-19.2.2** -- **The core emits the seal and flush pairs.** In place of `SealWaited`, `FlushIssued` and
-  `FlushAnswered`, each pair's id minted by `CorrelationId::for_pair` as its begin is built. An end on every path a begin can
-  leave by: an answer, a failure, a completion dropped unanswered, a lineage that ends or retires, and the core closed or
-  dropped; any that cannot be reached is documented at its definition. Tested over the in-memory backend and its script,
-  through the checker.
+- [x] **DI-19.2.2** -- The core emits the seal and flush pairs, beside the old delay events until `DI-19.2.4`, each ending on every path its begin can leave by. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1922)
 
 - [ ] **DI-19.2.3** -- **The lock-wait pair, and the sink's leaf-lock contract.** `LockWatch` writes the begin when the
   immediate try fails and the end on acquisition, with the lock held, and its timer goes. `DiagnosticSink`'s contract says a

@@ -75,6 +75,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             .filter(above)
             .max();
         let abandoned_through = sealed.max(written);
+        self.end_pairs(Some(lineage));
+        let state = self
+            .lineages
+            .get_mut(&lineage)
+            .expect("live, checked above");
         state.ended = true;
         state.seals.clear();
         self.writes
