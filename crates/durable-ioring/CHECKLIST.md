@@ -35,10 +35,7 @@ lower, made where the id is written, in the ETW provider, since the portable cor
 `DI-19.4`: whether a process id reused within one trace makes two processes' ids the same, which a counter that starts again
 would allow.
 
-- [ ] **DI-19.1** -- **A process-scoped correlation id in the core.** A `u64` minted from one static `AtomicU64` by a
-  `fetch_add` of one with relaxed ordering, in `durable-ioring`, minted only when a begin is built, so a sink that wants
-  nothing mints nothing. Tests: ids minted from many threads at once are all distinct, ids from one thread rise, and a
-  mint with no sink wanting an event takes none.
+- [x] **DI-19.1** -- `CorrelationId`, a process-scoped `u64` from one relaxed atomic counter, minted only by `CorrelationId::for_pair`, which asks the sink first. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-191)
 
 - [ ] **DI-19.2** -- **Begin and end events in the core, and one oracle for their pairing.** Three pairs, each one kind of
   event so a sink wants a pair or declines it, and cannot want a begin and not its end: a seal, from its being asked for to

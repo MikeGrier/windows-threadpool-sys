@@ -1527,3 +1527,21 @@ hand-written durability overlaps this crate.
 
 **Scheduled work.** [DI-M21](CHECKLIST.md#di-m21----a-sample-log-on-durable-ioring), and `DI-21+.1` in
 [PARKED.md](PARKED.md#di-m21----promoting-the-sample-log-parked-behind-di-m21).
+
+## <a id="di-d-86"></a>DI-D-86: how a correlation id is minted
+
+The choices [DI-19.1](COMPLETED-CHECKLIST.md#di-191) left to its implementation, made by the assistant under
+[DI-D-80](#di-d-80) and open to a ruling.
+
+- **One way to mint, which asks the sink.** `CorrelationId::for_pair(sink, kind)` mints only if the sink wants `kind`, and
+  returns `None` otherwise, having taken nothing from the counter. Asking is the rule's single home, so a begin cannot be
+  given an id its sink did not want, and the core cannot forget to ask.
+- **Public, and exported from the crate.** A sink reads an event's id, so it names the type; minting is public too, for a
+  driver that builds a pair of its own. An id minted by anyone comes from the same counter and is as unique as any other.
+- **The counter starts at 1**, so zero is never the first id; it wraps on overflow, as `fetch_add` does, and nothing checks
+  for that.
+- **Relaxed ordering**, as the engineer ruled: an id must differ from every other, which the counter's single order of
+  modification gives, and it orders nothing else.
+
+**Scheduled work.** [DI-19.2](CHECKLIST.md), which mints an id as it builds each begin.
+

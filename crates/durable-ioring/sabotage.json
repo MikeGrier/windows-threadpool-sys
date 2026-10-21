@@ -2090,6 +2090,38 @@
       "why": "A control: the same empty parts made by counting the routes instead of walking them, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["            self.routes.iter().map(|_| Vec::new()).collect();"],
       "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect();"]
+    },
+    {
+      "name": "DI-19.1: an id is minted whether or not the sink wants the pair",
+      "file": "src/correlation.rs",
+      "expect": "caught",
+      "why": "An id is minted only for a pair a sink wants (DI-D-80), so a sink that wants nothing costs the counter nothing.",
+      "find": ["    sink.wants(kind)"],
+      "replace": ["    (sink.wants(kind) || kind == kind)"]
+    },
+    {
+      "name": "DI-19.1: the counter is not advanced",
+      "file": "src/correlation.rs",
+      "expect": "caught",
+      "why": "Every id differs from every other the process minted, which a counter that does not move breaks at the second mint.",
+      "find": ["        .then(|| CorrelationId(counter.fetch_add(1, Ordering::Relaxed)))"],
+      "replace": ["        .then(|| CorrelationId(counter.fetch_add(0, Ordering::Relaxed)))"]
+    },
+    {
+      "name": "DI-19.1: the counter starts at zero",
+      "file": "src/correlation.rs",
+      "expect": "caught",
+      "why": "The first id is 1, as the documentation says.",
+      "find": ["const FIRST: u64 = 1;"],
+      "replace": ["const FIRST: u64 = 0;"]
+    },
+    {
+      "name": "DI-19.1 control: the counter is advanced with sequential consistency",
+      "file": "src/correlation.rs",
+      "expect": "survives",
+      "why": "A control: a stronger ordering than relaxed, which mints the same distinct ids and no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        .then(|| CorrelationId(counter.fetch_add(1, Ordering::Relaxed)))"],
+      "replace": ["        .then(|| CorrelationId(counter.fetch_add(1, Ordering::SeqCst)))"]
     }
   ]
 }

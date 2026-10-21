@@ -4001,3 +4001,18 @@ Its three items are archived: the census ([DI-18.1](COMPLETED-CHECKLIST.md#di-18
 ([DI-18.2](COMPLETED-CHECKLIST.md#di-182)) and the deletion ([DI-18.3](COMPLETED-CHECKLIST.md#di-183)). A failure test now lives
 at the layer that owns what it checks: how the core answers a failed flush, in `durable-ioring` over its in-memory script; what
 the Windows driver adds, in `win-durable-ioring` over its seam.
+
+## Moved 2026-10-21 17:41:53 -04:00 -- DI-19.1: the correlation id
+
+### <a id="di-191"></a>DI-19.1 -- `CorrelationId`, a process-scoped `u64` from one relaxed atomic counter, minted only by `CorrelationId::for_pair`, which asks the sink first. *(completed 2026-10-21 17:41:53 -04:00)*
+
+The item as written:
+
+**DI-19.1** -- **A process-scoped correlation id in the core.** A `u64` minted from one static `AtomicU64` by a
+  `fetch_add` of one with relaxed ordering, in `durable-ioring`, minted only when a begin is built, so a sink that wants
+  nothing mints nothing. Tests: ids minted from many threads at once are all distinct, ids from one thread rise, and a
+  mint with no sink wanting an event takes none.
+
+Built in `src/correlation.rs` and exported from the crate. Nothing builds a begin yet, so the rule that an id is minted only
+when a begin is built is carried by the one way to mint, which asks the sink whether it wants the kind; [DI-19.2](CHECKLIST.md)
+calls it as it builds each begin. The choices are [DI-D-86](DESIGN-NOTES.md#di-d-86).

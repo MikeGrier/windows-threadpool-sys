@@ -15,6 +15,7 @@ mod access;
 pub mod backend;
 mod clock;
 mod contract;
+mod correlation;
 mod diagnostics;
 mod domains;
 pub mod driver;
@@ -43,6 +44,7 @@ pub use contract::{
     DurableRing, EntryOf, EpochId, EpochIdOf, FailureIdOf, HandleOf, Identities, Lin, OpIdOf,
     PushResult, RegisteredBufferRing, TokenOf,
 };
+pub use correlation::CorrelationId;
 pub use diagnostics::{
     Diagnostic, DiagnosticKind, DiagnosticSink, FanOutDiagnostics, FlushPart, LINE_PREFIX,
     NoDiagnostics, StderrDiagnostics,
