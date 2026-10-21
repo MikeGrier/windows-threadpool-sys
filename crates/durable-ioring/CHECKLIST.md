@@ -27,9 +27,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 - [x] **DI-12.1.2** -- `win-debugging-sys` is created, with `output_debug_string` and `output_debug_str` over `OutputDebugStringW`, and a NUL refused as the crate's own error. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1212)
 
-- [ ] **DI-12.1.3** -- **`DebugOutputDiagnostics` in `win-durable-ioring`**, through `win-debugging-sys`: each event as
-  a `dioring:` line, wanting every kind. Tests: the formatting apart from the emission, and the emission observed by a
-  documented route, which this step records.
+- [x] **DI-12.1.3** -- `DebugOutputDiagnostics` writes each event as a `dioring:` line to the debugger, through `win-debugging-sys`, and wants every kind. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1213)
 
 - [ ] **DI-12.1.4** -- **A safe wrapper for the event-tracing provider functions** (register, unregister, whether a
   session is listening, write an event), in `win-etw-sys` (the engineer, 2026-10-20: "win-etw-sys is good"). The step reads each function's page and records where it is documented before it names a section

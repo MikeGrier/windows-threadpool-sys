@@ -3663,3 +3663,17 @@ filed are [WD-D-1](../win-debugging-sys/DESIGN-NOTES.md#wd-d-1), and the shape, 
 observed are [WD-D-2](../win-debugging-sys/DESIGN-NOTES.md#wd-d-2). The call is observed by a debugger the test starts,
 over the documented debugger functions, and not by the shared-section protocol that no page describes. The crate is a new
 workspace member, registered for release-please and the publish workflow as `win-text-sys` was.
+
+## Moved 2026-10-20 22:32:55 -04:00 -- DI-12.1.3: the debugger sink
+
+### <a id="di-1213"></a>DI-12.1.3 -- `DebugOutputDiagnostics` writes each event as a `dioring:` line to the debugger, through `win-debugging-sys`, and wants every kind. *(completed 2026-10-20 22:32:55 -04:00)*
+
+The item as written:
+
+**DI-12.1.3** -- **`DebugOutputDiagnostics` in `win-durable-ioring`**, through `win-debugging-sys`: each event as
+  a `dioring:` line, wanting every kind. Tests: the formatting apart from the emission, and the emission observed by a
+  documented route, which this step records.
+
+What was built and chosen is [DI-D-78](DESIGN-NOTES.md#di-d-78). The emission is observed by a debugger the test starts, through
+the `test-util` feature of `win-debugging-sys` ([WD-D-3](../win-debugging-sys/DESIGN-NOTES.md#wd-d-3)), which is the one copy
+of that harness. `FlushPart` was exported from the portable crate on the way, and the line prefix became one constant.

@@ -1310,3 +1310,27 @@ open to a ruling.
   added with the mutex held, that might warrant it." The comment is on the field.
 
 **Scheduled work.** None beyond [DI-12.1.2](CHECKLIST.md) onward, which carry these events to the sinks.
+
+## <a id="di-d-78"></a>DI-D-78: the debugger sink writes the standard-error sink's line, escapes a NUL, and wants everything
+
+The choices [DI-12.1.3](COMPLETED-CHECKLIST.md#di-1213) left to its implementation, made by the assistant under
+[DI-D-51](#di-d-51) and open to a ruling.
+
+- **The line is the standard-error sink's.** `DebugOutputDiagnostics` writes `dioring:`, a space and the event's text,
+  as `StderrDiagnostics` does, and both take the prefix from one constant, `LINE_PREFIX`, so a reader of either sees the
+  same line. The constant is exported from the portable crate, and so is `FlushPart`, which `Diagnostic::FlushAnswered`
+  carries and which [DI-12.1.1](COMPLETED-CHECKLIST.md#di-1211) had left unnameable by a sink.
+- **A NUL in the text is written as `\0`.** The call's string ends at its first NUL, and `win-debugging-sys` refuses a string
+  that has one ([WD-D-2](../win-debugging-sys/DESIGN-NOTES.md#wd-d-2)). An event's text can carry one: a flush domain's
+  name is bytes the consumer chose, and an inconsistency's detail is any text. A sink has no way to report a failure
+  of its own, so it escapes the NUL and sends the line; nothing else in the text is changed, so a `\0` already there is
+  indistinguishable from an escaped NUL, which is the cost of the choice.
+- **It wants every kind, always.** A line is built for each event whether or not a debugger is attached, because the call
+  gives no way to tell and the page says it "does nothing" when there is none. Asking `IsDebuggerPresent` first would
+  decide for the consumer that a system debugger, or one attached later, is not wanted. A consumer who does not want the cost
+  chooses another sink, or leaves this one out of a fan-out.
+- **The emission is observed by a debugger, once.** The sink's test starts the test binary as a debugged process through
+  `win-debugging-sys`' `test-util` feature ([WD-D-3](../win-debugging-sys/DESIGN-NOTES.md#wd-d-3)), which is the one copy of
+  that harness: this crate forbids unsafe code ([DI-D-4](#di-d-4)), so it could not carry one.
+
+**Scheduled work.** None beyond [DI-12.1.4](CHECKLIST.md) onward.
