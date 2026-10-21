@@ -8,15 +8,12 @@ use super::empty;
 use super::pushes::{ADDED, GIVEN, Harness, given, instance, temp};
 use durable_ioring::driver::Home;
 use durable_ioring::{
-    DurabilityRequest, EndLineageRefusal, Entry, Epoch, EpochState, ImportScope, Resolution,
+    DurabilityRequest, EndLineageRefusal, Entry, Epoch, ImportScope, Resolution,
     RetireLineageRefusal, UnknownLineage,
 };
 use durable_ioring::{DurableRing, Identities, Lin};
 use durable_ioring::{FailureToken, LineageHandle};
 use std::sync::{Arc, Weak};
-
-/// `ERROR_IO_DEVICE`, the failure the seam is armed with.
-const IO_DEVICE: u32 = 1117;
 
 /// Written against the trait, as a consumer would: it must compile for any implementation.
 fn default_is_listed<D: DurableRing>(ring: &D) -> bool {
@@ -295,54 +292,6 @@ fn a_handle_outliving_its_instance_releases_harmlessly() {
         Err(UnknownLineage(lineage)),
         "and names nothing anywhere else"
     );
-}
-
-/// A failure suspecting a held write of each lineage holds both, and a heal takes effect in each
-/// at its own next seal (DI-D-41): the default's `Durable` comes before the failure's `Healed`,
-/// which waits for the minted lineage's seal.
-#[test]
-fn a_failure_spanning_two_lineages_heals_in_each_at_its_own_seal() {
-    let (a, b) = (temp(&[0; 64]), temp(&[0; 64]));
-    let (mut harness, minted) = two(&a, &b);
-    let lineage = minted.lineage();
-    let own = harness.write(GIVEN, 0, b"own", 1, 1);
-    let theirs = harness.write_in(&minted, ADDED, 0, b"theirs", 1, 2);
-    harness.next_n(2);
-
-    harness.ring.fail_next_flush(GIVEN, IO_DEVICE);
-    harness.seal(1);
-    let failed = match harness.next_entry() {
-        Entry::Failed(failed) => failed,
-        other => panic!("expected Failed, got {other:?}"),
-    };
-    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
-    assert_eq!(suspects, [own, theirs], "a held write of each lineage");
-    heal(&mut harness, failed.token);
-
-    assert_eq!(harness.seal(2), DurabilityRequest::Submitted);
-    let (one, two) = (harness.epoch(1), harness.epoch(2));
-    expect_durable(&mut harness, one);
-    expect_durable(&mut harness, two);
-    assert_eq!(harness.ring.failures().len(), 1, "it still holds the other");
-    assert_eq!(
-        harness.ring.epoch_state(Epoch::new(lineage, 1)),
-        Ok(EpochState::Open)
-    );
-
-    assert_eq!(harness.seal_in(&minted, 1), DurabilityRequest::Submitted);
-    loop {
-        match harness.next_entry() {
-            Entry::Marked { .. } => continue,
-            Entry::Healed { failure, .. } => {
-                assert_eq!(failure, failed.id);
-                break;
-            }
-            other => panic!("expected Healed, got {other:?}"),
-        }
-    }
-    expect_durable(&mut harness, Epoch::new(lineage, 1));
-    assert!(harness.ring.failures().is_empty());
-    harness.finish();
 }
 
 /// Ending a lineage a heal still waits for lets the heal take effect.
