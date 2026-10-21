@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Mike Grier
-//! Timing the waits for an instance's locks (DI-12.1.1, DI-D-26): a lock taken through a
-//! [`LockWatch`] reports a [`Diagnostic::LockWait`] when -- and only when -- taking it had to wait.
+//! The waits for an instance's locks (DI-12.1.1, DI-D-26, DI-D-87): a lock taken through a
+//! [`LockWatch`] reports a wait when -- and only when -- taking it had to: a pair, its begin when
+//! the immediate try fails and its end as the lock is taken, with the lock held; and, until the
+//! sinks have moved to the pair (DI-19.2.4), a [`Diagnostic::LockWait`] after the lock is let go.
 //!
 //! The core's sink and clock live inside the engine, which is itself behind the lock being timed,
 //! so a wait cannot be timed from inside it. The watch holds its own handles to both, and sits
@@ -15,6 +17,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Duration;
 
 use crate::clock::StampClock;
+use crate::correlation::CorrelationId;
 use crate::diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink};
 
 /// What an instance calls the lock on its engine's slot in a [`LockWatch`] report.
@@ -60,13 +63,29 @@ impl LockWatch {
         let (guard, waited) = match mutex.try_lock() {
             Ok(guard) => (guard, None),
             Err(TryLockError::Poisoned(poisoned)) => (poisoned.into_inner(), None),
-            Err(TryLockError::WouldBlock) if !self.sink.wants(DiagnosticKind::LockWait) => {
-                (mutex.lock().unwrap_or_else(PoisonError::into_inner), None)
-            }
             Err(TryLockError::WouldBlock) => {
+                // One question decides both the pair and the wait reported after: they share a kind.
+                let Some(id) = CorrelationId::for_pair(&*self.sink, DiagnosticKind::LockWait)
+                else {
+                    return WatchedGuard::unwatched(
+                        mutex.lock().unwrap_or_else(PoisonError::into_inner),
+                    );
+                };
+                self.sink.report(&Diagnostic::LockWaitBegan {
+                    instance: self.instance,
+                    lock: name,
+                    id,
+                });
                 let mut taken = None;
                 let waited = self.timer.time(&mut || {
                     taken = Some(mutex.lock().unwrap_or_else(PoisonError::into_inner));
+                });
+                // Written with the lock held, as the engineer ruled (DI-D-80): the sink's own
+                // synchronization is a leaf beneath it, which `DiagnosticSink` requires.
+                self.sink.report(&Diagnostic::LockWaitEnded {
+                    instance: self.instance,
+                    lock: name,
+                    id,
                 });
                 (taken.expect("the lock was taken"), Some(waited))
             }

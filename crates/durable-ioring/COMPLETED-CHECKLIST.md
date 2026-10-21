@@ -4051,3 +4051,33 @@ still emitted beside the pairs, not in their place as the item said: had the cor
 events until it maps the pairs in `DI-19.2.4`, and the driver's elevated session test in CI would fail meanwhile. The choices
 are [DI-D-89](DESIGN-NOTES.md#di-d-89).
 
+## Moved 2026-10-21 18:50:31 -04:00 -- DI-19.2.3: the lock-wait pair and the leaf-lock rule
+
+### <a id="di-1923"></a>DI-19.2.3 -- A lock wait is a pair, begun when the immediate try fails and ended as the lock is taken with it held, and `DiagnosticSink` states the leaf-lock rule the shipped sinks keep. *(completed 2026-10-21 18:50:31 -04:00)*
+
+The item as written:
+
+**DI-19.2.3** -- **The lock-wait pair, and the sink's leaf-lock contract.** `LockWatch` writes the begin when the
+  immediate try fails and the end on acquisition, with the lock held, and its timer goes. `DiagnosticSink`'s contract says a
+  sink is called with dioring's lock held, so its own synchronization is leaf-only: never taken in a way that can wait on
+  anything dioring's locks guard, and never held by a thread while it calls into an instance, a consumer holding a sink's
+  lock around such a call included. The shipped sinks are checked against it and the result recorded; a test sink that
+  records under a mutex is shown to keep to it.
+
+Built in `src/lock_watch.rs`, with the rule on `DiagnosticSink` in `src/diagnostics.rs`. The timer did not go here as the item
+said: the old `LockWait`, which carries how long the wait was, is still reported until `DI-19.2.4` moves the sinks, and it
+is the timer that measures that; it goes with the old event, as `DI-19.2.4` now says.
+
+**The shipped sinks, read against the rule on 2026-10-21.** `NoDiagnostics` takes nothing. `StderrDiagnostics` writes through
+`eprintln!`, which takes the standard library's lock on standard error and nothing else; a consumer holding that lock -- a
+`StderrLock` -- around a call on the instance would be the case the rule forbids. `FanOutDiagnostics` takes no lock of its own
+and calls each sink it holds, so it keeps the rule when they do. `DebugOutputDiagnostics` takes no lock: it formats a line and
+makes one call to `OutputDebugStringW`. `EtwDiagnostics` takes no lock to report; its shared registration's mutex is taken only
+to build, drop and ask. The test sinks that record do so under a mutex taken only to record, and one test shows a wait's end
+recorded that way while the watched lock is held.
+
+Three test sinks -- `durable-ioring`'s pump tests and two in `win-durable-ioring` -- panicked on any event but the old
+`LockWait`; they now pass over the pairs until `DI-19.2.4` binds them to the checker. The pump tests' sink panicking on the
+pair's begin had made two of them hang, waiting for a signal the panicking thread never sent; a sweep's baseline found it.
+The choices are [DI-D-90](DESIGN-NOTES.md#di-d-90).
+

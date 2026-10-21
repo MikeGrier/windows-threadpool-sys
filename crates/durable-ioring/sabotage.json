@@ -2000,8 +2000,8 @@
       "file": "src/lock_watch.rs",
       "expect": "caught",
       "why": "A sink that does not want lock waits must cost a blocked acquisition no clock read.",
-      "find": ["            Err(TryLockError::WouldBlock) if !self.sink.wants(DiagnosticKind::LockWait) => {"],
-      "replace": ["            Err(TryLockError::WouldBlock) if false => {"]
+      "find": ["                let Some(id) = CorrelationId::for_pair(&*self.sink, DiagnosticKind::LockWait)"],
+      "replace": ["                let Some(id) = CorrelationId::for_pair(&crate::diagnostics::StderrDiagnostics, DiagnosticKind::LockWait)"]
     },
     {
       "name": "DI-12.1.1: a wait is reported before the lock is let go",
@@ -2218,6 +2218,30 @@
       "why": "A control: the same order by a stable sort, which no test can tell apart since the keys are distinct. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        flushes.sort_unstable_by_key(|((key, seq, _), pair)| (*key, *seq, pair.id));"],
       "replace": ["        flushes.sort_by_key(|((key, seq, _), pair)| (*key, *seq, pair.id));"]
+    },
+    {
+      "name": "DI-19.2.3: a lock wait's begin is not reported",
+      "file": "src/lock_watch.rs",
+      "expect": "caught",
+      "why": "A wait is a pair whose begin is written when the immediate try fails (DI-D-87); an end with no begin is what the pairing checker refuses.",
+      "find": ["                self.sink.report(&Diagnostic::LockWaitBegan {"],
+      "replace": ["                let _ = &(Diagnostic::LockWaitBegan {"]
+    },
+    {
+      "name": "DI-19.2.3: a lock wait's end is not reported",
+      "file": "src/lock_watch.rs",
+      "expect": "caught",
+      "why": "The end is written as the lock is taken, with it held (DI-D-80); a wait whose end never comes is a pair left open.",
+      "find": ["                self.sink.report(&Diagnostic::LockWaitEnded {"],
+      "replace": ["                let _ = &(Diagnostic::LockWaitEnded {"]
+    },
+    {
+      "name": "DI-19.2.3 control: the taken guard is declared with its type spelled",
+      "file": "src/lock_watch.rs",
+      "expect": "survives",
+      "why": "A control: the same binding with its type written out, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["                let mut taken = None;"],
+      "replace": ["                let mut taken: Option<MutexGuard<'_, T>> = None;"]
     }
   ]
 }

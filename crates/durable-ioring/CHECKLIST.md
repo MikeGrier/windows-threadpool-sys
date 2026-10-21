@@ -59,18 +59,14 @@ would allow.
 
 - [x] **DI-19.2.2** -- The core emits the seal and flush pairs, beside the old delay events until `DI-19.2.4`, each ending on every path its begin can leave by. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1922)
 
-- [ ] **DI-19.2.3** -- **The lock-wait pair, and the sink's leaf-lock contract.** `LockWatch` writes the begin when the
-  immediate try fails and the end on acquisition, with the lock held, and its timer goes. `DiagnosticSink`'s contract says a
-  sink is called with dioring's lock held, so its own synchronization is leaf-only: never taken in a way that can wait on
-  anything dioring's locks guard, and never held by a thread while it calls into an instance, a consumer holding a sink's
-  lock around such a call included. The shipped sinks are checked against it and the result recorded; a test sink that
-  records under a mutex is shown to keep to it.
+- [x] **DI-19.2.3** -- A lock wait is a pair, begun when the immediate try fails and ended as the lock is taken with it held, and `DiagnosticSink` states the leaf-lock rule the shipped sinks keep. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1923)
 
 - [ ] **DI-19.2.4** -- **The sinks follow, and the old variants go.** The standard-error and debugger lines carry the id.
   `durable-ioring-events`' table maps the pairs to events with Start and Stop opcodes, the manifest is rendered and held
   equal, and it is verified as `DI-12.1.5` was, compiled, installed and read back by `tracerpt`; the activity id is
-  `DI-19.4`'s. The driver's tests bind to the checker. `FlushIssued`, `FlushAnswered` and `SealWaited` are removed, and
-  `StampClock::elapsed` with them (DI-D-87). This is the major change to `durable-ioring`.
+  `DI-19.4`'s. The driver's tests bind to the checker. `FlushIssued`, `FlushAnswered`, `SealWaited` and the old `LockWait`
+  are removed, and `StampClock::elapsed` and the lock watch's `LockTimer` with them (DI-D-87), the timer having stayed
+  through `DI-19.2.3` to time the old wait. This is the major change to `durable-ioring`.
 
 - [ ] **DI-19.2.5** -- **The sweep, the sabotage and the record.** A sweep for the delay events' old shape, of `DI-D-26`,
   `DI-D-51`, `DI-D-77`, the README and the crates' docs, is recorded with it; sabotage shows the checker is the one place

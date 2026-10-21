@@ -1611,3 +1611,20 @@ The choices [DI-19.2.2](COMPLETED-CHECKLIST.md#di-1922) left to its implementati
 
 **Scheduled work.** None beyond [DI-19.2.3](CHECKLIST.md) onward.
 
+## <a id="di-d-90"></a>DI-D-90: the lock-wait pair, and the rule that a sink's locks are a leaf beneath dioring's
+
+The choices [DI-19.2.3](COMPLETED-CHECKLIST.md#di-1923) left to its implementation, made by the assistant under
+[DI-D-80](#di-d-80) and [DI-D-87](#di-d-87) and open to a ruling.
+
+- **One question decides the wait.** When the immediate try fails, the watch asks for a pair id, which asks the sink once
+  whether it wants lock waits. With none, the lock is taken with no clock read and no event; with one, the begin is written,
+  the wait is timed, the end is written with the lock taken, and the old wait is reported after the guard is let go. The pair
+  and the old wait share a kind, so the one answer is right for both.
+- **The rule on `DiagnosticSink`** is the engineer's "any synchronization within the diagnostics platform must not interfere
+  with the synchronization in the durable-ioring", stated as the assistant reads it: a sink's lock is never taken in a way
+  that can wait on anything dioring's locks guard, and never held by a thread while it calls into an instance, including a
+  consumer holding a sink's lock around such a call. That reading is open to correction.
+- **The timer stays until the old wait goes**, in [DI-19.2.4](CHECKLIST.md), since it is what measures that wait.
+
+**Scheduled work.** None beyond [DI-19.2.4](CHECKLIST.md) and `DI-19.2.5`.
+

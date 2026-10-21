@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Mike Grier
-//! The lock watch (DI-12.1.1): an immediate acquisition is free and silent; a waited one is
-//! timed, and reported after the lock is let go.
+//! The lock watch (DI-12.1.1, DI-19.2.3): an immediate acquisition is free and silent; a waited one
+//! is a pair, its begin before the wait and its end with the lock held, and is timed and reported
+//! after the lock is let go.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Sender, channel};
@@ -11,6 +12,7 @@ use std::time::Duration;
 use super::{LockTimer, LockWatch, WatchedGuard};
 use crate::clock::StampClock;
 use crate::diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink};
+use crate::oracle::PairingChecker;
 use crate::test_support::{ManualClock, Ticks};
 
 type Hook = Box<dyn Fn() + Send>;
@@ -19,8 +21,13 @@ type Hook = Box<dyn Fn() + Send>;
 struct Waits {
     wanted: bool,
     seen: Mutex<Vec<(u64, &'static str, Duration)>>,
-    /// Run on each report, for a test that looks at the world as the report finds it.
+    /// Run on each report of a wait after the lock was let go, for a test that looks at the world
+    /// as the report finds it.
     on_report: Mutex<Option<Hook>>,
+    /// The pairs' lines, and the pairing rule over them.
+    pairs: Mutex<(Vec<String>, PairingChecker)>,
+    /// Run as a pair's end is reported, for a test that looks at the world as the end finds it.
+    on_end: Mutex<Option<Hook>>,
 }
 
 impl Waits {
@@ -29,7 +36,19 @@ impl Waits {
             wanted,
             seen: Mutex::new(Vec::new()),
             on_report: Mutex::new(None),
+            pairs: Mutex::new((Vec::new(), PairingChecker::new())),
+            on_end: Mutex::new(None),
         })
+    }
+
+    fn pair_lines(&self) -> Vec<String> {
+        self.pairs.lock().expect("the pairs").0.clone()
+    }
+
+    /// Every pair begun has ended, and the stream kept the rule.
+    fn pairs_finished(&self) {
+        let checker = std::mem::take(&mut self.pairs.lock().expect("the pairs").1);
+        checker.finish(&[]).expect("every wait's pair ended");
     }
 
     fn seen(&self) -> Vec<(u64, &'static str, Duration)> {
@@ -43,6 +62,17 @@ impl DiagnosticSink for Waits {
     }
 
     fn report(&self, event: &Diagnostic<'_>) {
+        if event.pairing().is_some() {
+            if matches!(event, Diagnostic::LockWaitEnded { .. })
+                && let Some(look) = &*self.on_end.lock().expect("the hook")
+            {
+                look();
+            }
+            let mut pairs = self.pairs.lock().expect("the pairs");
+            pairs.0.push(event.to_string());
+            pairs.1.observe(event).expect("the pairing rule");
+            return;
+        }
         let Diagnostic::LockWait {
             instance,
             lock,
@@ -263,4 +293,116 @@ fn the_report_reads_as_a_sentence_naming_the_instance_and_the_lock() {
         event.to_string(),
         "instance 4 waited 12ns for its engine lock"
     );
+}
+
+#[test]
+fn a_waited_acquisition_is_one_pair_naming_its_instance_and_its_lock() {
+    let (sink, gate) = (Waits::new(true), Gate::taking(Duration::from_nanos(1)));
+    let mutex = Mutex::new(());
+    let watch = watch(9, &sink, gate.clone());
+    waited_for(&watch, &gate, &mutex, "engine");
+    let lines = sink.pair_lines();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(
+        lines[0].starts_with("instance 9 (pair ")
+            && lines[0].ends_with("waits for its engine lock"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[1].starts_with("instance 9 (pair ") && lines[1].ends_with("took its engine lock"),
+        "{lines:?}"
+    );
+    sink.pairs_finished();
+}
+
+#[test]
+fn a_pairs_begin_is_written_before_the_wait_and_its_end_after_it() {
+    let (sink, gate) = (Waits::new(true), Gate::taking(Duration::from_nanos(1)));
+    let mutex = Mutex::new(());
+    let watch = watch(1, &sink, gate.clone());
+    let (signal, found_held) = channel();
+    *gate.about_to_block.lock().expect("the gate") = Some(signal);
+    let held = mutex.lock().expect("not poisoned");
+    thread::scope(|scope| {
+        let other = scope.spawn(|| drop(watch.lock(&mutex, "engine")));
+        found_held
+            .recv()
+            .expect("the other thread reached its wait");
+        assert_eq!(
+            sink.pair_lines().len(),
+            1,
+            "the begin, and only the begin, before the wait"
+        );
+        drop(held);
+        other.join().expect("the other thread finished");
+    });
+    assert_eq!(sink.pair_lines().len(), 2);
+    sink.pairs_finished();
+}
+
+#[test]
+fn a_pairs_end_is_written_with_the_lock_held_and_the_sinks_own_lock_is_a_leaf_beneath_it() {
+    let (sink, gate) = (Waits::new(true), Gate::taking(Duration::from_nanos(1)));
+    let mutex = Arc::new(Mutex::new(()));
+    let looked = Arc::new(AtomicU32::new(0));
+    {
+        let (mutex, looked) = (mutex.clone(), looked.clone());
+        *sink.on_end.lock().expect("the hook") = Some(Box::new(move || {
+            assert!(
+                mutex.try_lock().is_err(),
+                "the end was written with the lock let go"
+            );
+            looked.fetch_add(1, Ordering::Relaxed);
+        }));
+    }
+    let watch = watch(1, &sink, gate.clone());
+    waited_for(&watch, &gate, &mutex, "engine");
+    assert_eq!(looked.load(Ordering::Relaxed), 1);
+    // The sink took its own mutex to record the end while the watched lock was held, and no
+    // thread holds the sink's mutex while it takes the watched one: the order is a leaf beneath.
+    assert_eq!(sink.pair_lines().len(), 2);
+    sink.pairs_finished();
+}
+
+#[test]
+fn each_waited_acquisition_is_its_own_pair() {
+    let (sink, gate) = (Waits::new(true), Gate::taking(Duration::from_nanos(3)));
+    let mutex = Mutex::new(());
+    let watch = watch(2, &sink, gate.clone());
+    for name in ["engine", "hub", "engine", "slot"] {
+        waited_for(&watch, &gate, &mutex, name);
+    }
+    let lines = sink.pair_lines();
+    assert_eq!(lines.len(), 8, "{lines:?}");
+    sink.pairs_finished();
+}
+
+#[test]
+fn an_immediate_acquisition_is_no_pair() {
+    let (sink, gate) = (Waits::new(true), Gate::taking(Duration::from_secs(1)));
+    let mutex = Mutex::new(());
+    let watch = watch(1, &sink, gate);
+    drop(watch.lock(&mutex, "engine"));
+    assert!(sink.pair_lines().is_empty());
+    sink.pairs_finished();
+}
+
+#[test]
+fn a_waited_acquisition_by_a_sink_that_does_not_want_it_is_no_pair() {
+    let (sink, gate) = (Waits::new(false), Gate::taking(Duration::from_secs(1)));
+    let mutex = Mutex::new(());
+    let watch = watch(1, &sink, gate);
+    let (signal, started) = channel();
+    let held = mutex.lock().expect("not poisoned");
+    thread::scope(|scope| {
+        let other = scope.spawn(|| {
+            signal.send(()).expect("the test is listening");
+            drop(watch.lock(&mutex, "engine"));
+        });
+        started.recv().expect("the other thread started");
+        thread::sleep(Duration::from_millis(20));
+        drop(held);
+        other.join().expect("the other thread finished");
+    });
+    assert!(sink.pair_lines().is_empty());
 }

@@ -418,6 +418,13 @@ impl fmt::Display for Diagnostic<'_> {
 
 /// Where an instance's diagnostics go (DI-D-51). Called from whatever thread observed the event,
 /// with dioring's lock held, so a sink returns promptly and never calls back into the instance.
+///
+/// Its own synchronization is a leaf beneath dioring's (DI-D-80): a lock a sink takes is never
+/// taken in a way that can wait on anything dioring's locks guard, and is never held by a thread
+/// while it calls into an instance -- a consumer that holds a sink's lock around a call on the
+/// instance included, since that call may report to the sink under the instance's lock. A lock
+/// wait's end is reported with the lock just taken (DI-D-87), so a sink that broke this could
+/// deadlock against the instance it reports on.
 pub trait DiagnosticSink: Send + Sync {
     /// Whether the sink wants events of `kind`. Asked before each event is built, so answering
     /// `false` costs the core a branch and nothing more.
