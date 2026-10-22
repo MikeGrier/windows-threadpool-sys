@@ -31,6 +31,9 @@ pub trait Timeline: 'static {
 
 /// A point on timeline `T`: a tick count since the timeline's zero.
 ///
+/// No `checked_` method here or on [`Ticks`] panics, for any value or any timeline ([WT-D-7]); the
+/// operators are the ones that panic, on the overflow a `checked_` method reports as `None`.
+///
 /// Points on one timeline compare, subtract to [`Ticks`], and can be written down as a tick count
 /// and read back ([`ticks`](Self::ticks), [`from_ticks`](Self::from_ticks)). Points on different
 /// timelines do not compare at all, because their types differ:
@@ -51,6 +54,8 @@ pub trait Timeline: 'static {
 /// // The same unit, but not the same zero: refused.
 /// let _ = TimePoint::<Boot>::from_ticks(1) < TimePoint::<Calendar>::from_ticks(2);
 /// ```
+///
+/// [WT-D-7]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/win-time-sys/DESIGN-NOTES.md#wt-d-7
 pub struct TimePoint<T: Timeline> {
     ticks: u64,
     timeline: PhantomData<fn() -> T>,
