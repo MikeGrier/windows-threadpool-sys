@@ -18,7 +18,8 @@ pub enum Value {
     UInt64(u64),
     /// A `Boolean`.
     Boolean(bool),
-    /// A `UnicodeString`, as UTF-16 units without the terminator.
+    /// A `UnicodeString`, as UTF-16 units without the terminator, and **without a zero unit**: a zero in the text ends it where
+    /// it is, as a reader of a `UnicodeString` ends it, so the units after it are not part of the value (DE-D-7).
     Text(Vec<u16>),
     /// A `Binary`.
     Bytes(Vec<u8>),
@@ -45,10 +46,22 @@ impl Value {
             Self::UInt32(v) => Field::U32(*v),
             Self::UInt64(v) => Field::U64(*v),
             Self::Boolean(v) => Field::boolean(*v),
-            Self::Text(units) => Field::Utf16Terminated(units),
+            Self::Text(units) => Field::Utf16Terminated(before_zero(units)),
             Self::Bytes(bytes) => Field::Bytes(bytes),
         }
     }
+}
+
+/// `units` up to its first zero unit, which is where a reader of a `UnicodeString` field ends the string. A zero left in would end
+/// it there for the reader while the units after it were taken as the next fields, so each later field of the event would be
+/// misread (DE-D-7). The one place the rule is written: [`encode`] makes its text through it, and so does the write of a value
+/// whoever made it.
+fn before_zero(units: &[u16]) -> &[u16] {
+    let end = units
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(units.len());
+    &units[..end]
 }
 
 /// The event an event of durable-ioring becomes, or `None` for one this crate does not know, which a newer durable-ioring may
@@ -99,7 +112,10 @@ fn part_values(part: &FlushPart<'_>) -> Option<Vec<Value>> {
 /// event a session wants.
 #[must_use]
 pub fn encode(event: &Diagnostic<'_>) -> Option<Vec<Value>> {
-    let units = |text: &str| Value::Text(text.encode_utf16().collect());
+    let units = |text: &str| {
+        let all: Vec<u16> = text.encode_utf16().collect();
+        Value::Text(before_zero(&all).to_vec())
+    };
     Some(match event {
         Diagnostic::Inconsistency {
             instance,

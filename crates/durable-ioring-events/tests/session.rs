@@ -27,8 +27,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use durable_ioring::{
-    CorrelationId, Diagnostic, DiagnosticKind, DiagnosticSink, FlushDomain, FlushOutcome,
-    FlushPart, IoTargetKey, SealOutcome,
+    CorrelationId, Diagnostic, DiagnosticKind, DiagnosticSink, FanOutDiagnostics, FlushDomain,
+    FlushOutcome, FlushPart, IoTargetKey, SealOutcome,
 };
 use durable_ioring_events::{
     ColumnType, EVENTS, EtwDiagnostics, EventSchema, INCONSISTENCIES, LOCKS, PROVIDER_ID, Value,
@@ -441,24 +441,44 @@ fn threads_report_through_one_sink_and_every_event_is_recorded() {
 
 #[test]
 #[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
-fn a_zero_in_text_is_written_whole_and_ends_the_string_for_a_reader() {
+fn a_zero_in_text_ends_it_there_and_leaves_the_fields_after_it_where_they_were() {
     let _serial = serial();
     let session = listening();
     let sink = EtwDiagnostics::new();
-    assert!(becomes(|| sink.wants(DiagnosticKind::Inconsistency)));
+    assert!(becomes(|| sink.wants(DiagnosticKind::LockWait)));
+    // A zero in a field that is not the last: what follows it in the data would be read as the next fields if it were written.
+    let id = minted();
+    sink.report(&Diagnostic::LockWaitBegan {
+        instance: 7,
+        lock: "en\0gine",
+        id,
+    });
     sink.report(&Diagnostic::Inconsistency {
         instance: 1,
-        what: "x",
+        what: "x\0y",
         detail: format_args!("ab\0cd"),
     });
-    let event = only(session.stop().expect("stopped"));
-    // Written whole: the data holds every unit, the zero and what follows it, then the terminator.
-    let tail: Vec<u8> = "ab\0cd"
-        .encode_utf16()
-        .chain([0])
-        .flat_map(u16::to_ne_bytes)
-        .collect();
-    assert!(event.data.ends_with(&tail), "{:?}", event.data);
+    let recorded = session.stop().expect("stopped");
+    assert_eq!(recorded.len(), 2, "{recorded:?}");
+    let lock = schema_of_id(recorded[0].descriptor.id).expect("a known event");
+    assert_eq!(
+        decode(lock, &recorded[0].data),
+        [
+            Value::UInt64(7),
+            Value::Text("en".encode_utf16().collect()),
+            Value::UInt64(id.get())
+        ],
+        "the pair id after the cut text is the pair id"
+    );
+    let inconsistency = schema_of_id(recorded[1].descriptor.id).expect("a known event");
+    assert_eq!(
+        decode(inconsistency, &recorded[1].data),
+        [
+            Value::UInt64(1),
+            Value::Text("x".encode_utf16().collect()),
+            Value::Text("ab".encode_utf16().collect())
+        ]
+    );
 }
 
 #[test]
@@ -596,10 +616,42 @@ fn an_end_whose_begin_was_not_written_is_an_activity_of_its_own() {
     sink.report(&lock_wait(true, 2, other));
     sink.report(&lock_wait(false, 2, other));
     let recorded = session.stop().expect("stopped");
+    // A sink does not expect its begins and ends to match (DI-D-96), so the end is written, and in an activity no other event shares.
     assert_eq!(recorded.len(), 3, "{recorded:?}");
     assert_ne!(recorded[0].activity, NO_ACTIVITY);
     assert_ne!(recorded[0].activity, recorded[1].activity);
     assert_eq!(recorded[1].activity, recorded[2].activity);
+}
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn a_pair_ended_through_a_fan_out_after_its_session_stopped_is_let_go() {
+    let _serial = serial();
+    let first = listening();
+    let fan = FanOutDiagnostics::new(vec![Arc::new(EtwDiagnostics::new())]);
+    assert!(becomes(|| fan.wants(DiagnosticKind::LockWait)));
+    let id = minted();
+    fan.report(&lock_wait(true, 1, id));
+    let begun = only(first.stop().expect("stopped"));
+    assert_ne!(begun.activity, NO_ACTIVITY);
+    assert!(
+        becomes(|| !fan.wants(DiagnosticKind::LockWait)),
+        "no session listens now"
+    );
+    // The fan-out is given the end and passes it on whatever the sink wants, so the sink lets the pair go.
+    fan.report(&lock_wait(false, 1, id));
+
+    // An end of that pair that a later session sees is then an end with no begin: in an activity of its own. Had the pair been
+    // held, it would be written in the begin's.
+    let second = listening();
+    assert!(becomes(|| fan.wants(DiagnosticKind::LockWait)));
+    fan.report(&lock_wait(false, 1, id));
+    let ended = only(second.stop().expect("stopped"));
+    assert_ne!(ended.activity, NO_ACTIVITY);
+    assert_ne!(
+        ended.activity, begun.activity,
+        "the pair was let go at the end the session did not record"
+    );
 }
 
 #[test]

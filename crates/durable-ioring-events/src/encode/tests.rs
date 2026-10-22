@@ -367,3 +367,140 @@ fn a_boolean_is_written_as_four_bytes_and_text_with_a_terminator() {
     ));
     assert!(matches!(Value::Bytes(vec![1]).field(), Field::Bytes(_)));
 }
+
+// --- a zero in text (DE-D-7) ---
+
+/// Every text value an event's encoding holds.
+fn texts(event: &Diagnostic<'_>) -> Vec<Vec<u16>> {
+    encode(event)
+        .expect("values")
+        .into_iter()
+        .filter_map(|value| match value {
+            Value::Text(units) => Some(units),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_zero_in_text_ends_it_where_it_is() {
+    let event = Diagnostic::Inconsistency {
+        instance: 1,
+        what: "a\0b",
+        detail: format_args!("c\0d\0e"),
+    };
+    agrees(&event);
+    assert_eq!(
+        encode(&event),
+        Some(vec![Value::UInt64(1), text("a"), text("c")]),
+        "what follows a zero is not part of the field"
+    );
+}
+
+#[test]
+fn text_that_starts_with_a_zero_is_empty() {
+    let event = Diagnostic::Inconsistency {
+        instance: 1,
+        what: "\0abc",
+        detail: format_args!("\0"),
+    };
+    assert_eq!(texts(&event), [Vec::<u16>::new(), Vec::new()]);
+}
+
+#[test]
+fn text_with_no_zero_is_kept_whole() {
+    let event = Diagnostic::Inconsistency {
+        instance: 1,
+        what: "abc",
+        detail: format_args!("{}", "d".repeat(1000)),
+    };
+    assert_eq!(texts(&event)[0], "abc".encode_utf16().collect::<Vec<_>>());
+    assert_eq!(texts(&event)[1].len(), 1000);
+}
+
+#[test]
+fn a_zero_in_any_text_of_any_event_leaves_every_other_field_where_it_was() {
+    // The corruption a zero caused was in the fields after it, so the check is that the values after a cut text are the ones
+    // that would be there without the zero, for each event with a text that is not the last field.
+    let id = minted();
+    let events = [
+        Diagnostic::Inconsistency {
+            instance: 5,
+            what: "w\0x",
+            detail: format_args!("d"),
+        },
+        Diagnostic::SealBegan {
+            instance: 5,
+            lineage: 6,
+            through: format_args!("e\0x"),
+            id,
+        },
+        Diagnostic::SealEnded {
+            instance: 5,
+            lineage: 6,
+            through: format_args!("e\0x"),
+            id,
+            outcome: SealOutcome::Durable,
+        },
+        Diagnostic::FlushBegan {
+            instance: 5,
+            lineage: 6,
+            through: format_args!("e\0x"),
+            part: FlushPart::File(IoTargetKey(9)),
+            id,
+        },
+        Diagnostic::FlushEnded {
+            instance: 5,
+            lineage: 6,
+            through: format_args!("e\0x"),
+            part: FlushPart::File(IoTargetKey(9)),
+            id,
+            outcome: FlushOutcome::Succeeded,
+        },
+        Diagnostic::LockWaitBegan {
+            instance: 5,
+            lock: "l\0x",
+            id,
+        },
+        Diagnostic::LockWaitEnded {
+            instance: 5,
+            lock: "l\0x",
+            id,
+        },
+    ];
+    for event in &events {
+        agrees(event);
+        let values = encode(event).expect("values");
+        assert!(
+            texts(event).iter().all(|units| !units.contains(&0)),
+            "{event}: {values:?}"
+        );
+        assert_eq!(values[0], Value::UInt64(5), "{event}");
+        let pair = id.get();
+        if event.pairing().is_some() {
+            assert!(
+                values.contains(&Value::UInt64(pair)),
+                "{event}: the pair is where it was"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_write_of_a_text_value_stops_at_a_zero_whoever_made_it() {
+    use win_etw_sys::Field;
+    let written = |units: Vec<u16>| -> Vec<u16> {
+        let value = Value::Text(units);
+        let Field::Utf16Terminated(written) = value.field() else {
+            panic!("text is written terminated");
+        };
+        written.to_vec()
+    };
+    assert_eq!(written(vec![0x61, 0, 0x62]), [0x61]);
+    assert!(written(vec![0, 0x62]).is_empty());
+    assert_eq!(
+        written(vec![0x61, 0x62]),
+        [0x61, 0x62],
+        "no zero, nothing cut"
+    );
+}

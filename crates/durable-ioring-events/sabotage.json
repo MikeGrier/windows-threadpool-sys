@@ -56,8 +56,8 @@
       "file": "src/encode.rs",
       "expect": "caught",
       "why": "A name or a detail written as one unit is no name.",
-      "find": ["    let units = |text: &str| Value::Text(text.encode_utf16().collect());\n"],
-      "replace": ["    let units = |text: &str| Value::Text(text.encode_utf16().take(1).collect());\n"]
+      "find": ["        let all: Vec<u16> = text.encode_utf16().collect();\n"],
+      "replace": ["        let all: Vec<u16> = text.encode_utf16().take(1).collect();\n"]
     },
     {
       "name": "DE-D-3: the manifest names an error as a warning",
@@ -239,6 +239,38 @@
       "replace": [
         "            self.took.as_secs_f64() * 1e3,"
       ]
+    },
+    {
+      "name": "DE-D-7: the encoder keeps what follows a zero in text",
+      "file": "src/encode.rs",
+      "expect": "caught",
+      "why": "The values an event is written with are what a reader reads; text that keeps its tail after a zero is a field whose later fields a reader takes from the middle of it.",
+      "find": ["        Value::Text(before_zero(&all).to_vec())"],
+      "replace": ["        Value::Text(all)"]
+    },
+    {
+      "name": "DE-D-7: the write of a text value keeps what follows a zero",
+      "file": "src/encode.rs",
+      "expect": "caught",
+      "why": "A text value built by anyone is still written up to its first zero; the encoder cuts the text it makes and the write cuts whatever it is given.",
+      "find": ["            Self::Text(units) => Field::Utf16Terminated(before_zero(units)),"],
+      "replace": ["            Self::Text(units) => Field::Utf16Terminated(units),"]
+    },
+    {
+      "name": "DE-D-7: the cut keeps the zero",
+      "file": "src/encode.rs",
+      "expect": "caught",
+      "why": "A text cut after its zero instead of before it carries a zero unit into the value, which is then a unit longer than the text a reader reads.",
+      "find": ["    &units[..end]"],
+      "replace": ["    &units[..(end + 1).min(units.len())]"]
+    },
+    {
+      "name": "DE-D-7 control: the first zero is found by another spelling",
+      "file": "src/encode.rs",
+      "expect": "survives",
+      "why": "A control: `unwrap_or_else` is `unwrap_or` over a value that costs nothing to make, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        .unwrap_or(units.len());"],
+      "replace": ["        .unwrap_or_else(|| units.len());"]
     }
   ]
 }

@@ -48,9 +48,10 @@ first, and a name too long for the length is cut to what the length can say so t
 filters by: locks, flushes, seals and inconsistencies, one bit each in the provider's forty-eight. Every event has a nonzero
 level and keyword, as the page for the structure asks of every event, and is version 0, channel 0, opcode 0 and task 0.
 
-**Text.** Text is written as UTF-16 with a terminator, as a manifest's `UnicodeString` is read. A zero in the text is written
-whole and ends the string for a reader, so what follows it in that field is not shown. The one text that is arbitrary, an
-inconsistency's detail, is the last field of its event, so no field after it is misread. An event larger than a session's buffer is dropped by the call and the sink
+**Text.** Text is written as UTF-16 with a terminator, as a manifest's `UnicodeString` is read. **Amended by
+[DE-D-7](#de-d-7):** a zero in the text ends it where it is, and what follows is not written. It was written whole, on the
+ground that the one arbitrary text is the last field of its event, which holds for an inconsistency's detail and not for a
+lock's name, which is followed by the pair. An event larger than a session's buffer is dropped by the call and the sink
 ignores that.
 
 **The ids are pinned.** A reader decodes by an event's id, so they are 1 to 6 in this order and a test holds them.
@@ -108,7 +109,7 @@ a sink has no way to report a failure of its own.
 gives it back. With one, `tests/session.rs`, which starts a real session, enables the provider in it, reports through the sink
 and reads the events back, decoding them by the table: every event reaches a session as its values, a keyword filter and a
 level filter are what the sink is asked about, a sink made before a session wants events once one listens, two sinks and four
-threads record each event once, a zero in text is written whole, and an event too large for a session is dropped with no
+threads record each event once, a zero in text ends it there ([DE-D-7](#de-d-7)), and an event too large for a session is dropped with no
 failure. Starting a session needs privilege, so those tests are ignored by default and CI runs them with `--include-ignored`
 ([WE-D-3](../win-etw-sys/DESIGN-NOTES.md#we-d-3)). They were run elevated on 2026-10-20 and all nine pass.
 
@@ -168,7 +169,7 @@ it, and both are written by `write_transfer` with that activity, whatever thread
 a lock that is a leaf as `DiagnosticSink` requires: a pair written by two sinks -- a clone, or two in a fan-out -- is one
 activity, held until its last end. An end lets its activity go whether or not a session is listening for it, so nothing is
 held for a session that stopped between the two. An end whose begin was not written, because no session listened then, is
-written in an activity of its own, so it joins no other; a begin whose id cannot be created is written in the thread's
+written in an activity of its own, so it joins no other, because a sink assumes no begin for an end ([DI-D-96](../durable-ioring/DESIGN-NOTES.md#di-d-96)); a begin whose id cannot be created is written in the thread's
 activity, with nothing held. Any event that is not a pair is written in the thread's activity, as before. The pair id stays in
 the `Pair` field, so a text sink's line and a trace's record still name the same pair.
 
@@ -184,3 +185,24 @@ were run elevated the same day and pass, and the sabotages only a session catche
 caught and its control surviving.
 
 **Scheduled work.** None.
+
+## <a id="de-d-7"></a>DE-D-7: a zero in text ends it where it is, and an end is let go whenever the sink is given it
+
+The review of 2026-10-22 and the engineer's rulings on it ([DI-D-96](../durable-ioring/DESIGN-NOTES.md#di-d-96)); the details
+are the assistant's and open to a ruling.
+
+**A zero ends the text.** A `UnicodeString` is read to its first zero unit, so a zero in the text of a field that is not the last
+makes a reader take the units after it as the fields after it. The review measured it with `TdhGetProperty` over the encoder's output for a
+lock wait named `a<NUL>b` with pair 7: the call succeeded and the pair it read was 30064771170. So text is cut at its
+first zero where it is made, by one function, `before_zero`, which the encoder and the write of a value both use, and what a
+reader is shown of a field is its text up to that zero. The alternatives were to escape the zero or to write the length first;
+neither is a `UnicodeString`, so a manifest would have to change for each, and the text is a diagnostic. A text with no zero is
+unchanged.
+
+**An end is written whenever a session wants it, with or without its begin.** The sink is given every pair's end by a fan-out
+whatever it wants, lets its pair go at that end whether or not it writes it, and writes it if the event is enabled: in the
+begin's activity if the begin was written, and in one of its own if it was not. A sink assumes no begin for an end; a begin
+whose end never comes is the producer's to answer for.
+
+**Scheduled work.** None; [DI-22.2](../durable-ioring/COMPLETED-CHECKLIST.md#di-222) is this.
+

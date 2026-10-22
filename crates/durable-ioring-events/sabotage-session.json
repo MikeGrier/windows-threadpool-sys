@@ -70,6 +70,14 @@
       "replace": [
         "            None => Option::<win_etw_sys::Guid>::None,"
       ]
+    },
+    {
+      "name": "DE-D-7: an end lets its pair go only when it is written",
+      "file": "src/sink.rs",
+      "expect": "caught",
+      "why": "An end reported after its session stopped is not written and must still release what was held for its pair, or the process map grows by a pair for each stop. A later session then writes an end of that pair in the begin's activity, which `a_pair_ended_through_a_fan_out_after_its_session_stopped_is_let_go` reads.",
+      "find": ["            Some(pairing) if pairing.edge == Edge::End => activity::ended(pairing.id),"],
+      "replace": ["            Some(pairing) if pairing.edge == Edge::End && registration.is_enabled(&schema.descriptor()) => {\n                activity::ended(pairing.id)\n            }"]
     }
   ]
 }
