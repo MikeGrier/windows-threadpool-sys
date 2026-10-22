@@ -107,6 +107,54 @@
       "why": "GetHandleInformation fails only for a handle that is not open, which AsHandle rules out, so no test can make it fail. The definition says so.",
       "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(HandleFlags(flags))\n"],
       "replace": ["    if ok == 12345 {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(HandleFlags(flags))\n"]
+    },
+    {
+      "name": "WH-1.2: the mask is not passed to the call",
+      "file": "src/handle_information.rs",
+      "expect": "caught",
+      "why": "The mask is what names the flags to change: passed as zero, nothing is ever set or cleared.",
+      "find": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0, flags.0) };"],
+      "replace": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), 0, flags.0) };"]
+    },
+    {
+      "name": "WH-1.2: the flags are not passed to the call",
+      "file": "src/handle_information.rs",
+      "expect": "caught",
+      "why": "The flags give each flag in the mask its new value: passed as zero, a flag can only be cleared, never set.",
+      "find": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0, flags.0) };"],
+      "replace": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0, 0) };"]
+    },
+    {
+      "name": "WH-1.2: the mask and the flags are passed in each other's places",
+      "file": "src/handle_information.rs",
+      "expect": "caught",
+      "why": "The call takes the mask before the flags; swapped, a flag is set only if it is also what is to be cleared, and a clear changes nothing.",
+      "find": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0, flags.0) };"],
+      "replace": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), flags.0, mask.0) };"]
+    },
+    {
+      "name": "WH-1.2: a refused call is reported as success",
+      "file": "src/handle_information.rs",
+      "expect": "caught",
+      "why": "A failure of the call is its error: a handle the platform refuses, which a test can hold as the current process's pseudo-handle, must not read as set.",
+      "find": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0, flags.0) };", "    if ok == FALSE {"],
+      "replace": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0, flags.0) };", "    if false {"]
+    },
+    {
+      "name": "WH-1.2 control: only the flags in the mask are passed as flags",
+      "file": "src/handle_information.rs",
+      "expect": "survives",
+      "why": "A control: the platform applies flags & mask, so passing that is the same observable by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0, flags.0) };"],
+      "replace": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0, flags.0 & mask.0) };"]
+    },
+    {
+      "name": "WH-1.2: BLIND SPOT: a bit Windows does not name is narrowed away before the call",
+      "file": "src/handle_information.rs",
+      "expect": "survives",
+      "why": "The crate does not narrow what the call is given (HandleFlags), but the platform accepts a bit it does not name and gives it no effect, so a narrowing before the call looks the same from outside. The claim is documented and measured (WH-D-3) and cannot be pinned by a test.",
+      "find": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0, flags.0) };"],
+      "replace": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0 & 3, flags.0 & 3) };"]
     }
   ]
 }

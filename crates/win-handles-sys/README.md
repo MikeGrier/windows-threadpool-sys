@@ -7,6 +7,9 @@ Windows System Information > Handles and Objects*. Thin over Win32, adding no po
   chosen. It returns an `OwnedHandle`, so the duplicate is closed when it is dropped and nothing else has to.
 - `get_handle_information` is `GetHandleInformation`: the `HandleFlags` a handle carries, whether it is
   inheritable and whether closing it is refused. A bit Windows defines that is not named is kept, not refused.
+- `set_handle_information` is `SetHandleInformation`: the same `HandleFlags`, with a mask of which are changed. A flag in the
+  mask is set if the flags have it and cleared if they do not, and one outside the mask is left as it was. Nothing is refused
+  before the call. A handle protected from close is not closed by dropping it, so clear the flag first.
 - `Access` is the mask, a newtype over the Win32 bits combined with `|`. `SYNCHRONIZE` and
   `EVENT_MODIFY_STATE` are named; any other right is `Access::from_bits`.
 

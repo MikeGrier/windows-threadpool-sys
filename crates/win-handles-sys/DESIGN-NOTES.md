@@ -37,3 +37,40 @@ not inheritable even when its source is; and protecting a handle from close read
 and clears when the protection is removed. The tests set the flags through raw `SetHandleInformation`, so the
 query is never checked against itself, and the protection is cleared by a guard before the handle is dropped,
 since closing a protected handle is refused.
+
+## WH-D-3: `set_handle_information` takes the page's mask and flags, and refuses nothing
+
+**Read 2026-10-21** from the page for `SetHandleInformation` (`ms.date` 2018-12-05, `updated_at` 2024-02-22), beside
+`GetHandleInformation`'s (`ms.date` 2018-12-05). The call takes a handle, `dwMask` ("A mask that specifies the bit flags to be
+changed") and `dwFlags` ("This parameter can be 0 or one or more of the following values"), and its one remark is "To set or
+clear the associated bit flag in dwFlags, you must set a change mask bit flag in dwMask".
+
+**The function is the call.** `set_handle_information(handle, mask, flags)` takes the same `HandleFlags` the query returns, in
+the call's order, and returns `io::Result<()>`; a flag in the mask is set if `flags` has it and cleared if it does not. The handle
+is `impl AsHandle`, as the query's is. The crate adds no convenience over it: a caller who wants to set one flag passes it as the
+mask and as the flags, which the example shows.
+
+**Nothing is refused ahead of the call.** The page calls no value of either argument invalid, so none is refused. A flag in
+`flags` and not in `mask` is the page's "you must set a change mask bit": the page says what changes, and a flag that is passed
+and not applied is not an invalid argument, so it is passed through and documented. A bit the page does not name is the call's
+to judge, as it is for the query's result ([WH-D-2](#wh-d-2)), and is not narrowed.
+
+**Measured on Windows 11 build 26300, 2026-10-21, none of it a ruling.** Through raw calls on an event handle, over every start
+state, mask and flags of the two named flags (sixty-four), the result was `(start & !mask) | (flags & mask)` each time. A bit the
+page does not name, in the mask, in the flags, or in both and with every bit set, was accepted and changed no named flag. The
+flags belong to the handle: setting one on a duplicate left the source unchanged, and the other way round. The current
+process's pseudo-handle, which `std` lets a `BorrowedHandle` hold, was refused by the set with `ERROR_ACCESS_DENIED` (5), where
+the query on it succeeded and read no flag; so the set's error path has a test, which the query's has not. `CloseHandle` on a
+handle protected from close, with no debugger attached, returned `FALSE` with `ERROR_INVALID_HANDLE` (6) and left the handle
+open with the flag still set, which is what the page says of the flag ("calling the CloseHandle function will not close the
+object handle"); so an `OwnedHandle` dropped while protected stays open, which the function's documentation says. No test closes a
+protected handle, because a debugger makes that raise an exception, which was not measured.
+
+**The tests** read what the setter did through raw `GetHandleInformation`, as the query's set it through the raw setter, so
+neither is checked against the other, and a protection is cleared by a guard before its handle is dropped. The sweep
+([sabotage.json](sabotage.json)) catches a mask not passed, flags not passed, the two passed in each other's places, and a refused
+call read as success. Its control passes `flags & mask`, which the platform applies anyway. Its declared blind spot is narrowing a
+bit the platform does not name before the call: the platform gives such a bit no effect, so the narrowing cannot be seen, and
+the claim that the crate does not narrow is the documentation's.
+
+**Scheduled work.** None; `WH-1.3` and `WH-1.4` are the checklist's.
