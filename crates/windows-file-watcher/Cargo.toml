@@ -88,6 +88,8 @@ test-util = []
 # `OVERLAPPED` across a re-arm. No features are enabled; only the core completion
 # machinery is needed.
 windows-overlapped-io-sys = { version = "0.3.0", path = "../windows-overlapped-io-sys", default-features = false }
+# Duplicating a handle: this crate's `DuplicateHandle` call is `win-handles-sys`'s, the repository's one.
+win-handles-sys = { version = "0.1.0", path = "../win-handles-sys" }
 
 # The thread pool the monitor runs on: `ThreadpoolIo` services detailed reads,
 # `ThreadpoolWait` the coarse fallback, `ThreadpoolTimer` the retry backoff, and

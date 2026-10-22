@@ -302,6 +302,7 @@ dependencies = [
  "serde",
  "serde_json",
  "win-error-codes",
+ "win-handles-sys",
  "win-text-sys",
  "windows-overlapped-io-sys",
  "windows-sys",
