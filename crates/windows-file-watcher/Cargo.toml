@@ -90,6 +90,9 @@ test-util = []
 windows-overlapped-io-sys = { version = "0.3.0", path = "../windows-overlapped-io-sys", default-features = false }
 # Duplicating a handle: this crate's `DuplicateHandle` call is `win-handles-sys`'s, the repository's one.
 win-handles-sys = { version = "0.1.0", path = "../win-handles-sys" }
+# The doorbell is held as a shared handle, so a client can wait on it, or arm a thread-pool wait on it, without a
+# kernel handle of its own. `windows-threadpool-sys` takes the same type, from the same crate.
+win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
 
 # The thread pool the monitor runs on: `ThreadpoolIo` services detailed reads,
 # `ThreadpoolWait` the coarse fallback, `ThreadpoolTimer` the retry backoff, and

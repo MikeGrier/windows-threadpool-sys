@@ -91,6 +91,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use win_handles_sys::{DuplicateAccess, Inheritance, duplicate_handle};
+use win_shared_os_owned_handle::SharedHandle;
 use windows_sys::Win32::Foundation::{FALSE, TRUE};
 use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
@@ -287,7 +288,7 @@ struct Shared {
     ///
     /// Outside the lock so a borrow of it can outlive the guard, but only ever
     /// signalled or reset *under* the lock -- see [`refresh_doorbell`].
-    doorbell: OnceLock<OwnedHandle>,
+    doorbell: OnceLock<SharedHandle>,
 }
 
 /// A crate-owned producer that stopped because the queue was full, and must be
@@ -988,8 +989,9 @@ impl Receiver {
     /// arrive.
     ///
     /// The borrow is deliberate: the event belongs to this queue and must not be
-    /// closed by a caller. Use [`Receiver::doorbell_owned`] where ownership is
-    /// required, such as arming a `ThreadpoolWait`.
+    /// closed by a caller. Use [`Receiver::doorbell_shared`] or
+    /// [`Receiver::doorbell_owned`] where ownership is required, such as arming a
+    /// `ThreadpoolWait`.
     ///
     /// # Errors
     ///
@@ -1021,6 +1023,37 @@ impl Receiver {
         )
     }
 
+    /// The doorbell as a shared handle: the queue's own event, held by one more
+    /// owner.
+    ///
+    /// This is [`Receiver::doorbell`] with the ownership the borrow lacks, and no
+    /// new kernel handle: the result is a clone of the handle the queue holds, so
+    /// its raw handle is the borrow's, and the event closes when the last holder
+    /// of it, the queue's own included, drops. A `ThreadpoolWait` can take it
+    /// through `WaitableHandle::assume_waitable_shared`, which is what arming one
+    /// needs without a duplicate per waiter.
+    ///
+    /// The queue keeps the event in agreement with its contents only for as long as
+    /// the queue exists. Holding this does not keep the queue alive, and nothing
+    /// signals or resets the event once the queue is gone, so a holder that outlives
+    /// every sender and the receiver is waiting on an event nothing will change. Use
+    /// [`Receiver::doorbell_owned`] for a handle that is the caller's own and can be
+    /// closed whenever the caller likes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `CreateEventW` on the first call to any doorbell
+    /// method.
+    pub fn doorbell_shared(&self) -> io::Result<SharedHandle> {
+        self.ensure_doorbell()?;
+        Ok(self
+            .shared
+            .doorbell
+            .get()
+            .expect("the doorbell was just created")
+            .clone())
+    }
+
     /// Create the doorbell if it does not exist yet.
     fn ensure_doorbell(&self) -> io::Result<()> {
         if self.shared.doorbell.get().is_some() {
@@ -1032,7 +1065,7 @@ impl Receiver {
         let state = lock(&self.shared.items);
         if self.shared.doorbell.get().is_none() {
             let event = create_event(state.pending())?;
-            let _ = self.shared.doorbell.set(event);
+            let _ = self.shared.doorbell.set(SharedHandle::new(event));
         }
         Ok(())
     }

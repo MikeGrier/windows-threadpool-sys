@@ -72,3 +72,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#m15).
 ## M17 -- The ordinal comparison through `win-text-sys`
 
 Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#m171).
+
+## M18 -- The doorbell as a shared handle
+
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#m181).

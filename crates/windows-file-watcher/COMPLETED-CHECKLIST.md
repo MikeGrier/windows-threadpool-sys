@@ -1195,3 +1195,20 @@ existing route tests passed unchanged. Recorded as [D-86](DESIGN-NOTES.md#d-86),
 that changed, for a name of more than 2^31 units, and that it cannot be reached. Tests: seven new, of `names_match` in both
 modes, an interior NUL, and each result of the comparison. Evidence, in [sabotage.json](sabotage.json): five entries, all
 caught, and a control. The workspace's `M43` is complete with this and `SAFE-5` of `windows-file-enumeration-sys`.
+
+## Moved 2026-10-22 00:12:45 -04:00 -- M18: the doorbell as a shared handle
+
+### <a id="m181"></a>M18.1 -- The receiver's doorbell is held as a `SharedHandle`, and `doorbell_shared` hands out one more owner of it. *(completed 2026-10-22 00:12:45 -04:00)*
+
+The item as written:
+
+**Migrate `windows-file-watcher` to the shared owned handle.** The receiver's doorbell is the one place the crate
+shares a handle, and it shared it by `DuplicateHandle` per consumer. It is held as a `win-shared-os-owned-handle`
+`SharedHandle`, and `Receiver::doorbell_shared` returns a clone, so a `ThreadpoolWait` can take it through
+`WaitableHandle::assume_waitable_shared` without a duplicate. `doorbell` and `doorbell_owned` are unchanged.
+
+What was done. Recorded as [D-87](DESIGN-NOTES.md#d-87), which also records why [D-42](DESIGN-NOTES.md#d-42)'s two
+forms stand and what the shared form does not do. The directory handle needed nothing: it goes to
+`windows-overlapped-io-sys`, which holds it as a `SharedHandle` itself, and the coarse handle is closed by
+`FindCloseChangeNotification`, which `SharedHandle` is not for. Tests: eight new for the shared form and one for a
+client's own `ThreadpoolWait` on it. Evidence, in [sabotage.json](sabotage.json): two entries caught and a control.

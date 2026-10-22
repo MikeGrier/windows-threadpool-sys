@@ -67,6 +67,30 @@
       "why": "A control: the same comparison through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        Ok(ordering) => ordering == Ordering::Equal,\n"],
       "replace": ["        Ok(ordering) => {\n            let equal = ordering == Ordering::Equal;\n            equal\n        }\n"]
+    },
+    {
+      "name": "D-87: the shared doorbell is an event of its own",
+      "file": "src/queue.rs",
+      "expect": "caught",
+      "why": "A shared holder is meant to be one more owner of the queue's event. A handle to a different event is silent: it never signals, and a thread-pool wait armed on it never fires. The raw handle equal to the queue's and the wake tests see it.",
+      "find": ["        self.ensure_doorbell()?;\n        Ok(self\n            .shared\n            .doorbell\n            .get()\n            .expect(\"the doorbell was just created\")\n            .clone())\n"],
+      "replace": ["        self.ensure_doorbell()?;\n        Ok(SharedHandle::new(create_event(false)?))\n"]
+    },
+    {
+      "name": "D-87: the shared doorbell is taken without creating it",
+      "file": "src/queue.rs",
+      "expect": "caught",
+      "why": "The first ask for any doorbell creates it. A shared form that skips that finds nothing to clone, which the test that asks for the shared form first sees as a panic.",
+      "find": ["        self.ensure_doorbell()?;\n        Ok(self\n            .shared\n            .doorbell\n            .get()\n            .expect(\"the doorbell was just created\")\n            .clone())\n"],
+      "replace": ["        Ok(self\n            .shared\n            .doorbell\n            .get()\n            .expect(\"the doorbell was just created\")\n            .clone())\n"]
+    },
+    {
+      "name": "D-87 control: the shared doorbell is converted into its own type",
+      "file": "src/queue.rs",
+      "expect": "survives",
+      "why": "A control: `.into()` from the type to itself, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        self.ensure_doorbell()?;\n        Ok(self\n            .shared\n            .doorbell\n            .get()\n            .expect(\"the doorbell was just created\")\n            .clone())\n"],
+      "replace": ["        self.ensure_doorbell()?;\n        Ok(self\n            .shared\n            .doorbell\n            .get()\n            .expect(\"the doorbell was just created\")\n            .clone().into())\n"]
     }
   ]
 }
