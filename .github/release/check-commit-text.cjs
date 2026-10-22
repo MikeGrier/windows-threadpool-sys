@@ -1,22 +1,24 @@
 // Copyright (c) Mike Grier.
 'use strict';
 const { spawnSync } = require('node:child_process');
+const { parseConventionalCommits } = require('release-please/build/src/commit.js');
 
-const BREAKING = /^BREAKING[ -]CHANGE:/m;
-
-// release-please copies a BREAKING CHANGE footer into the changelog verbatim and escapes a subject
+// release-please copies a breaking-change note into the changelog verbatim and escapes a subject
 // except inside backticks, and then reads the release pull request body as HTML. An HTML parser takes
 // no notice of backticks, so a Type<Param> there opens an element that is never closed, and two of
 // them swallow the sections after them: those components get no tag and the run still succeeds.
+// The notes are what release-please's own parser produces, not a re-reading of the footer syntax: a
+// `!` in the subject makes the subject itself a note, and an explicit footer replaces that note.
 // An address in angle brackets, such as a Co-authored-by trailer, is not an element and is allowed.
 const MARKUP = /<(?![^<>\s]*@)[A-Za-z/!?][^\s>]*/g;
+const quiet = { warn() {}, error() {}, info() {}, debug() {}, trace() {} };
 
 function rawMarkup(message) {
-  const [subject] = message.split('\n', 1);
-  const quoted = (subject.match(/``[^`].*[^`]``|`[^`]*`/g) ?? []).join(' ');
-  const start = message.search(BREAKING);
-  const footer = start < 0 ? '' : message.slice(start);
-  return `${quoted}\n${footer}`.match(MARKUP) ?? [];
+  return parseConventionalCommits([{ sha: 'x', message }], quiet).flatMap(commit => {
+    const quoted = commit.bareMessage.match(/``[^`].*[^`]``|`[^`]*`/g) ?? [];
+    const notes = commit.notes.filter(note => note.title === 'BREAKING CHANGE').map(note => note.text);
+    return [...quoted, ...notes].join('\n').match(MARKUP) ?? [];
+  });
 }
 
 function offenders(messages) {

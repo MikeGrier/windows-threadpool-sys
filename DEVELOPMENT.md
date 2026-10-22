@@ -77,10 +77,13 @@ swallow the sections after them, those components get no release or tag, and the
 run still succeeds. Write such a type without angle brackets (`Key[A]`) in a
 subject or footer. The `commit text` job in [ci.yml](.github/workflows/ci.yml)
 rejects a pull request carrying one ([check-commit-text.cjs](.github/release/check-commit-text.cjs)),
-and the release run fails after creating releases when any package in
+and the release run fails after creating releases when a package in
 [release-please-config.json](release-please-config.json) has a version in
-[.release-please-manifest.json](.release-please-manifest.json) with no tag
-([check-release-tags.cjs](.github/release/check-release-tags.cjs)). A failed
+[.release-please-manifest.json](.release-please-manifest.json) that its
+`CHANGELOG.md` records but that has no tag
+([check-release-tags.cjs](.github/release/check-release-tags.cjs)). A bootstrap
+version registered before the first release has no changelog entry and is not
+owed a tag. A failed
 run is repaired by creating the missing release and tag at the release pull
 request's merge commit, which drives that crate's publish workflow.
 
