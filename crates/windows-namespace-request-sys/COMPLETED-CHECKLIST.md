@@ -203,7 +203,7 @@ namespace operations, and `NR-2.1` to `NR-2.5` and `NR-2.7` are not those: they 
 checklist placed them here, and that placement was not questioned when it should have been. The
 decision is [WV-D-5](../win-volume-sys/DESIGN-NOTES.md#wv-d-5), and a handle that must be shared is a
 `SharedHandle` ([WV-D-6](../win-volume-sys/DESIGN-NOTES.md#wv-d-6)). What this left to do is the move,
-which is [WV-M2](../win-volume-sys/CHECKLIST.md#wv-m2----take-in-the-storage-locality-entries), and
+which is [WV-M2](../win-volume-sys/COMPLETED-CHECKLIST.md#wv-m2----take-in-the-storage-locality-entries), and
 the deletion, which is `NR-2.8`.
 
 ## Moved 2026-10-15 23:09:28 -04:00 -- NR-2.8: the storage-locality entries leave this crate
