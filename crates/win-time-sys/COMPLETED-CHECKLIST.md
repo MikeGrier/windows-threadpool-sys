@@ -324,3 +324,33 @@ extremes of the existing tests. It is now stated in the decision and in the docu
 [`TimePoint`](src/timeline.rs), and held by a test that runs every `checked_` method, `to_duration`,
 `abs_duration` and `from_duration` over the extremes of five periods, including the largest and
 smallest a `NonZeroU64` allows. Making the one `checked_since` return path panic fails it.
+
+## Moved 2026-10-22 18:22:46 -04:00 -- WT-3.2, and WT-M3 complete: the engineer's review
+
+The milestone as it stood, before its items moved:
+
+> The assistant chose these while implementing `WT-M1`, and the crate and its consumers bind to them
+> already; what is open is the review. A rejected point is reworked in its item, with its decision
+> row amended.
+
+### <a id="wt-32"></a>WT-3.2 -- The engineer confirmed [WT-D-8](DESIGN-NOTES.md#wt-d-8) in full, and ruled that no probe is wanted for any of this. *(completed 2026-10-22 18:22:46 -04:00)*
+
+The engineer, 2026-10-22: "I don't need to have a probe for any of this; otherwise, confirm all".
+Confirmed: the cost probe shipped as this crate's `clock_costs` example rather than in
+`windows-platform-probes`, reporting what it observed (least, median and most cost per read, and the
+smallest step) with no ranking, no verdict, and no figure quoted in the crate's documentation. The
+ruling that no `windows-platform-probes` probe and no machine-readable row from `clock_costs` is
+wanted is in the decision's row, which schedules no work. So is what the confirmation was given
+knowing: a coarse clock's smallest step is the system timer resolution at that moment.
+
+Two optional points were put to the engineer and are not scheduled: the example's `clock_nanos`
+reads a distance with the panicking operator rather than `checked_since`, which cannot overflow for
+any timeline in this crate; and no timer resolution is reported beside the step.
+
+The item as it stood at completion:
+
+- [x] **WT-3.2** -- **The engineer confirms or amends [WT-D-8](DESIGN-NOTES.md#wt-d-8)**, from
+  `WT-1.6`: the cost probe shipped as this crate's `clock_costs` example rather than in
+  `windows-platform-probes`, and reporting what it observed -- least, median and most cost per
+  read, and the smallest step -- with no ranking, no verdict, and no figure quoted in the crate's
+  documentation.
