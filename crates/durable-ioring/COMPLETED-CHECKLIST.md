@@ -4123,3 +4123,30 @@ the page calls no value invalid. A session's `Recorded` carries the activity and
 end on another and reads the activity given on both; it and four others were run elevated and pass. The sabotages only a
 session can catch are a manifest of their own, `sabotage-session.json`, swept elevated. The choices are
 [WE-D-4](../win-etw-sys/DESIGN-NOTES.md#we-d-4).
+
+## Moved 2026-10-21 20:48:46 -04:00 -- DI-19.4, and DI-M19 is complete
+
+### <a id="di-194"></a>DI-19.4 -- The ETW provider writes each pair in an activity `EventActivityIdControl` creates at the begin and the end repeats, and a program pairs a trace's dump and computes each duration. *(completed 2026-10-21 20:48:46 -04:00)*
+
+The item as written:
+
+**DI-19.4** -- **The ETW provider writes the activity id.** Waits on `DI-19.2` and `DI-19.3`. The Start and Stop
+  opcodes moved to `DI-19.2.4` (DI-D-87); this step writes each pair's activity id by the mapping the section above holds as
+  a working position, and is verified as `DI-12.1.5` was: compiled and installed, then a trace recorded and read by
+  `tracerpt`, which this time must show the begin and end paired and their duration computed.
+
+Both halves changed by the engineer's rulings before it was built ([DI-D-93](DESIGN-NOTES.md#di-d-93)). The working position
+was set aside for ids `EventActivityIdControl` creates, since a reused process id would repeat a derived one;
+`win-etw-sys` gained `create_activity_id` ([WE-D-5](../win-etw-sys/DESIGN-NOTES.md#we-d-5)) and the provider holds each pair's
+id from its begin to its end ([DE-D-6](../durable-ioring-events/DESIGN-NOTES.md#de-d-6)). `tracerpt` does not pair records, so
+the trace was dumped to CSV and paired by the example `pair_trace`, which found all four of `emit_every_event`'s pairs, each in
+an activity of its own and no shorter than the wait made, the flushes ending on another thread than they began on. The session
+tests of both crates were run elevated and pass, and both crates' session sabotage manifests were swept then, each entry caught
+and each control surviving.
+
+### <a id="di-m19----paired-begin-and-end-events-with-correlation-ids"></a>DI-M19 is complete
+
+Its items are archived: the correlation id ([DI-19.1](#di-191)), the begin and end events and the one checker
+([DI-19.2](#di-192)), the explicit activity id in `win-etw-sys` ([DI-19.3](#di-193)) and the provider's activities
+([DI-19.4](#di-194)). The rulings that opened it are [DI-D-80](DESIGN-NOTES.md#di-d-80). A delay is now a begin and an end
+sharing an id, written by every sink, and in ETW one activity, so a duration is computed by whoever reads the trace.

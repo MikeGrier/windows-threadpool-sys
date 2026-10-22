@@ -1401,11 +1401,11 @@ not share, and a provider's answer may come from any thread. These are why the w
   instance" already bounds. The rule that the sink's locks are leaves is the assistant's statement of the second sentence, and
   is open to the engineer's correction.
 
-**A working position, not a decision.** The engineer, 2026-10-21, on the 128-bit activity id: "true, perhaps we use the
+**Superseded by [DI-D-93](#di-d-93).** **A working position, not a decision.** The engineer, 2026-10-21, on the 128-bit activity id: "true, perhaps we use the
 process id as the upper 64 bits and the u64 as the lower?" It is held as a position until [DI-19.4](CHECKLIST.md) builds it,
 and a process id reused within one trace is a case the assistant has not settled.
 
-**Scheduled work.** [DI-M19](CHECKLIST.md#di-m19----paired-begin-and-end-events-with-correlation-ids). The router
+**Scheduled work.** [DI-M19](COMPLETED-CHECKLIST.md#di-m19----paired-begin-and-end-events-with-correlation-ids), completed. The router
 reports no timing, and nothing else: a domain it does not route is panicked on, the panic its only report
 ([DI-D-83](#di-d-83)).
 
@@ -1675,3 +1675,22 @@ The choices [DI-19.2.5](COMPLETED-CHECKLIST.md#di-1925) left to its implementati
   [DI-D-90](#di-d-90).
 
 **Scheduled work.** None; [DI-19.3](CHECKLIST.md) and `DI-19.4` follow.
+
+## <a id="di-d-93"></a>DI-D-93: a pair's ETW activity id is created by the platform, and a trace's pairing is verified by a program
+
+**The activity id** ("go ahead with your "c" option", the engineer, 2026-10-21). The working position of
+[DI-D-80](#di-d-80), the process id over the pair id, lets a process id reused within one trace give a later process's pair an
+earlier one's activity. The assistant offered three ways: keep it and document the collision; mix in something of each process
+instance, which narrows the collision without removing it; or have the ETW provider create each pair's activity id with
+`EventActivityIdControl`, which its page guarantees unique across every process of the system until it restarts, hold it from
+the begin to the end, and keep the pair id in the payload. The third was chosen. How the provider does it is
+[DE-D-6](../durable-ioring-events/DESIGN-NOTES.md#de-d-6), and the call is [WE-D-5](../win-etw-sys/DESIGN-NOTES.md#we-d-5). The
+portable core is unchanged: it has the `u64`, and the activity is the ETW sink's.
+
+**The verification** ("dump the events to xml or csv. Write code to load the file and do the pairing in Rust", the engineer,
+2026-10-21). `DI-19.4` asked that `tracerpt` show each begin and end paired with a duration, which `tracerpt` does not do: it
+dumps records. So the trace is dumped to CSV and read by the example `pair_trace` in `durable-ioring-events`, which pairs by
+activity, checks task and pair id, and computes each duration; its tests run over the recorded dump.
+
+**Scheduled work.** None; [DI-M19](COMPLETED-CHECKLIST.md#di-m19----paired-begin-and-end-events-with-correlation-ids) is
+complete.

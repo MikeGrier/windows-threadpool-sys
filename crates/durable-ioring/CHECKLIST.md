@@ -12,40 +12,6 @@ new milestones are numbered after the parked DI-M5+ and DI-M6+, which are cited 
 renumber. The flush-failure spike (DI-M4) runs alongside and gates nothing. This file holds only work in
 scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARKED.md](PARKED.md).
 
-## DI-M19 -- Paired begin and end events with correlation ids
-
-Queued by the engineer, 2026-10-21 ([DI-D-80](DESIGN-NOTES.md#di-d-80)): durations are computed by the analysis tools from
-paired begin and end events, which the sinks can all do given a correlation id and a reliable pairing, and no component
-such as the router builds timing of its own. A correlation id is scoped to a process, and is a `u64` minted from an atomic
-with relaxed increments. The shipped delay events ([DI-12.1](COMPLETED-CHECKLIST.md#di-121)) carry no id; they report a flush's
-issue once for a whole seal and its answer once for each part; and the ETW write takes the current thread's activity id,
-which a begin and an end on different threads do not share, since a provider answers from any thread.
-
-Ruled by the engineer, 2026-10-21, and recorded in [DI-D-80](DESIGN-NOTES.md#di-d-80):
-- there are pairs for seals and for the weightier actions such as a flush, and a sink may decline any pair; a flush is
-  asynchronous in the provider, as with `io_uring`, so its pairing matters;
-- an end carries no `elapsed`, and a sink that wants a duration of its own is enhanced in the sink, not in the core or the
-  router;
-- the pairs are a seal, a flush of a file or a domain, and a lock wait;
-- a seal's pair runs from its being asked for to its becoming durable or failing;
-- a lock wait's end is written with the lock held, and a sink's synchronization must not interfere with dioring's.
-
-A working position, not decided: the 128-bit activity id is the process id in the upper 64 bits and the correlation id in the
-lower, made where the id is written, in the ETW provider, since the portable core has only the `u64`. Open, and met in
-`DI-19.4`: whether a process id reused within one trace makes two processes' ids the same, which a counter that starts again
-would allow.
-
-- [x] **DI-19.1** -- `CorrelationId`, a process-scoped `u64` from one relaxed atomic counter, minted only by `CorrelationId::for_pair`, which asks the sink first. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-191)
-
-- [x] **DI-19.2** -- Begin and end events in the core, with the ETW provider and every sink following and the old delay events gone, and `PairingChecker` the one place the pairing rule lives. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-192)
-
-- [x] **DI-19.3** -- `win-etw-sys` writes an event with the activity id and related activity id its caller gives, by `EventWriteTransfer`, and its session reads both back. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-193)
-
-- [ ] **DI-19.4** -- **The ETW provider writes the activity id.** Waits on `DI-19.2` and `DI-19.3`. The Start and Stop
-  opcodes moved to `DI-19.2.4` (DI-D-87); this step writes each pair's activity id by the mapping the section above holds as
-  a working position, and is verified as `DI-12.1.5` was: compiled and installed, then a trace recorded and read by
-  `tracerpt`, which this time must show the begin and end paired and their duration computed.
-
 ## DI-M20 -- Durability of a directory's entries
 
 Opened 2026-10-21 from [the design session](../../design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#directory-entries):
