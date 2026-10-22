@@ -1697,8 +1697,10 @@ complete.
 
 ## <a id="di-d-94"></a>DI-D-94: what Windows documents about a directory entry's durability
 
+**DI-M20 withdrawn by [DI-D-95](#di-d-95); kept as the record of what the pages say, for a consumer that makes its own files durable.**
+
 **Findings, not a decision.** Read by the assistant for [DI-20.1](COMPLETED-CHECKLIST.md#di-201), 2026-10-21; what follows
-from them is [DI-20.2](CHECKLIST.md)'s discussion with the engineer. Each page is named with the `ms.date` it carries. No
+from them was to be [DI-20.2](COMPLETED-CHECKLIST.md#di-202)'s discussion with the engineer. Each page is named with the `ms.date` it carries. No
 `Nt*` or driver-kit page is a source. Silence is recorded as silence.
 
 ### Whether flushing a new file makes its directory entry durable
@@ -1776,5 +1778,27 @@ configuration; no loss shows only that none was seen. Its results are evidence a
 rests on the documented contract, never on what a run showed
 ([DESIGN-NOTES.md](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)).
 
-**Scheduled work.** [DI-20.2](CHECKLIST.md), which brings these to the engineer. Whether to build the experiment is a
-question for that discussion.
+**Scheduled work.** None; DI-M20 is withdrawn ([DI-D-95](#di-d-95)), and the experiment is not built.
+
+## <a id="di-d-95"></a>DI-D-95: a directory entry's durability is not the durable ioring's question, and DI-M20 is withdrawn
+
+The engineer, 2026-10-21, asked whether the durable ioring creates or deletes files: "no I didn't think it did either", and: "the 'directory' point I raised previously was mostly framing for what seems to feed in to m39.3".
+
+**Why.** The durable ioring never names a file. A file enters as an open handle and leaves by `remove_file`; the operations
+are reads and writes, made durable by sealing an epoch, which flushes what was written ([API.md](API.md) sections 8 and 15).
+It has no create, rename, delete or directory operation, and the Windows driver's `OpenedFile`, the one place a file is
+created, is a `CreateFileW` wrapper that runs before the file is given to the ring ([DI-D-60](#di-d-60)). So what a seal
+covers is what was written and flushed through the ring; whether a file's name survives is decided by calls the consumer made
+before, and is the consumer's, with [DI-D-94](#di-d-94) as the record of what Windows documents about it.
+
+**Where the question came from.** The design session's directory was the engineer's framing of how a database's storage is
+laid out: a layer outside the crate maps a directory to the flush domains a file created in it will have. That is root
+[M39.3](../../CHECKLIST.md), which predicts a directory's domains and confirms each file's by its handle. The assistant read a
+second question into it -- whether the new file's directory entry is durable -- from the practice on Linux of flushing the
+directory, and queued it as DI-M20 without asking whether the durable ioring had any part in making a name.
+
+**A direction not taken, recorded so it is not lost.** The durable ioring could take namespace operations -- create, rename,
+delete -- as operations tagged with an epoch, so that sealing an epoch would cover a file's existence with its writes. It was
+named in the discussion and not asked for; nothing is queued for it.
+
+**Scheduled work.** None.

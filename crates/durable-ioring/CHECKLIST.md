@@ -12,21 +12,6 @@ new milestones are numbered after the parked DI-M5+ and DI-M6+, which are cited 
 renumber. The flush-failure spike (DI-M4) runs alongside and gates nothing. This file holds only work in
 scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARKED.md](PARKED.md).
 
-## DI-M20 -- Durability of a directory's entries
-
-Opened 2026-10-21 from [the design session](../../design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#directory-entries):
-a database that creates a data file by name at run time needs the creation, and so the directory entry, durable before it
-relies on the file, and nothing in [CONTRACT.md](CONTRACT.md) or [API.md](API.md) says whether a seal covers it. Linux
-requires an `fsync` of the directory; what Windows requires is not known to the assistant. Kept apart from the router by
-the engineer's agreement, 2026-10-21. Beyond the first two items this milestone is deliberately coarse: what is built, if
-anything, follows from what the pages say.
-
-- [x] **DI-20.1** -- What Windows documents about a directory entry's durability -- the pages for creating, flushing, renaming and deleting, and what they lead to -- is read and recorded with each page's date, silence as silence, and the experiment the open questions call for is described. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-201)
-
-- [ ] **DI-20.2** -- **Bring the findings to the engineer for a design discussion.** Whether dioring makes a directory
-  entry durable, whether a consumer must, and whether a directory is a target a seal can cover, are decided there; the work
-  that follows is queued from that discussion and not before it.
-
 ## DI-M21 -- A sample log on durable-ioring
 
 Queued by the engineer, 2026-10-21 ([DI-D-85](DESIGN-NOTES.md#di-d-85)): survey common practice in database and file-system

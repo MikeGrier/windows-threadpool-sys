@@ -105,3 +105,7 @@ Raised by the assistant and kept apart by agreement: a database that creates a d
 durable before it relies on it. Linux requires an `fsync` of the directory. What Windows documents -- whether flushing the
 new file makes its entry durable, whether a directory handle may be flushed -- the assistant does not know, and the API does
 not say. Queued as research and a discussion, `DI-M20`, deliberately coarse beyond that.
+
+*Afterward, 2026-10-21:* `DI-M20` was withdrawn once the research was done
+([DI-D-95](../crates/durable-ioring/DESIGN-NOTES.md#di-d-95)). The durable ioring never creates, renames or deletes a file,
+and the engineer's directory was framing for root `M39.3`, which holds the mapping of a directory to its flush domains.

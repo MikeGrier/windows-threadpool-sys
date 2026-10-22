@@ -4169,3 +4169,27 @@ The findings are [DI-D-94](DESIGN-NOTES.md#di-d-94). Beyond the pages the item n
 caching section to File Caching and Directory Handles, the rename and disposition classes to `FILE_INFO_BY_HANDLE_CLASS`,
 `DeleteFileW`, `CreateDirectoryW`, `RemoveDirectoryW`, `ReplaceFileW`, the transacted forms and the alternatives to
 Transactional NTFS, and the ring's own flush, which has no page on Learn. The experiment is described there and not built.
+
+## Moved 2026-10-21 21:21:09 -04:00 -- DI-M20 withdrawn: the durable ioring never names a file
+
+### <a id="di-202"></a>DI-20.2 -- Withdrawn: the durable ioring neither creates, renames nor deletes a file, so a directory entry's durability is not a question for it. *(withdrawn 2026-10-21 21:21:09 -04:00)*
+
+The item as written:
+
+**DI-20.2** -- **Bring the findings to the engineer for a design discussion.** Whether dioring makes a directory
+  entry durable, whether a consumer must, and whether a directory is a target a seal can cover, are decided there; the work
+  that follows is queued from that discussion and not before it.
+
+The engineer, 2026-10-21, asked whether the durable ioring creates or deletes files: "no I didn't think it did either", and: "the 'directory' point I raised previously was mostly framing for what seems to feed in to m39.3".
+
+Investigated before the ruling: a file enters the durable ioring as an open handle (`Setup::files`, `add_file`) and leaves by
+`remove_file`; its only operations are reads and writes, made durable by seals; and the Windows driver's `OpenedFile`, the
+one place a file is created, is a `CreateFileW` wrapper that runs before the file reaches the ring. What a seal covers is
+what was written and flushed through it. The design session's directory was the question of which flush domains a file
+created in it will have, which root [M39.3](../../CHECKLIST.md) holds. The reasoning is [DI-D-95](DESIGN-NOTES.md#di-d-95).
+
+### <a id="di-m20----durability-of-a-directorys-entries"></a>DI-M20 is withdrawn
+
+[DI-20.1](#di-201) was completed, and its findings stay as [DI-D-94](DESIGN-NOTES.md#di-d-94), the record of what Windows
+documents for a consumer that makes its own files durable. [DI-20.2](#di-202) is withdrawn above, and nothing was queued
+from it.
