@@ -2907,7 +2907,7 @@ backstop. The layers, cheapest first, are the items from
 - The post-merge sweep plans only the manifests a change could have reached, and within each, only
   the entries. A manifest takes every entry when the change touched an input every sweep shares
   (the workspace manifest and lockfile, the toolchain, the sabotage tools, the sweep workflow, and
-  `win-job-launcher`, which supervises every sweep); a crate its crate builds on; another package
+  `win-job-launcher`, which supervises every sweep, and `win-handles-sys`, which it builds on); a crate its crate builds on; another package
   whose tests it runs, or one that builds on; its crate's own build settings (`Cargo.toml`,
   `build.rs`, `.cargo/`), which can switch a test off without touching it; or its own settings. A
   manifest's `testArgs` replace `test -p <package>`, so the packages it runs are the ones they name,

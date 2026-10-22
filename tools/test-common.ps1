@@ -490,11 +490,11 @@ Test-Case 'manifests are found under crates, in order, and nowhere else' {
 Test-Case 'the inputs every sweep shares are recognised, and a crate''s own files are not' {
     foreach ($path in 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'tools/common.ps1',
         'tools/run-sabotage.ps1', 'tools\plan-sabotage-matrix.ps1', 'tools/check-sabotage-patches.ps1',
-        '.github/workflows/sabotage-sweep.yml') {
+        '.github/workflows/sabotage-sweep.yml', 'crates/win-handles-sys/src/lib.rs', 'crates\win-handles-sys\Cargo.toml') {
         if (-not (Test-SabotageSharedInput $path)) { throw "not taken as shared: $path" }
     }
     foreach ($path in 'crates/a/Cargo.toml', 'crates/a/sabotage.json', 'tools/check-encoding.ps1', 'README.md',
-        '.github/workflows/ci.yml', 'docs/Cargo.toml') {
+        '.github/workflows/ci.yml', 'docs/Cargo.toml', 'crates/win-handles-sysx/src/lib.rs', 'crates/win-sync-sys/src/lib.rs') {
         if (Test-SabotageSharedInput $path) { throw "taken as shared: $path" }
     }
 }

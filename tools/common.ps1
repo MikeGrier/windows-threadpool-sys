@@ -426,14 +426,16 @@ function Test-SabotagePatch {
 # reaches every manifest: the workspace's manifest, lockfile and toolchain, the
 # sabotage tools and the helper they share, the sweep workflow, and
 # win-job-launcher, which supervises every phase of every sweep and decides what
-# its exit means. It has no path dependency on any workspace crate; a test checks
-# that against cargo, so one added later is not missed. `Path` is relative to the
+# its exit means, with win-handles-sys, the one workspace crate it builds on for
+# its handle duplication. A test checks the list against cargo, so a path
+# dependency the launcher gains later is not missed. `Path` is relative to the
 # repository root; either slash.
 function Test-SabotageSharedInput {
     param([string] $Path)
     $normal = $Path.Replace('\', '/')
     foreach ($pattern in @('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rust-toolchain', '.cargo/*',
-            'tools/common.ps1', 'tools/*sabotage*.ps1', '.github/workflows/sabotage-sweep.yml', 'crates/win-job-launcher/*')) {
+            'tools/common.ps1', 'tools/*sabotage*.ps1', '.github/workflows/sabotage-sweep.yml', 'crates/win-job-launcher/*',
+            'crates/win-handles-sys/*')) {
         if ($normal -like $pattern) { return $true }
     }
     return $false
