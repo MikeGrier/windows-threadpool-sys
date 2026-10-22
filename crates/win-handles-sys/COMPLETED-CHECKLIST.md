@@ -20,3 +20,17 @@ The item as written:
 
 `set_handle_information(handle, mask, flags)`, with nothing refused ahead of the call, read from the page and measured on a real
 handle. The reading, the measurements, and what the sweep does and cannot pin are [WH-D-3](DESIGN-NOTES.md#wh-d-3).
+
+## Moved 2026-10-21 22:19:12 -04:00 -- the comparison of two handles
+
+### <a id="wh-13"></a>WH-1.3 -- `CompareObjectHandles`: whether two handles name the same kernel object, as `compare_object_handles`, and this crate's tests no longer call it raw. *(completed 2026-10-21 22:19:12 -04:00)*
+
+The item as written:
+
+**WH-1.3** -- `CompareObjectHandles`: whether two handles name the same kernel object. It is listed in the
+  same section, and the tests of this crate already call it raw (`same_object` in `duplicate/tests.rs`), so a
+  safe form lets them stop.
+
+`compare_object_handles(first, second) -> bool`, read from the page and measured on real handles. The duplicate's tests, which
+called the raw function through a helper of their own, call it now. Why the answer is a `bool` and not a `Result`, and what was
+measured, are [WH-D-4](DESIGN-NOTES.md#wh-d-4).

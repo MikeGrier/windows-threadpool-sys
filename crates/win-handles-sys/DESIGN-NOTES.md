@@ -74,3 +74,41 @@ bit the platform does not name before the call: the platform gives such a bit no
 the claim that the crate does not narrow is the documentation's.
 
 **Scheduled work.** None; `WH-1.3` and `WH-1.4` are the checklist's.
+
+## WH-D-4: `compare_object_handles` returns the call's answer as a `bool`
+
+**Read 2026-10-21** from the page for `CompareObjectHandles` (`ms.date` 2018-12-05, `updated_at` 2024-08-01). It returns "A
+Boolean value that indicates if the two handles refer to the same underlying kernel object. TRUE if the same, otherwise FALSE."
+and lists no failure and no use of `GetLastError`. Its remarks say it works "without imposing a requirement that specific access
+rights be granted to either handle", give "whether a process handle is a handle to the current process" as the use, and its example
+says of two objects of different types that the comparison "is legal to make, though the function will always return FALSE and
+indicate a last error status of ERROR_NOT_SAME_OBJECT". The page gives Windows 10 and Windows Server 2016 as the first that have
+the call, and the binding reaches it through the `api-ms-win-core-handle-l1-1-0` API set, not `kernel32`.
+
+**The function is the call, and it returns a `bool`.** `compare_object_handles(first, second)` takes two `impl AsHandle` and is
+`#[must_use]`. The answer is the page's: the page documents a `TRUE` and a `FALSE` and no failure, and both handles are open for
+their borrows, so the one way a comparison could fail, a handle that is not open, cannot be made through the types.
+
+**Why not `io::Result<bool>`.** The last error does separate the two kinds of `FALSE`, as measured below, and a function that
+read it would return an error for a handle that is not open. That would put this crate's classification of a code on top of a page
+that ties `ERROR_NOT_SAME_OBJECT` to different types only, to guard a case the borrows have excluded, and a caller would meet a
+`Result` that never fails. The page's own contract is a `bool`. Changing it later to a `Result` would be a breaking change, which
+is the price of this choice.
+
+**Measured on Windows 11 build 26300, 2026-10-21, none of it a ruling.** A handle against itself, a duplicate against its source
+in either order, a duplicate that grants no access, a named event made twice, and the current process's pseudo-handle against a real
+handle to it in either order were the same object. Two anonymous events, an event and a mutex, an event and the process
+pseudo-handle, and the process's pseudo-handle against the thread's were not. A file and its duplicate were the same object, and
+one file opened twice was two, since each open makes a file object of its own. The `FALSE` for two valid handles of different
+objects, of one type or two, set `ERROR_NOT_SAME_OBJECT` (1656). The `FALSE` for a null handle, a value that was never a handle,
+and the value of a handle just closed set `ERROR_INVALID_HANDLE` (6), and the pseudo-handle `INVALID_HANDLE_VALUE` against itself
+was the same object. These are the unit tests' cases, except the invalid handles, which the types do not let a test make.
+
+**The tests** make their objects with raw calls and their duplicates with `std`'s `try_clone`, and not with this crate's
+`duplicate_handle_with_access`, so the two are not checked against each other; the duplicate's own tests now ask
+`compare_object_handles` what they used to ask the raw call. A test of all seven pairs in three groups of duplicates holds the
+answer, its symmetry and its transitivity at once. The sweep ([sabotage.json](sabotage.json)) catches an inverted answer, one that
+is always yes, one that is always no, and the first handle compared with itself; its control writes the test of the result
+against a literal zero.
+
+**Scheduled work.** None; `WH-1.4` is the checklist's.

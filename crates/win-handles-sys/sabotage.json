@@ -155,6 +155,46 @@
       "why": "The crate does not narrow what the call is given (HandleFlags), but the platform accepts a bit it does not name and gives it no effect, so a narrowing before the call looks the same from outside. The claim is documented and measured (WH-D-3) and cannot be pinned by a test.",
       "find": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0, flags.0) };"],
       "replace": ["    let ok = unsafe { SetHandleInformation(handle.as_handle().as_raw_handle(), mask.0 & 3, flags.0 & 3) };"]
+    },
+    {
+      "name": "WH-1.3: the answer is inverted",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "TRUE is that the two handles name one object; read the other way, every duplicate is a different object and every pair of different ones is the same.",
+      "find": ["    same != FALSE"],
+      "replace": ["    same == FALSE"]
+    },
+    {
+      "name": "WH-1.3: every pair is the same object",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "A comparison that cannot say no cannot tell a handle from another object's.",
+      "find": ["    same != FALSE"],
+      "replace": ["    let _ = same;", "    true"]
+    },
+    {
+      "name": "WH-1.3: no pair is the same object",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "A comparison that cannot say yes cannot find a duplicate, nor a handle to the current process.",
+      "find": ["    same != FALSE"],
+      "replace": ["    let _ = same;", "    false"]
+    },
+    {
+      "name": "WH-1.3: the first handle is compared with itself",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "The second handle is the other half of the question: with it dropped, every handle is the same object as whatever it is asked about.",
+      "find": ["            second.as_handle().as_raw_handle(),"],
+      "replace": ["            first.as_handle().as_raw_handle(),"]
+    },
+    {
+      "name": "WH-1.3 control: the call's result is tested against a literal zero",
+      "file": "src/compare.rs",
+      "expect": "survives",
+      "why": "A control: FALSE is zero, so the same test by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    same != FALSE"],
+      "replace": ["    same != 0"]
     }
   ]
 }

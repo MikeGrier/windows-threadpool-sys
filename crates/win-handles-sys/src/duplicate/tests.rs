@@ -5,12 +5,14 @@
 //! What a duplicate can and cannot do is observed through raw Win32 calls, never through anything
 //! this crate offers to set, reset or wait, so a defect in the duplication cannot hide behind the
 //! thing it duplicated. The objects are events made with `CreateEventW`, since the events of
-//! `win-sync-sys` are a layer above this crate.
+//! `win-sync-sys` are a layer above this crate. Whether a duplicate is the same object is this
+//! crate's `compare_object_handles`, whose own tests make their duplicates by `std`'s `try_clone`,
+//! so the two are not checked against each other.
 
 use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
 
 use windows_sys::Win32::Foundation::{
-    CompareObjectHandles, ERROR_ACCESS_DENIED, FALSE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    ERROR_ACCESS_DENIED, FALSE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, ResetEvent, SYNCHRONIZATION_SYNCHRONIZE,
@@ -18,7 +20,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use super::{Access, duplicate_handle_with_access};
-use crate::{HandleFlags, get_handle_information};
+use crate::{HandleFlags, compare_object_handles, get_handle_information};
 
 /// A manual-reset event with no name and default security.
 fn manual_event(signalled: bool) -> OwnedHandle {
@@ -57,11 +59,6 @@ fn reset_error(handle: &impl AsRawHandle) -> Option<i32> {
     None
 }
 
-fn same_object(a: &impl AsRawHandle, b: &impl AsRawHandle) -> bool {
-    // SAFETY: both handles are open for the duration of the borrows.
-    unsafe { CompareObjectHandles(a.as_raw_handle(), b.as_raw_handle()) != FALSE }
-}
-
 const DENIED: Option<i32> = Some(ERROR_ACCESS_DENIED as i32);
 
 #[test]
@@ -69,8 +66,8 @@ fn a_duplicate_is_the_same_object_and_a_new_event_is_not() {
     let event = manual_event(false);
     let other = manual_event(false);
     let copy = duplicate(&event, Access::SYNCHRONIZE);
-    assert!(same_object(&event, &copy));
-    assert!(!same_object(&other, &copy));
+    assert!(compare_object_handles(&event, &copy));
+    assert!(!compare_object_handles(&other, &copy));
     assert_ne!(copy.as_raw_handle(), event.as_raw_handle());
 }
 
@@ -140,7 +137,7 @@ fn a_duplicate_may_hold_rights_its_source_does_not() {
     assert_eq!(set_error(&waiter), DENIED, "the source cannot set");
 
     let widened = duplicate(&waiter, Access::EVENT_MODIFY_STATE | Access::SYNCHRONIZE);
-    assert!(same_object(&widened, &event));
+    assert!(compare_object_handles(&widened, &event));
     assert_eq!(set_error(&widened), None, "the duplicate can");
     assert_eq!(poll(&event), WAIT_OBJECT_0);
 }
@@ -153,7 +150,7 @@ fn narrowing_and_asking_for_what_the_source_holds_both_work() {
     let same = duplicate(&narrowed, Access::SYNCHRONIZE);
     let nothing = duplicate(&same, Access::from_bits(0));
     for copy in [&both, &narrowed, &same, &nothing] {
-        assert!(same_object(copy, &event));
+        assert!(compare_object_handles(copy, &event));
     }
     assert_eq!(set_error(&narrowed), DENIED);
     assert_eq!(set_error(&same), DENIED);
@@ -223,7 +220,7 @@ fn any_kind_of_object_can_be_duplicated_not_only_an_event() {
     let mutex = unsafe { OwnedHandle::from_raw_handle(raw) };
 
     let copy = duplicate(&mutex, Access::SYNCHRONIZE);
-    assert!(same_object(&mutex, &copy));
+    assert!(compare_object_handles(&mutex, &copy));
     assert_eq!(poll(&copy), WAIT_OBJECT_0, "an unowned mutex is signalled");
 }
 
@@ -237,7 +234,7 @@ fn the_source_may_be_borrowed_or_owned_or_a_duplicate() {
     let from_borrowed = duplicate(event.as_handle(), Access::SYNCHRONIZE);
     let from_duplicate = duplicate(&duplicated, Access::SYNCHRONIZE);
     for copy in [&from_owned, &from_borrowed, &from_duplicate] {
-        assert!(same_object(copy, &event));
+        assert!(compare_object_handles(copy, &event));
     }
 }
 
