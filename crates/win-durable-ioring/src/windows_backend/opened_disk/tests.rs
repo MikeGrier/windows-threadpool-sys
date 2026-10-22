@@ -2,12 +2,13 @@
 
 use std::io;
 
-use super::{DiskPath, OpenedDisk};
-use crate::dioring::tests::TempFile;
+use super::{DiskOptions, DiskPath, OpenedDisk};
+use crate::dioring::tests::{TempFile, wtf};
 use crate::windows_backend::{
-    Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget, disk_flush_domain,
+    Cached, FileOptions, OpenedFile, ReadOnly, ReadWrite, ShareMode, Unbuffered, Win32FileTarget,
+    WriteOnly, disk_flush_domain,
 };
-use durable_ioring::{Capabilities, Geometry, IoTarget, WarrantyClass};
+use durable_ioring::{Access, Capabilities, Geometry, IoTarget, WarrantyClass};
 
 /// A disk made of the parts a test gives it, over an ordinary file's handle: what is derived from a
 /// disk does not depend on the handle being one, and opening one needs an administrator.
@@ -16,12 +17,44 @@ fn assembled<B: crate::windows_backend::Buffering>(
     sector: u32,
 ) -> (OpenedDisk<B>, TempFile) {
     let temp = TempFile::new("od-assembled");
-    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read(true).write(true))
+    let file = OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write())
         .expect("open a file");
     (
         OpenedDisk::assembled(file.handle().clone(), disk_number, sector),
         temp,
     )
+}
+
+#[test]
+fn a_disk_is_opened_sharing_every_member_unless_told_otherwise() {
+    assert_eq!(DiskOptions::new().share, ShareMode::ALL);
+    assert_eq!(DiskOptions::default().share, ShareMode::ALL);
+    assert_eq!(
+        DiskOptions::new().share(ShareMode::NONE).share,
+        ShareMode::NONE
+    );
+    assert_eq!(
+        DiskOptions::new()
+            .share(ShareMode::NONE)
+            .share(ShareMode::READ)
+            .share,
+        ShareMode::READ,
+        "the last call replaces the mode"
+    );
+}
+
+#[test]
+fn a_disks_target_states_the_access_the_disk_was_opened_with() {
+    let temp = TempFile::new("od-access");
+    let file = OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write())
+        .expect("open a file");
+    let handle = file.handle().clone();
+    let disk = OpenedDisk::<Unbuffered, ReadOnly>::assembled(handle.clone(), 1, 512);
+    assert_eq!(Win32FileTarget::from_disk(disk).access(), Access::ReadOnly);
+    let disk = OpenedDisk::<Unbuffered, WriteOnly>::assembled(handle.clone(), 1, 512);
+    assert_eq!(Win32FileTarget::from_disk(disk).access(), Access::WriteOnly);
+    let disk = OpenedDisk::<Unbuffered, ReadWrite>::assembled(handle, 1, 512);
+    assert_eq!(Win32FileTarget::from_disk(disk).access(), Access::ReadWrite);
 }
 
 #[test]
@@ -83,7 +116,38 @@ fn a_cached_disks_target_claims_best_effort_and_no_write_through() {
 }
 
 #[test]
-fn a_disks_target_is_never_complete() {
+fn an_attested_disks_target_is_complete_and_nothing_else_changes() {
+    for (number, sector) in [(0u32, 512u32), (6, 4096), (17, 512)] {
+        let (disk, _temp) = assembled::<Unbuffered>(number, sector);
+        let (sibling, _temp2) = assembled::<Unbuffered>(number, sector);
+        let attested = Win32FileTarget::from_disk_attested_exclusive(disk);
+        let plain = Win32FileTarget::from_disk(sibling);
+
+        assert_eq!(attested.warranty(), WarrantyClass::Complete);
+        assert_eq!(plain.warranty(), WarrantyClass::SharedDevice);
+        assert_eq!(attested.flush_domains(), [disk_flush_domain(number)]);
+        assert_eq!(attested.flush_domains(), plain.flush_domains());
+        assert_eq!(attested.geometry(), plain.geometry());
+        assert_eq!(attested.capabilities(), plain.capabilities());
+        assert_eq!(attested.access(), plain.access());
+    }
+}
+
+#[test]
+fn an_attested_disk_still_adds_declared_domains_and_never_loses_its_own() {
+    let (disk, _temp) = assembled::<Unbuffered>(5, 512);
+    let other = durable_ioring::FlushDomain::new(b"a share".to_vec());
+    let target = Win32FileTarget::from_disk_attested_exclusive(disk).with_domains([other.clone()]);
+    assert_eq!(target.warranty(), WarrantyClass::Complete);
+    assert_eq!(target.flush_domains(), [disk_flush_domain(5), other]);
+    assert_eq!(
+        target.with_domains([]).flush_domains(),
+        [disk_flush_domain(5)]
+    );
+}
+
+#[test]
+fn a_disks_target_is_not_complete_unless_attested() {
     let (disk, _temp) = assembled::<Unbuffered>(0, 512);
     assert_ne!(
         Win32FileTarget::from_disk(disk).warranty(),
@@ -107,8 +171,8 @@ fn declared_domains_are_added_to_the_disks_own_and_never_take_it_away() {
 fn a_disk_number_nothing_has_is_refused() {
     // Not opened for any purpose but to be refused: no disk is numbered this, so the open fails
     // whatever the account, and never touches a real one.
-    let error =
-        OpenedDisk::<Unbuffered>::open(DiskPath::number(u32::MAX - 1)).expect_err("no such disk");
+    let error = OpenedDisk::<Unbuffered>::open(DiskPath::number(u32::MAX - 1), DiskOptions::new())
+        .expect_err("no such disk");
     assert!(
         matches!(
             error.kind(),

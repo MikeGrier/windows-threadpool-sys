@@ -11,7 +11,7 @@ use super::{
     FileOptions, OpenedFile, Unbuffered, Win32FileTarget, WindowsBackend, WindowsBackendError,
     WindowsBackendRefusal, WindowsBackendSetup, refusal_cause, transfer,
 };
-use crate::dioring::tests::TempFile;
+use crate::dioring::tests::{TempFile, wtf};
 use durable_ioring::backend::{
     Completion, IoBackend, RefusalCause, RegisteredRegion, Submission, SubmissionData,
     SubmissionOp, SubmissionToken,
@@ -27,6 +27,7 @@ const BOUND: Duration = Duration::from_secs(5);
 type Backend = WindowsBackend<Vec<u8>>;
 
 mod construction;
+mod directory;
 
 fn setup(
     targets: Vec<(IoTargetKey, Win32FileTarget)>,
@@ -554,7 +555,7 @@ fn a_file_target_claims_what_its_open_mode_allows() {
     assert!(!cached.capabilities().write_through());
 
     let unbuffered = Win32FileTarget::new(
-        OpenedFile::<Unbuffered>::open(&file.0, FileOptions::new().read(true).write(true))
+        OpenedFile::<Unbuffered>::open(wtf(&file.0), FileOptions::new().read().write())
             .expect("open unbuffered"),
     )
     .with_domains([FlushDomain::new(b"disk".as_slice())]);
@@ -569,6 +570,41 @@ fn a_file_target_claims_what_its_open_mode_allows() {
         Geometry::uniform(Unbuffered::DEFAULT_SECTOR_SIZE).expect("a power of two")
     );
     assert!(description.capabilities.write_through());
+}
+
+#[test]
+fn an_attested_file_targets_is_complete_and_nothing_else_changes() {
+    let file = TempFile::new("wb-attested");
+    let open = || {
+        OpenedFile::<Unbuffered>::open(wtf(&file.0), FileOptions::new().read().write())
+            .expect("open unbuffered")
+    };
+    let domain = FlushDomain::new(b"disk".as_slice());
+    let attested = Win32FileTarget::new_attested_exclusive(open()).with_domains([domain.clone()]);
+    let plain = Win32FileTarget::new(open()).with_domains([domain.clone()]);
+
+    assert_eq!(attested.warranty(), WarrantyClass::Complete);
+    assert_eq!(plain.warranty(), WarrantyClass::SharedDevice);
+    assert_eq!(attested.flush_domains(), [domain]);
+    assert_eq!(attested.flush_domains(), plain.flush_domains());
+    assert_eq!(attested.geometry(), plain.geometry());
+    assert_eq!(
+        attested.geometry(),
+        Geometry::uniform(Unbuffered::DEFAULT_SECTOR_SIZE).expect("a power of two")
+    );
+    assert_eq!(attested.capabilities(), plain.capabilities());
+    assert!(attested.capabilities().write_through());
+    assert_eq!(attested.access(), plain.access());
+}
+
+#[test]
+fn an_attested_file_target_reports_complete_to_the_core() {
+    let file = TempFile::new("wb-attested-describe");
+    let target = Win32FileTarget::new_attested_exclusive(
+        OpenedFile::<Unbuffered>::open(wtf(&file.0), FileOptions::new().read().write())
+            .expect("open unbuffered"),
+    );
+    assert_eq!(target.describe().warranty, WarrantyClass::Complete);
 }
 
 #[test]

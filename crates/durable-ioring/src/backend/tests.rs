@@ -25,6 +25,7 @@ fn table() -> Vec<(RefusalCause, bool, bool, bool)> {
         (RefusalCause::UnknownTarget, false, false, false),
         (RefusalCause::Unsupported, false, false, false),
         (RefusalCause::Invalid, false, false, false),
+        (RefusalCause::AccessDenied, false, false, false),
         (RefusalCause::Unusable(fault()), false, false, false),
         (RefusalCause::Unknown(fault()), false, false, false),
     ]
@@ -78,6 +79,11 @@ fn a_refusal_fault_carries_its_cause_and_the_backends_code() {
         (RefusalCause::UnknownTarget, io::ErrorKind::NotFound, None),
         (RefusalCause::Unsupported, io::ErrorKind::Unsupported, None),
         (RefusalCause::Invalid, io::ErrorKind::InvalidInput, None),
+        (
+            RefusalCause::AccessDenied,
+            io::ErrorKind::PermissionDenied,
+            None,
+        ),
         (RefusalCause::Busy, io::ErrorKind::Other, None),
         (
             RefusalCause::Unusable(coded()),

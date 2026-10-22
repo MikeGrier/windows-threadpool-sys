@@ -21,7 +21,9 @@ use windows_threadpool_sys::callback_env::CallbackEnviron;
 use super::WindowsBackend;
 use durable_ioring::EpochId;
 use durable_ioring::StampClock;
-use durable_ioring::driver::{Engine, EngineGuard, Slot, lock, present};
+use durable_ioring::driver::{
+    ENGINE_LOCK, Engine, EngineGuard, LockWatch, Slot, lock, present, present_watched,
+};
 
 #[cfg(test)]
 mod tests;
@@ -49,6 +51,8 @@ where
     /// drain touches the engine once it goes.
     wake: CompletionWake,
     engine: Shared<E, B, C, K, R>,
+    /// Times the waits for `engine`'s lock.
+    watch: LockWatch,
 }
 
 impl<E, B, C, K, R> PoolDelivery<E, B, C, K, R>
@@ -71,11 +75,16 @@ where
         engine: PoolEngine<E, B, C, K, R>,
         on_ready: impl Fn() + Send + Sync + 'static,
         env: Option<&mut CallbackEnviron<'_>>,
+        watch: LockWatch,
     ) -> PoolSetup<E, B, C, K, R> {
         let engine = Arc::new(Mutex::new(Some(engine)));
         let drained = Arc::clone(&engine);
+        let drain_watch = watch.clone();
         let on_wake = move || {
-            let deliver = lock(&drained).as_mut().is_some_and(Engine::drain);
+            let deliver = drain_watch
+                .lock(&drained, ENGINE_LOCK)
+                .as_mut()
+                .is_some_and(Engine::drain);
             if deliver {
                 on_ready();
             }
@@ -84,7 +93,11 @@ where
         // signal starts waits for the lock until this returns.
         let woken = present(lock(&engine)).backend.wake(on_wake, env);
         match woken {
-            Ok(wake) => Ok(Self { wake, engine }),
+            Ok(wake) => Ok(Self {
+                wake,
+                engine,
+                watch,
+            }),
             Err(error) => {
                 let engine = lock(&engine).take().expect("put there above");
                 Err((error, Box::new(engine)))
@@ -102,7 +115,7 @@ where
 {
     /// The engine, locked: what a consumer call acts through.
     pub(crate) fn engine(&self) -> EngineGuard<'_, PoolEngine<E, B, C, K, R>> {
-        present(lock(&self.engine))
+        present_watched(self.watch.lock(&self.engine, ENGINE_LOCK))
     }
 
     /// The engine's slot, for a path of the driver's own that reaches it on another thread.
@@ -113,7 +126,7 @@ where
     /// Stop delivering, handing the engine back: the wake is stopped and any running drain waited
     /// for first, then the engine is taken out of its slot, so a shared path finds it empty.
     pub(crate) fn into_engine(self) -> PoolEngine<E, B, C, K, R> {
-        let Self { wake, engine } = self;
+        let Self { wake, engine, .. } = self;
         drop(wake);
         lock(&engine)
             .take()

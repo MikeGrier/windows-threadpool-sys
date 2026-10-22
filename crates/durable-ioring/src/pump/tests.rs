@@ -17,11 +17,13 @@ use crate::backend::{
     Completion, DuplicateTarget, IoBackend, RefusalCause, Refused, Submission, SubmissionData,
     SubmissionOp,
 };
-use crate::diagnostics::NoDiagnostics;
+use crate::diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink, NoDiagnostics};
 use crate::engine::{Engine, Slot, lock};
 use crate::io_core::DurableIoCore;
 use crate::io_target::IoTarget;
+use crate::lock_watch::LockWatch;
 use crate::memory::{MemoryBackend, MemoryNotification, MemoryTarget};
+use crate::oracle::PairingChecker;
 use crate::test_support::Ticks;
 use crate::types::{Entry, Epoch, FlushDomain, IoFault, IoTargetKey, Outcome, WriteOptions};
 
@@ -500,4 +502,102 @@ fn a_wait_that_fails_still_drains_what_completed_during_it_and_reports_why() {
     let error = pumped.waited.expect_err("the wait failed");
     assert!(error.to_string().contains("the wait failed"), "{error}");
     assert_eq!(written(&mut pump.engine()), vec![15]);
+}
+
+/// Keeps the lock waits it is given, by their begins, holds them to the pairing rule, and says when
+/// a wait is about to block: its begin is reported just before.
+struct Waits {
+    seen: Mutex<Vec<(u64, String)>>,
+    checker: Mutex<PairingChecker>,
+    about_to_block: std::sync::mpsc::Sender<()>,
+}
+
+impl Waits {
+    fn new(about_to_block: std::sync::mpsc::Sender<()>) -> Arc<Self> {
+        Arc::new(Self {
+            seen: Mutex::default(),
+            checker: Mutex::default(),
+            about_to_block,
+        })
+    }
+
+    /// Every wait's pair ended, and the stream kept the rule.
+    fn finished(&self) {
+        let checker = std::mem::take(&mut *self.checker.lock().expect("the checker"));
+        checker.finish(&[]).expect("every wait's pair ended");
+    }
+}
+
+impl DiagnosticSink for Waits {
+    fn wants(&self, kind: DiagnosticKind) -> bool {
+        kind == DiagnosticKind::LockWait
+    }
+
+    fn report(&self, event: &Diagnostic<'_>) {
+        self.checker
+            .lock()
+            .expect("the checker")
+            .observe(event)
+            .expect("the pairing rule");
+        match event {
+            Diagnostic::LockWaitBegan { instance, lock, .. } => {
+                self.seen
+                    .lock()
+                    .expect("the record")
+                    .push((*instance, (*lock).to_owned()));
+                self.about_to_block.send(()).expect("the test is listening");
+            }
+            Diagnostic::LockWaitEnded { .. } => {}
+            other => panic!("reported {other}"),
+        }
+    }
+}
+
+#[test]
+fn a_consumer_call_that_waits_for_the_engine_reports_the_wait_and_one_that_does_not_reports_none() {
+    let (signal, about_to_block) = std::sync::mpsc::channel();
+    let waits = Waits::new(signal);
+    let watch = LockWatch::new(11, waits.clone());
+    let pump = pump().with_lock_watch(watch);
+
+    drop(pump.engine());
+    assert!(waits.seen.lock().expect("the record").is_empty());
+
+    let slot = pump.shared();
+    let held = lock(&slot);
+    std::thread::scope(|scope| {
+        let other = scope.spawn(|| drop(pump.engine()));
+        about_to_block
+            .recv()
+            .expect("the other call reached its wait");
+        drop(held);
+        other.join().expect("the other call finished");
+    });
+    assert_eq!(
+        *waits.seen.lock().expect("the record"),
+        [(11, "engine".to_owned())]
+    );
+    waits.finished();
+}
+
+#[test]
+fn a_pumps_drain_that_waits_for_the_engine_reports_the_wait() {
+    let (signal, about_to_block) = std::sync::mpsc::channel();
+    let waits = Waits::new(signal);
+    let watch = LockWatch::new(12, waits.clone());
+    let mut pump = pump().with_lock_watch(watch);
+
+    let slot = pump.shared();
+    let held = lock(&slot);
+    std::thread::scope(|scope| {
+        let other = scope.spawn(|| pump.pump(Some(Duration::ZERO)));
+        about_to_block.recv().expect("the drain reached its wait");
+        drop(held);
+        other.join().expect("the pump finished");
+    });
+    assert_eq!(
+        *waits.seen.lock().expect("the record"),
+        [(12, "engine".to_owned())]
+    );
+    waits.finished();
 }

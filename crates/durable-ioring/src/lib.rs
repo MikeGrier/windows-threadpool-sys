@@ -11,9 +11,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod access;
 pub mod backend;
 mod clock;
 mod contract;
+mod correlation;
 mod diagnostics;
 mod domains;
 pub mod driver;
@@ -23,21 +25,29 @@ mod error_code;
 mod ids;
 mod io_core;
 mod io_target;
+mod key;
+mod lock_watch;
 pub mod memory;
 pub mod oracle;
 mod provider;
 mod pump;
+mod router;
 #[cfg(test)]
 mod test_support;
 mod types;
 
+pub use access::{
+    Access, CanRead, CanWrite, DataAccess, HasData, NoData, ReadOnly, ReadWrite, WriteOnly,
+};
 pub use clock::{Instant, StampClock};
 pub use contract::{
     DurableRing, EntryOf, EpochId, EpochIdOf, FailureIdOf, HandleOf, Identities, Lin, OpIdOf,
     PushResult, RegisteredBufferRing, TokenOf,
 };
+pub use correlation::CorrelationId;
 pub use diagnostics::{
-    Diagnostic, DiagnosticKind, DiagnosticSink, FanOutDiagnostics, NoDiagnostics, StderrDiagnostics,
+    Diagnostic, DiagnosticKind, DiagnosticSink, Edge, FanOutDiagnostics, FlushOutcome, FlushPart,
+    LINE_PREFIX, NoDiagnostics, Pairing, SealOutcome, StderrDiagnostics,
 };
 pub use error_code::ErrorCode;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};
@@ -45,14 +55,16 @@ pub use io_core::{CoreActions, DuplicateDomain, DurableIoCore};
 pub use io_target::{
     Capabilities, Geometry, GeometryError, IoTarget, IoTargetDescription, WarrantyClass,
 };
+pub use key::{Key, ReadKey, TargetKey, WriteKey};
 pub use provider::{
     DomainCompletion, DomainOutcome, DomainRequest, DurabilityProvider, FlushRequest,
     IoTargetWrites, ProviderPart, ProviderRequest,
 };
 pub use pump::Waitable;
+pub use router::{RoutedTwice, RouterBuilder, RoutingProvider};
 pub use types::{
-    AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
-    EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportScope,
+    AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,
+    Epoch, EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportScope,
     Imported, IoFault, IoTargetBusy, IoTargetKey, Leftovers, LineageBusy, LineageInfo, Marking,
     MarkingKind, OpCompletion, OpKind, Outcome, PushError, PushRefusal, ReadOptions,
     RemoveTargetError, Resolution, ResolveError, ResolveRefusal, RetireLineageError,

@@ -138,8 +138,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "The prefix property (guarantee 2): Durable through 2 covers 1, so it must wait for 1. Caught by the I/O test whose first seal a provider holds, and by the unit tests.",
-      "find": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.front()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            state.seals.pop_front();\n"],
-      "replace": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.back()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            state.seals.pop_back();\n"]
+      "find": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.front()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            let popped = state.seals.pop_front().expect(\"found above\");\n"],
+      "replace": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.back()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            let popped = state.seals.pop_back().expect(\"found above\");\n"]
     },
     {
       "name": "DI-3.2.3: a write a provider serves does not hold its seal",
@@ -1017,9 +1017,9 @@
       "name": "DI-3.10.3.3: a fan-out gives each event to every sink",
       "file": "src/diagnostics.rs",
       "expect": "caught",
-      "why": "A fan-out hands an event only to the sinks that want its kind, so a sink's answer to wants means the same behind a fan-out as alone.",
-      "find": ["        for sink in self.sinks.iter().filter(|sink| sink.wants(kind)) {\n"],
-      "replace": ["        for sink in self.sinks.iter().filter(|_| kind == kind) {\n"]
+      "why": "A fan-out hands an event that is not a pair's end only to the sinks that want its kind, so a sink's answer to wants means the same behind a fan-out as alone.",
+      "find": ["            if is_end || sink.wants(kind) {\n"],
+      "replace": ["            if is_end || kind == kind {\n"]
     },
     {
       "name": "DI-3.10.3.3: a fan-out wants an event only when every sink does",
@@ -1042,8 +1042,8 @@
       "file": "src/memory.rs",
       "expect": "caught",
       "why": "DI-D-52: a refusal names its cause. A backend that admits more than its completion queue holds never tells the caller to drain.",
-      "find": ["        let drain = self.queued.len() + self.completed.len() >= self.completion_queue_size;\n"],
-      "replace": ["        let drain = self.queued.len() >= self.completion_queue_size;\n"]
+      "find": ["        let outstanding = self.queued.len() + self.completed.len() + self.held.len();\n"],
+      "replace": ["        let outstanding = self.queued.len();\n"]
     },
     {
       "name": "DI-3.10.3.5.1: a full submission queue is reported as needing a drain",
@@ -1074,8 +1074,8 @@
       "file": "src/memory.rs",
       "expect": "caught",
       "why": "A read may complete short, and the count is the consumer's to handle; reporting the buffer's length claims bytes that were not read.",
-      "find": ["        count\n"],
-      "replace": ["        into.len()\n"]
+      "find": ["        into[..count].copy_from_slice(&available[..count]);\n        count\n"],
+      "replace": ["        into[..count].copy_from_slice(&available[..count]);\n        into.len()\n"]
     },
     {
       "name": "DI-3.10.3.5.1: a buffer's address is not checked",
@@ -1090,16 +1090,16 @@
       "file": "src/memory.rs",
       "expect": "caught",
       "why": "Buffers go in owned and come back (DI-D-50 P10), on a fault as on a success.",
-      "find": ["                } => Some(buffer),\n"],
-      "replace": ["                } => {\n                    drop(buffer);\n                    None\n                }\n"]
+      "find": ["        } => Some(buffer),\n"],
+      "replace": ["        } => {\n            drop(buffer);\n            None\n        }\n"]
     },
     {
       "name": "CONTROL: the memory backend tests emptiness by length",
       "file": "src/memory.rs",
       "expect": "survives",
       "why": "The manifest checking itself on the new code: an empty queue has length zero, so this is an equivalent change. If it comes back caught, something is reacting to more than behaviour.",
-      "find": ["        let was_empty = self.completed.is_empty();\n"],
-      "replace": ["        let was_empty = self.completed.len() == 0;\n"]
+      "find": ["        if was_empty && !self.completed.is_empty() {\n"],
+      "replace": ["        if was_empty && self.completed.len() != 0 {\n"]
     },
     {
       "name": "DI-3.10.3.5.1: needing both is not reported as needing a drain",
@@ -1346,7 +1346,7 @@
       "file": "src/io_core/provider.rs",
       "expect": "caught",
       "why": "DI-D-27: the durability core asks the provider only for the domains it serves; without them a served target's seal waits for an answer never requested.",
-      "find": ["        core.durability.serve(Arc::clone(&served));\n"],
+      "find": ["        core.durability\n            .serve(Arc::clone(&served), core.served_names.clone());\n"],
       "replace": [""]
     },
     {
@@ -1513,7 +1513,7 @@
       "file": "src/memory.rs",
       "expect": "caught",
       "why": "A queued or finished operation may name a registered region, which replacing the buffers invalidates; the builder refuses it as a caller's programming error. Caught by the two should_panic tests, one with an operation queued and one with a completion waiting.",
-      "find": ["            self.queued.is_empty() && self.completed.is_empty(),\n"],
+      "find": ["            self.queued.is_empty() && self.completed.is_empty() && self.held.is_empty(),\n"],
       "replace": ["            true,\n"]
     },    {
       "name": "CONTROL: the engine tests a pass's pops by comparison",
@@ -1600,15 +1600,15 @@
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "The wait is for the completions the drain then takes. Drained first, a pump woken by a raising returns having taken nothing, and the entries are there only for the next one.",
-      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
-      "replace": ["        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);", "        let waited = self.notification.wait(timeout);"]
+      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let ready = self.locked().as_mut().is_some_and(Engine::drain);", "        let waited = self.notification.wait(timeout);"]
     },
     {
       "name": "DI-7.3: a pump waits holding the engine's lock",
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "The wait is for something another thread does, and doing it takes the lock: a push, a provider's answer, a handle's release. Held through the wait, nothing can wake the pump but its own timeout.",
-      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
+      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
       "replace": ["        let mut held = lock(&self.engine);", "        let waited = self.notification.wait(timeout);", "        let ready = held.as_mut().is_some_and(Engine::drain);"]
     },
     {
@@ -1616,8 +1616,8 @@
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "A delivery that cannot wait still delivers what has completed, and says why it could not wait. Skipping the drain makes a broken notification stop an instance delivering at all.",
-      "find": ["        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
-      "replace": ["        let ready = waited.is_ok() && lock(&self.engine).as_mut().is_some_and(Engine::drain);"]
+      "find": ["        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let ready = waited.is_ok() && self.locked().as_mut().is_some_and(Engine::drain);"]
     },
     {
       "name": "DI-7.3: a pump reports the drain's result inverted",
@@ -1688,15 +1688,15 @@
       "file": "src/pump.rs",
       "expect": "survives",
       "why": "The manifest checking itself on the new module: map_or(false, ..) is is_some_and(..), so this must survive; if it comes back caught, something is matching incidental text.",
-      "find": ["        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
-      "replace": ["        let ready = lock(&self.engine).as_mut().map_or(false, Engine::drain);"]
+      "find": ["        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let ready = self.locked().as_mut().map_or(false, Engine::drain);"]
     },
     {
       "name": "DI-7.5: a pump does not drain before it waits",
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "The notification is an edge: the completions that raised it may have been taken by another waiter on the same event, and waiting for a raising that has happened blocks while they sit in the backend.",
-      "find": ["        if lock(&self.engine).as_mut().is_some_and(Engine::drain) {"],
+      "find": ["        if self.locked().as_mut().is_some_and(Engine::drain) {"],
       "replace": ["        if false {"]
     },
     {
@@ -1704,8 +1704,561 @@
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "A first drain that delivered returns that it did, which sets the readiness event and tells the consumer to pop.",
-      "find": ["        if lock(&self.engine).as_mut().is_some_and(Engine::drain) {"],
-      "replace": ["        if !lock(&self.engine).as_mut().is_some_and(Engine::drain) {"]
+      "find": ["        if self.locked().as_mut().is_some_and(Engine::drain) {"],
+      "replace": ["        if !self.locked().as_mut().is_some_and(Engine::drain) {"]
+    },
+    {
+      "name": "DI-13.9: a write-only access is said to be able to read",
+      "file": "src/access.rs",
+      "expect": "caught",
+      "why": "Whether an access can read is what the backends ask, so a write-only access that said it could read would let a read through to a target that cannot serve it.",
+      "find": ["        matches!(self, Self::ReadOnly | Self::ReadWrite)\n"],
+      "replace": ["        matches!(self, Self::ReadOnly | Self::ReadWrite | Self::WriteOnly)\n"]
+    },
+    {
+      "name": "DI-13.9: the read-only marker names the read and write access",
+      "file": "src/access.rs",
+      "expect": "caught",
+      "why": "A target made from a read-only handle states what the marker names, so a marker that named another access would state more than the handle was opened with.",
+      "find": ["    const ACCESS: Access = Access::ReadOnly;\n"],
+      "replace": ["    const ACCESS: Access = Access::ReadWrite;\n"]
+    },
+    {
+      "name": "DI-13.9: a description states a different access than its target",
+      "file": "src/io_target.rs",
+      "expect": "caught",
+      "why": "What the core decides with is the description, taken once, so a description that did not carry the target's access would leave the refusal to a backend that has already been told otherwise.",
+      "find": ["            access: self.access(),\n"],
+      "replace": ["            access: Access::ReadWrite,\n"]
+    },
+    {
+      "name": "DI-13.9: a refusal for access ends an operation with some other kind of error",
+      "file": "src/backend.rs",
+      "expect": "caught",
+      "why": "The fault a refused operation of the core's own ends with names the cause as the error's kind, and a refusal for access is permission denied.",
+      "find": ["        RefusalCause::AccessDenied => io::ErrorKind::PermissionDenied,\n"],
+      "replace": ["        RefusalCause::AccessDenied => io::ErrorKind::Other,\n"]
+    },
+    {
+      "name": "DI-13.9: the in-memory backend lets a write through to a target that cannot write",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A write is covered by a target that can write.",
+      "find": ["            SubmissionOp::Write { .. } => target.access.can_write(),\n"],
+      "replace": ["            SubmissionOp::Write { .. } => target.access.can_read(),\n"]
+    },
+    {
+      "name": "DI-13.9: the in-memory backend lets a read through from a target that cannot read",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A read is covered by a target that can read.",
+      "find": ["            SubmissionOp::Read { .. } => target.access.can_read(),\n"],
+      "replace": ["            SubmissionOp::Read { .. } => target.access.can_write(),\n"]
+    },
+    {
+      "name": "DI-13.9: the in-memory backend refuses a commit to a target that cannot write",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A commit is not covered or refused by access: it is issued only to a target with writes, and a target that cannot write has none, so no rule is made for it.",
+      "find": ["            SubmissionOp::Commit => true,\n"],
+      "replace": ["            SubmissionOp::Commit => target.access.can_write(),\n"]
+    },
+    {
+      "name": "DI-13.9: the in-memory backend does not refuse what the access does not cover",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "An operation the access does not cover is refused as AccessDenied.",
+      "find": ["        if !covered {\n            return Err(RefusalCause::AccessDenied);\n"],
+      "replace": ["        if false && !covered {\n            return Err(RefusalCause::AccessDenied);\n"]
+    },
+    {
+      "name": "DI-13.9 control: a target states its access through a binding",
+      "file": "src/memory.rs",
+      "expect": "survives",
+      "why": "A control: the same value returned through a local, which no test can tell apart.",
+      "find": ["    fn access(&self) -> Access {\n        self.access\n    }\n"],
+      "replace": ["    fn access(&self) -> Access {\n        let access = self.access;\n        access\n    }\n"]
+    },
+    {
+      "name": "DI-13.10: a key declaring more than its target states is admitted",
+      "file": "src/key.rs",
+      "expect": "caught",
+      "why": "Registration refuses a key whose declaration the target does not cover. Admitting exactly those it does cover, and refusing the rest, is the one runtime step a typed key adds.",
+      "find": ["            Some(declared) if !actual.covers(declared) => {\n"],
+      "replace": ["            Some(declared) if actual.covers(declared) => {\n"]
+    },
+    {
+      "name": "DI-13.10: a typed key declares some other access than its marker names",
+      "file": "src/key.rs",
+      "expect": "caught",
+      "why": "What a key declares is what its marker says; a key that always declared read and write would be admitted by every target that can do both and refused by none it should be.",
+      "find": ["        Some(A::ACCESS)\n"],
+      "replace": ["        Some(Access::ReadWrite)\n"]
+    },
+    {
+      "name": "DI-13.10: an untyped key declares an access",
+      "file": "src/key.rs",
+      "expect": "caught",
+      "why": "An untyped key declares nothing, so any target registers under it and the core judges what is pushed.",
+      "find": ["    fn declared(&self) -> Option<Access> {\n        None\n    }\n"],
+      "replace": ["    fn declared(&self) -> Option<Access> {\n        Some(Access::ReadWrite)\n    }\n"]
+    },
+    {
+      "name": "DI-13.10: an access covers what it cannot do",
+      "file": "src/access.rs",
+      "expect": "caught",
+      "why": "An access covers another when it can do everything the other can, so joining the two axes with an or covers a key that declares one axis the target lacks.",
+      "find": ["(self.can_read() || !other.can_read()) && (self.can_write() || !other.can_write())"],
+      "replace": ["(self.can_read() || !other.can_read()) || (self.can_write() || !other.can_write())"]
+    },
+    {
+      "name": "DI-13.10 control: a typed key's number is taken through a binding",
+      "file": "src/key.rs",
+      "expect": "survives",
+      "why": "A control: the same number returned through a local, which no test can tell apart.",
+      "find": ["    fn untyped(&self) -> IoTargetKey {\n        self.key\n    }\n"],
+      "replace": ["    fn untyped(&self) -> IoTargetKey {\n        let key = self.key;\n        key\n    }\n"]
+    },
+    {
+      "name": "DI-11.1: a failed write is applied to the target anyway",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "Fail must leave the target as it was; applying it and then reporting the fault is FailAfterApplying, which is a different and separately tested fault.",
+      "find": ["            Some(Fault::Fail(fault)) => (\n                Completion {\n                    token: submission.token,\n                    result: Err(fault),\n                    buffer: owned_buffer(submission.op),\n                },\n                None,\n            ),\n"],
+      "replace": ["            Some(Fault::Fail(fault)) => {\n                let mut completion = self.execute(submission, None);\n                completion.result = Err(fault);\n                (completion, None)\n            }\n"]
+    },
+    {
+      "name": "DI-11.1: a write failed after applying is reported as having succeeded",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "The fault is the point of the variant: a write whose bytes are in the target and which is reported failed.",
+      "find": ["                if completion.result.is_ok() {\n                    completion.result = Err(fault);\n                }\n"],
+      "replace": ["                let _ = fault;\n"]
+    },
+    {
+      "name": "DI-11.1: a short count is ignored",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A short write is what the fault exists to produce; ignoring the count completes it in full.",
+      "find": ["            Some(Fault::Short(count)) => (self.execute(submission, Some(count)), None),\n"],
+      "replace": ["            Some(Fault::Short(_)) => (self.execute(submission, None), None),\n"]
+    },
+    {
+      "name": "DI-11.1: a short count larger than the buffer transfers the count",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "The transfer is at most the count and never more than the buffer holds; max would slice past the end and panic.",
+      "find": ["    short.map_or(length, |count| length.min(position(count)))\n"],
+      "replace": ["    short.map_or(length, |count| length.max(position(count)))\n"]
+    },
+    {
+      "name": "DI-11.1: a held completion is delivered at once",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "Holding is withholding the completion until the test releases it; delivering it at once is an ordinary completion.",
+      "find": ["            Some(Fault::Hold) => (self.execute(submission, None), Some(None)),\n"],
+      "replace": ["            Some(Fault::Hold) => (self.execute(submission, None), None),\n"]
+    },
+    {
+      "name": "DI-11.1: a late completion of zero doorbells is held",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "Zero is an ordinary completion; held with a count of zero it would be aged below zero by the next doorbell.",
+      "find": ["            Some(Fault::Late(0)) => (self.execute(submission, None), None),\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-11.1: a late completion is aged by two doorbells at a time",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A completion late by two doorbells is released after two, and not after one.",
+      "find": ["                *left -= 1;\n"],
+      "replace": ["                *left = left.saturating_sub(2);\n"]
+    },
+    {
+      "name": "DI-11.1: a held completion takes no room in the completion queue",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A held completion is outstanding: if it took no room, a completion might have nowhere to go when it is released.",
+      "find": ["        let outstanding = self.queued.len() + self.completed.len() + self.held.len();\n"],
+      "replace": ["        let outstanding = self.queued.len() + self.completed.len();\n"]
+    },
+    {
+      "name": "DI-11.1: the notification is raised when the completions were not empty",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "The notification is raised on a transition from none to some; raising it on every release or doorbell into a non-empty queue wakes a waiter for nothing, and not raising it into an empty one loses the wakeup.",
+      "find": ["        if was_empty && !self.completed.is_empty() {\n"],
+      "replace": ["        if !was_empty && !self.completed.is_empty() {\n"]
+    },
+    {
+      "name": "DI-11.1: a scripted refusal is never consulted at the push",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "The refusal is applied at the push; consulted at the wrong point it never fires.",
+      "find": ["        if let Some(Fault::Refuse(cause)) = self.script.consult(Point::Push, probe) {\n"],
+      "replace": ["        if let Some(Fault::Refuse(cause)) = self.script.consult(Point::Execute, probe) {\n"]
+    },
+    {
+      "name": "DI-11.1: a step counts only when no earlier step has fired",
+      "file": "src/memory/script.rs",
+      "expect": "caught",
+      "why": "Every matching step counts every occurrence, so a step's count does not depend on the steps before it.",
+      "find": ["            self.seen[index] = self.seen[index].saturating_add(1);\n"],
+      "replace": ["            if firing.is_none() {\n                self.seen[index] = self.seen[index].saturating_add(1);\n            }\n"]
+    },
+    {
+      "name": "DI-11.1: from fires one occurrence late",
+      "file": "src/memory/script.rs",
+      "expect": "caught",
+      "why": "From n is the nth match and every one after it.",
+      "find": ["            Occurrence::From(n) => seen >= n,\n"],
+      "replace": ["            Occurrence::From(n) => seen > n,\n"]
+    },
+    {
+      "name": "DI-11.1: nth fires on every match from the nth",
+      "file": "src/memory/script.rs",
+      "expect": "caught",
+      "why": "Nth is that match and no other.",
+      "find": ["            Occurrence::Nth(n) => seen == n,\n"],
+      "replace": ["            Occurrence::Nth(n) => seen >= n,\n"]
+    },
+    {
+      "name": "DI-11.1: a step ignores the target it names",
+      "file": "src/memory/script.rs",
+      "expect": "caught",
+      "why": "A step that names a target fires only for operations on it.",
+      "find": ["        self.op.is_none_or(|wanted| op == Some(wanted))\n            && self.target.is_none_or(|wanted| target == Some(wanted))\n"],
+      "replace": ["        self.op.is_none_or(|wanted| op == Some(wanted))\n"]
+    },
+    {
+      "name": "DI-11.1 control: the count limit is taken through a match",
+      "file": "src/memory.rs",
+      "expect": "survives",
+      "why": "A control: the same limit by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    short.map_or(length, |count| length.min(position(count)))\n"],
+      "replace": ["    match short {\n        Some(count) => length.min(position(count)),\n        None => length,\n    }\n"]
+    },
+    {
+      "name": "DI-12.1.1: every lock is reported as waited for, held or not",
+      "file": "src/lock_watch.rs",
+      "expect": "caught",
+      "why": "An immediate acquisition is a try_lock and nothing else (DI-D-26, DI-D-87): no id minted and no event. Reporting every one as a wait builds two events on the path the pattern exists to keep free, and reports waits that never happened.",
+      "find": ["        let guard = match mutex.try_lock() {"],
+      "replace": ["        let guard = match Err::<MutexGuard<'a, T>, TryLockError<MutexGuard<'a, T>>>(TryLockError::WouldBlock) {"]
+    },
+    {
+      "name": "DI-12.1.1: a wait's pair is minted though no sink wants it",
+      "file": "src/lock_watch.rs",
+      "expect": "caught",
+      "why": "A sink that does not want lock waits must cost a blocked acquisition no id and no event (DI-D-87).",
+      "find": ["                let Some(id) = CorrelationId::for_pair(&*self.sink, DiagnosticKind::LockWait)"],
+      "replace": ["                let Some(id) = CorrelationId::for_pair(&crate::diagnostics::StderrDiagnostics, DiagnosticKind::LockWait)"]
+    },
+    {
+      "name": "DI-19.2.4: a lock wait's end is written before the lock is taken",
+      "file": "src/lock_watch.rs",
+      "expect": "caught",
+      "why": "The end says the lock was taken (DI-D-80): written first, it closes the pair while the thread is still waiting, and a wait that never ends reads as one that did.",
+      "find": [
+        "                let taken = mutex.lock().unwrap_or_else(PoisonError::into_inner);",
+        "                // Written with the lock held, as the engineer ruled (DI-D-80): the sink's own",
+        "                // synchronization is a leaf beneath it, which `DiagnosticSink` requires.",
+        "                self.sink.report(&Diagnostic::LockWaitEnded {",
+        "                    instance: self.instance,",
+        "                    lock: name,",
+        "                    id,",
+        "                });",
+        "                taken"
+      ],
+      "replace": [
+        "                self.sink.report(&Diagnostic::LockWaitEnded {",
+        "                    instance: self.instance,",
+        "                    lock: name,",
+        "                    id,",
+        "                });",
+        "                mutex.lock().unwrap_or_else(PoisonError::into_inner)"
+      ]
+    },
+    {
+      "name": "DI-12.1.3: the line prefix drops its space",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "The prefix is what a reader of a line, and every sink that writes one, relies on being the same: `dioring:`, a space, and the event.",
+      "find": ["pub const LINE_PREFIX: &str = \"dioring: \";"],
+      "replace": ["pub const LINE_PREFIX: &str = \"dioring:\";"]
+    },
+    {
+      "name": "DI-12.2.1: a domain claimed twice is not refused",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "A domain routed to two providers is refused at build (DI-2.12 point 1): with no refusal the router would serve it twice and the core would refuse the whole instance with less to go on.",
+      "find": ["                        vacant.insert(registration);"],
+      "replace": ["                        drop(vacant);"]
+    },
+    {
+      "name": "DI-12.2.1: the refusal names the second registration twice",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "The refusal names both registrations, so a consumer can find the two that claim the domain; naming one twice reads as a provider that declared it twice.",
+      "find": ["                            first: *owner.get(),"],
+      "replace": ["                            first: registration,"]
+    },
+    {
+      "name": "DI-12.2.1: the union is read in reverse registration order",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "The router's domains are the registrations in order, each in its own order, which is what a consumer reading them back, and the core interning them, see.",
+      "find": ["            .flat_map(|route| route.domains.iter().cloned())"],
+      "replace": ["            .rev().flat_map(|route| route.domains.iter().cloned())"]
+    },
+    {
+      "name": "DI-12.2.1 control: the routes are gathered without a capacity",
+      "file": "src/router.rs",
+      "expect": "survives",
+      "why": "A control: the same routes gathered without reserving room first, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        let mut routes = Vec::with_capacity(self.providers.len());"],
+      "replace": ["        let mut routes = Vec::new();"]
+    },
+    {
+      "name": "DI-12.2.2: every part goes to the first registration",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "Each domain's part goes to the provider that serves it (DI-D-81); a part given to another provider is flushed by something that never said it could.",
+      "find": ["            parts[registration].push(part);"],
+      "replace": ["            parts[0].push(part);"]
+    },
+    {
+      "name": "DI-12.2.2: a provider with no part is called anyway",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "One call per provider that has parts: a provider called with an empty request is asked for work it was never given, and a provider that rejects that would fail a seal it had no part in.",
+      "find": ["            if !domains.is_empty() {"],
+      "replace": ["            if domains.len() < usize::MAX {"]
+    },
+    {
+      "name": "DI-12.2.2: an unrouted domain is sent to the first registration instead of panicked on",
+      "file": "src/router.rs",
+      "expect": "caught",
+      "why": "A domain no provider serves is a caller breaking the protocol and is panicked on where it is found (DI-D-46, DI-D-83); sending it to a provider hands work to something that never said it could do it, and lets the breach persist.",
+      "find": ["            let Some(&registration) = self.owners.get(&part.domain) else {"],
+      "replace": ["            let Some(&registration) = self.owners.get(&part.domain).or(Some(&0)) else {"]
+    },
+    {
+      "name": "DI-12.2.2 control: the per-provider parts are made by counting",
+      "file": "src/router.rs",
+      "expect": "survives",
+      "why": "A control: the same empty parts made by counting the routes instead of walking them, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["            self.routes.iter().map(|_| Vec::new()).collect();"],
+      "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect();"]
+    },
+    {
+      "name": "DI-19.1: an id is minted whether or not the sink wants the pair",
+      "file": "src/correlation.rs",
+      "expect": "caught",
+      "why": "An id is minted only for a pair a sink wants (DI-D-80), so a sink that wants nothing costs the counter nothing.",
+      "find": ["    sink.wants(kind)"],
+      "replace": ["    (sink.wants(kind) || kind == kind)"]
+    },
+    {
+      "name": "DI-19.1: the counter is not advanced",
+      "file": "src/correlation.rs",
+      "expect": "caught",
+      "why": "Every id differs from every other the process minted, which a counter that does not move breaks at the second mint.",
+      "find": ["        .then(|| CorrelationId(counter.fetch_add(1, Ordering::Relaxed)))"],
+      "replace": ["        .then(|| CorrelationId(counter.fetch_add(0, Ordering::Relaxed)))"]
+    },
+    {
+      "name": "DI-19.1: the counter starts at zero",
+      "file": "src/correlation.rs",
+      "expect": "caught",
+      "why": "The first id is 1, as the documentation says.",
+      "find": ["const FIRST: u64 = 1;"],
+      "replace": ["const FIRST: u64 = 0;"]
+    },
+    {
+      "name": "DI-19.1 control: the counter is advanced with sequential consistency",
+      "file": "src/correlation.rs",
+      "expect": "survives",
+      "why": "A control: a stronger ordering than relaxed, which mints the same distinct ids and no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        .then(|| CorrelationId(counter.fetch_add(1, Ordering::Relaxed)))"],
+      "replace": ["        .then(|| CorrelationId(counter.fetch_add(1, Ordering::SeqCst)))"]
+    },
+    {
+      "name": "DI-19.2.1: an end of another kind than its begin is accepted",
+      "file": "src/oracle/pairing.rs",
+      "expect": "caught",
+      "why": "A pair's begin and end are one kind, so a sink wants both or neither (DI-D-87); an end of another kind is a different pair's, or a defect.",
+      "find": ["                if begun.kind != pairing.kind {"],
+      "replace": ["                if begun.kind != pairing.kind && false {"]
+    },
+    {
+      "name": "DI-19.2.1: an end that does not repeat its begin's identity is accepted",
+      "file": "src/oracle/pairing.rs",
+      "expect": "caught",
+      "why": "An end repeats its begin's identity fields (DI-D-87), so a reader of one line knows what ended; the checker is where that is held.",
+      "find": ["                if begun.subject != subject {"],
+      "replace": ["                if begun.subject != subject && false {"]
+    },
+    {
+      "name": "DI-19.2.1: an ended pair is forgotten",
+      "file": "src/oracle/pairing.rs",
+      "expect": "caught",
+      "why": "Nothing of a pair follows its end; a checker that forgets the end lets a second end, or a begin again, pass as something else.",
+      "find": ["                self.ended.insert(id);"],
+      "replace": ["                let _ = id;"]
+    },
+    {
+      "name": "DI-19.2.1: a pair named as left open need not be open",
+      "file": "src/oracle/pairing.rs",
+      "expect": "caught",
+      "why": "The finish is bidirectional: every open pair is named, and every named pair is open, so a test cannot excuse a pair that never began.",
+      "find": ["            Some(&id) => Err(PairingViolation::NamedNotOpen { id }),"],
+      "replace": ["            Some(_) => Ok(()),"]
+    },
+    {
+      "name": "DI-19.2.1: a lock wait's end is taken for a begin",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "Which events open and close a pair is defined once, by Diagnostic::pairing (DI-D-87), which the checker and the ETW sink both read.",
+      "find": ["            | Self::LockWaitEnded { id, .. } => (*id, Edge::End),"],
+      "replace": ["            | Self::LockWaitEnded { id, .. } => (*id, Edge::Begin),"]
+    },
+    {
+      "name": "DI-19.2.1 control: the open pairs are gathered by cloning",
+      "file": "src/oracle/pairing.rs",
+      "expect": "survives",
+      "why": "A control: the same ids gathered by clone instead of copy, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        let mut open: Vec<CorrelationId> = self.open.keys().copied().collect();"],
+      "replace": ["        let mut open: Vec<CorrelationId> = self.open.keys().cloned().collect();"]
+    },
+    {
+      "name": "DI-19.2.2: a seal answered durable leaves its pair open",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A seal's pair ends at its first answer (DI-D-87); one left open is a begin with no end, which the pairing checker refuses.",
+      "find": ["                popped.pair,"],
+      "replace": ["                None,"]
+    },
+    {
+      "name": "DI-19.2.2: a seal answered blocked leaves its pair open",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Blocked is an answer, so it ends the seal's pair; left open, the pair would end later as durable, saying the wrong answer.",
+      "find": ["                let pair = state.seals[index].pair.take();"],
+      "replace": ["                let pair: Option<crate::correlation::CorrelationId> = None;"]
+    },
+    {
+      "name": "DI-19.2.2: a seal whose flush failed ends as durable",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A failure of a seal's own flush is its answer, and its pair ends saying so.",
+      "find": ["                SealOutcome::Failed,"],
+      "replace": ["                SealOutcome::Durable,"]
+    },
+    {
+      "name": "DI-19.2.2: a lineage that ends leaves its pairs open",
+      "file": "src/durability/lineages.rs",
+      "expect": "caught",
+      "why": "An end is reported on every path a begin can leave by (DI-D-87); a lineage that ends answers nothing more, so its pairs end with it.",
+      "find": ["        self.end_pairs(Some(lineage));"],
+      "replace": ["        let _ = lineage;"]
+    },
+    {
+      "name": "DI-19.2.2: the core dropped leaves its pairs open",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "An instance closed or dropped answers nothing more, so every pair still open ends as it does.",
+      "find": ["        self.end_pairs(None);"],
+      "replace": ["        let _ = self;"]
+    },
+    {
+      "name": "DI-19.2.2 control: the abandoned flushes are ordered by a stable sort",
+      "file": "src/durability.rs",
+      "expect": "survives",
+      "why": "A control: the same order by a stable sort, which no test can tell apart since the keys are distinct. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        flushes.sort_unstable_by_key(|((key, seq, _), pair)| (*key, *seq, pair.id));"],
+      "replace": ["        flushes.sort_by_key(|((key, seq, _), pair)| (*key, *seq, pair.id));"]
+    },
+    {
+      "name": "DI-19.2.3: a lock wait's begin is not reported",
+      "file": "src/lock_watch.rs",
+      "expect": "caught",
+      "why": "A wait is a pair whose begin is written when the immediate try fails (DI-D-87); an end with no begin is what the pairing checker refuses.",
+      "find": ["                self.sink.report(&Diagnostic::LockWaitBegan {"],
+      "replace": ["                let _ = &(Diagnostic::LockWaitBegan {"]
+    },
+    {
+      "name": "DI-19.2.3: a lock wait's end is not reported",
+      "file": "src/lock_watch.rs",
+      "expect": "caught",
+      "why": "The end is written as the lock is taken, with it held (DI-D-80); a wait whose end never comes is a pair left open.",
+      "find": ["                self.sink.report(&Diagnostic::LockWaitEnded {"],
+      "replace": ["                let _ = &(Diagnostic::LockWaitEnded {"]
+    },
+    {
+      "name": "DI-19.2.3 control: the taken guard is declared with its type spelled",
+      "file": "src/lock_watch.rs",
+      "expect": "survives",
+      "why": "A control: the same binding with its type written out, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["                let taken = mutex.lock().unwrap_or_else(PoisonError::into_inner);"],
+      "replace": ["                let taken: MutexGuard<'_, T> = mutex.lock().unwrap_or_else(PoisonError::into_inner);"]
+    },
+    {
+      "name": "DI-19.2.4: a provider's abandoned domain ends as failed",
+      "file": "src/durability/providers.rs",
+      "expect": "caught",
+      "why": "A flush's end says how it ended (DI-D-87): a domain its provider abandoned did not fail, and an end that says it did sends a reader after a failure that did not happen.",
+      "find": ["            Err(FailureCause::ProviderAbandoned { .. }) => FlushOutcome::Abandoned,"],
+      "replace": ["            Err(FailureCause::ProviderAbandoned { .. }) => FlushOutcome::Failed,"]
+    },
+    {
+      "name": "DI-19.2.4: a provider's failed domain ends as succeeded",
+      "file": "src/durability/providers.rs",
+      "expect": "caught",
+      "why": "A failed domain whose end says it succeeded hides the failure the pair exists to show.",
+      "find": ["            Err(_) => FlushOutcome::Failed,"],
+      "replace": ["            Err(_) => FlushOutcome::Succeeded,"]
+    },
+    {
+      "name": "DI-19.2.5: the one definition calls a seal's end a begin",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "DI-19.2.5: Diagnostic::pairing is the one definition of which events pair (DI-D-88). Changing it must fail this suite through the code that binds to it; a suite that held a copy of the rule would pass.",
+      "find": [
+        "            | Self::LockWaitBegan { id, .. } => (*id, Edge::Begin),",
+        "            Self::SealEnded { id, .. }",
+        "            | Self::FlushEnded { id, .. }"
+      ],
+      "replace": [
+        "            | Self::LockWaitBegan { id, .. }",
+        "            | Self::SealEnded { id, .. } => (*id, Edge::Begin),",
+        "            Self::FlushEnded { id, .. }"
+      ]
+    },
+    {
+      "name": "DI-22.1: a pair's end is asked of wants",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "A sink that stopped wanting a kind while a pair was open is not given the end, so a sink that holds something for the pair from its begin never lets it go: the ETW sink's activity map grew by a pair for each session stop. DI-D-96.",
+      "find": ["            if is_end || sink.wants(kind) {\n"],
+      "replace": ["            if sink.wants(kind) {\n"]
+    },
+    {
+      "name": "DI-22.1: a begin is taken for an end",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "The edge decides which events skip the question. Reading a begin as an end gives every sink every begin, wanted or not, and asks the end.",
+      "find": ["            .is_some_and(|pairing| pairing.edge == Edge::End);\n"],
+      "replace": ["            .is_some_and(|pairing| pairing.edge == Edge::Begin);\n"]
+    },
+    {
+      "name": "DI-22.1 control: the end is read by another spelling",
+      "file": "src/diagnostics.rs",
+      "expect": "survives",
+      "why": "A control: `map_or(false, ..)` is `is_some_and(..)`, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["            .is_some_and(|pairing| pairing.edge == Edge::End);\n"],
+      "replace": ["            .map_or(false, |pairing| pairing.edge == Edge::End);\n"]
     }
   ]
 }

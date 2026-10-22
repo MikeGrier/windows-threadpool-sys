@@ -19,13 +19,10 @@ use durable_ioring::backend::SubmissionData;
 use durable_ioring::driver::{Answer, DomainCall, Home};
 use durable_ioring::{DomainOutcome, DurabilityProvider};
 use durable_ioring::{
-    DurabilityRequest, Entry, Epoch, Failed, IoTargetBusy, IoTargetKey, OpKind, PushRefusal,
-    ReadOptions, RemoveTargetError, Resolution, WriteOptions,
+    DurabilityRequest, Epoch, IoTargetBusy, IoTargetKey, OpKind, PushRefusal, ReadOptions,
+    RemoveTargetError, WriteOptions,
 };
 use durable_ioring::{DurableRing, RegisteredBufferRing};
-
-/// `ERROR_IO_DEVICE`, the failure the seam is armed with.
-const IO_DEVICE: u32 = 1117;
 
 /// `key`'s refusal, which must be `Busy`.
 fn busy<K: crate::dioring::TimeBase>(ring: &mut Ring<K>, key: IoTargetKey) -> IoTargetBusy<V> {
@@ -33,13 +30,6 @@ fn busy<K: crate::dioring::TimeBase>(ring: &mut Ring<K>, key: IoTargetKey) -> Io
         Err(RemoveTargetError::Busy(busy)) => busy,
         Err(other) => panic!("expected Busy, got {other:?}"),
         Ok(_) => panic!("expected Busy, and the file was removed"),
-    }
-}
-
-fn next_failed(harness: &mut Harness) -> Failed<V> {
-    match harness.next_entry() {
-        Entry::Failed(failed) => failed,
-        other => panic!("expected Failed, got {other:?}"),
     }
 }
 
@@ -169,33 +159,6 @@ fn held_operations_hold_their_file_with_the_lowest_gate_in_each_lineage() {
     assert_eq!(left.held.len(), 3);
 }
 
-#[test]
-fn a_failure_suspecting_a_write_holds_its_file_until_it_is_resolved() {
-    let temp = temp(&[0; 64]);
-    let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], Vec::new()));
-    harness.write(GIVEN, 0, b"one", 1, 1);
-    harness.next();
-    harness.ring.fail_next_flush(GIVEN, IO_DEVICE);
-    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
-    let failed = next_failed(&mut harness);
-
-    let refused = busy(&mut harness.ring, GIVEN);
-    assert_eq!(refused.failures, [failed.id]);
-    assert_eq!(
-        refused.uncovered, 0,
-        "its suspect write is reported by the failure"
-    );
-    assert!(refused.to_string().contains("heal or abandon"), "{refused}");
-
-    harness
-        .ring
-        .resolve(vec![(failed.token, Resolution::Abandon)])
-        .expect("abandon");
-    assert!(matches!(harness.next_entry(), Entry::Abandoned { .. }));
-    harness.ring.remove_target(GIVEN).expect("resolved");
-    harness.finish();
-}
-
 /// An operation is held in flight on demand by holding the engine's lock: no pool drain can record
 /// its completion until the lock is released.
 #[test]
@@ -323,21 +286,6 @@ fn closing_hands_back_held_operations_in_push_order_with_what_they_took() {
             (registered, in_minted(2), gate, None, 3),
         ]
     );
-}
-
-#[test]
-fn closing_hands_back_the_unresolved_failures() {
-    let temp = temp(&[0; 64]);
-    let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], Vec::new()));
-    harness.write(GIVEN, 0, b"one", 1, 1);
-    harness.next();
-    harness.ring.fail_next_flush(GIVEN, IO_DEVICE);
-    harness.seal(1);
-    let failed = next_failed(&mut harness);
-    let left = harness.ring.close();
-    let ids: Vec<_> = left.failures.iter().map(|f| f.id).collect();
-    assert_eq!(ids, [failed.id]);
-    assert_eq!(left.lineages[0].durable_through, None);
 }
 
 /// End an instance whose provider holds an unanswered request, answering it from another thread

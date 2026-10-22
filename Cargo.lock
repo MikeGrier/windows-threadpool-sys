@@ -10,6 +10,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "durable-ioring-events"
+version = "0.0.1"
+dependencies = [
+ "durable-ioring",
+ "win-error-codes",
+ "win-etw-sys",
+]
+
+[[package]]
 name = "io-buffers"
 version = "0.1.0"
 
@@ -138,13 +147,19 @@ name = "win-durable-ioring"
 version = "0.3.2"
 dependencies = [
  "durable-ioring",
+ "durable-ioring-events",
  "io-buffers",
+ "win-authorization-sys",
+ "win-debugging-sys",
  "win-durable-ioring",
  "win-error-codes",
+ "win-etw-sys",
+ "win-handles-sys",
  "win-shared-os-owned-handle",
  "win-sync-sys",
  "win-time-sys",
  "win-volume-sys",
+ "windows-file-enumeration-sys",
  "windows-ioring-sys",
  "windows-namespace-request-sys",
  "windows-sys",

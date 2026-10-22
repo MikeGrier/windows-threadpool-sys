@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use windows_ioring_sys::RegisteredSpan;
 
 use super::{DeliveryEvent, EntryDelivery};
-use crate::dioring::tests::TempFile;
+use crate::dioring::tests::{TempFile, wtf};
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
 use crate::fake::{Fake, Signals};
 use crate::windows_backend::Win32FileTarget;
@@ -38,10 +38,7 @@ fn instance(temp: &TempFile, buffers: Vec<Vec<u8>>) -> Ring {
     Ring::new(Setup {
         submission_queue_size: 128,
         completion_queue_size: 128,
-        files: vec![TargetSetup {
-            key: FILE,
-            target: Win32FileTarget::new(temp.open()),
-        }],
+        files: vec![TargetSetup::new(FILE, Win32FileTarget::new(temp.open()))],
         buffers,
         provider: None,
         diagnostics: None,
@@ -485,6 +482,41 @@ fn a_file_is_removed_through_the_handle() {
             2
         )))
     ));
+}
+
+#[test]
+fn a_typed_key_is_judged_at_registration_through_the_handle_too() {
+    let temp = temp();
+    let other = TempFile::new("delivery-typed");
+    let (delivery, _rx) = forwarding(instance(&temp, Vec::new()));
+    let read_only = crate::windows_backend::OpenedFile::<
+        crate::windows_backend::Cached,
+        crate::windows_backend::ReadOnly,
+    >::open(
+        wtf(&other.0),
+        crate::windows_backend::FileOptions::new().read(),
+    )
+    .expect("open read-only");
+
+    let error = delivery
+        .add_target(
+            durable_ioring::Key::<durable_ioring::ReadWrite>::new(IoTargetKey(2)),
+            Win32FileTarget::new(read_only),
+        )
+        .expect_err("the key declares more than a read-only target states");
+    assert_eq!(
+        error.cause,
+        durable_ioring::AddTargetCause::AccessNotCovered {
+            declared: durable_ioring::Access::ReadWrite,
+            actual: durable_ioring::Access::ReadOnly,
+        }
+    );
+    delivery
+        .add_target(
+            durable_ioring::Key::<durable_ioring::ReadOnly>::new(IoTargetKey(2)),
+            error.target,
+        )
+        .expect("the target comes back and registers under a key it covers");
 }
 
 #[test]

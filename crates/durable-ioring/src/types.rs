@@ -7,6 +7,7 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 
+use crate::access::Access;
 use crate::backend::RefusalCause;
 use crate::contract::Identities;
 use crate::error_code::ErrorCode;
@@ -705,14 +706,44 @@ pub struct Leftovers<V: Identities, B, C> {
     pub lineages: Vec<LineageInfo<V>>,
 }
 
-/// A refused `add_target`: a target is already present under `key`. The target, of the
-/// implementation's type, is handed back.
+/// Why an `add_target` was refused (DI-13.10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AddTargetCause {
+    /// A target is already present under the key.
+    KeyInUse,
+    /// The key declared more access than the target states: a `Key<ReadWrite>` for a target that
+    /// can only be read, for one. A key that declares less is accepted.
+    AccessNotCovered {
+        /// What the key declared.
+        declared: Access,
+        /// What the target states.
+        actual: Access,
+    },
+}
+
+impl fmt::Display for AddTargetCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KeyInUse => f.write_str("a target is already present under the key"),
+            Self::AccessNotCovered { declared, actual } => write!(
+                f,
+                "the key declares {declared} access and the target states {actual}"
+            ),
+        }
+    }
+}
+
+/// A refused `add_target`, with its `cause`. The target, of the implementation's type, is handed
+/// back.
 #[derive(Debug)]
 pub struct AddTargetError<T> {
-    /// The key already in use.
+    /// The key the target was offered under.
     pub key: IoTargetKey,
     /// The consumer's target.
     pub target: T,
+    /// Why it was refused.
+    pub cause: AddTargetCause,
 }
 
 /// Everything still holding a file that `remove_target` refused, and what clears each hold. Every

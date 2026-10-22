@@ -48,8 +48,9 @@ refused push names its cause, and the loop that waits it out is a maintained exa
   session planned it as a layer that contains an execution domain; it is built on `IoRing`
   directly instead, and the item that queued it, `M33+.5` in
   [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md), has been transferred here.
-- **It does not replace the `epoch_log` sample** ([DI-D-7](DESIGN-NOTES.md#di-d-7)). The two
-  coexist until this crate is proven, and the merge-or-delete decision is queued.
+- **It does not replace the `epoch_log` sample**, which is a log, a consumer of a durable ring, and stays in
+  `windows-ioring-sys` as that crate's own ([DI-D-85](DESIGN-NOTES.md#di-d-85)). A sample log built on this crate, from
+  common practice in database and file-system logs, is queued as `DI-M21`.
 
 ## Design record
 

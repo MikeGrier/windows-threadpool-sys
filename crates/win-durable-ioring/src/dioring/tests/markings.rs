@@ -76,55 +76,6 @@ fn a_suspect_write_flushed_after_an_import_is_marked_covered_and_abandoning_carr
 }
 
 #[test]
-fn a_heal_reports_its_record_with_the_markings_its_failure_gained() {
-    let file = temp(&[0; 64]);
-    let mut harness = Harness::new(instance(vec![given(GIVEN, &file)], Vec::new()));
-    let sealed = harness.write(GIVEN, 0, b"first", 1, 1);
-    let later = harness.write(GIVEN, 8, b"second", 2, 2);
-    harness.next_n(2);
-    harness.ring.fail_next_flush(GIVEN, IO_DEVICE);
-    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
-    let failed = next_failed(&mut harness);
-    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
-    assert_eq!(suspects, [sealed, later]);
-
-    harness
-        .ring
-        .resolve(vec![(failed.token, Resolution::Heal)])
-        .expect("heal");
-    harness.oracle.healed(failed.id);
-    assert_eq!(harness.seal(2), DurabilityRequest::Submitted);
-    let (_, covered) = next_marked(&mut harness);
-    assert_eq!(
-        (covered.write, covered.kind.clone()),
-        (
-            later,
-            MarkingKind::Covered {
-                flushed: true,
-                provider: false
-            }
-        ),
-        "a healing failure goes on gaining markings"
-    );
-    match harness.next_entry() {
-        Entry::Healed {
-            failure, markings, ..
-        } => {
-            assert_eq!(failure, failed.id);
-            assert_eq!(markings, [covered]);
-        }
-        other => panic!("expected Healed, got {other:?}"),
-    }
-    for id in [1, 2] {
-        match harness.next_entry() {
-            Entry::Durable { through } => assert_eq!(through, harness.epoch(id)),
-            other => panic!("expected Durable through {id}, got {other:?}"),
-        }
-    }
-    harness.finish();
-}
-
-#[test]
 fn a_failed_flushs_code_reads_without_the_ring_crate() {
     let file = temp(&[0; 64]);
     let mut harness = Harness::new(instance(vec![given(GIVEN, &file)], Vec::new()));

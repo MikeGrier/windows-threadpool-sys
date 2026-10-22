@@ -30,10 +30,84 @@ A blocking push is not an API of either crate: a refused push names its cause, a
 waits it out is a maintained example, [examples/blocking_push/](examples/blocking_push/main.rs), to
 use as it stands or adapt ([DI-D-56](../durable-ioring/DESIGN-NOTES.md#di-d-56)).
 
+## Diagnostics
+
+An instance reports what it waits on as pairs of events, a begin and an end sharing an id -- a seal, from its being asked
+for to its answer; each flush of a file or a domain; and a wait for one of its locks -- and its inconsistencies, to a
+`DiagnosticSink` given in `Setup::diagnostics`. How long each took is the gap between its begin and its end, which the reader
+measures; the instance times nothing. **Given none, it writes them to ETW**, to the provider
+`durable-ioring-events` ([durable-ioring-events](../durable-ioring-events/README.md)), through `EtwDiagnostics`. That costs a
+test of whether a session is listening when none is, and no event is built; the first such instance registers the provider
+for the process, and the last gives it back. Any other sink is given in its place: `NoDiagnostics` for none, `StderrDiagnostics`
+or `DebugOutputDiagnostics` for text, or `FanOutDiagnostics` to send events to several. A reader of the trace needs the
+provider's manifest to see names and fields; the instance does not.
+
 `DeliveryMode::Pool`, `DeliveryMode::Signalled` and `EntryDelivery::new` take
 `windows-threadpool-sys`'s `CallbackEnviron`, so that crate's types are part of this crate's public
 API. A minor release of `windows-threadpool-sys` that changes those types is a minor release of this
 crate too, in the 0.x series: 0.3 of this crate pairs with 0.3 of `windows-threadpool-sys`.
+
+## Several durability providers
+
+An instance holds the built-in provider, which flushes each file through its own ring, and at most one more, given in
+`Setup::provider`: a `DurabilityProvider` serving the flush domains it declares, which answers for those domains of each
+seal. **Several are composed by `RoutingProvider`**, itself a provider. Each provider registered with it serves exactly the
+domains its own `domains()` returns, read once when the router is built; a domain claimed twice refuses the build, naming
+both registrations. A seal's work is split by domain, and each provider with a part is called once, in registration order;
+its answers go straight back to the instance. A file declared with domains of two providers is in both calls and is durable
+when both have succeeded; a domain no provider serves stays the built-in provider's. The rules are in
+[API.md](../durable-ioring/API.md) section 15 and [DI-D-81](../durable-ioring/DESIGN-NOTES.md#di-d-81) to
+[DI-D-83](../durable-ioring/DESIGN-NOTES.md#di-d-83).
+
+```rust
+use win_durable_ioring::*;
+
+/// A provider for one device, serving the domains it was built with. A real one flushes the
+/// files each part names, by its own means, before it answers.
+#[derive(Debug)]
+struct Device(Vec<FlushDomain>);
+
+impl DurabilityProvider<WindowsIds<u64>> for Device {
+    fn domains(&self) -> Vec<FlushDomain> {
+        self.0.clone()
+    }
+
+    fn make_durable(&mut self, request: FlushRequest<WindowsIds<u64>>) {
+        for part in request.domains {
+            part.completion.succeed();
+        }
+    }
+}
+
+let log = FlushDomain::new(b"log-disk".to_vec());
+let data = FlushDomain::new(b"data-disk".to_vec());
+let router = RoutingProvider::builder()
+    .register(Device(vec![log.clone()]))
+    .register(Device(vec![data.clone()]))
+    .build()?;
+assert_eq!(router.domains(), [log.clone(), data]);
+
+let (ring, _default) = Dioring::<Vec<u8>>::new(Setup {
+    submission_queue_size: 16,
+    completion_queue_size: 16,
+    files: Vec::new(),
+    buffers: Vec::new(),
+    provider: Some(Box::new(router)),
+    diagnostics: None,
+    delivery: DeliveryMode::Pool(None),
+})
+.expect("an instance");
+drop(ring);
+
+// The same domain from two providers refuses the router, naming both registrations.
+let refused = RoutingProvider::<WindowsIds<u64>>::builder()
+    .register(Device(vec![log.clone()]))
+    .register(Device(vec![log.clone()]))
+    .build()
+    .expect_err("the log twice");
+assert_eq!((refused.domain, refused.first, refused.second), (log, 0, 1));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
 
 ## Opening a file
 
@@ -48,27 +122,178 @@ write-through. A consumer that needs the stronger warranty asks for `OpenedFile<
 own signature, and a cached file cannot be passed. A handle opened elsewhere cannot be given to a
 target in this version.
 
+The data access of a handle is its type. `FileOptions::new()` asks for none, `read()` and `write()` add
+the right to read and to write, and the file an open makes is an `OpenedFile<B, A>` whose `A` is
+`NoData`, `ReadOnly`, `WriteOnly` or `ReadWrite`. A target needs a data right, so a file opened with
+`NoData` cannot be made into one, and the program does not compile. `OpenedDisk` and `OpenedVolume` carry
+the same parameter, so either can be opened for reading only. The other rights an open can ask for, the
+attribute, delete and security rights, are a `FileRights` set given to `FileOptions::rights`; they gate
+calls a consumer makes on the handle it is lent and not anything this crate does. There is no
+constructor from a raw mask and no right for appending only, which would land every write at the end
+of the file whatever offset the core names, so it cannot be asked for. What the file's security
+allows is the kernel's to say.
+
+`FileOptions::share` takes a `ShareMode`, a set of `READ`, `WRITE` and `DELETE` naming what other opens of
+the file may request while this one is open; a file is opened sharing all three unless it is told
+otherwise, and `ShareMode::NONE` is an exclusive open. An open that the sharing of either side does not
+allow fails as a `SharingViolation`, an `io::ErrorKind::ResourceBusy` error whose cause carries what this
+open asked for. `CreateFileW` reports both sides' conflicts as one error and no documented call reports
+what the other open holds, so it cannot say which side conflicted. The kernel's own error is its source.
+
+`FileOptions::random_access` and `FileOptions::sequential_scan` are the two cache hints
+(`FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN`). They are passed to an unbuffered file as
+well as a cached one, never refused, and change nothing a target claims: the class, the alignment and
+what it offers follow from the buffering mode alone. What the `CreateFileW` documentation says about them
+on an unbuffered file can be read two ways, and the methods' own documentation says what was measured.
+
+`FileOptions::overlapped` sets `FILE_FLAG_OVERLAPPED`. The ring takes such a handle and gives the result
+for each operation that it gives without the flag; what the flag changes is when a completion is there and,
+for an unbuffered file, the order a batch's completions come in. The handle the open lends is the same
+overlapped handle, so I/O a caller makes on it directly, without an offset, is I/O on a handle for which
+`CreateFileW` says the file pointer is not maintained.
+
+The path is a `Wtf16String`, handed to Win32 as the caller gave it: nothing lengthens, shortens or
+refuses it, so a path past `MAX_PATH` without a `\\?\` prefix, and an empty one, are what `CreateFileW`
+makes of them. Convert a `Path` with `Wtf16String::from_os_str`, which loses nothing.
+
+`FileOptions::disposition` takes a `Disposition`: `CreateNew`, `OpenExisting` (where the options start) or
+`OpenAlways`, named as `CreateFileW` names them. `CREATE_ALWAYS` and `TRUNCATE_EXISTING`, the two that
+empty a file that exists, are not offered in this version; a caller empties a file through the handle the
+open lends, with `File::set_len(0)`. `FileOptions::open_reparse_point` sets `FILE_FLAG_OPEN_REPARSE_POINT`,
+which no disposition implies: without it a link is followed, including by `CreateNew`.
+
+`OpenedFile::open` blocks for as long as `CreateFileW` does. `OpenedFile::request` builds an `OpenRequest`
+and opens nothing, fixing a relative path to the current directory as it is then, and
+`OpenRequest::perform` makes the call on whatever thread the caller chooses. A request is `Send`, and
+performing it again opens the file again. The refusal of an unbuffered file on a remote device is made in
+`perform`, on the opened handle from its final path, so a file the open created is still there when it is
+refused.
+
+A file the open creates is given `FileOptions::attributes`, a `FileAttributes` set of `ARCHIVE`, `HIDDEN`,
+`OFFLINE`, `READONLY`, `SYSTEM` and `TEMPORARY` (`FILE_ATTRIBUTE_NORMAL`, the absence of attributes, is the
+empty set, and `FILE_ATTRIBUTE_ENCRYPTED` is not offered), and `OpenRequest::with_security_descriptor`, a
+`SecurityDescriptor` built from SDDL, which the request owns and frees. The descriptor is on the request and
+not in the options because it owns memory and cannot be copied, as the options can. Neither applies to a file
+that already exists. Handles are never inheritable, and there is no option to make one so.
+
 ```rust
 use win_durable_ioring::windows_backend::{
-    Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget,
+    Cached, Disposition, FileAttributes, FileOptions, OpenedFile, SecurityDescriptor,
 };
-use win_durable_ioring::{IoTarget, WarrantyClass};
+use win_durable_ioring::Wtf16String;
+
+let path = std::env::temp_dir().join(format!("durable-ioring-create-{}", std::process::id()));
+let options = FileOptions::new()
+    .read()
+    .write()
+    .disposition(Disposition::CreateNew)
+    .attributes(FileAttributes::HIDDEN);
+let descriptor = SecurityDescriptor::from_sddl(&Wtf16String::from("D:P(A;;GA;;;WD)"))?;
+
+let created = OpenedFile::<Cached>::request(Wtf16String::from_os_str(path.as_os_str()), options)?
+    .with_security_descriptor(descriptor)
+    .perform()?;
+drop(created);
+# std::fs::remove_file(&path)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+```rust
+use win_durable_ioring::windows_backend::{
+    Cached, Disposition, FileOptions, OpenedFile, Unbuffered, Win32FileTarget,
+};
+use win_durable_ioring::{IoTarget, WarrantyClass, Wtf16String};
 
 let path = std::env::temp_dir().join(format!("durable-ioring-open-{}", std::process::id()));
 std::fs::write(&path, [0u8; 8192])?;
-let options = FileOptions::new().read(true).write(true);
+let options = FileOptions::new().read().write();
+// The open takes the path as the caller gave it, a `Wtf16String`: converting loses nothing.
+let name = || Wtf16String::from_os_str(path.as_os_str());
 
-let cached = Win32FileTarget::new(OpenedFile::<Cached>::open(&path, options)?);
+let cached = Win32FileTarget::new(OpenedFile::<Cached>::open(name(), options)?);
 assert_eq!(cached.warranty(), WarrantyClass::BestEffort);
 
-let unbuffered = Win32FileTarget::new(OpenedFile::<Unbuffered>::open(&path, options)?);
+let unbuffered = Win32FileTarget::new(OpenedFile::<Unbuffered>::open(name(), options)?);
 assert_eq!(unbuffered.warranty(), WarrantyClass::SharedDevice);
 assert!(unbuffered.capabilities().write_through());
+
+// Built here, and made on the thread that may block.
+let request = OpenedFile::<Cached>::request(name(), options.disposition(Disposition::OpenAlways))?;
+let opened = std::thread::spawn(move || request.perform()).join().expect("the thread")?;
+drop(opened);
 # std::fs::remove_file(&path)?;
 # Ok::<(), std::io::Error>(())
 ```
 
-An unbuffered file is refused on a remote device, where the claim cannot hold.
+An unbuffered file is refused on a remote device, where the claim cannot hold. The handle is asked where it
+is after the open, so a link is judged by the handle it opens: followed, the file it leads to; opened with
+`open_reparse_point`, the link itself.
+
+### By identity
+
+A file has an identity, `FileId`: its volume's serial number and a 128-bit identifier, read from any handle to
+it. `OpenedFile::open_by_id` opens it again by that, or by a 64-bit file ID or an object ID, on the volume of a
+hint, which is any handle on that volume ([DI-D-70](../durable-ioring/DESIGN-NOTES.md#di-d-70)). Its options are
+`ByIdOptions`, since `OpenFileById` takes no disposition and no attributes. The call never sees a `FileId`'s
+volume, so the file it opens is asked its identity, and one from another volume is refused as an
+`IdentityMismatch`. An identifier can name a directory, which opens, and a target made from it faults every read
+and write ([DI-D-72](../durable-ioring/DESIGN-NOTES.md#di-d-72)).
+
+```rust
+use win_durable_ioring::windows_backend::{ByIdOptions, Cached, FileOptions, OpenedFile};
+use win_durable_ioring::Wtf16String;
+
+let path = std::env::temp_dir().join(format!("durable-ioring-by-id-{}", std::process::id()));
+std::fs::write(&path, b"by identity")?;
+let file = OpenedFile::<Cached, _>::open(
+    Wtf16String::from_os_str(path.as_os_str()),
+    FileOptions::new().read(),
+)?;
+let id = file.file_id()?;
+
+// Any handle on the volume is a hint: here, another file's, opened by std.
+let neighbour = path.with_extension("neighbour");
+std::fs::write(&neighbour, b"")?;
+let hint = std::fs::File::open(&neighbour)?;
+let again = OpenedFile::<Cached, _>::open_by_id(hint, id, ByIdOptions::new().read())?;
+assert_eq!(again.file_id()?, id);
+# drop((file, again));
+# std::fs::remove_file(&path)?;
+# std::fs::remove_file(&neighbour)?;
+# Ok::<(), std::io::Error>(())
+```
+
+### Reopening
+
+`OpenedFile::reopen` makes a new handle to what a handle already names, through `ReOpenFile`, in the buffering
+mode and with the access its type asks for ([DI-D-71](../durable-ioring/DESIGN-NOTES.md#di-d-71)): cached to
+unbuffered and back, or a read-only handle for a scrubber beside the writer. The original is any handle, this
+crate's or one opened elsewhere, and the result is judged by the same checks as an open by path. Its options are
+`ReopenOptions`. The reopen's sharing is judged against every handle still open to the file, the original among
+them, so a reopen of a file its original opened without sharing is refused as a `SharingViolation`.
+
+```rust
+use win_durable_ioring::windows_backend::{
+    Cached, FileOptions, OpenedFile, ReadOnly, ReopenOptions, Unbuffered,
+};
+use win_durable_ioring::Wtf16String;
+
+let path = std::env::temp_dir().join(format!("durable-ioring-reopen-{}", std::process::id()));
+std::fs::write(&path, [0u8; 4096])?;
+let writer = OpenedFile::<Cached, _>::open(
+    Wtf16String::from_os_str(path.as_os_str()),
+    FileOptions::new().read().write(),
+)?;
+
+let scrubber = OpenedFile::<Unbuffered, ReadOnly>::reopen(
+    writer.handle().clone(),
+    ReopenOptions::new().read(),
+)?;
+assert_eq!(scrubber.file_id()?, writer.file_id()?);
+# drop((writer, scrubber));
+# std::fs::remove_file(&path)?;
+# Ok::<(), std::io::Error>(())
+```
 
 ### A raw volume
 
@@ -86,11 +311,13 @@ file system on it needs and which fails if anything else has the volume open.
 
 ```rust,no_run
 use win_durable_ioring::windows_backend::{
-    OpenedVolume, Unbuffered, VolumeOptions, VolumePath, Win32FileTarget,
+    OpenedVolume, ReadWrite, Unbuffered, VolumeOptions, VolumePath, Win32FileTarget,
 };
 
 let path = VolumePath::drive('E')?;
-let volume = OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new().lock(true))?;
+// The data access is named in the type: a volume opened for reading only is `ReadOnly`.
+let volume =
+    OpenedVolume::<Unbuffered, ReadWrite>::open(&path, VolumeOptions::new().lock(true))?;
 let target = Win32FileTarget::from_volume(volume);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
@@ -103,12 +330,18 @@ let target = Win32FileTarget::from_volume(volume);
 which a device control reports. It claims `SharedDevice` when opened unbuffered and `BestEffort` when opened cached, never
 `Complete`, for the reason a volume does not. Windows documents that it blocks a direct write to a sector a mounted volume covers, so a
 disk with volumes on it is written through them, or has them locked or is taken offline first; the
-tests here use a disk with no partition. Opening one for writing needs an administrator.
+tests here use a disk with no partition. Opening one for writing needs an administrator. A disk and a
+volume are opened sharing reading, writing and deletion unless `DiskOptions::share` or
+`VolumeOptions::share` takes a `ShareMode` otherwise, and a conflict is the same `SharingViolation` a file
+reports.
 
 ```rust,no_run
-use win_durable_ioring::windows_backend::{DiskPath, OpenedDisk, Unbuffered, Win32FileTarget};
+use win_durable_ioring::windows_backend::{
+    DiskOptions, DiskPath, OpenedDisk, ReadOnly, Unbuffered, Win32FileTarget,
+};
 
-let disk = OpenedDisk::<Unbuffered>::open(DiskPath::number(3))?;
+// The data access is named in the type: this one is opened for reading only.
+let disk = OpenedDisk::<Unbuffered, ReadOnly>::open(DiskPath::number(3), DiskOptions::new())?;
 let target = Win32FileTarget::from_disk(disk);
 # Ok::<(), std::io::Error>(())
 ```
@@ -147,16 +380,16 @@ flush of a file report the error given whatever the device answered. Setting up 
 # let path = std::env::temp_dir().join(format!("durable-ioring-heal-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
-#     &path,
-#     windows_backend::FileOptions::new().read(true).write(true),
+#     win_durable_ioring::Wtf16String::from_os_str(path.as_os_str()),
+#     windows_backend::FileOptions::new().read().write(),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
-#     files: vec![TargetSetup {
-#         key: FILE,
-#         target: windows_backend::Win32FileTarget::new(file),
-#     }],
+#     files: vec![TargetSetup::new(
+#         FILE,
+#         windows_backend::Win32FileTarget::new(file),
+#     )],
 #     buffers: Vec::new(),
 #     provider: None,
 #     diagnostics: None,
@@ -231,16 +464,16 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 # let path = std::env::temp_dir().join(format!("durable-ioring-many-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
-#     &path,
-#     windows_backend::FileOptions::new().read(true).write(true),
+#     win_durable_ioring::Wtf16String::from_os_str(path.as_os_str()),
+#     windows_backend::FileOptions::new().read().write(),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
-#     files: vec![TargetSetup {
-#         key: FILE,
-#         target: windows_backend::Win32FileTarget::new(file),
-#     }],
+#     files: vec![TargetSetup::new(
+#         FILE,
+#         windows_backend::Win32FileTarget::new(file),
+#     )],
 #     buffers: Vec::new(),
 #     provider: None,
 #     diagnostics: None,
@@ -320,16 +553,16 @@ fails as never issued.
 # let path = std::env::temp_dir().join(format!("durable-ioring-abandon-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
-#     &path,
-#     windows_backend::FileOptions::new().read(true).write(true),
+#     win_durable_ioring::Wtf16String::from_os_str(path.as_os_str()),
+#     windows_backend::FileOptions::new().read().write(),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
-#     files: vec![TargetSetup {
-#         key: FILE,
-#         target: windows_backend::Win32FileTarget::new(file),
-#     }],
+#     files: vec![TargetSetup::new(
+#         FILE,
+#         windows_backend::Win32FileTarget::new(file),
+#     )],
 #     buffers: Vec::new(),
 #     provider: None,
 #     diagnostics: None,

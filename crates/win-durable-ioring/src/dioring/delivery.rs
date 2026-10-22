@@ -81,7 +81,7 @@ where
         }
     }
 
-    /// A duplicate of the event the pool sets, if the instance has one: `None` unless signalled.
+    /// A clone of the event the pool sets, if the instance has one: `None` unless signalled.
     pub(crate) fn signal(&self) -> Option<io::Result<Event>> {
         match self {
             Self::Signalled(signalled) => Some(signalled.signal()),

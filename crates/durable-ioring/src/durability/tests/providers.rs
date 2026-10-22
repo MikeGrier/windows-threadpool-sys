@@ -38,7 +38,12 @@ const BY_BOTH: MarkingKind = MarkingKind::Covered {
 };
 
 fn serve(lineage: &mut Lineage, ids: &[u32]) {
-    lineage.serve(ids.iter().map(|&d| DomainId(d)).collect());
+    lineage.serve(
+        ids.iter().map(|&d| DomainId(d)).collect(),
+        ids.iter()
+            .map(|d| crate::types::FlushDomain::new(format!("d{d}").into_bytes()))
+            .collect(),
+    );
 }
 
 /// The single request a change asked of the provider.

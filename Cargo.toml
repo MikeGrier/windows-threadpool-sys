@@ -17,6 +17,7 @@ members = [
 	"crates/win-text-sys",
 	"crates/win-debugging-sys",
 	"crates/win-etw-sys",
+	"crates/durable-ioring-events",
 	"crates/win-time-sys",
 	"crates/win-volume-sys",
 	"crates/windows-file-enumeration-sys",

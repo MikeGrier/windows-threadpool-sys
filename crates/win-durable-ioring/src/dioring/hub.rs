@@ -23,8 +23,8 @@ use durable_ioring::EpochId;
 use durable_ioring::Lineage;
 use durable_ioring::StampClock;
 use durable_ioring::driver::inconsistent;
-use durable_ioring::driver::lock;
 use durable_ioring::driver::{Answer, DomainCall};
+use durable_ioring::driver::{ENGINE_LOCK, LockWatch, lock};
 use durable_ioring::driver::{Home, InstanceId};
 
 /// What an instance shares with its paths off the consumer's thread.
@@ -42,7 +42,13 @@ where
     /// The instance, for what an inconsistency names.
     instance: InstanceId,
     diagnostics: Arc<dyn DiagnosticSink>,
+    /// Times the waits for `engine`'s lock.
+    watch: LockWatch,
     /// Provider completions made and not yet answered, dropped ones included.
+    ///
+    /// Not taken through `watch`: it is held only for an increment or a decrement, so a wait for it
+    /// is not a delay worth reporting (the engineer, 2026-10-20). If more work comes to be done
+    /// with it held, that changes, and the wait for it may then warrant a lock name of its own.
     unanswered: Mutex<usize>,
     /// Notified when the last unanswered completion is answered.
     answered: Condvar,
@@ -61,20 +67,22 @@ where
         readiness: Event,
         instance: InstanceId,
         diagnostics: Arc<dyn DiagnosticSink>,
+        watch: LockWatch,
     ) -> Self {
         Self {
             engine,
             readiness,
             instance,
             diagnostics,
+            watch,
             unanswered: Mutex::new(0),
             answered: Condvar::new(),
         }
     }
 
-    /// A duplicate of the readiness event.
+    /// A clone of the readiness event, sharing its handle.
     pub(crate) fn readiness(&self) -> io::Result<Event> {
-        self.readiness.try_clone()
+        Ok(self.readiness.clone())
     }
 
     /// Entries became poppable where there were none: set the readiness event (DI-D-28). Called
@@ -106,7 +114,11 @@ where
     /// Act on the engine, if the instance has not ended, and signal if that made entries
     /// poppable.
     fn reach(&self, act: impl FnOnce(&mut PoolEngine<E, B, C, K, R>) -> bool) {
-        let deliver = lock(&self.engine).as_mut().is_some_and(act);
+        let deliver = self
+            .watch
+            .lock(&self.engine, ENGINE_LOCK)
+            .as_mut()
+            .is_some_and(act);
         if deliver {
             self.signal();
         }

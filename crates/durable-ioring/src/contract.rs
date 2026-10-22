@@ -13,6 +13,7 @@ use std::io;
 use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
 
 use crate::io_target::IoTarget;
+use crate::key::{ReadKey, TargetKey, WriteKey};
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
     ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo, PushError, ReadOptions,
@@ -87,14 +88,15 @@ pub trait DurableRing {
     /// a `Win32FileTarget`.
     type Target: IoTarget;
 
-    /// A duplicate of the readiness signal (DI-D-28): one the instance owns, set after an entry
-    /// becomes poppable and at least whenever the queue goes from empty to non-empty, and when a
-    /// [`pop`](Self::pop) has a failure to report (DI-D-58). One waiter; pop until `None` after
-    /// every wake; a wake with nothing to pop is normal.
+    /// The readiness signal (DI-D-28), as a value the caller holds: a second holder of the
+    /// instance's signal, or a duplicate where the implementation's handles cannot be shared. It
+    /// is set after an entry becomes poppable and at least whenever the queue goes from empty to
+    /// non-empty, and when a [`pop`](Self::pop) has a failure to report (DI-D-58). One waiter; pop
+    /// until `None` after every wake; a wake with nothing to pop is normal.
     ///
     /// # Errors
     ///
-    /// The error from making the duplicate.
+    /// The error from making the value, where making it can fail.
     fn readiness(&mut self) -> io::Result<Self::Readiness>;
 
     /// Give the instance a target after construction, under a key unique within the instance. What
@@ -103,10 +105,12 @@ pub trait DurableRing {
     ///
     /// # Errors
     ///
-    /// An [`AddTargetError`] handing the target back, when one is already present under `key`.
-    fn add_target(
+    /// An [`AddTargetError`] handing the target back, when one is already present under `key`, or
+    /// when `key` is a [`Key<A>`](crate::Key) that declares more access than the target states
+    /// (DI-13.10); the error's `cause` says which. An untyped [`IoTargetKey`] declares nothing.
+    fn add_target<K: TargetKey>(
         &mut self,
-        key: IoTargetKey,
+        key: K,
         target: Self::Target,
     ) -> Result<(), AddTargetError<Self::Target>>;
 
@@ -168,9 +172,9 @@ pub trait DurableRing {
     /// # Errors
     ///
     /// As [`write_with`](Self::write_with).
-    fn write(
+    fn write<K: WriteKey>(
         &mut self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         buffer: Self::Buffer,
         tag: Tag<'_, Self::Ids>,
@@ -192,9 +196,9 @@ pub trait DurableRing {
     /// A [`PushError`] handing back the buffer and the context, for a file the instance was not
     /// given, a lineage -- the write's or the gate's -- it cannot answer for, a gate already
     /// abandoned, a gate that would close a cycle (DI-D-23), or a ring that refused the push.
-    fn write_with(
+    fn write_with<K: WriteKey>(
         &mut self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         buffer: Self::Buffer,
         tag: Tag<'_, Self::Ids>,
@@ -209,9 +213,9 @@ pub trait DurableRing {
     /// # Errors
     ///
     /// As [`read_with`](Self::read_with).
-    fn read(
+    fn read<K: ReadKey>(
         &mut self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         buffer: Self::Buffer,
         context: Self::Context,
@@ -232,9 +236,9 @@ pub trait DurableRing {
     /// A [`PushError`] handing back the buffer and the context, for a file the instance was not
     /// given, a gate's lineage it cannot answer for, a gate already abandoned, or a ring that
     /// refused the push.
-    fn read_with(
+    fn read_with<K: ReadKey>(
         &mut self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         buffer: Self::Buffer,
         context: Self::Context,
@@ -387,9 +391,9 @@ pub trait RegisteredBufferRing: DurableRing {
     /// # Errors
     ///
     /// As [`write_registered_with`](Self::write_registered_with).
-    fn write_registered(
+    fn write_registered<K: WriteKey>(
         &mut self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         span: RegisteredSpan,
         tag: Tag<'_, Self::Ids>,
@@ -405,9 +409,9 @@ pub trait RegisteredBufferRing: DurableRing {
     ///
     /// A [`PushError`] handing back the context, as for [`DurableRing::write_with`], and for an
     /// instance built without registered buffers or a span the registration does not contain.
-    fn write_registered_with(
+    fn write_registered_with<K: WriteKey>(
         &mut self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         span: RegisteredSpan,
         tag: Tag<'_, Self::Ids>,
@@ -420,9 +424,9 @@ pub trait RegisteredBufferRing: DurableRing {
     /// # Errors
     ///
     /// As [`read_registered_with`](Self::read_registered_with).
-    fn read_registered(
+    fn read_registered<K: ReadKey>(
         &mut self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         span: RegisteredSpan,
         context: Self::Context,
@@ -435,9 +439,9 @@ pub trait RegisteredBufferRing: DurableRing {
     /// # Errors
     ///
     /// As [`write_registered_with`](Self::write_registered_with), less the epoch.
-    fn read_registered_with(
+    fn read_registered_with<K: ReadKey>(
         &mut self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         span: RegisteredSpan,
         context: Self::Context,

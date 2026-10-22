@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::{MEMORY, MemoryBackend, MemoryTarget};
+use crate::access::Access;
 use crate::backend::{
     Completion, IoBackend, RefusalCause, RegisteredRegion, Submission, SubmissionData,
     SubmissionOp, SubmissionToken,
@@ -397,6 +398,108 @@ fn the_targets_geometry_is_enforced() {
     );
     backend.push(write(4, 512, &[0; 1024])).expect("aligned");
     backend.push(commit(5)).expect("a commit has no geometry");
+}
+
+/// A backend with `KEY` attached as a target of `access`.
+fn with_access(access: Access) -> MemoryBackend {
+    let mut backend = queues(8, 16);
+    backend
+        .attach(KEY, MemoryTarget::new().with_access(access))
+        .expect("a new key");
+    backend
+}
+
+#[test]
+fn a_target_that_cannot_write_refuses_a_write_and_takes_a_read() {
+    let mut backend = with_access(Access::ReadOnly);
+    let refused = backend
+        .push(write(1, 0, b"no"))
+        .expect_err("a write to a read-only target");
+    assert_eq!(refused.cause, RefusalCause::AccessDenied);
+    assert_eq!(
+        refused.submission.token,
+        SubmissionToken(1),
+        "the submission comes back"
+    );
+    assert!(contents(&backend).is_empty(), "nothing was written");
+    let done = run(&mut backend, vec![read(2, 0, 4)]);
+    assert_eq!(done[0].result, Ok(0), "a read of an empty target");
+}
+
+#[test]
+fn a_target_that_cannot_read_refuses_a_read_and_takes_a_write() {
+    let mut backend = with_access(Access::WriteOnly);
+    let refused = backend
+        .push(read(1, 0, 4))
+        .expect_err("a read from a write-only target");
+    assert_eq!(refused.cause, RefusalCause::AccessDenied);
+    let done = run(&mut backend, vec![write(2, 0, b"yes")]);
+    assert_eq!(done[0].result, Ok(3));
+    assert_eq!(contents(&backend), b"yes");
+}
+
+#[test]
+fn a_target_that_can_do_both_takes_both_and_a_default_target_can() {
+    let mut backend = with_access(Access::ReadWrite);
+    let done = run(&mut backend, vec![write(1, 0, b"both"), read(2, 0, 4)]);
+    assert_eq!(
+        (done[0].result.clone(), done[1].result.clone()),
+        (Ok(4), Ok(4))
+    );
+    assert_eq!(MemoryTarget::new().access(), Access::ReadWrite);
+}
+
+#[test]
+fn a_commit_is_not_refused_on_account_of_the_targets_access() {
+    // A commit is issued only to a target with writes, so no access refuses it.
+    for access in [Access::ReadOnly, Access::WriteOnly, Access::ReadWrite] {
+        let mut backend = with_access(access);
+        let done = run(&mut backend, vec![commit(1)]);
+        assert_eq!(done[0].result, Ok(0), "{access:?}");
+    }
+}
+
+#[test]
+fn an_operation_the_access_does_not_cover_is_named_after_an_unknown_target_and_before_the_geometry()
+{
+    let geometry = Geometry::new(512, 512, 1).expect("powers of two");
+    let mut backend = queues(8, 16);
+    backend
+        .attach(
+            KEY,
+            MemoryTarget::new()
+                .with_geometry(geometry)
+                .with_access(Access::ReadOnly),
+        )
+        .expect("a new key");
+    // Off the sector as well as a write to a read-only target: the access is named.
+    assert_eq!(
+        refusal(&mut backend, write(1, 1, &[0; 3])),
+        RefusalCause::AccessDenied
+    );
+    // An unattached key has no access to speak of.
+    let mut unattached = write(2, 0, b"x");
+    unattached.target = IoTargetKey(99);
+    assert_eq!(
+        refusal(&mut backend, unattached),
+        RefusalCause::UnknownTarget
+    );
+}
+
+#[test]
+fn check_refuses_for_the_access_as_a_push_does() {
+    let backend = with_access(Access::ReadOnly);
+    assert_eq!(
+        backend.check(KEY, &write(1, 0, b"x").op),
+        Err(RefusalCause::AccessDenied)
+    );
+    assert_eq!(backend.check(KEY, &read(2, 0, 1).op), Ok(()));
+    let backend = with_access(Access::WriteOnly);
+    assert_eq!(
+        backend.check(KEY, &read(3, 0, 1).op),
+        Err(RefusalCause::AccessDenied)
+    );
+    assert_eq!(backend.check(KEY, &write(4, 0, b"x").op), Ok(()));
 }
 
 #[test]

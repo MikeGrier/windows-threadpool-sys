@@ -85,6 +85,10 @@
             "package-name": "win-etw-sys",
             "component": "win-etw-sys"
         },
+        "crates/durable-ioring-events": {
+            "package-name": "durable-ioring-events",
+            "component": "durable-ioring-events"
+        },
     "crates/windows-file-enumeration-sys": {
             "package-name": "windows-file-enumeration-sys",
             "component": "windows-file-enumeration-sys"
