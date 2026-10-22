@@ -264,8 +264,9 @@ pub fn present<T>(guard: MutexGuard<'_, Option<T>>) -> EngineGuard<'_, T> {
     present_watched(WatchedGuard::unwatched(guard))
 }
 
-/// The engine in a slot locked through a [`LockWatch`](crate::lock_watch::LockWatch), whose wait
-/// is reported when the guard is dropped.
+/// The engine in a slot locked through a [`LockWatch`](crate::lock_watch::LockWatch), whose wait,
+/// if the lock was contended, is reported when the lock is acquired, before the guard is returned,
+/// and not when the guard is dropped: the pair does not include the time the lock is held.
 ///
 /// # Panics
 ///
