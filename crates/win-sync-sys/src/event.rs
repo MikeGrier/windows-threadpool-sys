@@ -145,26 +145,6 @@ impl Event {
         Ok(())
     }
 
-    /// A second handle to the same event, with the same access.
-    ///
-    /// **Being removed** ([WS-D-10](../DESIGN-NOTES.md#ws-d-10)): `Clone` shares
-    /// the one handle and gives what this did without a new one. It remains
-    /// only while the workspace's callers move to `Clone`.
-    ///
-    /// Setting or resetting either affects both, and the event lives until
-    /// every handle to it is closed, so a clone may outlive the original.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error from `DuplicateHandle`. Like [`new`](Self::new)'s, no
-    /// test reaches it: duplicating a handle this process owns fails only when
-    /// the process cannot get another handle.
-    pub fn try_clone(&self) -> io::Result<Self> {
-        Ok(Self {
-            handle: SharedHandle::new(self.handle.as_handle().try_clone_to_owned()?),
-        })
-    }
-
     /// The handle, as an [`OwnedHandle`], if `self` is its last holder.
     ///
     /// # Errors
@@ -177,11 +157,13 @@ impl Event {
             .map_err(|handle| Self { handle })
     }
 
-    /// A second handle to the same event that can wait on it and do nothing else.
+    /// A new handle to the same event that can wait on it and do nothing else: the one operation
+    /// here that makes a handle, because access belongs to a handle and narrowing it needs a new
+    /// one ([WS-D-10](../DESIGN-NOTES.md#ws-d-10)).
     ///
     /// The handle carries `SYNCHRONIZE` access alone, so it can neither set nor reset the event:
-    /// the kernel refuses a `SetEvent` or `ResetEvent` on it. That is something [`try_clone`] cannot
-    /// give, since its clone holds whatever access the original does. See [`WaitOnlyEvent`] for
+    /// the kernel refuses a `SetEvent` or `ResetEvent` on it. A clone cannot give that, since it
+    /// shares the original's handle and so its access. See [`WaitOnlyEvent`] for
     /// what the result is, why it is not an `Event`, and what the guarantee does not cover.
     ///
     /// A wait through it takes what a signalled event gives, as any wait does: waiting through a
@@ -190,27 +172,13 @@ impl Event {
     ///
     /// # Errors
     ///
-    /// Returns the error from `DuplicateHandle`. Like [`try_clone`](Self::try_clone)'s, no test
-    /// reaches it: duplicating a handle this process owns fails only when the process cannot get
-    /// another handle.
-    ///
-    /// [`try_clone`]: Self::try_clone
+    /// Returns the error from `DuplicateHandle`. Like [`new`](Self::new)'s, no test reaches it:
+    /// duplicating a handle this process owns fails only when the process cannot get another
+    /// handle.
     pub fn duplicate_wait_only(&self) -> io::Result<WaitOnlyEvent> {
         Ok(WaitOnlyEvent {
             handle: SharedHandle::new(duplicate_handle_with_access(self, Access::SYNCHRONIZE)?),
         })
-    }
-
-    /// The former name of [`duplicate_wait_only`](Self::duplicate_wait_only).
-    ///
-    /// **Being removed** ([WS-D-10](../DESIGN-NOTES.md#ws-d-10)): `clone` now means sharing a
-    /// handle, and this makes a new one.
-    ///
-    /// # Errors
-    ///
-    /// As [`duplicate_wait_only`](Self::duplicate_wait_only).
-    pub fn try_clone_wait_only(&self) -> io::Result<WaitOnlyEvent> {
-        self.duplicate_wait_only()
     }
 }
 
@@ -240,22 +208,6 @@ pub struct WaitOnlyEvent {
 }
 
 impl WaitOnlyEvent {
-    /// A second wait-only handle to the same event.
-    ///
-    /// **Being removed** ([WS-D-10](../DESIGN-NOTES.md#ws-d-10)): `Clone` shares the one handle.
-    ///
-    /// It holds the same access as this one, so the clone cannot signal either.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error from `DuplicateHandle`; no test reaches it, as for
-    /// [`Event::try_clone`].
-    pub fn try_clone(&self) -> io::Result<Self> {
-        Ok(Self {
-            handle: SharedHandle::new(self.handle.as_handle().try_clone_to_owned()?),
-        })
-    }
-
     /// The handle, as an [`OwnedHandle`], if `self` is its last holder.
     ///
     /// # Errors
@@ -287,15 +239,6 @@ impl From<WaitOnlyEvent> for SharedHandle {
     }
 }
 
-/// **Being removed** ([WS-D-10](../DESIGN-NOTES.md#ws-d-10)) in favour of
-/// [`WaitOnlyEvent::try_into_owned`], which cannot fail silently. While a clone is held this
-/// duplicates the handle, and panics if the process cannot get another.
-impl From<WaitOnlyEvent> for OwnedHandle {
-    fn from(event: WaitOnlyEvent) -> Self {
-        last_or_duplicate(event.handle)
-    }
-}
-
 impl AsHandle for Event {
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
@@ -314,26 +257,6 @@ impl From<Event> for SharedHandle {
     fn from(event: Event) -> Self {
         event.handle
     }
-}
-
-/// **Being removed** ([WS-D-10](../DESIGN-NOTES.md#ws-d-10)) in favour of
-/// [`Event::try_into_owned`], which cannot fail silently. While a clone is held this duplicates the
-/// handle, and panics if the process cannot get another.
-impl From<Event> for OwnedHandle {
-    fn from(event: Event) -> Self {
-        last_or_duplicate(event.handle)
-    }
-}
-
-/// The handle if this was its last holder, and a duplicate of it otherwise: the transitional body of
-/// the two `From` conversions above, which predate sharing.
-fn last_or_duplicate(handle: SharedHandle) -> OwnedHandle {
-    handle.try_into_owned().unwrap_or_else(|shared| {
-        shared
-            .as_handle()
-            .try_clone_to_owned()
-            .expect("duplicating a handle this process holds")
-    })
 }
 
 #[cfg(test)]

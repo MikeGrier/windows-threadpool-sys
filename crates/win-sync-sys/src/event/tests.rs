@@ -164,24 +164,24 @@ fn reset_withdraws_an_auto_reset_signal_nobody_has_taken() {
 #[test]
 fn a_clone_is_the_same_object_and_a_new_event_is_not() {
     let original = event(ResetMode::Manual, false);
-    let clone = original.try_clone().expect("clone");
+    let clone = original.clone();
     let other = event(ResetMode::Manual, false);
     assert!(same_object(&original, &clone), "a clone is the same event");
     assert!(
         !same_object(&original, &other),
         "and the comparison can tell two events apart"
     );
-    assert_ne!(
+    assert_eq!(
         original.as_raw_handle(),
         clone.as_raw_handle(),
-        "a clone is a second handle, not the same handle twice"
+        "a clone is the same handle, held twice (WS-D-10)"
     );
 }
 
 #[test]
 fn a_clone_and_its_original_signal_each_other() {
     let original = event(ResetMode::Manual, false);
-    let clone = original.try_clone().expect("clone");
+    let clone = original.clone();
     original.set().expect("set the original");
     assert!(take(&clone), "the clone saw the original's set");
     original.reset().expect("reset the original");
@@ -195,7 +195,7 @@ fn a_clone_and_its_original_signal_each_other() {
 #[test]
 fn a_clone_outlives_its_original() {
     let original = event(ResetMode::Manual, false);
-    let clone = original.try_clone().expect("clone");
+    let clone = original.clone();
     drop(original);
     clone.set().expect("set the surviving clone");
     assert!(take(&clone));
@@ -204,7 +204,7 @@ fn a_clone_outlives_its_original() {
 #[test]
 fn a_set_on_another_thread_releases_a_waiter_on_this_one() {
     let event = event(ResetMode::Auto, false);
-    let signaller = event.try_clone().expect("clone");
+    let signaller = event.clone();
     let thread = std::thread::spawn(move || signaller.set());
     assert_eq!(wait(event.as_handle(), BOUND_MS), WAIT_OBJECT_0);
     thread
@@ -216,7 +216,7 @@ fn a_set_on_another_thread_releases_a_waiter_on_this_one() {
 #[test]
 fn a_reset_on_another_thread_is_seen_on_this_one() {
     let event = event(ResetMode::Manual, true);
-    let resetter = event.try_clone().expect("clone");
+    let resetter = event.clone();
     std::thread::spawn(move || resetter.reset())
         .join()
         .expect("the resetting thread")
@@ -229,7 +229,7 @@ fn a_reset_on_another_thread_is_seen_on_this_one() {
 fn waiters(event: &Event, count: usize) -> mpsc::Receiver<(usize, u32)> {
     let (tx, rx) = mpsc::channel();
     for which in 0..count {
-        let waiter = event.try_clone().expect("clone");
+        let waiter = event.clone();
         let tx = tx.clone();
         std::thread::spawn(move || {
             let result = wait(waiter.as_handle(), BOUND_MS);
@@ -312,18 +312,6 @@ fn set_and_reset_succeed_on_an_adopted_handle_with_modify_state() {
 }
 
 #[test]
-fn an_event_converted_into_an_owned_handle_is_the_same_object() {
-    let event = event(ResetMode::Manual, false);
-    let keeper = event.try_clone().expect("clone");
-    let raw = event.as_raw_handle();
-    let owned: OwnedHandle = event.into();
-    assert_eq!(owned.as_raw_handle(), raw, "the handle itself moved out");
-    assert!(same_object(&owned, &keeper));
-    keeper.set().expect("set through the kept clone");
-    assert!(take(&owned), "the owned handle sees the set");
-}
-
-#[test]
 fn as_handle_lends_the_handle_as_raw_handle_names() {
     let event = event(ResetMode::Auto, false);
     assert_eq!(event.as_handle().as_raw_handle(), event.as_raw_handle());
@@ -336,7 +324,7 @@ fn an_event_is_send_and_sync() {
 }
 
 fn wait_only(event: &Event) -> WaitOnlyEvent {
-    event.try_clone_wait_only().expect("wait-only clone")
+    event.duplicate_wait_only().expect("a wait-only duplicate")
 }
 
 /// The error a raw `SetEvent` on `handle` reports, `None` if it succeeded.
@@ -402,7 +390,7 @@ fn a_wait_only_clone_can_neither_set_nor_reset_the_event() {
 #[test]
 fn a_wait_only_clone_converted_to_a_handle_and_adopted_as_an_event_cannot_set_it() {
     let event = event(ResetMode::Manual, false);
-    let handle: OwnedHandle = wait_only(&event).into();
+    let handle = wait_only(&event).try_into_owned().expect("the only holder");
     // SAFETY: a duplicate of an event is an event, and this one carries SYNCHRONIZE.
     let adopted = unsafe { Event::from_owned_handle(handle) };
     let refused = adopted.set().expect_err("the access was narrowed away");
@@ -414,7 +402,7 @@ fn a_wait_only_clone_converted_to_a_handle_and_adopted_as_an_event_cannot_set_it
 fn a_clone_of_a_wait_only_clone_is_wait_only_too() {
     let event = event(ResetMode::Manual, false);
     let first = wait_only(&event);
-    let second = first.try_clone().expect("clone the clone");
+    let second = first.clone();
     assert!(same_object(&first, &second));
     assert!(same_object(&event, &second));
     assert_eq!(raw_set_error(&second), Some(ERROR_ACCESS_DENIED as i32));
@@ -425,7 +413,7 @@ fn a_clone_of_a_wait_only_clone_is_wait_only_too() {
 #[test]
 fn a_wait_only_clone_outlives_the_event_it_came_from() {
     let event = event(ResetMode::Manual, false);
-    let keeper = event.try_clone().expect("clone");
+    let keeper = event.clone();
     let waiter = wait_only(&event);
     drop(event);
     keeper.set().expect("set through the kept clone");
@@ -452,7 +440,7 @@ fn a_wait_only_clone_is_waited_on_by_the_crates_wait() {
 fn a_set_on_another_thread_releases_a_wait_only_waiter_on_this_one() {
     let event = event(ResetMode::Auto, false);
     let waiter = wait_only(&event);
-    let signaller = event.try_clone().expect("clone");
+    let signaller = event.clone();
     let worker = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(10));
         signaller.set()
@@ -470,7 +458,7 @@ fn as_handle_lends_a_wait_only_clones_handle_as_raw_handle_names() {
     let waiter = wait_only(&event);
     assert_eq!(waiter.as_handle().as_raw_handle(), waiter.as_raw_handle());
     let raw = waiter.as_raw_handle();
-    let owned: OwnedHandle = waiter.into();
+    let owned = waiter.try_into_owned().expect("the only holder");
     assert_eq!(owned.as_raw_handle(), raw, "the handle itself moved out");
 }
 
@@ -480,7 +468,7 @@ fn a_wait_only_event_is_send_and_sync() {
     assert_send_and_sync::<WaitOnlyEvent>();
 }
 
-// --- clones share one handle (WS-2.1, WS-D-10) ---
+// --- clones share one handle (WS-2.2, WS-D-10) ---
 
 #[test]
 fn a_clone_shares_the_handle_rather_than_making_one() {
@@ -537,20 +525,6 @@ fn an_event_converted_into_a_shared_handle_is_its_handle() {
     assert_eq!(shared.as_raw_handle(), clone.as_raw_handle());
     clone.set().expect("set through the clone");
     assert!(take(&shared), "the shared handle sees the set");
-}
-
-#[test]
-fn the_conversion_to_an_owned_handle_duplicates_while_a_clone_is_held() {
-    // Transitional (WS-D-10): the conversion predates sharing, and is deleted with `try_clone`.
-    let event = event(ResetMode::Manual, false);
-    let clone = event.clone();
-    let owned: OwnedHandle = event.into();
-    assert_ne!(
-        owned.as_raw_handle(),
-        clone.as_raw_handle(),
-        "a second handle"
-    );
-    assert!(same_object(&owned, &clone), "to the same event");
 }
 
 #[test]

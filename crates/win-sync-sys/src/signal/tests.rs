@@ -55,7 +55,7 @@ fn the_signal_object_may_be_given_by_reference_or_by_value() {
     assert!(is_signalled(&by_reference));
 
     let by_value = manual(false);
-    let keeper = by_value.try_clone().expect("clone");
+    let keeper = by_value.clone();
     signal_object_and_wait(by_value, &wait, POLL, NO).expect("by value");
     assert!(is_signalled(&keeper));
 }
@@ -63,7 +63,7 @@ fn the_signal_object_may_be_given_by_reference_or_by_value() {
 #[test]
 fn the_wait_object_may_be_any_handle() {
     let signal = manual(false);
-    let owned: OwnedHandle = manual(true).into();
+    let owned: OwnedHandle = manual(true).try_into_owned().expect("the only holder");
     let outcome = signal_object_and_wait(&signal, &owned, POLL, NO).expect("the call");
     assert_eq!(outcome, WaitOutcome::Signalled);
 }
@@ -72,10 +72,7 @@ fn the_wait_object_may_be_any_handle() {
 fn two_threads_hand_a_turn_back_and_forth() {
     const ROUNDS: usize = 200;
     let (ping, pong) = (auto(false), auto(false));
-    let (their_ping, their_pong) = (
-        ping.try_clone().expect("clone"),
-        pong.try_clone().expect("clone"),
-    );
+    let (their_ping, their_pong) = (ping.clone(), pong.clone());
 
     // Each side signals only after the other's signal was taken, so an auto-reset signal is never
     // set twice before it is taken, which would merge two turns into one.
