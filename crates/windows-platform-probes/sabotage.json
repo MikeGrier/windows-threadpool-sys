@@ -1,6 +1,7 @@
 {
   "description": "Sabotage manifest for windows-platform-probes. Each entry is a defect that was actually run by hand while building M3; the manifest exists so those one-off verifications stop being discarded. See CHECKLIST.md M2.14.1. Run with --all-features because the corpus target, tests/a_real_report_agrees_with_itself.rs, requires oracle-in-renderer: with default features it is not built, so an entry only that target catches -- a wrong arm in its codes_for, for one -- would be scored as surviving.",
   "package": "windows-platform-probes",
+  "notCoveredHere": "this_build() reading windows-placement-probe's stamps in place of this crate's has no entry here, because whether a test can see it depends on the date: the two crates are calendar-versioned, the version is all that tells their identities apart, and on a day both are released they carry one version, so the test that holds it (build_identity::tests::this_crate_reads_its_own_stamps_not_the_placement_probes) says it cannot tell and passes. An entry would be caught on most days and survive on those, so a sweep's result would follow the calendar and not the code. The compiler already refuses the wrong crate's stamp variables, which leaves the rewiring to the placement probe's BuildIdentity::current() as the one way to read it. What would close it is a crate name in BuildIdentity, which the design notes record.",
   "testArgs": ["-p", "windows-platform-probes", "--locked", "--all-features"],
   "sabotages": [
     {
