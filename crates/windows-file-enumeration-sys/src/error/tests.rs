@@ -41,15 +41,15 @@ fn a_win32_code_displays_with_its_numeric_value() {
 
 #[test]
 fn a_request_error_without_a_call_behind_it_carries_no_code() {
-    let error = RequestError::new(RequestFailure::EmptyPath);
-    assert_eq!(error.failure(), RequestFailure::EmptyPath);
+    let error = RequestError::new(RequestFailure::InteriorNul);
+    assert_eq!(error.failure(), RequestFailure::InteriorNul);
     assert_eq!(error.code(), None);
     assert!(!error.to_string().is_empty());
 }
 
 #[test]
-fn a_resolution_failure_keeps_the_code_windows_reported() {
-    let error = RequestError::with_code(RequestFailure::PathResolution, Win32Error::from_code(123));
+fn a_capture_failure_keeps_the_code_windows_reported() {
+    let error = RequestError::with_code(RequestFailure::PathCapture, Win32Error::from_code(123));
     assert_eq!(error.code(), Some(Win32Error::from_code(123)));
     assert!(error.to_string().contains("123"));
 }
@@ -161,14 +161,8 @@ fn assert_descriptions_are_distinct(descriptions: &[(&str, &str)]) {
 #[test]
 fn every_request_failure_describes_itself_distinctly() {
     assert_descriptions_are_distinct(&[
-        ("EmptyPath", RequestFailure::EmptyPath.describe()),
         ("InteriorNul", RequestFailure::InteriorNul.describe()),
-        ("PathTooLong", RequestFailure::PathTooLong.describe()),
-        (
-            "NotFullyQualified",
-            RequestFailure::NotFullyQualified.describe(),
-        ),
-        ("PathResolution", RequestFailure::PathResolution.describe()),
+        ("PathCapture", RequestFailure::PathCapture.describe()),
         (
             "BufferCapacityUnrepresentable",
             RequestFailure::BufferCapacityUnrepresentable.describe(),

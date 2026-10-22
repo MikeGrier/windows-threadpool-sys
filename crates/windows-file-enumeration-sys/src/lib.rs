@@ -18,17 +18,19 @@
 //!
 //! # Safety
 //!
-//! The public surface is entirely safe: every FFI call the native engine makes
-//! is confined to a single caller-owned, size-checked buffer
-//! ([`EnumerationRequest::with_buffer_capacity`]), and no directory entry is
-//! ever opened individually -- the engine reads only from the batched
+//! The public surface is entirely safe. The directory's own calls are not made
+//! here: its open and its queries are `windows-namespace-request-sys` entries on
+//! one handle that is shared rather than duplicated, and every query reads into
+//! a single caller-owned, size-checked buffer
+//! ([`EnumerationRequest::with_buffer_capacity`]). No directory entry is ever
+//! opened individually -- the engine reads only from the batched
 //! `GetFileInformationByHandleEx` listing of the one directory handle the
 //! request named. A submitted enumeration's security context is captured
 //! synchronously on the submitter's own thread, before the request becomes
 //! visible to any worker, so the later directory open always runs as whoever
-//! asked for it rather than as the pool. The unsafe internals that make this
-//! true -- buffer aliasing, handle ownership, and thread-pool callback
-//! lifetime -- are recorded in [DESIGN-NOTES.md][1] and [DESIGN-RATIONALE.md][2].
+//! asked for it rather than as the pool. The crate holds no `unsafe` code: its
+//! root forbids it, in the tests as in the library, and the reasoning is
+//! recorded in [DESIGN-NOTES.md][1] (D-23) and [DESIGN-RATIONALE.md][2].
 //!
 //! [1]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-file-enumeration-sys/DESIGN-NOTES.md
 //! [2]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md
@@ -119,18 +121,16 @@
 //! ```
 
 #![cfg(windows)]
-#![forbid(unsafe_op_in_unsafe_fn)]
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 mod admission;
-mod buffer;
 mod completion;
 mod completion_ring;
 mod engine;
 mod entry;
 mod error;
 mod native;
-mod path;
 mod pattern;
 mod predicate;
 mod record;

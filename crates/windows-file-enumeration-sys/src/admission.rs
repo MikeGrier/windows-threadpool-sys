@@ -37,13 +37,13 @@
 //! outlive its handle says so with [`EnumerationHandle::detach`], which gives
 //! the reservation back rather than spending it.
 
+use io_buffers::AlignedBuf;
 use windows_impersonation_token_sys::{CaptureError, ImpersonationToken};
 
-use crate::buffer::NativeBuffer;
 use crate::completion::EnumerationId;
 use crate::engine::EngineState;
 use crate::error::{BeginError, BeginFailure};
-use crate::request::EnumerationRequest;
+use crate::request::{EnumerationRequest, RECORD_ALIGNMENT};
 use crate::session::SessionShared;
 use crate::submission_ring::{
     BeginMessage, CancelSlot, ControlMessage, SubmitRejection, release_cancel_slot,
@@ -200,7 +200,7 @@ pub(crate) fn try_begin_with_token(
     // because the buffer belongs to the enumeration it serves: a request is a
     // cheap, clonable, comparable description that may be submitted more than
     // once and is handed straight back when a begin is refused.
-    let Some(buffer) = NativeBuffer::try_new(request.buffer_capacity()) else {
+    let Ok(buffer) = AlignedBuf::zeroed(request.buffer_capacity(), RECORD_ALIGNMENT) else {
         release_cancel_slot(&shared.submissions, cancel);
         release_retire_slot(&shared.submissions, retire);
         drop(terminal);

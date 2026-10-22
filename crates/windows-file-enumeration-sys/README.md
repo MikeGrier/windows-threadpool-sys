@@ -22,7 +22,8 @@ This crate owns flat one-directory enumeration:
 - entries and exactly one terminal outcome per accepted request leave through a
   bounded single-receiver completion ring;
 - directory handles are opened under an explicitly captured
-  `ImpersonationToken`;
+  `ImpersonationToken`, and the directory is opened and queried through
+  `windows-namespace-request-sys`' entries on one shared handle;
 - native paths and names retain WTF-16 fidelity; and
 - caller-owned `GetFileInformationByHandleEx` buffers provide lossless bounded
   staging under completion-ring backpressure.

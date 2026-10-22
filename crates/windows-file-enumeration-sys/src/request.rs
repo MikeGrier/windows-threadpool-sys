@@ -9,11 +9,11 @@
 
 use std::path::Path;
 
+use windows_namespace_request_sys::{AnchoredPath, PathCaptureError};
 use wtf_string::{Wtf16Str, Wtf16String};
 
 use crate::entry::FileIdentityMode;
 use crate::error::{RequestError, RequestFailure};
-use crate::path;
 use crate::predicate::EntryPredicate;
 
 /// The default native buffer capacity, in bytes.
@@ -42,8 +42,8 @@ pub(crate) const RECORD_ALIGNMENT: usize = 8;
 ///
 /// **It says nothing about alignment**, and an earlier version of this comment
 /// claimed it did -- twice, in two places six lines apart, of which only one
-/// was corrected on the first attempt. [`crate::buffer::NativeBuffer`] stores
-/// `Vec<u64>`, so the allocation is 8-byte aligned; a length that is a whole
+/// was corrected on the first attempt. The buffer is an [`io_buffers::AlignedBuf`]
+/// made at 8 bytes, so its allocation is 8-byte aligned; a length that is a whole
 /// number of pages does not decide where the buffer *starts*, and a refill can
 /// begin partway through a page. What the constraint buys is a round request
 /// size with no part-page tail. Large-page allocations are a different
@@ -68,7 +68,7 @@ const PAGE_SIZE: usize = 4096;
 //
 // **And the first repair over-claimed in turn**, which the same review caught:
 // it said a page-multiple length makes "each refill begin on a page boundary".
-// It does not. `NativeBuffer` stores `Vec<u64>`, so the allocation is 8-byte
+// It does not. The buffer is an `AlignedBuf` made at 8, so the allocation is 8-byte
 // aligned and nothing more -- a length that is a whole number of pages says
 // nothing about where the buffer starts. What the constraint actually buys is a
 // page-sized *request*: a round amount for the kernel to fill per call, and one
@@ -108,7 +108,7 @@ const _: () = {
 /// One directory to enumerate, with the predicate and bounds that apply to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnumerationRequest {
-    path: Wtf16String,
+    path: AnchoredPath,
     predicate: EntryPredicate,
     file_identity_mode: FileIdentityMode,
     buffer_capacity: usize,
@@ -117,19 +117,25 @@ pub struct EnumerationRequest {
 impl EnumerationRequest {
     /// Build a request for a native WTF-16 path.
     ///
-    /// The path is validated and, unless it is already a verbatim `\\?\` path,
-    /// resolved to its fully qualified form now. The stored value is exactly
-    /// what a worker will later open.
+    /// The path is kept as it was given, and a relative one is fixed to the
+    /// process current directory as it is now, so that the request names the
+    /// same directory wherever and whenever it is performed. That is
+    /// `windows-namespace-request-sys`'s path contract, its `AnchoredPath`, taken
+    /// from there and not kept a second time here. Nothing else about the path
+    /// is checked: an empty path, a path longer than `MAX_PATH` and a `\\?\` path
+    /// that is not fully qualified reach the open, and its error is the
+    /// enumeration's terminal [`DirectoryOpen`](crate::EnumerationError::DirectoryOpen).
     ///
     /// # Errors
     ///
-    /// Returns [`RequestError`] for an empty path, an interior NUL, a `\\?\`
-    /// path that is not fully qualified, an ordinary path longer than
-    /// `MAX_PATH` before or after resolution, or a resolution failure reported
-    /// by Windows.
+    /// [`RequestFailure::InteriorNul`] for a path with a NUL before its end, and
+    /// [`RequestFailure::PathCapture`] if the current directory had to be read
+    /// and could not be.
     pub fn new(path: &Wtf16Str) -> Result<Self, RequestError> {
+        let path =
+            AnchoredPath::new(Wtf16String::from_units(path.as_units())).map_err(request_error)?;
         Ok(Self {
-            path: path::prepare(path)?,
+            path,
             predicate: EntryPredicate::default(),
             file_identity_mode: FileIdentityMode::default(),
             buffer_capacity: DEFAULT_BUFFER_CAPACITY,
@@ -183,9 +189,22 @@ impl EnumerationRequest {
         Ok(self)
     }
 
-    /// The exact path a worker will open.
+    /// The path exactly as the caller gave it.
     #[must_use]
     pub fn path(&self) -> &Wtf16Str {
+        self.path.given()
+    }
+
+    /// The path a worker will hand to Win32 to open the directory: the path as
+    /// given, or, for a relative one, that path grafted onto the current
+    /// directory of the moment the request was built.
+    #[must_use]
+    pub fn win32_path(&self) -> &Wtf16Str {
+        self.path.win32()
+    }
+
+    /// The path contract the open is built from, which is the request crate's.
+    pub(crate) fn anchored_path(&self) -> &AnchoredPath {
         &self.path
     }
 
@@ -206,6 +225,19 @@ impl EnumerationRequest {
     #[must_use]
     pub fn buffer_capacity(&self) -> usize {
         self.buffer_capacity
+    }
+}
+
+/// A path that could not be captured, as this crate reports it.
+fn request_error(error: PathCaptureError) -> RequestError {
+    match error {
+        PathCaptureError::InteriorNul => RequestError::new(RequestFailure::InteriorNul),
+        PathCaptureError::CurrentDirectory(code) => {
+            RequestError::with_code(RequestFailure::PathCapture, code)
+        }
+        // `CurrentDirectoryUnstable`, whose size kept changing and which has no
+        // code, and any failure of reading the current directory added later.
+        _ => RequestError::new(RequestFailure::PathCapture),
     }
 }
 

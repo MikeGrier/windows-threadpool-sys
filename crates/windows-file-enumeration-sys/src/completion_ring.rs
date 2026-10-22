@@ -36,6 +36,10 @@
 //!
 //! The receiver hands out a manual-reset event so a client that already owns a
 //! thread pool can integrate without dedicating a thread to a blocking receive.
+//! The ring holds it as a `win-sync-sys` [`Event`] and sets and resets it through
+//! that type; what a client arms a wait on is a [`WaitableHandle`] that shares the
+//! ring's handle, so no handle is duplicated and a client cannot set or reset it
+//! without `unsafe`.
 //! Its invariant is one line: **signalled exactly when the receiver has
 //! something to observe** -- a queued record, or the end of the stream. It is
 //! re-established under the ring lock at the end of every mutation, which is the
@@ -47,12 +51,11 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, BorrowedHandle};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, FALSE, HANDLE};
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, ResetEvent, SetEvent};
+use win_sync_sys::{Event, ResetMode};
 use windows_threadpool_sys::wait::WaitableHandle;
 
 use crate::completion::{Completion, EnumerationId, TerminalOutcome};
@@ -67,7 +70,7 @@ pub(crate) const MINIMUM_COMPLETION_CAPACITY: usize = 2;
 pub(crate) struct CompletionRing {
     state: Mutex<RingState>,
     arrived: Condvar,
-    doorbell: OnceLock<WaitableHandle>,
+    doorbell: OnceLock<Event>,
 }
 
 struct RingState {
@@ -288,24 +291,30 @@ impl CompletionRing {
     /// ring it reports on: a client that asks for it after records have already
     /// arrived must find it signalled.
     pub(crate) fn doorbell(&self) -> io::Result<BorrowedHandle<'_>> {
+        Ok(self.doorbell_event()?.as_handle())
+    }
+
+    /// The doorbell as a wait target that shares the ring's handle, as a
+    /// `ThreadpoolWait` requires.
+    ///
+    /// Made from a clone of the ring's [`Event`], so the wait and the ring hold
+    /// the one handle and the handle closes when the last of them drops. The
+    /// wait target gives a client no way to set or reset the event without
+    /// `unsafe`, so the doorbell's invariant stays the ring's.
+    pub(crate) fn doorbell_waitable(&self) -> io::Result<WaitableHandle> {
+        Ok(WaitableHandle::from(self.doorbell_event()?.clone()))
+    }
+
+    /// The ring's doorbell event, created on first use under the ring lock.
+    fn doorbell_event(&self) -> io::Result<&Event> {
         if self.doorbell.get().is_none() {
             let state = self.lock();
             if self.doorbell.get().is_none() {
-                let event = WaitableHandle::event(true, state.pending())?;
+                let event = Event::new(ResetMode::Manual, state.pending())?;
                 let _ = self.doorbell.set(event);
             }
         }
-        Ok(self
-            .doorbell
-            .get()
-            .expect("the doorbell was just created")
-            .handle())
-    }
-
-    /// A duplicate of the doorbell that the caller owns, as a `ThreadpoolWait`
-    /// requires.
-    pub(crate) fn doorbell_owned(&self) -> io::Result<OwnedHandle> {
-        duplicate(self.doorbell()?)
+        Ok(self.doorbell.get().expect("the doorbell was just created"))
     }
 
     /// Re-establish the doorbell's one invariant.
@@ -317,15 +326,18 @@ impl CompletionRing {
         let Some(event) = self.doorbell.get() else {
             return;
         };
-        let handle = event.handle().as_raw_handle() as HANDLE;
-        // SAFETY: the handle is a live manual-reset event owned by this ring.
-        unsafe {
-            if state.pending() {
-                SetEvent(handle);
-            } else {
-                ResetEvent(handle);
-            }
-        }
+        // The event was made here, so it carries full access and is open while the ring is: neither
+        // call can fail. Checked in a debug build, so a change that broke that is caught as this
+        // crate's own bug, and ignored in a release build as the doorbell always has been.
+        let refreshed = if state.pending() {
+            event.set()
+        } else {
+            event.reset()
+        };
+        debug_assert!(
+            refreshed.is_ok(),
+            "the doorbell could not be refreshed: {refreshed:?}"
+        );
     }
 
     /// Give back a terminal reservation that was never used.
@@ -379,29 +391,6 @@ impl Drop for TerminalSlot {
     fn drop(&mut self) {
         self.ring.release_reservation();
     }
-}
-
-/// Duplicate a handle into one the caller owns.
-fn duplicate(handle: BorrowedHandle<'_>) -> io::Result<OwnedHandle> {
-    let mut copy: HANDLE = std::ptr::null_mut();
-    // SAFETY: `handle` is live for the borrow, `copy` is a valid out-pointer,
-    // and both process handles are the current-process pseudo handle.
-    let ok = unsafe {
-        DuplicateHandle(
-            GetCurrentProcess(),
-            handle.as_raw_handle() as HANDLE,
-            GetCurrentProcess(),
-            &raw mut copy,
-            0,
-            FALSE,
-            DUPLICATE_SAME_ACCESS,
-        )
-    };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: `DuplicateHandle` succeeded, so `copy` owns a live handle.
-    Ok(unsafe { OwnedHandle::from_raw_handle(copy as _) })
 }
 
 #[cfg(test)]

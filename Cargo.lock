@@ -266,8 +266,13 @@ dependencies = [
 name = "windows-file-enumeration-sys"
 version = "0.2.2"
 dependencies = [
+ "io-buffers",
  "win-error-codes",
+ "win-shared-os-owned-handle",
+ "win-sync-sys",
+ "win-text-sys",
  "windows-impersonation-token-sys",
+ "windows-namespace-request-sys",
  "windows-sys",
  "windows-threadpool-sys",
  "wtf-string",
