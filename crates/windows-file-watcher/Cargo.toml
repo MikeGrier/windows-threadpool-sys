@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-file-watcher"
-version = "0.2.5" # x-release-please-version
+version = "0.2.6" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -87,9 +87,9 @@ test-util = []
 # completion from being misattributed to the next read that reuses the same
 # `OVERLAPPED` across a re-arm. No features are enabled; only the core completion
 # machinery is needed.
-windows-overlapped-io-sys = { version = "0.3.0", path = "../windows-overlapped-io-sys", default-features = false }
+windows-overlapped-io-sys = { version = "0.3.1", path = "../windows-overlapped-io-sys", default-features = false }
 # Duplicating a handle: this crate's `DuplicateHandle` call is `win-handles-sys`'s, the repository's one.
-win-handles-sys = { version = "0.1.0", path = "../win-handles-sys" }
+win-handles-sys = { version = "0.1.1", path = "../win-handles-sys" }
 # The doorbell is held as a shared handle, so a client can wait on it, or arm a thread-pool wait on it, without a
 # kernel handle of its own. `windows-threadpool-sys` takes the same type, from the same crate.
 win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
@@ -98,11 +98,11 @@ win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned
 # `ThreadpoolWait` the coarse fallback, `ThreadpoolTimer` the retry backoff, and
 # `ThreadpoolWork` drains the request queue. The monitor owns no threads of its
 # own.
-windows-threadpool-sys = { version = "0.3.0", path = "../windows-threadpool-sys" }
+windows-threadpool-sys = { version = "0.4.0", path = "../windows-threadpool-sys" }
 
 # A single-file route's case-insensitive leaf-name match (PR #20 review response): `CompareStringOrdinal`,
 # the OS's own ordinal case folding and not an ASCII-only approximation, over counted slices (M17.1).
-win-text-sys = { version = "0.0.1", path = "../win-text-sys" }
+win-text-sys = { version = "0.0.2", path = "../win-text-sys" }
 
 # Relative names decoded from `ReadDirectoryChangesW` are native `u16`, and are
 # handed back to Windows APIs as `u16`. Storing them as `Wtf16String` keeps them

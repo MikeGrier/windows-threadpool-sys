@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026.1022.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/placement-probe-v2026.1018.0...placement-probe-v2026.1022.0) (2026-10-22)
+
+
+### Features
+
+* **placement-probe:** carry each measurement's raw pass and a stable placement name ([05cb73a](https://github.com/MikeGrier/windows-threadpool-sys/commit/05cb73aa8d7e5b491e3a63a8ef307ce58317477a))
+
 ## [2026.1018.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/placement-probe-v2026.1017.0...placement-probe-v2026.1018.0) (2026-10-18)
 
 ## [2026.1017.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/placement-probe-v2026.919.0...placement-probe-v2026.1017.0) (2026-10-17)

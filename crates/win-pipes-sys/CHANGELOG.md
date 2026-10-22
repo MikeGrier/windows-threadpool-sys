@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.1.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-pipes-sys-v0.1.0...win-pipes-sys-v0.1.1) (2026-10-22)
+
 ## [0.1.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-pipes-sys-v0.0.1...win-pipes-sys-v0.1.0) (2026-10-20)
 
 

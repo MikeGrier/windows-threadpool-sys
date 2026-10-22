@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.9](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-example-test-harness-v0.1.8...windows-file-watcher-example-test-harness-v0.1.9) (2026-10-22)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-file-watcher bumped from 0.2.5 to 0.2.6
+
 ## [0.1.8](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-example-test-harness-v0.1.7...windows-file-watcher-example-test-harness-v0.1.8) (2026-10-17)
 
 

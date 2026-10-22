@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.3.0...windows-threadpool-sys-v0.4.0) (2026-10-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **threadpool:** From<Event> for WaitableHandle takes win-sync-sys' new Event, whose clones share one handle and which no longer converts to OwnedHandle, so it is not the Event type 0.3.0 accepted. A wait built from an Event is a shared target: WaitableHandle::into_handle returns the wrapper unchanged while any clone of the Event remains, where it returned the handle unconditionally.
+
+### Features
+
+* **threadpool:** a wait target may be a SharedHandle, and a wait built from an Event shares its handle with the clones the caller keeps ([2821f76](https://github.com/MikeGrier/windows-threadpool-sys/commit/2821f76a7f6ac8520ee7106af01a6e7d0c13adbc))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-overlapped-io-sys bumped from 0.3.0 to 0.3.1
+    * win-sync-sys bumped from 0.0.2 to 0.1.0
+  * dev-dependencies
+    * windows-overlapped-io-sys bumped from 0.3.0 to 0.3.1
+
 ## [0.3.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.2.2...windows-threadpool-sys-v0.3.0) (2026-10-17)
 
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.3](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-waitable-queues-v0.1.2...windows-waitable-queues-v0.1.3) (2026-10-22)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * win-handles-sys bumped from 0.1.0 to 0.1.1
+
 ## [0.1.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-waitable-queues-v0.1.1...windows-waitable-queues-v0.1.2) (2026-10-18)
 
 

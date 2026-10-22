@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.4.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.3.2...win-durable-ioring-v0.4.0) (2026-10-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **durable-ioring:** durable-ioring's target and submit traits gain a declared access and carry it in a typed Key<A>, Diagnostic and DiagnosticKind gain the begin/end pair variants, and a sink is given every pair's end; win-durable-ioring asks for file access as a typed set of named rights, takes data access as the type parameter of every handle it opens, takes a share mode as a typed set, takes OpenedFile::open's path as a Wtf16String, uses Win32's own disposition enum, and removes HandleKindQuery and HandleKind.
+
+### Features
+
+* **durable-ioring:** a typed Key&lt;A&gt; carries a target's access, every sink takes the begin/end pairs, and the ETW provider writes each pair as one activity ([341858e](https://github.com/MikeGrier/windows-threadpool-sys/commit/341858ed566c12a38bfde2dd06a7d9c1a9da1a09))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * durable-ioring bumped from 0.2.0 to 0.3.0
+    * windows-ioring-sys bumped from 0.8.0 to 0.9.0
+    * win-sync-sys bumped from 0.0.2 to 0.1.0
+    * windows-threadpool-sys bumped from 0.3.0 to 0.4.0
+    * win-volume-sys bumped from 0.1.1 to 0.1.2
+    * windows-namespace-request-sys bumped from 0.5.0 to 0.5.1
+    * win-handles-sys bumped from 0.1.0 to 0.1.1
+    * win-debugging-sys bumped from 0.0.1 to 0.0.2
+    * durable-ioring-events bumped from 0.0.1 to 0.1.0
+
 ## [0.3.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.3.1...win-durable-ioring-v0.3.2) (2026-10-20)
 
 

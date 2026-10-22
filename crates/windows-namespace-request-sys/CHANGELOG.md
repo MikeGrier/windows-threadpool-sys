@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.5.0...windows-namespace-request-sys-v0.5.1) (2026-10-22)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dev-dependencies
+    * windows-thread-ambient-sys bumped from 0.3.2 to 0.3.3
+
 ## [0.5.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.4.2...windows-namespace-request-sys-v0.5.0) (2026-10-20)
 
 
