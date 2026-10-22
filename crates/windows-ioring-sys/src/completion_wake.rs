@@ -57,7 +57,10 @@ impl CompletionWake {
     /// (`M4.2`, `M26.9`, `M26.12`).
     ///
     /// `env` binds the wait's pool -- to a NUMA node's, for instance; `None` is the process's
-    /// default pool.
+    /// default pool. It is [`windows_threadpool_sys::callback_env::CallbackEnviron`], the type of
+    /// the `windows-threadpool-sys` this crate depends on: another version of that crate has
+    /// another `CallbackEnviron`, so a caller builds the environment with the version this crate
+    /// resolves to.
     ///
     /// # Errors
     ///
