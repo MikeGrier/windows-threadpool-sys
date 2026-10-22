@@ -160,6 +160,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "win-etw-sys"
+version = "0.0.1"
+dependencies = [
+ "win-error-codes",
+ "win-etw-sys",
+ "windows-sys",
+]
+
+[[package]]
 name = "win-handles-sys"
 version = "0.1.0"
 dependencies = [

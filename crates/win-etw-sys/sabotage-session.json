@@ -1,0 +1,90 @@
+{
+  "package": "win-etw-sys",
+  "description": "Sabotages of win-etw-sys that only a trace session can catch: tests/session.rs, run with --include-ignored. Run with tools/run-sabotage.ps1 from an elevated process or one in the Performance Log Users group, as CI's runners are (WE-D-3); unelevated, every session test fails to start and the baseline is red, so the sweep stops before any entry.",
+  "testArgs": [
+    "-p",
+    "win-etw-sys",
+    "--test",
+    "session",
+    "--",
+    "--include-ignored"
+  ],
+  "notCoveredHere": "What a unit test can see is sabotage.json.",
+  "sabotages": [
+    {
+      "name": "WE-D-4: the activity given is not passed to the call",
+      "file": "src/registration.rs",
+      "expect": "caught",
+      "why": "The activity id the caller gives is what lets a begin and its end written on two threads be one activity; passed as null, the call takes each thread's own.",
+      "find": [
+        "        let activity: *const GUID = activity.map_or(null(), |id| id.raw());"
+      ],
+      "replace": [
+        "        let activity: *const GUID = null();"
+      ]
+    },
+    {
+      "name": "WE-D-4: the activity and the related activity are passed in each other's places",
+      "file": "src/registration.rs",
+      "expect": "caught",
+      "why": "The call takes the activity before the related one; swapped, a start event is recorded as the activity it was related to.",
+      "find": [
+        "            unsafe { EventWriteTransfer(self.handle, &raw, activity, related, count, blocks) };"
+      ],
+      "replace": [
+        "            unsafe { EventWriteTransfer(self.handle, &raw, related, activity, count, blocks) };"
+      ]
+    },
+    {
+      "name": "WE-D-4: the related activity given is not passed to the call",
+      "file": "src/registration.rs",
+      "expect": "caught",
+      "why": "A related id the caller gave and the call never saw is a parent the trace does not record.",
+      "find": [
+        "        let related: *const GUID = related.map_or(null(), |id| id.raw());"
+      ],
+      "replace": [
+        "        let related: *const GUID = null();"
+      ]
+    },
+    {
+      "name": "WE-D-4: a session reads no related activity",
+      "file": "src/session.rs",
+      "expect": "caught",
+      "why": "The reader is how the tests see what the call wrote; one that drops the related id would let the call drop it unseen.",
+      "find": [
+        "        related_activity: unsafe { related_activity(extended) },"
+      ],
+      "replace": [
+        "        related_activity: {",
+        "            let _ = extended;",
+        "            None",
+        "        },"
+      ]
+    },
+    {
+      "name": "WE-D-4: a session takes another extended item for the related activity",
+      "file": "src/session.rs",
+      "expect": "caught",
+      "why": "The related id is the item of its own type, and no other item is read as one.",
+      "find": [
+        "        u32::from(item.ExtType) == EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID"
+      ],
+      "replace": [
+        "        u32::from(item.ExtType) != EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID"
+      ]
+    },
+    {
+      "name": "WE-D-4 control: no related activity is passed by another spelling of null",
+      "file": "src/registration.rs",
+      "expect": "survives",
+      "why": "A control: the same null by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": [
+        "        let related: *const GUID = related.map_or(null(), |id| id.raw());"
+      ],
+      "replace": [
+        "        let related: *const GUID = related.map_or(std::ptr::null::<GUID>(), |id| id.raw());"
+      ]
+    }
+  ]
+}

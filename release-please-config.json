@@ -81,6 +81,10 @@
             "package-name": "win-debugging-sys",
             "component": "win-debugging-sys"
         },
+        "crates/win-etw-sys": {
+            "package-name": "win-etw-sys",
+            "component": "win-etw-sys"
+        },
     "crates/windows-file-enumeration-sys": {
             "package-name": "windows-file-enumeration-sys",
             "component": "windows-file-enumeration-sys"

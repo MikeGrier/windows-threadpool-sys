@@ -17,6 +17,7 @@
   "crates/win-sync-sys": "0.0.2",
   "crates/win-text-sys": "0.0.1",
   "crates/win-debugging-sys": "0.0.1",
+  "crates/win-etw-sys": "0.0.1",
   "crates/win-time-sys": "0.1.0",
   "crates/win-multi-file-tail-watcher": "0.2.0",
   "crates/win-volume-sys": "0.1.1",
