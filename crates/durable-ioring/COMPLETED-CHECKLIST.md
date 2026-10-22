@@ -4150,3 +4150,22 @@ Its items are archived: the correlation id ([DI-19.1](#di-191)), the begin and e
 ([DI-19.2](#di-192)), the explicit activity id in `win-etw-sys` ([DI-19.3](#di-193)) and the provider's activities
 ([DI-19.4](#di-194)). The rulings that opened it are [DI-D-80](DESIGN-NOTES.md#di-d-80). A delay is now a begin and an end
 sharing an id, written by every sink, and in ETW one activity, so a duration is computed by whoever reads the trace.
+
+## Moved 2026-10-21 20:57:55 -04:00 -- DI-20.1: what Windows documents about a directory entry's durability
+
+### <a id="di-201"></a>DI-20.1 -- What Windows documents about a directory entry's durability -- the pages for creating, flushing, renaming and deleting, and what they lead to -- is read and recorded with each page's date, silence as silence, and the experiment the open questions call for is described. *(completed 2026-10-21 20:57:55 -04:00)*
+
+The item as written:
+
+**DI-20.1** -- **Read what Windows documents about a directory entry's durability, and record it.** The pages for
+  `CreateFileW`, `FlushFileBuffers`, `MoveFileExW` (with `MOVEFILE_WRITE_THROUGH`), `SetFileInformationByHandle`'s rename
+  and disposition classes, and anything they lead to, each read for: whether flushing a new file makes its directory entry
+  durable; whether a directory handle may be flushed, and what that commits; and what a rename or a delete needs. Each
+  finding is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) with its page and the date read, and silence is recorded as
+  silence. No `Nt*` page is a source ([the rule](../../.github/copilot-instructions.md)). If the pages leave a question open,
+  the experiment that would answer it is described, and is evidence, never a check.
+
+The findings are [DI-D-94](DESIGN-NOTES.md#di-d-94). Beyond the pages the item named, the reading followed `CreateFileW`'s
+caching section to File Caching and Directory Handles, the rename and disposition classes to `FILE_INFO_BY_HANDLE_CLASS`,
+`DeleteFileW`, `CreateDirectoryW`, `RemoveDirectoryW`, `ReplaceFileW`, the transacted forms and the alternatives to
+Transactional NTFS, and the ring's own flush, which has no page on Learn. The experiment is described there and not built.

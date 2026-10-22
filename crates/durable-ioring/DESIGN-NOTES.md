@@ -1694,3 +1694,87 @@ activity, checks task and pair id, and computes each duration; its tests run ove
 
 **Scheduled work.** None; [DI-M19](COMPLETED-CHECKLIST.md#di-m19----paired-begin-and-end-events-with-correlation-ids) is
 complete.
+
+## <a id="di-d-94"></a>DI-D-94: what Windows documents about a directory entry's durability
+
+**Findings, not a decision.** Read by the assistant for [DI-20.1](COMPLETED-CHECKLIST.md#di-201), 2026-10-21; what follows
+from them is [DI-20.2](CHECKLIST.md)'s discussion with the engineer. Each page is named with the `ms.date` it carries. No
+`Nt*` or driver-kit page is a source. Silence is recorded as silence.
+
+### Whether flushing a new file makes its directory entry durable
+
+- **`FlushFileBuffers`** (2018-12-05): "writes all the buffered information for a specified file to the device or pipe".
+  It speaks of the file, of a communications device, of a pipe and of a volume. It says nothing of the directory that
+  names the file. **Silent.**
+- **`CreateFileW`** (2022-08-16), under `FILE_FLAG_NO_BUFFERING`: "the file metadata may still be cached (for example, when
+  creating an empty file). To ensure that the metadata is flushed to disk, use the FlushFileBuffers function." The page
+  counts a file's creation among the metadata a flush of that file covers. It does not say whether the entry in the parent
+  directory is part of "the file metadata".
+- **File Caching** (2018-05-31): "File system metadata is always cached. Therefore, to store any metadata changes to disk,
+  the file must either be flushed or be opened with FILE_FLAG_WRITE_THROUGH." Which file's flush stores a change to a
+  directory's entries is not said.
+- **`CreateFileW`**, under caching behavior: "A write-through request via FILE_FLAG_WRITE_THROUGH also causes NTFS to flush
+  any metadata changes, such as a time stamp update or a rename operation, that result from processing the request." The
+  sentence names NTFS only, and names a rename among the metadata changes a write-through request flushes.
+- **The ring's flush**, which the built-in provider issues: `BuildIoRingFlushFile` has no page among the ring API's pages
+  on Learn (the `ioringapi` index lists none), so neither does its `FILE_FLUSH_MODE`, whose modes name metadata. What
+  [windows-ioring-sys](../windows-ioring-sys/src) says of the modes comes from the header and from inference, and it says
+  so. **Silent** on Learn.
+
+### Whether a directory handle may be flushed, and what that commits
+
+- **`CreateFileW`**: `FILE_FLAG_BACKUP_SEMANTICS` -- "You must set this flag to obtain a handle to a directory. A directory
+  handle can be passed to some functions instead of a file handle."
+- **Directory Handles** (2018-05-31): "You can pass a directory handle to the following functions", listing `BackupRead`,
+  `BackupWrite`, `GetFileTime`, `ReadDirectoryChangesW` and `SetFileTime`. `FlushFileBuffers` is not among them. The page
+  does not say the list is complete.
+- **`FlushFileBuffers`**: the handle "must have the GENERIC_WRITE access right"; directories are not mentioned. **Silent**
+  on whether a directory handle may be flushed and on what such a flush commits.
+- **Measured, not documented** ([DI-D-72](#di-d-72), 2026-10-19): `FlushFileBuffers` on a directory handle succeeded with
+  the write right and failed with error 5 without it, and a commit through the ring on a directory target completed
+  successfully. Neither says what reached stable media.
+- **A volume**: "To flush all open files on a volume, call FlushFileBuffers with a handle to the volume. The caller must
+  have administrative privileges." The page says "open files". **Silent** on directories, and on files no longer open.
+
+### What a rename or a delete needs
+
+- **`MoveFileExW`** (2018-12-05), `MOVEFILE_WRITE_THROUGH`: "The function does not return until the file is actually moved
+  on the disk. Setting this value guarantees that a move performed as a copy and delete operation is flushed to disk before
+  the function returns. The flush occurs at the end of the copy operation." and "This value has no effect if
+  MOVEFILE_DELAY_UNTIL_REBOOT is set." The guarantee is stated for a move done as a copy and a delete; for a rename within a
+  volume the page has the first sentence and no guarantee.
+- **`SetFileInformationByHandle`** (2018-12-05) with `FileRenameInfo`, and **`FILE_RENAME_INFO`** (2018-12-05): nothing
+  about durability. `FILE_RENAME_INFO` names a `Flags` member used with `FileRenameInfoEx` and lists no flag values.
+  **Silent.**
+- **`ReplaceFileW`** (2018-12-05): `REPLACEFILE_WRITE_THROUGH` -- "This value is not supported." The page for the
+  alternatives to Transactional NTFS (2018-05-31) offers `ReplaceFile` for an update that is "completely applied or not
+  applied at all" and says nothing of durability.
+- **`DeleteFileW`** (2023-12-15): "The DeleteFile function marks a file for deletion on close." and "The use of POSIX delete
+  causes the file to be deleted while handles remain open." Nothing about durability. **Silent.**
+- **`FILE_DISPOSITION_INFO`** (2018-12-05): nothing about durability. `FILE_INFO_BY_HANDLE_CLASS` (2018-12-05) lists
+  `FileDispositionInfoEx` with no description, and `FILE_DISPOSITION_INFO_EX` has no page among the Win32 API pages, so its
+  flags are documented only in driver-kit material, which is not a source here. **Silent.**
+- **`CreateDirectoryW`** (2018-12-05) and **`RemoveDirectoryW`** (2023-12-15): nothing about durability. **Silent.**
+- **Transactional NTFS**: the operations have transacted forms (`MoveFileTransactedW`, `DeleteFileTransacted`,
+  `CreateFileTransacted`, among others). `MoveFileTransactedW`'s page (2018-12-05), the one read, opens with "Microsoft
+  strongly recommends developers utilize alternative means" and "TxF may not be available in future versions of Microsoft
+  Windows."
+
+### Questions the pages leave open, and the experiment that would bear on them
+
+Open: whether flushing a new file -- by `FlushFileBuffers` or by the ring's default flush -- makes its directory entry
+survive a power loss; whether flushing a directory handle does; whether a rename on a handle opened write-through, or by
+`MoveFileExW` with `MOVEFILE_WRITE_THROUGH` within a volume, does; and the same for a delete.
+
+The experiment: a virtual machine whose disk is a virtual hard disk file. The guest creates, renames or deletes an entry,
+applies one candidate -- none, a flush of the file, the ring's flush, a flush of the directory handle, a flush of the
+volume, a write-through handle, or `MOVEFILE_WRITE_THROUGH` -- and tells the host, which turns the machine off at once. On
+the next boot the guest records which entries exist. Many trials per candidate, on NTFS and on ReFS. Such a power-off
+discards the guest's memory but not writes the host has accepted, so it measures what the guest's file system committed,
+not what a device's volatile cache would lose. A loss under a candidate shows the candidate insufficient on that
+configuration; no loss shows only that none was seen. Its results are evidence and never a check: a refusal ahead of a call
+rests on the documented contract, never on what a run showed
+([DESIGN-NOTES.md](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)).
+
+**Scheduled work.** [DI-20.2](CHECKLIST.md), which brings these to the engineer. Whether to build the experiment is a
+question for that discussion.

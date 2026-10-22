@@ -21,13 +21,7 @@ requires an `fsync` of the directory; what Windows requires is not known to the 
 the engineer's agreement, 2026-10-21. Beyond the first two items this milestone is deliberately coarse: what is built, if
 anything, follows from what the pages say.
 
-- [ ] **DI-20.1** -- **Read what Windows documents about a directory entry's durability, and record it.** The pages for
-  `CreateFileW`, `FlushFileBuffers`, `MoveFileExW` (with `MOVEFILE_WRITE_THROUGH`), `SetFileInformationByHandle`'s rename
-  and disposition classes, and anything they lead to, each read for: whether flushing a new file makes its directory entry
-  durable; whether a directory handle may be flushed, and what that commits; and what a rename or a delete needs. Each
-  finding is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) with its page and the date read, and silence is recorded as
-  silence. No `Nt*` page is a source ([the rule](../../.github/copilot-instructions.md)). If the pages leave a question open,
-  the experiment that would answer it is described, and is evidence, never a check.
+- [x] **DI-20.1** -- What Windows documents about a directory entry's durability -- the pages for creating, flushing, renaming and deleting, and what they lead to -- is read and recorded with each page's date, silence as silence, and the experiment the open questions call for is described. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-201)
 
 - [ ] **DI-20.2** -- **Bring the findings to the engineer for a design discussion.** Whether dioring makes a directory
   entry durable, whether a consumer must, and whether a directory is a target a seal can cover, are decided there; the work
