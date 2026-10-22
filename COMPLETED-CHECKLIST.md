@@ -893,7 +893,7 @@ across fifteen consecutive runs; targeted all-target Clippy and
 
 ### <a id="fe-8"></a>FE-8 -- Allocate the fixed native buffer and get one directory open and reading. *(completed 2026-08-27 20:12:34 UTC-04:00)*
 
-[buffer.rs](crates/windows-file-enumeration-sys/src/buffer.rs) allocates the
+`buffer.rs` (deleted by the enumeration crate's `SAFE-2`) allocated the
 staging buffer at admission, fallibly and as `u64` words so its base address is
 8-byte aligned by construction rather than by hope; the ordinary growable-vector
 path would abort the process on failure and guarantee only byte alignment.
@@ -1704,6 +1704,7 @@ Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is wh
   the tests, which is why the patch is now printed on every unexpected result; and a **too-short
   timeout manufactures a false "caught"**, crediting tests with catching a defect they never ran
   against, so the bound errs generous.
+
 ## Moved 2026-09-01 -- Thread ambient mutation gaps
 
 ### <a id="m236"></a>M23.6 -- Close mutation gaps with deterministic fault injection and exhaustive assertions. *(completed 2026-09-01 20:25:29 UTC-04:00)*
@@ -2185,6 +2186,7 @@ mutation wrapper. The conversion's three silent fallbacks are replaced by one ru
   Queued rather than left as a note precisely because a half-adopted abstraction is the state most
   likely to be forgotten -- the next probe author will see twelve neighbours printing directly and
   reasonably conclude that is the house style.
+
 ## Moved 2026-09-07 -- M34.4: the native-command guard became shared support, proven on both hosts
 
 ### <a id="m344"></a>M34.4 -- Share the native-command guard through a dot-sourced `tools/common.ps1`, route every capture site through it, and prove it on both PowerShell hosts. *(completed 2026-09-07 21:16:31 -04:00)*
@@ -2362,6 +2364,7 @@ namespace operation is.
   `#[cfg(doctest)] #[doc = include_str!("../README.md")]`, so a contract change breaks the build instead of
   leaving the README teaching the old answer. Verify by sabotage that the README examples are genuinely
   executed rather than merely parsed. M23.4 retains the *composite's* documentation.
+
 ## M23 -- `windows-thread-ambient-sys`: the composite
 
 - [x] **M23.1** -- Implement the capture set and its named default, covering only the capturable aspects.
@@ -2550,6 +2553,7 @@ assumed:
   holding a prepared path, two captured handles, and captured security attributes, outliving every input
   at once and still working on a thread that saw none of them -- plus the crate example, the README
   example compiled as a doctest, and confirmation that the changelog baseline matches its siblings.
+
 ## M25 -- `windows-namespace-request-sys`: the handle-producing entries
 
 Entries 1-4 of the audited list. Each depends on M24's foundations and on nothing else.
@@ -2641,8 +2645,8 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
   Two constraints that are not negotiable and are already solved in this repository, so bind to the
   precedent rather than re-deriving it. The buffer must be **8-byte aligned**: a `Vec<u8>` fails the very
   first query with `ERROR_NOACCESS`, which is why
-  [crates/windows-file-enumeration-sys/src/buffer.rs](crates/windows-file-enumeration-sys/src/buffer.rs)
-  backs its storage with `Vec<u64>`. And the call **reports no written length** -- a batch is walked by its
+  `crates/windows-file-enumeration-sys/src/buffer.rs` (deleted by `SAFE-2`, whose `AlignedBuf` states the alignment)
+  backed its storage with `Vec<u64>`. And the call **reports no written length** -- a batch is walked by its
   own next-entry offsets -- so the completion returns the whole buffer and the consumer bounds its own
   reads, rather than the entry inventing a byte count it cannot know.
 
@@ -4039,3 +4043,143 @@ The repository instructions' sabotage guidance in [.github/copilot-instructions.
 [tools/README-sabotage.md](tools/README-sabotage.md) say to verify a change with `-Since origin/main`, that `-List` shows which
 entries and why, that a clone takes every entry of a touched crate until it has swept the manifest once, and to sweep the whole
 manifest for a change scoping cannot see.
+
+## Moved 2026-10-18 20:52:23 -04:00 -- The duplicated path preparation is merged
+
+### <a id="m263"></a>M26+.3 -- The duplicated path preparation is merged: `windows-file-enumeration-sys` consumes the request crate's `AnchoredPath` and its older copy is deleted. *(completed 2026-10-18 20:52:23 -04:00)*
+
+Decided 2026-10-15 at the engineer's request, as the first of the two options the item named. The request
+crate's side is its `NR-3.8` and
+[D-30](crates/windows-namespace-request-sys/DESIGN-NOTES.md#d-30); the enumeration crate's is its `PATH-1`
+and [D-22](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-22), which also records what that crate
+gave up. The workspace principle the enumerator used to exemplify is amended at
+[A layer's path contract is decided by whether it constructs paths](DESIGN-NOTES.md#path-contracts-follow-path-construction).
+
+## Moved 2026-10-19 17:42:21 -04:00 -- M34.18: the archives are linted
+
+### <a id="m3418"></a>M34.18 -- Lint every `COMPLETED-CHECKLIST.md` mechanically, locally and in CI. *(completed 2026-10-19 17:42:21 -04:00)*
+
+Moved here from `windows-platform-probes`, where it was `M2.13`. An investigation of the 23 archives
+before building found that two of the three checks as first written would have failed on records kept
+on purpose, and the engineer settled four rules on 2026-10-19:
+
+1. A heading is preceded by a blank line, as style; the breaches were fixed. Applied to every heading
+   level, since the reason is the same at each: 49 blank lines across seven archives, inserted in a
+   `chore` commit of their own so released crates' archives earned no release.
+2. No `- [ ]` remains. The 18 open boxes were all verbatim copies of items "as they stood at
+   completion", in `durable-ioring` and `io-buffers`; they were ticked.
+3. Headings and `<a id>` anchors are immutable against the merge base, in place of the proposed "zero
+   deleted lines": since August, 62 of the 417 commits touching an archive deleted lines from one,
+   including link repointing this repository's own rules require. A heading glued onto a line is
+   checked too.
+4. A checked stub left after its item was archived may simply be deleted; recorded in the copilot
+   instructions beside the archive rules, which now also state rules 1 to 3 and name the tool.
+
+`tools/check-archives.ps1` checks all four, untracked archives included, and exits 0, 1 or 2 like its
+siblings; `tools/test-check-archives.ps1` covers each rule in both directions against throwaway git
+repositories, and a manual sabotage of the heading rule turned its case red. The `archives` CI job runs
+both, against the target branch on a pull request and the previous tip on a push.
+
+## Moved 2026-10-20 15:42:27 -04:00 -- M21.3 and M21.4: the enumeration crate's open and basic-info query are the request crate's entries
+
+### <a id="m213"></a>M21.3 -- The enumeration crate's inline `open_directory` is the request crate's `OpenFile`, keeping the access, share mode, flags and unassociated handle it needed. *(completed 2026-10-20 15:42:27 -04:00)*
+
+The item as written:
+
+Replace `windows-file-enumeration-sys`'s inline `open_directory` with the general
+  facility's catalogue operation. The direction is settled, not open: that open is the committed first
+  consumer, and the inline path exists only until the general one is proven. The replacement must preserve
+  everything the shipped open already gets right, each of which is a constraint on the catalogue rather
+  than an implementation detail: arbitrary access, share mode and flags (it opens with
+  `FILE_LIST_DIRECTORY`, not `GENERIC_READ`, and requires `FILE_FLAG_BACKUP_SEMANTICS` to obtain a
+  directory handle at all); an **unassociated** handle, since `GetFileInformationByHandleEx` is
+  synchronous; the raw Win32 code unaltered, because `ERROR_FILE_NOT_FOUND` means three different things
+  across the open and the first and later queries and only the consumer can disambiguate; and
+  `GetLastError` captured *before* the context is restored, which the shipped code does deliberately.
+  Its D-15 Globazog acceptance gate must still pass afterwards.
+
+Done by [SAFE-2](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-2): the open is `OpenFile` built from the
+request's `AnchoredPath`, with listing access, every share, an existing directory and backup semantics and no overlapped
+flag, performed under the captured token; the open's code is read before the token is restored, by the request
+crate's entry; and the Globazog acceptance gate passes. The constraints above are pinned by a unit test of the request the
+open builds, and by sabotage entries in the crate's [sabotage.json](crates/windows-file-enumeration-sys/sabotage.json).
+
+### <a id="m214"></a>M21.4 -- The `FileBasicInfo` query is its own catalogue entry, `QueryFileBasicInfo`, and the enumeration crate sequences it after the open. *(completed 2026-10-20 15:42:27 -04:00)*
+
+The item as written:
+
+Add the `FileBasicInfo` query as its own catalogue entry, and have the enumeration
+  crate sequence it after the open rather than performing it inline. It is a blocking namespace call, so
+  leaving it inline would keep a blocking call on the consumer's worker and only half-solve the problem
+  this facility exists for. One entry per Win32 call: this is **not** a compound open-and-classify
+  operation, and the sequencing is logical and client-side -- the crate submits the open, observes its
+  completion, then submits the query. A compound entry is reserved for a measured performance argument
+  and would be a fusion of these two entries rather than a capability they lack. Depends on M21.3.
+
+Done in two steps. The entry is the request crate's `QueryFileBasicInfo`, built as
+[NR-6.4](crates/windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-64-basic) (its D-33), and the enumeration crate
+sequences it after the open as [SAFE-2](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-2): the open
+completes, then the directory check is a separate query on a clone of the same handle, client-side, with no compound
+open-and-classify entry.
+
+## Moved 2026-10-20 16:10:00 -04:00 -- M43.1: win-text-sys is created
+
+### <a id="m431"></a>M43.1 -- `win-text-sys` is created, with `compare_string_ordinal` over `CompareStringOrdinal`. *(completed 2026-10-20 16:10:00 -04:00)*
+
+The item's text, with the engineer's ruling on the name and the placement it records, is the crate's
+[WT-D-1](crates/win-text-sys/DESIGN-NOTES.md#wt-d-1), and the first wrapper's shape and its one refusal are
+[WT-D-2](crates/win-text-sys/DESIGN-NOTES.md#wt-d-2).
+
+What was done. [crates/win-text-sys](crates/win-text-sys/Cargo.toml) is a new workspace member, registered for
+release-please and the publish workflow, with `compare_string_ordinal` taking two `&[u16]` and a `Case` and giving
+an `Ordering`. The count is always passed, so a NUL is a unit. A slice of more than `i32::MAX` units is refused as
+`CompareStringOrdinalError::TooLong` with the page's syntax block as the citation, and the call's failure is
+`CompareStringOrdinalError::Call` with a `Win32Error`. Tests: equal and unequal strings both ways, case folded and not
+(ASCII and beyond), embedded NULs, unpaired surrogates, a slice shorter than its buffer, a long string, the
+reversal and reflexivity of the order, the refusal and the order in which it names the strings, the mapping of every
+result and the call's own failure through the page's invalid value of `bIgnoreCase`. Evidence, in
+[sabotage.json](crates/win-text-sys/sabotage.json): eleven entries, all caught, and a control. The two sites that call
+`CompareStringOrdinal` themselves move to it in `SAFE-4` and `M17.1`.
+
+## Moved 2026-10-20 17:19:24 -04:00 -- M43: shared handles, and safe wrappers under the enumeration crate
+
+Opened 2026-10-18. The engineer ruled a request crate's handle duplication legacy, to be removed rather than
+kept for compatibility ([D-32](crates/windows-namespace-request-sys/DESIGN-NOTES.md#d-32)), and set
+`windows-file-enumeration-sys`' target as reaching Windows only through safe wrappers, under
+`forbid(unsafe_code)` ([D-23](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-23)). The work is in six
+crates' checklists; this is only the order and the links, and each item's own checkbox is its status.
+
+1. [NR-6.1](crates/windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-61-shared) -- request entries hold a `SharedHandle`;
+   additive for callers that build entries.
+2. The consumers move off `CapturedHandle`, in any order:
+   [DI-16.1](crates/durable-ioring/COMPLETED-CHECKLIST.md#di-161), [M7.1](crates/windows-platform-probes/COMPLETED-CHECKLIST.md#m71),
+   [SAFE-1](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-1).
+3. [NR-6.2](crates/windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-62-capture) -- capture deleted. `NR-6.3` to `NR-6.5` may land
+   at any point before the release.
+4. The request crate's release, a new minor. A release action, not an item.
+5. [SAFE-2](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-2) -- the directory's calls through the request crate.
+6. Independently of 1 to 5: [M-T15.1](crates/windows-threadpool-sys/CHECKLIST.md) then
+   [WS-2.2](crates/win-sync-sys/COMPLETED-CHECKLIST.md#ws-22) (reordered 2026-10-18: the shared wait target comes first), then
+   [SAFE-3](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-3); and `M43.1` below, then
+   [SAFE-4](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-4) and the file watcher's
+   [M17.1](crates/windows-file-watcher/COMPLETED-CHECKLIST.md#m171).
+7. [SAFE-5](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-5) -- `forbid(unsafe_code)`, last.
+
+- [x] **M43.1** -- `win-text-sys` is created, with `compare_string_ordinal` over `CompareStringOrdinal`. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#m431)
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is
+  > [SAFE-4](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-4) in `crates/windows-file-enumeration-sys` and
+  > [M17.1](crates/windows-file-watcher/COMPLETED-CHECKLIST.md#m171) in `crates/windows-file-watcher`.
+
+## Moved 2026-10-21 23:21:20 -04:00 -- M44: one handle duplication for the workspace
+
+`win-handles-sys` is where the Win32 handle functions live, and three crates had written their own same-process
+`DuplicateHandle`. The decision is [WH-D-6](crates/win-handles-sys/DESIGN-NOTES.md#wh-d-6-duplicate_handle-chooses-the-access-and-the-inheritance-and-is-the-one-duplicatehandle-call).
+
+- [x] **M44.1** -- `win-handles-sys`: `duplicate_handle`, choosing the access (the source's or a mask) and the inheritance.
+
+- [x] **M44.2** -- `windows-file-watcher`: its queue's `duplicate` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
+
+- [x] **M44.3** -- `windows-waitable-queues`: its doorbell's `duplicate` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
+
+- [x] **M44.4** -- `win-job-launcher`: `duplicate_inheritable` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.

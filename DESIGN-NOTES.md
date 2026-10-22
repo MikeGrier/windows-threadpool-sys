@@ -406,6 +406,57 @@ the existing ones stays open. The clarified scope adds a question to that migrat
 `windows-*` crates are facilities rather than direct layers, and for those the answer may be a
 name with no platform prefix rather than `win-`. The rationale for the clarification is in
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-the-win-prefix-is-scoped-to-direct-layers).
+## <a id="safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under"></a>A safe wrapper of a platform API is placed by the Microsoft Learn section the API is documented under, as of a dated snapshot
+
+**The engineer's decision, 2026-10-17.** The question was where a new safe wrapper belongs when no
+existing crate's scope contains it (the case that raised it was the two read-backs of
+[DI-14.8](crates/durable-ioring/CHECKLIST.md): `GetSecurityInfo` and `GetHandleInformation`). The first
+proposal, 2026-10-17, was to follow Learn's grouping; the engineer ruled it "the rule to follow", stayed
+undecided between naming by header and naming by documentation section, and then ruled: "classify by learn
+section as of this date", with a local record of Learn's table of contents to apply it by.
+
+**The rule.** A wrapper of a platform API goes in the crate for the Learn section that documents the API.
+The section is read from the dated snapshot [WIN32-LEARN-MAP-DATA.txt](WIN32-LEARN-MAP-DATA.txt), which
+[WIN32-LEARN-MAP.md](WIN32-LEARN-MAP.md) describes and
+[tools/snapshot-learn-toc.ps1](tools/snapshot-learn-toc.ps1) regenerates. No existing crate's scope
+contains it: a new crate, named by this repository for the section's subject and by the `win-` rule above.
+
+**Microsoft's strings classify and never name.** Neither a header name nor a section title appears in a
+crate name, a module path or any public identifier. They are carried in one place, the snapshot, so that
+Microsoft renaming a section or moving a symbol to another header is a new snapshot and not a release,
+and no release is compelled by the change. This is the permanent indirection the choice of key could not
+avoid, kept where it costs a regeneration. The header is recorded beside the symbol as an attribute that
+can be checked against the binding the wrapper calls, and is not the key. The engineer's reasoning:
+Microsoft may change the header that carries a symbol while `Windows.h` stays the public header clients
+include, and a key by header would then compel this repository to follow the change, where a section
+retitled in Learn can be absorbed by a new snapshot.
+
+**Granularity.** A crate covers a second-level topic under a Learn area (*Synchronization*, *Handles and
+Objects*, *Authorization*), which is how `win-sync-sys` and `win-volume-sys` are already cut. Learn
+sections that are very small may share a crate, and a topic too large for one crate may split; either
+is a judgement written in the crate's notes. One crate for the whole of Win32 with a feature per area, and
+one crate per symbol, were considered and rejected: the first has one version for areas that change at
+different rates and decisions that are authored, where `windows-sys`'s are generated, and the second has
+no meaning.
+
+**Going forward only.** Existing crates are not moved to match. Where the rule shows that an existing
+crate holds something filed elsewhere, which it does for the SDDL conversions and `SecurityDescriptor` in
+`windows-namespace-request-sys` (documented under *Authorization*) and for
+`duplicate_handle_with_access` in `win-sync-sys` (`DuplicateHandle` is documented under *Handles and
+Objects*), the move is a separate scheduled item and is not done as a side effect of adding a wrapper.
+
+**Learn's listings are a relation, not a function (the engineer, 2026-10-17).** The documentation's job is
+to convey meaning to people, so the same symbol can appear under several sections and different symbols
+can share a title; neither is an error. The snapshot therefore keeps every listing, and the rule does not
+say which one is "the" section: a symbol listed more than once is placed by judgement of its meaning, and
+the crate's notes name the section chosen and the others that list it.
+
+**Not decided, and scheduling no work:** an umbrella crate that only re-exports the others, which would
+decide no placement and is not needed to follow the rule; and a machine check that a crate's contents match
+the snapshot, which is possible and has no consumer until there is more than one wrapper placed by it. Any
+such check has to treat the listings as many-to-many, and report a symbol listed elsewhere as information
+and not as a violation.
+
 ## Windows SDK model and constraints
 
 This crate targets the object-based thread pool API (introduced in Windows Vista) rather than the legacy
@@ -841,6 +892,37 @@ of waits tearing down together, "some handle is closed" says nothing while a cal
 is a callback finding *its own* handle already closed, so each callback captures its raw handle value
 and looks for that. Each ordering test additionally asserts that teardown actually blocked, which is
 what stops it passing vacuously when a callback happens to finish before teardown begins.
+
+## <a id="a-wait-may-share-its-handle"></a>A wait may hold its handle shared
+
+**Decided by the engineer, 2026-10-18: "take the decision as yes now"**, to the question whether a `ThreadpoolWait`
+takes a `SharedHandle` as part of removing handle duplication from `windows-file-enumeration-sys` (its `SAFE-3`)
+and from the request crate ([D-32](crates/windows-namespace-request-sys/DESIGN-NOTES.md#d-32)). The work is
+[M-T15.1](crates/windows-threadpool-sys/CHECKLIST.md).
+
+**What is decided.** A `WaitTarget` may be shared: the wait holds a clone of a `SharedHandle`, and a caller that
+must also signal or inspect the object keeps another, instead of keeping a duplicate made for the purpose. The
+requirement exclusive ownership met, that nothing closes the handle while a wait on it is pending, is met by the
+count: the handle closes only when the last holder drops, and the wait's clone is one of them.
+
+**What does not change.** The waitability guarantee still comes from the type a target is built from, as
+[the provenance decision](#a-safe-wait-constructor-takes-proven-wait-provenance-not-any-handle) requires: a shared
+`win-sync-sys` `Event` converts safely because it is known to be an event, and a shared handle of unknown kind
+needs the caller's `unsafe` assertion. The teardown order needs nothing new: releasing the wait's clone is the
+target's destructor, which [the close-routine decision](#a-wait-target-owns-its-close-routine-because-not-every-waitable-handle-closes-with-closehandle)
+already orders after the drain on both teardown paths.
+
+**The seam and the way back out, settled in `M-T15.1` by the assistant within the engineer's decision.** A shared
+handle of unknown kind enters through `unsafe fn assume_waitable_shared(SharedHandle)`, beside `assume_waitable`
+and `assume_waitable_with`, and its contract is the waitability one alone: exclusivity, which `assume_waitable`
+also asks for, is what the count replaces. `into_handle` gives a shared target's handle back only to its last
+holder, as `SharedHandle::try_into_owned` does, and otherwise returns the wrapper unchanged, still holding its
+clone; this is [the same rule](#into_handle-now-declines-rather-than-lying) as a custom-close target's, a refusal
+that hands the value back rather than an answer that is wrong.
+
+**Where the safe conversion from an `Event` lands.** `From<Event>` builds a shared target, since `win-sync-sys`'
+`WS-2.2` made an `Event`'s clones share one handle ([its WS-D-10](crates/win-sync-sys/DESIGN-NOTES.md#ws-d-10)): the
+wait and every clone the caller keeps hold the one handle, and no duplicate is made to signal through.
 
 ## Re-arming is gated against teardown, under the same lock that arms
 
@@ -3372,8 +3454,10 @@ by construction, so the binding would be absent exactly where completion occurs.
 
 ## <a id="path-contracts-follow-path-construction"></a>A layer's path contract is decided by whether it constructs paths
 
-Two crates here treat a caller's path in opposite ways, and side by side they look
-like an inconsistency somebody should tidy up. They are not. Each follows from one
+**Amended 2026-10-18 by [D-22](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-22): `windows-file-enumeration-sys` builds no path and no longer has the path-building contract; that contract is for a traversal layer, which its `REVIEW-1` reviews.**
+
+Two crates here treated a caller's path in opposite ways, and side by side they looked
+like an inconsistency somebody should tidy up. They were not. Each follows from one
 question -- **does this layer ever build a path the caller did not give it?** --
 and the answer differs, so the contracts differ. This is recorded once, here,
 because the failure mode is a well-meant "harmonisation" that breaks whichever
@@ -3406,13 +3490,15 @@ mid-traversal is the worst possible time, so the contract front-loads it: resolv
 ordinary inputs once, cap them where behaviour is unambiguous, and tell the caller
 to supply a fully qualified `\\?\` path for anything longer -- an actionable
 synchronous error rather than a `NotFound` that names nothing.
-`windows-file-enumeration-sys` is this shape. See
-[D-7](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-7) and its
-[Request path contract](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#request-path-contract).
+No crate here is this shape now. `windows-file-enumeration-sys` was, under
+[D-7](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-7), until
+[D-22](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-22) recognised that it enumerates
+one directory and builds nothing, and took the request crate's verbatim contract instead. The
+question is open again for a layer that traverses, and is that crate's `REVIEW-1`.
 
 The two also differ on the manifest, and deliberately in opposite directions.
 The watcher lets behaviour follow the host, because it only ever hands the caller's
-own path back to Win32. The enumerator refuses to: it requires both the input and
+own path back to Win32. The enumerator, under D-7, refused to: it required both the input and
 the resolved form to fit the ordinary limit specifically **so that acceptance does
 not depend on the host executable's manifest**, which keeps one input meaning one
 thing in every host that links it. A layer whose results feed further path
@@ -3424,7 +3510,7 @@ into `\\?\` form, it must convert from a form Win32 has *already* normalised und
 the caller's own parsing mode -- `GetFullPathNameW`'s output, or
 `GetFinalPathNameByHandleW`'s -- never by prefixing the caller's raw string. Doing
 it after normalisation preserves what the path meant; doing it before silently
-reinterprets it. Both crates arrived at this independently, which is why it is
+reinterprets it. Both crates arrived at this independently, the enumerator under D-7, which is why it is
 written down once.
 
 ## <a id="tools-shared-support"></a>Shared support in `tools/` is dot-sourced, never a module
@@ -3788,3 +3874,65 @@ explains are binding where they are stated; the encodings taken at the time of w
 `is_nameable_in_a_mask` and `undirected` as single definitions, and an integration test asserting
 which probes emit a machine-readable row -- are in the commits that added this section and the one
 that corrected it.
+
+## <a id="refusals-rest-on-the-documented-contract"></a>A refusal rests on the documented contract; a measurement is documentation
+
+**The engineer, 2026-10-18, for the whole repository:** "If something has only been discovered experimentally,
+it is anecdotal data which we can provide as documentation but it must not become part of our own validation,
+as a rule. Now, if it leads to a combination of behaviors that we do not support, we should refuse it early but
+that is an implementation choice to narrow our focus, not attempting to embody the kernel's anticipated
+rejection." And: the principle "applies across the entire repository and should be encoded to be applied
+uniformly."
+
+It arose from `win-durable-ioring`'s open ([DI-14.4](crates/durable-ioring/CHECKLIST.md)), where measurements
+had already shown the kernel both stricter and more lenient than its pages. It is the consumer-side rule of
+PLATFORM INTEGRITY ("depend on specified primitives, never on incidental current behavior") applied to the
+platform itself: what one Windows build accepts on one machine is incidental behaviour, and the documented
+contract is the specification. It is the sibling of
+[DOCUMENTED APIS ONLY](.github/copilot-instructions.md), which governs which calls are made; this governs what
+is refused before one.
+
+**Three kinds of refusal, and one thing that is never a refusal.**
+
+1. **The documented contract.** Where a page says a combination of a call's arguments is invalid, the
+   repository may refuse it before the call. Each such refusal carries its citation -- the page, the condition
+   as the page states it, and the date it was read -- and is written only after the sentence has been read
+   again, not recalled. When the page changes, the refusal is changed on purpose, never discovered by a test.
+   **Amended by the engineer, 2026-10-18:** "If we have evidence that the documentation is wrong, I believe
+   the remedy is to not embody the documentation structurally. This is unfortunate." So a documented
+   condition that a measurement contradicts -- the platform accepts what the page calls invalid -- is not
+   refused; the discrepancy is documented beside the condition and pinned by the evidence test that shows it.
+   (This replaces the first wording, that the page was refused even where this machine accepted it.)
+   **Only the call's own pages are its contract.** A condition stated for a lower layer this repository does
+   not call -- `ZwCreateFile` beneath `CreateFileW`, for instance -- is not direct evidence of the upper
+   call's contract (the engineer, 2026-10-18); it is a good lead for an experiment whose findings are then
+   documented as such.
+2. **Our own narrowing.** Where a combination leads to behaviour a component does not support, it is refused as
+   early as the information to judge it exists, and named as the component's choice -- a separate error kind
+   from (1), since a narrowing is revisable and a contract refusal moves only when the contract does. It does
+   not claim to predict the platform's rejection.
+3. **The platform's own refusal.** Everything else reaches the call, and its error reaches the caller as the
+   platform gave it, refined into a typed error after the fact where the code is specific enough.
+4. **Never a refusal: a measurement.** Behaviour discovered by running is anecdote. It is documented, and pinned
+   by an evidence test so that a change is seen, but it never creates a refusal. It can only withhold one: a
+   measurement that shows the documentation wrong keeps the documented condition from being embodied, as (1)
+   says.
+
+**What a check ahead of the call can judge.** Only a condition on the arguments alone. A condition on the
+target -- whether a file exists, which file system or device it is on, whether it is local, the caller's token,
+who else holds it -- is the call's to judge: a check ahead of it is a guess, or a second open with a race window
+between them. Such a documented condition stays documentation, and the platform's error answers it.
+
+**What is not a contract of invalidity.** "Self-defeating", "is ignored", "has no effect", and a sentence that
+can be read two ways. Those pass through, and are documented as what the page says.
+
+**The default mechanism**, the assistant's proposal given leeway by the engineer on 2026-10-18: one pure check
+at the build step, over a table of conditions each with its predicate, its kind and its citation, tested in
+memory. A condition is made structural only where it falls on a type parameter the component already has; a
+type parameter is not added for a flag, since every one multiplies the conversions that carry the others. A
+component may choose otherwise and says why.
+
+**Scope.** Every component that validates ahead of a platform call. A `-sys` crate that decides nothing refuses
+nothing and is consistent with the rule as it stands. Applying it to refusals that already exist is
+[M42](CHECKLIST.md) in the root checklist; applying it to the open of `win-durable-ioring` is
+[DI-14.4](crates/durable-ioring/CHECKLIST.md).
