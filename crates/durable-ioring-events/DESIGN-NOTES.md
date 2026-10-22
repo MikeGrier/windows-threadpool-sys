@@ -133,7 +133,7 @@ defines ([DI-D-88](../durable-ioring/DESIGN-NOTES.md#di-d-88)), so a test encode
 end equal to what `pairing` says of it; a variant that changes ends cannot leave its row behind.
 
 **A task for each kind of pair**: `Seal` 1, `Flush` 2 and `LockWait` 3, so a reader groups a Start with its Stop by task,
-and the activity id that joins them is [DI-19.4](../durable-ioring/CHECKLIST.md)'s. `Inconsistency` has no task. The manifest
+and the activity id that joins them is [DE-D-6](#de-d-6)'s. `Inconsistency` has no task. The manifest
 renders the tasks before the keywords and names each event's task and opcode.
 
 **Fields.** A pair's id is `Pair`, a 64-bit number. An end's outcome is `Outcome`, text, the word durable-ioring's `Display`
@@ -149,4 +149,38 @@ end's outcome as its word, and a domain's bytes with their length. The same "Som
 as before was about the trace's header events. The manifest was uninstalled afterwards. The nine session tests and the
 Windows driver's ETW test were run elevated the same day and pass.
 
-**Scheduled work.** None beyond [DI-19.4](../durable-ioring/CHECKLIST.md).
+**Scheduled work.** None; the activity id is [DE-D-6](#de-d-6).
+
+## <a id="de-d-6"></a>DE-D-6: a pair is one ETW activity, whose id the platform creates at the begin and the end repeats
+
+The engineer's choice, 2026-10-21, of the assistant's option "c" ([DI-D-93](../durable-ioring/DESIGN-NOTES.md#di-d-93)); the
+details below are the assistant's and open to a ruling.
+
+**Why not an id derived from the pair.** The working position was the process id in the upper 64 bits and the pair id in the
+lower. A process id can be reused within one trace and the pair counter starts again in each process, so a later process's
+pair would carry an earlier one's activity: a reader that groups by activity would merge them, and an unfinished begin of a
+process that died could be paired with another process's end. `EventActivityIdControl` creates ids its page guarantees unique
+"across all processes on the local system until the system reboots" ([WE-D-5](../win-etw-sys/DESIGN-NOTES.md#we-d-5)), so no
+formula of ours has to be.
+
+**How.** When a pair's begin is written, an id is created and held against the pair id; its end takes the id back and writes
+it, and both are written by `write_transfer` with that activity, whatever thread writes each. The map is the process's, behind
+a lock that is a leaf as `DiagnosticSink` requires: a pair written by two sinks -- a clone, or two in a fan-out -- is one
+activity, held until its last end. An end lets its activity go whether or not a session is listening for it, so nothing is
+held for a session that stopped between the two. An end whose begin was not written, because no session listened then, is
+written in an activity of its own, so it joins no other; a begin whose id cannot be created is written in the thread's
+activity, with nothing held. Any event that is not a pair is written in the thread's activity, as before. The pair id stays in
+the `Pair` field, so a text sink's line and a trace's record still name the same pair.
+
+**Cost.** With no session listening, nothing: the sink is not asked to report. With one, a begin costs the call and a map
+insert under the lock, and an end a map removal.
+
+**Read back by a program, 2026-10-21.** A trace of `emit_every_event`, recorded elevated with the manifest installed and dumped
+by `tracerpt` to CSV, is read by the example `pair_trace`, which pairs each `win:Start` with the `win:Stop` in its activity,
+checks that the two agree on task and on the `Pair` field, and reports the gap between their clock times. It paired all four
+pairs, each in an activity of its own, each no shorter than the wait the example makes, and the two flushes ended on another
+thread than they began on. The dump is kept as the example's test fixture, `examples/pair_trace/trace.csv`. The session tests
+were run elevated the same day and pass, and the sabotages only a session catches are `sabotage-session.json`, swept then, each
+caught and its control surviving.
+
+**Scheduled work.** None.

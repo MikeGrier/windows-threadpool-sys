@@ -3,9 +3,11 @@
 
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
-use durable_ioring::{Diagnostic, DiagnosticKind, DiagnosticSink};
+use durable_ioring::{Diagnostic, DiagnosticKind, DiagnosticSink, Edge};
 use win_error_codes::Win32Error;
-use win_etw_sys::Registration;
+use win_etw_sys::{Registration, create_activity_id};
+
+use crate::activity;
 
 use crate::encode::{encode, schema_of};
 use crate::schema::{PROVIDER_ID, schema_of_kind};
@@ -35,6 +37,11 @@ fn shared() -> Result<Arc<Registration>, Win32Error> {
 ///
 /// It wants a kind only when a session is listening for it, so with none its cost is a test of that, and no event is built:
 /// no text is formatted and nothing is written. Cloning it shares the registration, which every sink of the process does.
+///
+/// A pair's begin and end are written in one activity: an id `EventActivityIdControl` creates when the begin is written and
+/// the end repeats, whatever thread writes either, and which the platform guarantees no process of the system repeats until it
+/// restarts. An end whose begin was not written, because no session was listening then, is written in an activity of its own.
+/// Any other event is written in the writing thread's activity. See DE-D-6.
 ///
 /// [`manifest`]: fn@crate::manifest
 #[derive(Clone, Debug)]
@@ -107,6 +114,13 @@ impl DiagnosticSink for EtwDiagnostics {
         let Some(schema) = schema_of(event) else {
             return;
         };
+        let pairing = event.pairing();
+        // An end lets its pair's activity go whether or not it is written, so a session that stopped between a begin and its
+        // end leaves nothing held.
+        let ended = match pairing {
+            Some(pairing) if pairing.edge == Edge::End => activity::ended(pairing.id),
+            _ => None,
+        };
         let descriptor = schema.descriptor();
         // Asked again, of the event itself, before anything is built: `wants` was asked of its kind.
         if !registration.is_enabled(&descriptor) {
@@ -116,8 +130,20 @@ impl DiagnosticSink for EtwDiagnostics {
             return;
         };
         let fields: Vec<_> = values.iter().map(crate::encode::Value::field).collect();
+        let activity = match pairing {
+            None => None,
+            Some(pairing) => match pairing.edge {
+                Edge::Begin => activity::begun(pairing.id, || create_activity_id().ok()),
+                Edge::End => ended.or_else(|| create_activity_id().ok()),
+            },
+        };
         // The page says the code "is primarily intended for use in debugging and diagnostic scenarios" and that most callers
         // ignore it, and a sink has no way to report a failure of its own.
-        let _ = registration.write(&descriptor, &fields);
+        let _ = match activity {
+            Some(activity) => {
+                registration.write_transfer(&descriptor, Some(&activity), None, &fields)
+            }
+            None => registration.write(&descriptor, &fields),
+        };
     }
 }

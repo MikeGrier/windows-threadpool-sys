@@ -1,0 +1,75 @@
+{
+  "package": "durable-ioring-events",
+  "description": "Sabotages of durable-ioring-events that only a trace session can catch: tests/session.rs, run with --include-ignored. Run with tools/run-sabotage.ps1 from an elevated process or one in the Performance Log Users group, as CI's runners are (DE-D-4); unelevated, every session test fails to start and the baseline is red, so the sweep stops before any entry.",
+  "testArgs": [
+    "-p",
+    "durable-ioring-events",
+    "--test",
+    "session",
+    "--",
+    "--include-ignored"
+  ],
+  "notCoveredHere": "What a unit test can see is sabotage.json.",
+  "sabotages": [
+    {
+      "name": "DE-D-6: a pair's begin is written in an activity no end will share",
+      "file": "src/sink.rs",
+      "expect": "caught",
+      "why": "The begin's activity is the one its end looks up; one created and not held leaves the end to create another, and the pair is two activities.",
+      "find": [
+        "                Edge::Begin => activity::begun(pairing.id, || create_activity_id().ok()),"
+      ],
+      "replace": [
+        "                Edge::Begin => create_activity_id().ok(),"
+      ]
+    },
+    {
+      "name": "DE-D-6: a pair's end is written in an activity of its own",
+      "file": "src/sink.rs",
+      "expect": "caught",
+      "why": "The end must repeat its begin's activity, or a reader cannot pair them by it.",
+      "find": [
+        "                Edge::End => ended.or_else(|| create_activity_id().ok()),"
+      ],
+      "replace": [
+        "                Edge::End => create_activity_id().ok(),"
+      ]
+    },
+    {
+      "name": "DE-D-6: a pair's events are written in the thread's activity",
+      "file": "src/sink.rs",
+      "expect": "caught",
+      "why": "Written by the plain call, a begin and an end on two threads carry the two threads' ids, and a pair whose end comes from another thread is never one activity.",
+      "find": [
+        "                registration.write_transfer(&descriptor, Some(&activity), None, &fields)"
+      ],
+      "replace": [
+        "                registration.write(&descriptor, &{ let _ = activity; fields })"
+      ]
+    },
+    {
+      "name": "DE-D-6: an end whose begin was not written is written in the thread's activity",
+      "file": "src/sink.rs",
+      "expect": "caught",
+      "why": "An end with no begin written is an activity of its own, so that it joins no other.",
+      "find": [
+        "                Edge::End => ended.or_else(|| create_activity_id().ok()),"
+      ],
+      "replace": [
+        "                Edge::End => ended,"
+      ]
+    },
+    {
+      "name": "DE-D-6 control: no activity is spelled another way for an event that is not a pair",
+      "file": "src/sink.rs",
+      "expect": "survives",
+      "why": "A control: the same value by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": [
+        "            None => None,"
+      ],
+      "replace": [
+        "            None => Option::<win_etw_sys::Guid>::None,"
+      ]
+    }
+  ]
+}

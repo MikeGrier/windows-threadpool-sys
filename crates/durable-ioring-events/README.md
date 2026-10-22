@@ -14,7 +14,8 @@ describes them, and `EtwDiagnostics`, a diagnostic sink that writes each event t
   renders the manifest from it, so the two cannot disagree.
 - durable-ioring's begin and end events are written as pairs: a begin with the `win:Start` opcode and its end with
   `win:Stop`, under a task for each kind -- a seal, a flush, a lock wait -- and both carrying the pair's id. A wait's length
-  is the gap between the two records' timestamps. The manifest is kept with the crate as `durable-ioring-events.man`, and a test
+  is the gap between the two records' timestamps. A pair is one ETW activity, whose id ETW creates at the begin and the end
+  repeats, so a begin and an end written on different threads are grouped together ([DE-D-6](DESIGN-NOTES.md#de-d-6)). The manifest is kept with the crate as `durable-ioring-events.man`, and a test
   holds the file equal to what is rendered.
 
 ```rust
@@ -44,6 +45,16 @@ Then a tool that decodes by manifest, such as `tracerpt`, shows each event by na
 uninstalls it. An event's fields are written in the order the manifest gives, with no padding, and a text field ends at its
 first zero unit, so a zero in a message cuts it short for a reader.
 
+## Pairing a trace
+
+The example `pair_trace` reads `tracerpt`'s CSV dump of a trace, decoded with the manifest installed, and prints each pair
+with how long it took, or what broke the pairing:
+
+```text
+tracerpt trace.etl -o trace.csv -of CSV
+cargo run -p durable-ioring-events --example pair_trace -- trace.csv
+```
+
 See [DE-D-1](DESIGN-NOTES.md#de-d-1) for the name and the GUID, [DE-D-2](DESIGN-NOTES.md#de-d-2) for the events,
 [DE-D-3](DESIGN-NOTES.md#de-d-3) for the manifest, [DE-D-4](DESIGN-NOTES.md#de-d-4) for the sink and
-[DE-D-5](DESIGN-NOTES.md#de-d-5) for the pairs.
+[DE-D-5](DESIGN-NOTES.md#de-d-5) for the pairs and [DE-D-6](DESIGN-NOTES.md#de-d-6) for their activities.

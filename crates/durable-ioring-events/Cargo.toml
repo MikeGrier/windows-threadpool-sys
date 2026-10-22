@@ -25,6 +25,12 @@ win-etw-sys = { version = "0.0.1", path = "../win-etw-sys" }
 # The failure a registration reports.
 win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 
+# Pairs the begins and ends of a trace's CSV dump (DE-D-6). Its tests run with the crate's.
+[[example]]
+name = "pair_trace"
+path = "examples/pair_trace/main.rs"
+test = true
+
 [dev-dependencies]
 # The trace session the tests use to see an event reach ETW (win-etw-sys' WE-D-3): it needs privilege, so the tests that use it
 # are ignored by default. A dev-dependency's features reach test builds only.

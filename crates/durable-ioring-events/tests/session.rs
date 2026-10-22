@@ -34,7 +34,7 @@ use durable_ioring_events::{
     ColumnType, EVENTS, EtwDiagnostics, EventSchema, INCONSISTENCIES, LOCKS, PROVIDER_ID, Value,
     encode, schema_of, schema_of_id,
 };
-use win_etw_sys::{Recorded, Session, level};
+use win_etw_sys::{Guid, Recorded, Session, level};
 
 /// A sink that wants every kind, to mint pair ids from.
 struct Wanting;
@@ -481,4 +481,152 @@ fn an_event_too_large_for_the_session_is_dropped_without_a_failure_and_the_next_
     });
     let event = only(session.stop().expect("stopped"));
     assert_eq!(event.descriptor.id, LOCK_WAIT_BEGAN);
+}
+
+/// The activity id the platform says is no activity.
+const NO_ACTIVITY: Guid = Guid::from_u128(0);
+
+fn lock_wait(edge_began: bool, instance: u64, id: CorrelationId) -> Diagnostic<'static> {
+    if edge_began {
+        Diagnostic::LockWaitBegan {
+            instance,
+            lock: "engine",
+            id,
+        }
+    } else {
+        Diagnostic::LockWaitEnded {
+            instance,
+            lock: "engine",
+            id,
+        }
+    }
+}
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn a_pairs_begin_and_end_written_on_two_threads_are_one_activity_created_for_it() {
+    let _serial = serial();
+    let session = listening();
+    let sink = EtwDiagnostics::new();
+    assert!(becomes(|| sink.wants(DiagnosticKind::LockWait)));
+    let id = minted();
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| sink.report(&lock_wait(true, 1, id)))
+            .join()
+            .expect("the begin's thread");
+        scope
+            .spawn(|| sink.report(&lock_wait(false, 1, id)))
+            .join()
+            .expect("the end's thread");
+    });
+    let recorded = session.stop().expect("stopped");
+    assert_eq!(recorded.len(), 2, "{recorded:?}");
+    assert_eq!(
+        recorded
+            .iter()
+            .map(|r| r.descriptor.opcode)
+            .collect::<Vec<_>>(),
+        [1, 2],
+        "a Start and a Stop"
+    );
+    assert_ne!(recorded[0].activity, NO_ACTIVITY);
+    assert_eq!(recorded[0].activity, recorded[1].activity);
+    assert!(
+        recorded.iter().all(|r| r.related_activity.is_none()),
+        "{recorded:?}"
+    );
+}
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn two_pairs_are_two_activities_however_they_interleave() {
+    let _serial = serial();
+    let session = listening();
+    let sink = EtwDiagnostics::new();
+    assert!(becomes(|| sink.wants(DiagnosticKind::LockWait)));
+    let (a, b) = (minted(), minted());
+    for event in [
+        lock_wait(true, 1, a),
+        lock_wait(true, 2, b),
+        lock_wait(false, 1, a),
+        lock_wait(false, 2, b),
+    ] {
+        sink.report(&event);
+    }
+    let recorded = session.stop().expect("stopped");
+    let activities: Vec<Guid> = recorded.iter().map(|r| r.activity).collect();
+    assert_eq!(activities.len(), 4, "{recorded:?}");
+    assert_eq!(activities[0], activities[2]);
+    assert_eq!(activities[1], activities[3]);
+    assert_ne!(activities[0], activities[1]);
+}
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn two_sinks_writing_one_pair_write_it_in_one_activity() {
+    let _serial = serial();
+    let session = listening();
+    let (a, b) = (EtwDiagnostics::new(), EtwDiagnostics::new());
+    assert!(becomes(|| a.wants(DiagnosticKind::LockWait)));
+    let id = minted();
+    for began in [true, false] {
+        a.report(&lock_wait(began, 1, id));
+        b.report(&lock_wait(began, 1, id));
+    }
+    let recorded = session.stop().expect("stopped");
+    assert_eq!(recorded.len(), 4, "{recorded:?}");
+    let first = recorded[0].activity;
+    assert_ne!(first, NO_ACTIVITY);
+    assert!(recorded.iter().all(|r| r.activity == first), "{recorded:?}");
+}
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn an_end_whose_begin_was_not_written_is_an_activity_of_its_own() {
+    let _serial = serial();
+    let sink = EtwDiagnostics::new();
+    let id = minted();
+    // No session yet, so the begin is not written.
+    sink.report(&lock_wait(true, 1, id));
+    let session = listening();
+    assert!(becomes(|| sink.wants(DiagnosticKind::LockWait)));
+    let other = minted();
+    sink.report(&lock_wait(false, 1, id));
+    sink.report(&lock_wait(true, 2, other));
+    sink.report(&lock_wait(false, 2, other));
+    let recorded = session.stop().expect("stopped");
+    assert_eq!(recorded.len(), 3, "{recorded:?}");
+    assert_ne!(recorded[0].activity, NO_ACTIVITY);
+    assert_ne!(recorded[0].activity, recorded[1].activity);
+    assert_eq!(recorded[1].activity, recorded[2].activity);
+}
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn an_event_that_is_not_a_pair_is_written_in_the_threads_activity() {
+    let _serial = serial();
+    let session = listening();
+    let sink = EtwDiagnostics::new();
+    assert!(becomes(|| sink.wants(DiagnosticKind::Inconsistency)));
+    let id = minted();
+    sink.report(&Diagnostic::Inconsistency {
+        instance: 1,
+        what: "a test",
+        detail: format_args!("none"),
+    });
+    sink.report(&lock_wait(true, 1, id));
+    sink.report(&lock_wait(false, 1, id));
+    sink.report(&Diagnostic::Inconsistency {
+        instance: 1,
+        what: "a test",
+        detail: format_args!("none"),
+    });
+    let recorded = session.stop().expect("stopped");
+    assert_eq!(recorded.len(), 4, "{recorded:?}");
+    assert_eq!(
+        recorded[0].activity, recorded[3].activity,
+        "the thread's, unchanged"
+    );
+    assert_ne!(recorded[0].activity, recorded[1].activity);
 }

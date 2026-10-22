@@ -5,6 +5,7 @@
 // This crate has no unsafe code: the calls are `win-etw-sys`'.
 #![forbid(unsafe_code)]
 
+mod activity;
 mod encode;
 mod manifest;
 mod schema;

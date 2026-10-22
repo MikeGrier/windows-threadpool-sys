@@ -1,7 +1,7 @@
 {
   "package": "durable-ioring-events",
   "description": "Sabotages for durable-ioring-events. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "What only a trace session can show is not swept here: that the sink wants a kind only when a session listens to it, that the level and keyword filters hold, and that each event reaches a session as its values are tests/session.rs, which are ignored without elevation (DE-D-4), so a sweep on a machine that cannot start a session would report a sabotage of those as surviving for a reason that is not a hole. That the manifest decodes is checked by hand with mc, rc, wevtutil and tracerpt (DE-D-3).",
+  "notCoveredHere": "What only a trace session can show is not swept here: that the sink wants a kind only when a session listens to it, that the level and keyword filters hold, and that each event reaches a session as its values are tests/session.rs, which are ignored without elevation (DE-D-4), and are swept by sabotage-session.json on a machine that can, with the activity each pair is written in (DE-D-6), so a sweep on a machine that cannot start a session would report a sabotage of those as surviving for a reason that is not a hole. That the manifest decodes is checked by hand with mc, rc, wevtutil and tracerpt (DE-D-3).",
   "sabotages": [
     {
       "name": "DE-D-1: the provider's GUID is changed",
@@ -129,6 +129,115 @@
         "            | Self::LockWaitBegan { id, .. }",
         "            | Self::SealEnded { id, .. } => (*id, Edge::Begin),",
         "            Self::FlushEnded { id, .. }"
+      ]
+    },
+    {
+      "name": "DE-D-6: a pair's second begin makes an activity of its own",
+      "file": "src/activity.rs",
+      "expect": "caught",
+      "why": "Two sinks writing one pair must write it in one activity, or a reader sees the pair's begin twice in two activities, one with no end.",
+      "find": [
+        "            *holders += 1;",
+        "            return Some(*id);"
+      ],
+      "replace": [
+        "            let _ = (holders, id);"
+      ]
+    },
+    {
+      "name": "DE-D-6: a pair's activity is let go at its first end",
+      "file": "src/activity.rs",
+      "expect": "caught",
+      "why": "A pair written by two sinks has two ends, and the second must carry the activity the begins did.",
+      "find": [
+        "        if *holders == 0 {"
+      ],
+      "replace": [
+        "        if *holders == 0 || true {"
+      ]
+    },
+    {
+      "name": "DE-D-6: an ended pair's activity is held for ever",
+      "file": "src/activity.rs",
+      "expect": "caught",
+      "why": "Each pair that ends must leave nothing held, or the map grows with every pair the process writes.",
+      "find": [
+        "            self.held.remove(&pair);"
+      ],
+      "replace": [
+        "            let _ = &pair;"
+      ]
+    },
+    {
+      "name": "DE-D-6 control: the activity is created by another spelling of the same call",
+      "file": "src/activity.rs",
+      "expect": "survives",
+      "why": "A control: the same value by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": [
+        "        let id = create()?;"
+      ],
+      "replace": [
+        "        let id = (create)()?;"
+      ]
+    },
+    {
+      "name": "DE-D-6: the pairing takes a stop of another task as its start's end",
+      "file": "examples/pair_trace/main.rs",
+      "expect": "caught",
+      "why": "A reader pairs by activity and task; a stop of another task in the same activity is a broken pairing and not a duration.",
+      "find": [
+        "        if began.task != row.task {"
+      ],
+      "replace": [
+        "        if false {"
+      ]
+    },
+    {
+      "name": "DE-D-6: the pairing takes a stop naming another pair as its start's end",
+      "file": "examples/pair_trace/main.rs",
+      "expect": "caught",
+      "why": "The pair id a stop carries must be its start's; the activity alone could hide a provider writing the wrong one.",
+      "find": [
+        "        if began.pair() != row.pair() || row.pair().is_none() {"
+      ],
+      "replace": [
+        "        if row.pair().is_none() {"
+      ]
+    },
+    {
+      "name": "DE-D-6: the pairing measures a duration backwards",
+      "file": "examples/pair_trace/main.rs",
+      "expect": "caught",
+      "why": "A duration is the stop's time less the start's.",
+      "find": [
+        "        let Some(ticks) = row.clock.checked_sub(began.clock) else {"
+      ],
+      "replace": [
+        "        let Some(ticks) = began.clock.checked_sub(row.clock) else {"
+      ]
+    },
+    {
+      "name": "DE-D-6: the pairing lets a second start replace the first unseen",
+      "file": "examples/pair_trace/main.rs",
+      "expect": "caught",
+      "why": "An activity started twice is a broken pairing, and a reader that overwrote the first start would measure from the second.",
+      "find": [
+        "            if open.insert(activity, row).is_some() {"
+      ],
+      "replace": [
+        "            if { open.insert(activity, row); false } {"
+      ]
+    },
+    {
+      "name": "DE-D-6 control: the pairing scales a duration to milliseconds by another spelling of the same factor",
+      "file": "examples/pair_trace/main.rs",
+      "expect": "survives",
+      "why": "A control: the same factor by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": [
+        "            self.took.as_secs_f64() * 1000.0,"
+      ],
+      "replace": [
+        "            self.took.as_secs_f64() * 1e3,"
       ]
     }
   ]
