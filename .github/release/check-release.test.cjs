@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { PullRequestBody } = require('release-please/build/src/util/pull-request-body.js');
 const { Version } = require('release-please/build/src/version.js');
-const { expectedTags, missingTags, changelogRecords, listTagNames, verifyReleased } = require('./check-release-tags.cjs');
+const { expectedTags, missingTags, changelogRecords, listTagNames, verifyReleased, headOf, verifyWhenCurrent } = require('./check-release-tags.cjs');
 const { rawMarkup, offenders } = require('./check-commit-text.cjs');
 
 const root = path.resolve(__dirname, '../..');
@@ -80,6 +80,35 @@ test('listing tags goes through the locked Octokit client\'s rest namespace, and
   const names = await listTagNames({ repository: { owner: 'o', repo: 'r' }, octokit });
   assert.deepEqual([...names].sort(), ['a-v1.0.0', 'b-v2.0.0', 'c-v3.0.0']);
   assert.deepEqual(calls, [{ method: 'listTags', params: { owner: 'o', repo: 'r', per_page: 100 } }]);
+});
+
+test('the tag check runs only when the branch tip is the checkout before and after the release phase', async () => {
+  const run = async (sha, before, after) => {
+    const verified = [];
+    const result = await verifyWhenCurrent({}, sha, before, { head: async () => after, verify: async () => { verified.push(sha); } });
+    return { result, verified };
+  };
+  const current = await run('s1', 's1', 's1');
+  assert.equal(current.result.verified, true);
+  assert.deepEqual(current.verified, ['s1']);
+  const trailing = await run('s1', 's2', 's2');
+  assert.equal(trailing.result.verified, false, 'a checkout behind the branch tip must not be checked against newer releases');
+  assert.match(trailing.result.reason, /s1.*s2/);
+  assert.deepEqual(trailing.verified, []);
+  const movedDuring = await run('s1', 's1', 's2');
+  assert.equal(movedDuring.result.verified, false, 'a push during the release phase moves what it loaded');
+  assert.deepEqual(movedDuring.verified, []);
+  await assert.rejects(verifyWhenCurrent({}, 's1', 's1', { head: async () => 's1', verify: async () => { throw new Error('missing tag'); } }), /missing tag/);
+});
+
+test('the branch tip is read through the locked client\'s rest namespace from the default branch', async () => {
+  const seen = [];
+  const github = { repository: { owner: 'o', repo: 'r', defaultBranch: 'main' },
+    octokit: { rest: { repos: { getBranch: async params => { seen.push(params); return { data: { commit: { sha: 'abc' } } }; } } } } };
+  assert.equal(await headOf(github), 'abc');
+  assert.deepEqual(seen, [{ owner: 'o', repo: 'r', branch: 'main' }]);
+  const { Octokit } = require('@octokit/rest');
+  assert.equal(typeof new Octokit().rest.repos.getBranch, 'function');
 });
 
 test('verification of this tree fails naming a recorded version that has no tag, and passes when every tag exists', async () => {

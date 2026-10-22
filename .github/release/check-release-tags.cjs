@@ -48,4 +48,22 @@ async function verifyReleased(github, root = path.resolve(__dirname, '../..'), l
   }
 }
 
-module.exports = { expectedTags, missingTags, changelogRecords, listTagNames, verifyReleased };
+async function headOf(github) {
+  const { owner, repo, defaultBranch } = github.repository;
+  const { data } = await github.octokit.rest.repos.getBranch({ owner, repo, branch: defaultBranch });
+  return data.commit.sha;
+}
+
+// The release phase loads its state from the live default branch, while the files this check reads are
+// the checkout of the push that started the run. They are the same revision only when the branch has
+// not moved, so the check runs only when the branch tip was the checkout both before the release phase
+// began and after it ended. Otherwise a newer push exists, its own run is queued behind this one
+// (the workflow serializes them), checks out the newer revision, and makes this same check.
+async function verifyWhenCurrent(github, sha, before, { head = headOf, verify = verifyReleased } = {}) {
+  const after = await head(github);
+  if (before !== sha || after !== sha) return { verified: false, reason: `the branch moved from ${sha} (tip ${before} before, ${after} after); the run for the newer push verifies it` };
+  await verify(github);
+  return { verified: true };
+}
+
+module.exports = { expectedTags, missingTags, changelogRecords, listTagNames, verifyReleased, headOf, verifyWhenCurrent };

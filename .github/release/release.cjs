@@ -5,7 +5,7 @@ const { DefaultVersioningStrategy } = require('release-please/build/src/versioni
 const { CargoWorkspace } = require('release-please/build/src/plugins/cargo-workspace.js');
 const { Version } = require('release-please/build/src/version.js');
 const { nextCalendarVersion } = require('./calver.cjs');
-const { verifyReleased } = require('./check-release-tags.cjs');
+const { verifyReleased, headOf, verifyWhenCurrent } = require('./check-release-tags.cjs');
 
 function registerCalendarVersions(date = new Date()) {
   class CalendarStrategy extends DefaultVersioningStrategy {
@@ -53,7 +53,13 @@ async function main(core) {
   if (!owner || !repo) throw new Error('GITHUB_REPOSITORY is required');
   registerCalendarVersions();
   const github = await GitHub.create({ owner, repo, token, defaultBranch: 'main' });
-  const { releases, prs } = await releaseAndPropose(github);
+  const sha = process.env.GITHUB_SHA;
+  if (!sha) throw new Error('GITHUB_SHA is required');
+  const before = await headOf(github);
+  const { releases, prs } = await releaseAndPropose(github, undefined, async client => {
+    const result = await verifyWhenCurrent(client, sha, before);
+    if (!result.verified) core.notice(`Tag verification skipped: ${result.reason}`);
+  });
   core.setOutput('release_created', releases.length > 0);
   core.setOutput('releases_created', releases.length > 0);
   core.setOutput('paths_released', JSON.stringify(releases.map(release => release.path || '.')));

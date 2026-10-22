@@ -83,7 +83,9 @@ and the release run fails after creating releases when a package in
 `CHANGELOG.md` records but that has no tag
 ([check-release-tags.cjs](.github/release/check-release-tags.cjs)). A bootstrap
 version registered before the first release has no changelog entry and is not
-owed a tag. A failed
+owed a tag. The check reads the push's checkout, so it runs only when
+`main` was still that commit before and after the release phase; when a newer
+push has landed, the run for that push makes the check instead. A failed
 run is repaired by creating the missing release and tag at the release pull
 request's merge commit, which drives that crate's publish workflow.
 
