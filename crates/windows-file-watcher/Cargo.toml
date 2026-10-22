@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-file-watcher"
-version = "0.2.6" # x-release-please-version
+version = "0.2.7" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -98,7 +98,7 @@ win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned
 # `ThreadpoolWait` the coarse fallback, `ThreadpoolTimer` the retry backoff, and
 # `ThreadpoolWork` drains the request queue. The monitor owns no threads of its
 # own.
-windows-threadpool-sys = { version = "0.4.0", path = "../windows-threadpool-sys" }
+windows-threadpool-sys = { version = "0.5.0", path = "../windows-threadpool-sys" }
 
 # A single-file route's case-insensitive leaf-name match (PR #20 review response): `CompareStringOrdinal`,
 # the OS's own ordinal case folding and not an ASCII-only approximation, over counted slices (M17.1).
