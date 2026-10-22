@@ -170,3 +170,17 @@ is stated as current, and the earlier steps' "scheduled work" lines say there is
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Evidence, in [sabotage.json](sabotage.json): an `unsafe` block added to the
 library is refused by the build, and a control adding the same item without `unsafe` survives. With this
 the `SAFE` group is complete, and its stubs left the checklist with it.
+
+## Moved 2026-10-21 21:46:17 -04:00 -- windows-file-enumeration-sys: milestones PATH and ERR are complete
+
+### <a id="path----one-path-contract-across-the-namespace-crates"></a>PATH -- One path contract across the namespace crates
+
+  **Next:** `REVIEW-1`, in [PARKED.md](PARKED.md), is re-read against the new contract. After that nothing further in this
+  crate; the order across the crates is at the top of
+  [durable-ioring's CHECKLIST.md](../durable-ioring/COMPLETED-CHECKLIST.md#open-surface-order).
+
+Items, each archived above under its own heading: [PATH-1](#path-1).
+
+### <a id="err----one-error-code-type-across-the-crates"></a>ERR -- One error code type across the crates
+
+Items, each archived above under its own heading: [ERR-1](#err-1).

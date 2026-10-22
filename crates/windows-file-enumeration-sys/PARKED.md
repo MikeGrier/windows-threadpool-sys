@@ -6,7 +6,7 @@ Work not in scope now. Nothing here is pending; an item leaves only by graduatin
 ## M-inf -- Horizon (ungated)
 
 - [ ] **REVIEW-1** -- Review the request path contract against a traversal layer, before one is built.
-  **Re-read after [PATH-1](CHECKLIST.md#path----one-path-contract-across-the-namespace-crates):** that item
+  **Re-read after [PATH-1](COMPLETED-CHECKLIST.md#path----one-path-contract-across-the-namespace-crates):** that item
   replaces the contract below (no `MAX_PATH` cap, no `\\?\` rewriting, a graft onto a captured root),
   so most of its questions are about a contract that no longer exists, and this review may close
   with a note of which still stand.
