@@ -17,6 +17,8 @@ description = "Runs one command inside a fresh Windows job object under a wall-c
 publish = false
 
 [dependencies]
+# Duplicating a handle: this crate's `DuplicateHandle` call is `win-handles-sys`'s, the repository's one.
+win-handles-sys = { path = "../win-handles-sys" }
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_Foundation",
 	# `CreateJobObjectW` takes a `SECURITY_ATTRIBUTES`, so windows-sys gates it

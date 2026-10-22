@@ -40,13 +40,13 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::ptr;
 
+use win_handles_sys::{DuplicateAccess, Inheritance, duplicate_handle};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_FILE_NOT_FOUND,
-    ERROR_INSUFFICIENT_BUFFER, HANDLE, TRUE,
+    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, HANDLE, TRUE,
 };
 use windows_sys::Win32::System::SystemInformation::{GetSystemDirectoryW, GetWindowsDirectoryW};
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
+    CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
     GetExitCodeProcess, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
     PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_INFORMATION,
     STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute,
@@ -135,9 +135,9 @@ pub fn spawn_in_job(
     // a later or concurrent process creation, by anything, would inherit them.
     let stdin = File::open("NUL")?;
     let owned = [
-        duplicate_inheritable(stdin.as_raw_handle())?,
-        duplicate_inheritable(stdout.as_raw_handle())?,
-        duplicate_inheritable(stderr.as_raw_handle())?,
+        duplicate_inheritable(&stdin)?,
+        duplicate_inheritable(stdout)?,
+        duplicate_inheritable(stderr)?,
     ];
     let stdio: [HANDLE; 3] = owned.each_ref().map(AsRawHandle::as_raw_handle);
     let jobs: [HANDLE; 1] = [job.as_raw_handle()];
@@ -453,28 +453,9 @@ fn cmd_exe() -> io::Result<PathBuf> {
     }
 }
 
-/// A new handle to the same object as `handle`, inheritable, owned by the caller.
-fn duplicate_inheritable(handle: HANDLE) -> io::Result<OwnedHandle> {
-    let mut duplicate: HANDLE = ptr::null_mut();
-    // SAFETY: `handle` is live for the call; both process arguments are this
-    // process's own pseudo-handle, and `duplicate` is writable.
-    let ok = unsafe {
-        DuplicateHandle(
-            GetCurrentProcess(),
-            handle,
-            GetCurrentProcess(),
-            &raw mut duplicate,
-            0,
-            TRUE,
-            DUPLICATE_SAME_ACCESS,
-        )
-    };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: a successful DuplicateHandle returns a new handle this process
-    // owns.
-    Ok(unsafe { OwnedHandle::from_raw_handle(duplicate) })
+/// A new handle to the same object as `handle`, with its access and inheritable, owned by the caller.
+fn duplicate_inheritable(handle: &File) -> io::Result<OwnedHandle> {
+    duplicate_handle(handle, DuplicateAccess::Same, Inheritance::Inheritable)
 }
 
 /// A `PROC_THREAD_ATTRIBUTE_LIST`, deleted on drop.

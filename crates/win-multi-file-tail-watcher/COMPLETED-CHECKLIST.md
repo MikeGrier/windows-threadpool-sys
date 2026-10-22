@@ -1192,6 +1192,7 @@ fan's group never exceeds a chunk, a small fan's allocations stay within it, ind
 ### <a id="tw-86"></a>TW-8.6 -- The root `PLANS.md` row for this crate no longer carries a milestone status that the crate's checklist owns. *(completed 2026-10-16 19:20:00 -04:00)*
 
 The row said reads were parked behind M4. It now says what the crate is and links its checklist.
+
 ## Moved 2026-10-16 20:58:29 -04:00 -- TW-8.7 to TW-8.10: the third pre-merge review
 
 ### <a id="tw-87"></a>TW-8.7 -- CI sweeps every sabotage manifest a crate carries, not only `sabotage.json`, so this crate's integration and doctest manifests are run. *(completed 2026-10-16 20:58:29 -04:00)*
@@ -1642,3 +1643,82 @@ completion queue, and a batch never pushes more reads than the ring's submission
 client-full stops, and the ring-full stop is reached by the test whose pool is larger than the ring. The comment in `option_sets.rs`
 and the README said otherwise, the README as "every stop is reached all the time", which no test observes. Both now say which set
 reaches which stop. No test asserts which stop was reached, and the engine's own tests are where that is asserted.
+
+## Moved 2026-10-21 21:45:55 -04:00 -- win-multi-file-tail-watcher: milestones M2, M3, M4, M5, M6, M7, M8, M9 and M10 are complete
+
+### <a id="m2----the-poll-engine-three-passes-and-a-stop-point-driven-synchronously"></a>M2 -- The poll engine: three passes and a stop point, driven synchronously
+
+Deliverable: the engine, called directly with no thread pool, over hundreds of real files and an SQ
+far smaller than the number of changes, reports every change exactly once across stops and
+continuations, then a poll-done entry. The engine comes before the thread pool because the stop and
+the continuation are part of the third pass, and a synchronous engine can be tested through every
+one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
+
+Items, each archived above under its own heading: [TW-2.1](#tw-21), [TW-2.2](#tw-22), [TW-2.3](#tw-23), [TW-2.4](#tw-24), [TW-2.5](#tw-25), [TW-2.6.1](#tw-261), [TW-2.6.2](#tw-262), [TW-2.6.3](#tw-263), [TW-2.6.4](#tw-264), [TW-2.6](#tw-26), [TW-2.7](#tw-27), [TW-2.8](#tw-28), [TW-2.8.1](#tw-281), [TW-2.9](#tw-29).
+
+### <a id="m3----the-poll-on-the-thread-pool"></a>M3 -- The poll on the thread pool
+
+Deliverable: `poll` runs the engine on the thread pool, one at a time. When the SQ fills it parks,
+and resumes when the caller rings back. A watcher over hundreds of files with child-process writers
+is polled repeatedly while registrations are dropped and added, with no hang and no crate callback
+running between polls.
+
+Items, each archived above under its own heading: [TW-3.1](#tw-31), [TW-3.2](#tw-32), [TW-3.3](#tw-33), [TW-3.4](#tw-34).
+
+### <a id="m4----shutdown"></a>M4 -- Shutdown
+
+Deliverable: shutdown requested from inside the caller's own doorbell callback stops the watcher
+from any state without blocking, and the subsequent `Drop` waits at most for a running poll to reach
+its next step, which is one probe or one report.
+
+Items, each archived above under its own heading: [TW-4.1](#tw-41), [TW-4.2](#tw-42), [TW-4.3](#tw-43), [TW-4.4](#tw-44).
+
+### <a id="m5----reading-the-announced-bytes-through-an-io-ring-driven-synchronously"></a>M5 -- Reading the announced bytes through an I/O ring, driven synchronously
+
+Deliverable: the reading layer, driven directly with no thread pool, over hundreds of files that
+child processes write and a pool far smaller than the bytes announced, delivers every announced byte
+exactly once across chunks labelled with their ranges, and then poll-done. Driven synchronously first
+for the same reason as M2: every stop and continuation can then be tested deterministically
+([TW-D-15](DESIGN-NOTES.md#tw-d-15)). These items replace TW-4+.1 and TW-4+.2, which planned the reads
+through `ThreadpoolIo`.
+
+Items, each archived above under its own heading: [TW-5.1](#tw-51), [TW-5.2](#tw-52), [TW-5.3](#tw-53), [TW-5.4](#tw-54), [TW-5.5](#tw-55), [TW-5.6](#tw-56).
+
+### <a id="m6----the-reading-layer-on-the-thread-pool"></a>M6 -- The reading layer on the thread pool
+
+Coarse on purpose: its scope is set when M5 is done.
+
+Items, each archived above under its own heading: [TW-6.1](#tw-61), [TW-6.2](#tw-62), [TW-6.3](#tw-63).
+
+### <a id="m7----shutdown-with-reads-in-flight"></a>M7 -- Shutdown with reads in flight
+
+Coarse on purpose: its scope is set when M6 is done.
+
+Items, each archived above under its own heading: [TW-7.1](#tw-71), [TW-7.2](#tw-72).
+
+### <a id="m8----findings-of-the-pre-merge-review"></a>M8 -- Findings of the pre-merge review
+
+A review of the branch against origin/main, 2026-10-16, found three defects in M5 to M7.
+
+Items, each archived above under its own heading: [TW-8.1](#tw-81), [TW-8.2](#tw-82), [TW-8.3](#tw-83), [TW-8.4](#tw-84), [TW-8.5](#tw-85), [TW-8.6](#tw-86), [TW-8.7](#tw-87), [TW-8.8](#tw-88), [TW-8.9](#tw-89), [TW-8.10](#tw-810).
+
+### <a id="m9----the-reading-layer-is-public-and-the-client-chooses-its-sizes"></a>M9 -- The reading layer is public, and the client chooses its sizes
+
+Deliverable: a client outside the crate, using only public items, creates the reading layer with a
+buffer size, a buffer count, a client SQ capacity and the ring's two queue sizes of its own choosing,
+registers files that child processes write, polls, and receives every announced byte exactly once as
+chunks; and a size that cannot work is refused at construction, naming the field and its bound
+([TW-D-16](DESIGN-NOTES.md#tw-d-16)). The layer is a module of this crate, not a new one.
+
+The module is `reader`, and its types are `TailReader<T>` (the layer), `TailReaderOptions` (the five
+sizes), `ReadEntry<T>` (the SQ entry) and `Chunk` (the bytes): the engineer, 2026-10-16, "the names are
+fine".
+
+Items, each archived above under its own heading: [TW-9.1](#tw-91), [TW-9.2](#tw-92), [TW-9.3](#tw-93), [TW-9.4](#tw-94), [TW-9.5](#tw-95), [TW-9.6](#tw-96).
+
+### <a id="m10----findings-of-the-review-of-m9"></a>M10 -- Findings of the review of M9
+
+A review of the branch against origin/main, 2026-10-17, found four defects in M9. The engineer: "polls
+initiated before the previous one completes should fail. fix all".
+
+Items, each archived above under its own heading: [TW-10.1](#tw-101), [TW-10.2](#tw-102), [TW-10.3](#tw-103), [TW-10.4](#tw-104), [TW-10.5](#tw-105), [TW-10.6](#tw-106), [TW-10.7](#tw-107), [TW-10.8](#tw-108), [TW-10.9](#tw-109), [TW-10.10](#tw-1010), [TW-10.11](#tw-1011), [TW-10.12](#tw-1012), [TW-10.13](#tw-1013).

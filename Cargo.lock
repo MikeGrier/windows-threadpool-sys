@@ -179,6 +179,7 @@ dependencies = [
 name = "win-job-launcher"
 version = "0.0.0"
 dependencies = [
+ "win-handles-sys",
  "windows-sys",
 ]
 
@@ -322,6 +323,7 @@ dependencies = [
  "io-buffers",
  "serde_json",
  "win-numa-sys",
+ "win-pipes-sys",
  "win-shared-os-owned-handle",
  "windows-guard-alloc",
  "windows-overlapped-io-sys",
@@ -457,6 +459,7 @@ name = "windows-waitable-queues"
 version = "0.1.2"
 dependencies = [
  "portable-atomic",
+ "win-handles-sys",
  "windows-sys",
 ]
 
