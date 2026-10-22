@@ -148,6 +148,11 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
     /// Neither makes the ring a synchronization provider: its lock is its
     /// own, and a callback holds it only for as long as a scope it opens.
     ///
+    /// `env` is [`windows_threadpool_sys::callback_env::CallbackEnviron`], the
+    /// type of the `windows-threadpool-sys` this crate depends on. Another
+    /// version of that crate has another `CallbackEnviron`, so a caller builds
+    /// the environment with the version this crate resolves to.
+    ///
     /// # Errors
     ///
     /// Returns [`io::ErrorKind::Unsupported`] if the running system does not
