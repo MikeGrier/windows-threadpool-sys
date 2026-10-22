@@ -7,3 +7,4 @@ Completed checklists are recorded in
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
 | [CHECKLIST.md](CHECKLIST.md) | in progress | Teardown, self-heal, and the pool stall. Which milestones are open, and what each covers, is what [CHECKLIST.md](CHECKLIST.md) says; the stall's evidence is in [STALL-TIMELINE.md](STALL-TIMELINE.md). | [DESIGN-NOTES.md](../../DESIGN-NOTES.md#teardown-drains), [STALL-TIMELINE.md](STALL-TIMELINE.md) |
+| [PARKED.md](PARKED.md) | parked | `M-T-inf.1`: find the threshold the pool's close races, diagnostic work with no gating deliverable since the draining teardown was adopted. | [STALL-TIMELINE.md](STALL-TIMELINE.md) |

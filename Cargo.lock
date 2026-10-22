@@ -430,6 +430,8 @@ dependencies = [
 name = "windows-threadpool-sys"
 version = "0.3.0"
 dependencies = [
+ "win-pipes-sys",
+ "win-shared-os-owned-handle",
  "win-sync-sys",
  "win-time-sys",
  "windows-overlapped-io-sys",

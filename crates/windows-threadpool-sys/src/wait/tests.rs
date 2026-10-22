@@ -4,11 +4,12 @@
 //! Every test drives a real event handle, since the wait object's contract is
 //! about handle ownership and per-activation rearming rather than about timing.
 
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::{AsHandle, AsRawHandle};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
 use windows_sys::Win32::Foundation::{CompareObjectHandles, FALSE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{ResetEvent, SetEvent, WaitForSingleObject};
@@ -150,7 +151,7 @@ fn same_object(a: std::os::windows::io::BorrowedHandle<'_>, b: &Event) -> bool {
 #[test]
 fn the_conversion_keeps_the_event_it_was_given() {
     let event = Event::new(ResetMode::Manual, false).expect("create an event");
-    let kept = event.try_clone().expect("clone");
+    let kept = event.clone();
     let other = Event::new(ResetMode::Manual, false).expect("create another");
     let waitable = WaitableHandle::from(event);
     assert!(
@@ -164,9 +165,29 @@ fn the_conversion_keeps_the_event_it_was_given() {
 }
 
 #[test]
+fn a_converted_event_shares_the_handle_a_kept_clone_holds() {
+    let event = Event::new(ResetMode::Manual, false).expect("create an event");
+    let kept = event.clone();
+    let waitable = WaitableHandle::from(event);
+    assert_eq!(
+        waitable.handle().as_raw_handle(),
+        kept.as_raw_handle(),
+        "one handle, held by the wait and by the kept clone"
+    );
+    let waitable = waitable
+        .into_handle()
+        .expect_err("the kept clone still holds the handle");
+    drop(kept);
+    assert!(
+        waitable.into_handle().is_ok(),
+        "the wait is the last holder"
+    );
+}
+
+#[test]
 fn a_converted_auto_reset_event_stays_auto_reset() {
     let event = Event::new(ResetMode::Auto, false).expect("create an event");
-    let kept = event.try_clone().expect("clone");
+    let kept = event.clone();
     let waitable = WaitableHandle::from(event);
     kept.set().expect("set through the kept clone");
     assert!(take(waitable.handle()), "the target saw the set");
@@ -176,7 +197,7 @@ fn a_converted_auto_reset_event_stays_auto_reset() {
 #[test]
 fn a_converted_manual_reset_event_stays_manual_reset() {
     let event = Event::new(ResetMode::Manual, false).expect("create an event");
-    let kept = event.try_clone().expect("clone");
+    let kept = event.clone();
     let waitable = WaitableHandle::from(event);
     kept.set().expect("set through the kept clone");
     assert!(take(waitable.handle()), "the target saw the set");
@@ -210,7 +231,7 @@ fn the_event_constructor_makes_each_reset_mode_and_initial_state() {
 #[test]
 fn a_wait_built_from_an_event_fires_when_a_kept_clone_is_set() {
     let event = Event::new(ResetMode::Auto, false).expect("create an event");
-    let kept = event.try_clone().expect("clone");
+    let kept = event.clone();
     let seen = Activations::new();
     let recorder = Arc::clone(&seen);
     let wait = ThreadpoolWait::new(
@@ -1397,4 +1418,117 @@ fn drop_runs_a_queued_callback_rather_than_discarding_it() {
     // A dispatch never settles a work item's obligation -- it can be submitted
     // again -- so the occupier owes a drain even though its callback returned.
     occupier.stop_and_drain();
+}
+
+// --- a shared wait target (M-T15.1) ---
+
+/// An auto-reset event as a shared handle, and a second holder of it.
+fn shared_event() -> (SharedHandle, SharedHandle) {
+    let event = Event::new(ResetMode::Auto, false).expect("create an event");
+    let shared = SharedHandle::from(event);
+    let other = shared.clone();
+    (shared, other)
+}
+
+/// A wait target from a shared event.
+fn shared_target(handle: SharedHandle) -> WaitableHandle {
+    // SAFETY: the handle is an event, which the pool supports.
+    unsafe { WaitableHandle::assume_waitable_shared(handle) }
+}
+
+#[test]
+fn a_shared_target_is_the_handle_its_holders_share_and_not_a_duplicate() {
+    let (shared, other) = shared_event();
+    let waitable = shared_target(shared);
+    assert_eq!(
+        waitable.handle().as_raw_handle(),
+        other.as_raw_handle(),
+        "one handle, held twice"
+    );
+}
+
+#[test]
+fn a_wait_on_a_shared_target_fires_when_another_holder_sets_it() {
+    let (shared, other) = shared_event();
+    let seen = Activations::new();
+    let recorder = Arc::clone(&seen);
+    let wait = ThreadpoolWait::new(
+        shared_target(shared),
+        move |activation| recorder.record(activation.result()),
+        None,
+    )
+    .expect("create wait");
+    wait.arm(None);
+    signal(other.as_handle());
+    let results = seen.wait_for(1);
+    wait.stop_and_drain();
+    assert_eq!(results, vec![WaitResult::Signalled]);
+}
+
+#[test]
+fn a_shared_target_stays_open_after_every_other_holder_drops() {
+    let (shared, other) = shared_event();
+    let seen = Activations::new();
+    let recorder = Arc::clone(&seen);
+    let wait = ThreadpoolWait::new(
+        shared_target(shared),
+        move |activation| recorder.record(activation.result()),
+        None,
+    )
+    .expect("create wait");
+    drop(other);
+    wait.arm(None);
+    signal(wait.handle());
+    let results = seen.wait_for(1);
+    wait.stop_and_drain();
+    assert_eq!(results, vec![WaitResult::Signalled]);
+}
+
+#[test]
+fn a_dropped_wait_releases_its_clone_of_a_shared_target() {
+    let (shared, other) = shared_event();
+    let wait = ThreadpoolWait::new(shared_target(shared), |_| {}, None).expect("create wait");
+    wait.arm(None);
+    signal(other.as_handle());
+    wait.stop_and_drain();
+    drop(wait);
+    assert!(
+        other.try_into_owned().is_ok(),
+        "the other holder is the last one once the wait has gone"
+    );
+}
+
+#[test]
+fn a_released_cleanup_group_member_releases_its_clone_of_a_shared_target() {
+    let (shared, other) = shared_event();
+    let mut group = crate::cleanup_group::CleanupGroup::new().expect("create a group");
+    let member = group
+        .create_wait(shared_target(shared), |_| {}, None)
+        .expect("create the member");
+    member.arm(None);
+    signal(other.as_handle());
+    group.close_members();
+    drop(group);
+    assert!(
+        other.try_into_owned().is_ok(),
+        "the other holder is the last one once the group has released the member"
+    );
+}
+
+#[test]
+fn into_handle_gives_a_shared_target_back_only_to_its_last_holder() {
+    let (shared, other) = shared_event();
+    let waitable = shared_target(shared)
+        .into_handle()
+        .expect_err("another holder remains, so the wrapper is returned");
+    assert_eq!(
+        waitable.handle().as_raw_handle(),
+        other.as_raw_handle(),
+        "the returned wrapper still holds its clone"
+    );
+    drop(other);
+    assert!(
+        waitable.into_handle().is_ok(),
+        "the last holder gets the handle"
+    );
 }
