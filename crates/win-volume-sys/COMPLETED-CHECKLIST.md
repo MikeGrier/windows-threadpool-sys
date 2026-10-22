@@ -109,3 +109,50 @@ what this left to do is `NR-2.8`, in the namespace crate.
 The engineer, 2026-10-18 ("build both of these now"), so that a caller can tell a volume or a disk from a file,
 which `GetFileType` does not. The decision and what was observed are [WV-D-11](DESIGN-NOTES.md#wv-d-11). Four
 sabotages, one a control that survives by design.
+
+## Moved 2026-10-21 21:46:17 -04:00 -- win-volume-sys: milestones WV-M1, WV-M2 and WV-M3 are complete
+
+### <a id="wv-m1----the-controls-durable-iorings-raw-volume-backing-needs"></a>WV-M1 -- The controls durable-ioring's raw volume backing needs
+
+Items, each archived above under its own heading: [WV-1.1](#wv-11), [WV-1.2](#wv-12), [WV-1.3](#wv-13).
+
+### <a id="wv-m2----take-in-the-storage-locality-entries"></a>WV-M2 -- Take in the storage-locality entries
+
+Opened 2026-10-15 by [WV-D-5](DESIGN-NOTES.md#wv-d-5) and [WV-D-6](DESIGN-NOTES.md#wv-d-6). The
+entries built in [windows-namespace-request-sys](../windows-namespace-request-sys/CHECKLIST.md) as
+`NR-2.1` to `NR-2.5` and `NR-2.7` are volume and disk operations, so they move here, with their tests,
+their sabotage entries, and the decisions that justify them (`D-20` to `D-24` in that crate's
+[DESIGN-NOTES.md](../windows-namespace-request-sys/DESIGN-NOTES.md), each given a `WV-D` number here
+when its item lands and replaced there by a pointer). **Each item carries its own records**, in the
+same commit, so the notes are never a step behind the code.
+
+An item that changes a signature `win-durable-ioring` calls (it uses `volume_disk_extents`,
+`bytes_per_sector` and `lock_volume`) **adapts that crate in the same commit**, so the workspace is
+never left unbuilt; the commit is a `feat!` of this crate and a `chore` of the consumer, split per
+the workspace's release-scope rule where the two do not have to build together.
+
+> **-> CROSS-COMPONENT PREREQUISITE:** `WV-2.1` needs [WE-1.1](../win-error-codes/CHECKLIST.md)
+> (`Win32Error`), in `crates/win-error-codes`.
+
+  **Next:** `WV-2.2`.
+
+  **Next:** `WV-2.3`.
+
+  **Next:** `WV-2.4`.
+
+  **Next:** `WV-2.5`.
+
+  **Next:** nothing further in this milestone; the order across crates is in
+  [durable-ioring's archive](../durable-ioring/COMPLETED-CHECKLIST.md#open-surface-order).
+
+Items, each archived above under its own heading: [WV-2.1](#wv-21), [WV-2.2](#wv-22), [WV-2.3](#wv-23), [WV-2.4](#wv-24), [WV-2.5](#wv-25).
+
+### <a id="wv-m3----what-telling-a-volume-or-a-disk-from-a-file-needs"></a>WV-M3 -- What telling a volume or a disk from a file needs
+
+Opened 2026-10-18 by `durable-ioring`'s `DI-14.12`. `GetFileType` answers `DISK` for a file,
+a volume and a physical disk alike, so a caller that must tell them apart needs a control that only a
+volume or a disk answers.
+
+  **Next:** none. `durable-ioring`'s `DI-14.12`, which this was built for, was withdrawn ([DI-D-73](../durable-ioring/DESIGN-NOTES.md#di-d-73)); the entry stays, since it reports one documented call's result.
+
+Items, each archived above under its own heading: [WV-3.1](#wv-31).
