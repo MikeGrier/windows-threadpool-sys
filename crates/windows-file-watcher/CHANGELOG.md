@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.6](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v0.2.5...windows-file-watcher-v0.2.6) (2026-10-22)
+
+
+### Features
+
+* **file-watcher:** hand out the receiver's doorbell as a shared handle ([071647d](https://github.com/MikeGrier/windows-threadpool-sys/commit/071647df4c5a459db9a5343a8371c0d729990608))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-overlapped-io-sys bumped from 0.3.0 to 0.3.1
+    * win-handles-sys bumped from 0.1.0 to 0.1.1
+    * windows-threadpool-sys bumped from 0.3.0 to 0.4.0
+    * win-text-sys bumped from 0.0.1 to 0.0.2
+
 ## [0.2.5](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v0.2.4...windows-file-watcher-v0.2.5) (2026-10-17)
 
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## [2026.1022.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1020.0...windows-platform-probes-v2026.1022.0) (2026-10-22)
+
+
+### Features
+
+* **platform-probes:** make the probes' sampling settable from the command line, and the queue probe's smallest run no longer panics ([19dbdf3](https://github.com/MikeGrier/windows-threadpool-sys/commit/19dbdf3bb8a6d7c556ab02529737842f3342f221))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-waitable-queues bumped from 0.1.2 to 0.1.3
+
 ## [2026.1020.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1018.0...windows-platform-probes-v2026.1020.0) (2026-10-20)
 
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.9.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.8.0...windows-ioring-sys-v0.9.0) (2026-10-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ioring:** EventDelivery::new and CompletionWake::new take the CallbackEnviron of the windows-threadpool-sys 0.4 this crate now depends on, which is not the CallbackEnviron of the 0.3 it depended on; a caller that builds one passes the one from the version this crate resolves to.
+
+### Bug Fixes
+
+* **ioring:** say that EventDelivery::new and CompletionWake::new take windows-threadpool-sys' CallbackEnviron, and mark the breaking change ([78e1924](https://github.com/MikeGrier/windows-threadpool-sys/commit/78e19241cac1d58ce7a1a70080879344dd5c7115))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-threadpool-sys bumped from 0.3.0 to 0.4.0
+  * dev-dependencies
+    * windows-overlapped-io-sys bumped from 0.3.0 to 0.3.1
+
 ## [0.8.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.7.2...windows-ioring-sys-v0.8.0) (2026-10-17)
 
 

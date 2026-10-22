@@ -2,7 +2,7 @@
 
 [package]
 name = "win-sync-sys"
-version = "0.0.2"
+version = "0.1.0"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,7 +20,7 @@ categories = ["api-bindings", "os::windows-apis", "concurrency"]
 [dependencies]
 # `DuplicateHandle` and the `Access` mask, which were this crate's `duplicate` module until they were
 # moved to where Microsoft Learn files them. Re-exported at the paths they had.
-win-handles-sys = { version = "0.1.0", path = "../win-handles-sys" }
+win-handles-sys = { version = "0.1.1", path = "../win-handles-sys" }
 
 # An event's clones share one handle (WS-D-10), held as the workspace's one shared owner of a handle.
 win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }

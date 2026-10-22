@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.1.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-volume-sys-v0.1.1...win-volume-sys-v0.1.2) (2026-10-22)
+
 ## [0.1.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-volume-sys-v0.1.0...win-volume-sys-v0.1.1) (2026-10-20)
 
 

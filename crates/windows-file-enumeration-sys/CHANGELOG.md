@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-enumeration-sys-v0.2.2...windows-file-enumeration-sys-v0.3.0) (2026-10-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **file-enumeration:** Receiver::doorbell_owned is removed and Receiver::doorbell_waitable, which returns a WaitableHandle sharing the ring's event, takes its place; the crate takes the request crate's path contract in place of its own path preparation.
+
+### Features
+
+* **file-enumeration:** the doorbell is a shared win-sync-sys Event, and the crate takes the request crate's path contract ([849959c](https://github.com/MikeGrier/windows-threadpool-sys/commit/849959cb08ed48c062d4aa9a3ded20fe71167636))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-threadpool-sys bumped from 0.3.0 to 0.4.0
+    * windows-namespace-request-sys bumped from 0.5.0 to 0.5.1
+    * win-sync-sys bumped from 0.0.2 to 0.1.0
+    * win-text-sys bumped from 0.0.1 to 0.0.2
+
 ## [0.2.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-enumeration-sys-v0.2.1...windows-file-enumeration-sys-v0.2.2) (2026-10-17)
 
 

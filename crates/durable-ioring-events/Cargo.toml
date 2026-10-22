@@ -2,7 +2,7 @@
 
 [package]
 name = "durable-ioring-events"
-version = "0.0.1"
+version = "0.1.0"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,9 +19,9 @@ categories = ["os::windows-apis", "development-tools::debugging"]
 
 [dependencies]
 # The sink trait, the events it carries and the kinds it is asked about (DI-D-51).
-durable-ioring = { version = "0.2.0", path = "../durable-ioring" }
+durable-ioring = { version = "0.3.0", path = "../durable-ioring" }
 # The provider's registration and the write of an event (DI-12.1.4). This crate has no `unsafe` of its own.
-win-etw-sys = { version = "0.0.1", path = "../win-etw-sys" }
+win-etw-sys = { version = "0.1.0", path = "../win-etw-sys" }
 # The failure a registration reports.
 win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 

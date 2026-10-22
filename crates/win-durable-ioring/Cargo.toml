@@ -2,7 +2,7 @@
 
 [package]
 name = "win-durable-ioring"
-version = "0.3.2"
+version = "0.4.0"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,29 +15,29 @@ readme = "README.md"
 [dependencies]
 # The contract, the core and the traits this crate drives and implements (DI-D-50). A version and a
 # path, as `cargo publish` requires: the version is the release that carries the split.
-durable-ioring = { version = "0.2.0", path = "../durable-ioring" }
+durable-ioring = { version = "0.3.0", path = "../durable-ioring" }
 # The ring crate (DI-D-16 in durable-ioring's DESIGN-NOTES.md): the release that carries the typed
 # ring, `leave_queued` and the registrations this driver is built on.
-windows-ioring-sys = { version = "0.8.0", path = "../windows-ioring-sys" }
+windows-ioring-sys = { version = "0.9.0", path = "../windows-ioring-sys" }
 # The file target's type (DI-D-29): a consumer's file is a `SharedHandle`, and this crate hands that
 # same handle to the ring, which takes the type directly.
 win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
 # The readiness signal's type (DI-D-28): an `Event`, so a front end can hand it to a thread-pool
 # wait without `unsafe`.
-win-sync-sys = { version = "0.0.2", path = "../win-sync-sys" }
+win-sync-sys = { version = "0.1.0", path = "../win-sync-sys" }
 # The thread-pool wait the drain and the readiness check wait through. It needs
 # `From<Event> for WaitableHandle`, which this release carries.
-windows-threadpool-sys = { version = "0.3.0", path = "../windows-threadpool-sys" }
+windows-threadpool-sys = { version = "0.4.0", path = "../windows-threadpool-sys" }
 # This driver's one time base, interrupt time (DI-D-37), read through `InterruptClock`: the crate
 # forbids `unsafe`, so it cannot call `QueryInterruptTime` itself.
 win-time-sys = { version = "0.1.0", path = "../win-time-sys" }
 # The disks a raw volume sits on, its sector size and its lock: device controls that need `unsafe`,
 # which this crate forbids (DI-D-61).
-win-volume-sys = { version = "0.1.1", path = "../win-volume-sys" }
+win-volume-sys = { version = "0.1.2", path = "../win-volume-sys" }
 # The open of a file (DI-13.2): every parameter of `CreateFileW`, made safe and decided by no one,
 # so what an open means is decided here and this crate has no `unsafe` of its own for it. The
 # handle it returns is plain and unassociated, as the ring needs.
-windows-namespace-request-sys = { version = "0.5.0", path = "../windows-namespace-request-sys" }
+windows-namespace-request-sys = { version = "0.5.1", path = "../windows-namespace-request-sys" }
 # The path type that crate takes, and the flags and access constants an open is made from.
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
 # The security descriptor a created file is given (DI-14.3), taken from the crate Microsoft Learn
@@ -47,18 +47,18 @@ win-authorization-sys = { version = "0.1.0", path = "../win-authorization-sys" }
 # `DuplicateHandle`, which the readiness event's wait-only copy is made with (DI-7.5), taken from
 # the crate Microsoft Learn files it under, and the flags of a handle, which the tests read back
 # (DI-14.8.5). It was `win-sync-sys`'s until DI-14.8.3 moved it.
-win-handles-sys = { version = "0.1.0", path = "../win-handles-sys" }
+win-handles-sys = { version = "0.1.1", path = "../win-handles-sys" }
 # The rule that wraps a Win32 code as an `HRESULT` and reads one back out (DI-9.7.11): this crate
 # owns the numbering of the codes it reports, and that crate owns the rule.
 win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 
 # The debugger sink's call (DI-12.1.3): `OutputDebugStringW`, made safe. The crate forbids `unsafe`, so it cannot
 # make the call itself.
-win-debugging-sys = { version = "0.0.1", path = "../win-debugging-sys" }
+win-debugging-sys = { version = "0.0.2", path = "../win-debugging-sys" }
 
 # The default diagnostic sink (DI-12.1.6): the ETW provider for dioring's begin and end events, which an instance built with no sink
 # of its own writes to. A crate of its own, so that this one needs no unsafe code to register a provider.
-durable-ioring-events = { version = "0.0.1", path = "../durable-ioring-events" }
+durable-ioring-events = { version = "0.1.0", path = "../durable-ioring-events" }
 
 [dependencies.windows-sys]
 version = "0.61.2"

@@ -4,6 +4,8 @@ Both 0.1.0 and 1.0.0 were yanked from crates.io: the 1.0.0 bump was
 accidental, and this crate is intended to stay pre-1.0 for now. Releases
 resume at 0.1.1, which supersedes both.
 
+## [0.3.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-overlapped-io-sys-v0.3.0...windows-overlapped-io-sys-v0.3.1) (2026-10-22)
+
 ## [0.3.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-overlapped-io-sys-v0.2.0...windows-overlapped-io-sys-v0.3.0) (2026-10-17)
 
 

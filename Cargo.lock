@@ -4,14 +4,14 @@ version = 4
 
 [[package]]
 name = "durable-ioring"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "io-buffers",
 ]
 
 [[package]]
 name = "durable-ioring-events"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "durable-ioring",
  "win-error-codes",
@@ -136,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "win-debugging-sys"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "win-debugging-sys",
  "windows-sys",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "win-durable-ioring"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "durable-ioring",
  "durable-ioring-events",
@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "win-etw-sys"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "win-error-codes",
  "win-etw-sys",
@@ -185,14 +185,14 @@ dependencies = [
 
 [[package]]
 name = "win-handles-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "windows-sys",
 ]
 
 [[package]]
 name = "win-job-launcher"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "win-handles-sys",
  "windows-sys",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "win-multi-file-tail-watcher"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "io-buffers",
  "windows-ioring-sys",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "win-pipes-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "win-authorization-sys",
  "win-handles-sys",
@@ -234,7 +234,7 @@ version = "0.1.0"
 
 [[package]]
 name = "win-sync-sys"
-version = "0.0.2"
+version = "0.1.0"
 dependencies = [
  "win-handles-sys",
  "win-shared-os-owned-handle",
@@ -243,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "win-text-sys"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "win-error-codes",
  "windows-sys",
@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "win-volume-sys"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "io-buffers",
  "win-error-codes",
@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "windows-file-enumeration-sys"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "io-buffers",
  "win-error-codes",
@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "windows-file-watcher"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "log",
  "serde",
@@ -313,7 +313,7 @@ dependencies = [
 
 [[package]]
 name = "windows-file-watcher-example-test-harness"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "windows-ioring-sys"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "io-buffers",
  "serde_json",
@@ -365,7 +365,7 @@ checksum = "9b39de7c7fe78858b0144c50c3fc000bab3be17d5e9b85b1053871693c7f7415"
 
 [[package]]
 name = "windows-namespace-request-sys"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "io-buffers",
  "win-authorization-sys",
@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "windows-overlapped-io-sys"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "io-buffers",
  "win-pipes-sys",
@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "windows-placement-probe"
-version = "2026.1018.0"
+version = "2026.1022.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "windows-platform-probes"
-version = "2026.1020.0"
+version = "2026.1022.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -446,7 +446,7 @@ dependencies = [
 
 [[package]]
 name = "windows-thread-ambient-sys"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "windows-impersonation-token-sys",
  "windows-sys",
@@ -455,7 +455,7 @@ dependencies = [
 
 [[package]]
 name = "windows-threadpool-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "win-pipes-sys",
  "win-shared-os-owned-handle",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "windows-waitable-queues"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "portable-atomic",
  "win-handles-sys",

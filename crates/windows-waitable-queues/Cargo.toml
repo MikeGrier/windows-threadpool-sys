@@ -8,7 +8,7 @@ name = "windows-waitable-queues"
 # what a first release should look like. Leaving it at `0.1.0` would have made
 # that first release `0.2.0`, skipping `0.1.0` entirely. Not `0.0.0`, which
 # release-please special-cases into a jump to `1.0.0`.
-version = "0.1.2" # x-release-please-version
+version = "0.1.3" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -78,7 +78,7 @@ optional = true
 
 # Duplicating a handle: this crate's `DuplicateHandle` call is `win-handles-sys`'s, the repository's one.
 [dependencies.win-handles-sys]
-version = "0.1.0"
+version = "0.1.1"
 path = "../win-handles-sys"
 
 [dependencies.windows-sys]
