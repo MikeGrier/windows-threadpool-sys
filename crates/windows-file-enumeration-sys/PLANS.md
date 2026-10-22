@@ -8,4 +8,4 @@ The crate's implementation is M5 through M7 in the workspace
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | REVIEW-1: re-read against that contract, which no longer caps ordinary paths or rewrites any to `\\?\` form, and review it against a traversal layer before one is built. Raised from the `windows-file-watcher` side; schedules no change of its own. | [DESIGN-NOTES.md](DESIGN-NOTES.md), [workspace DESIGN-NOTES.md](../../DESIGN-NOTES.md#path-contracts-follow-path-construction) |
+| [PARKED.md](PARKED.md) | parked | REVIEW-1: re-read against that contract, which no longer caps ordinary paths or rewrites any to `\\?\` form, and review it against a traversal layer before one is built. Raised from the `windows-file-watcher` side; schedules no change of its own. | [DESIGN-NOTES.md](DESIGN-NOTES.md), [workspace DESIGN-NOTES.md](../../DESIGN-NOTES.md#path-contracts-follow-path-construction) |
