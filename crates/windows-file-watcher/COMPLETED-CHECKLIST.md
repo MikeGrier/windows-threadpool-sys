@@ -554,6 +554,7 @@ a red suite, never by reasoning):
 
 The remaining 4 missed mutants are all in `StandingHold::drop`, whose body is unreachable; that is M15.1
 and is an engineer decision, not a test gap.
+
 ## Moved 2026-09-01 -- M15.1: the unreachable half of `StandingHold::drop`
 
 ### <a id="m151"></a>M15.1 -- Decide whether `StandingHold::drop`'s release path is dead code, and act on the answer. *(completed 2026-09-01 18:29:36 -04:00)*
@@ -607,6 +608,7 @@ body. `queue.rs` now has **4 missed mutants, none in this impl**.
 `StandingHold`, `StandingState`, and `take` all described this `Drop` as the live release mechanism. Four
 restatements of one fact, none of which moved when the fact did; all four corrected here, plus the note in
 `queue/tests.rs`. Recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `Dead code that could not have run`.
+
 ## Moved 2026-09-01 -- M15.2 / M-inf.4: why a by-id reopen cannot be watched
 
 ### <a id="m152"></a>M15.2 -- Explain, then either fix or document, why a handle from `reopen_by_id` rejects the very read the watcher exists to issue. *(completed 2026-09-01 19:05:00 -04:00)*
@@ -672,6 +674,7 @@ checklist entries all described the fast path as live or as pending root-cause; 
 
 **Spawned M15.8:** `WatcherInner::canonical_path` is now write-only, and no warning will ever surface it
 because `lock(&self.canonical_path)` counts as a read of the field.
+
 ## Moved 2026-09-01 -- M15.8: the write-only tail of M15.2's removal
 
 ### <a id="m158"></a>M15.8 -- Decide whether `WatcherInner::canonical_path` and `DirectoryHandle::canonical_path` survive M15.2's removal. *(completed 2026-09-01 19:20:00 -04:00)*
@@ -705,6 +708,7 @@ unanswered rather than dissolved, which is what this item had to determine.
 
 **The transferable rule:** a diagnostic wants the live handle, not a cached copy. Needing the *value* is
 not a reason to keep the *field*.
+
 ## Moved 2026-09-01 -- M15.3: paths are the caller's, verbatim (D-85)
 
 ### <a id="m153"></a>M15.3 -- Decide whether this crate should open paths longer than `MAX_PATH`, and note the consequence for `canonical_path`'s retry either way. *(completed 2026-09-01 19:45:00 -04:00)*
@@ -759,6 +763,7 @@ verbatim and only ever reopened, never matched against a canonical path.
 a future "helpful" prefix fails the suite) and M15.10 (the junction fixture for the 512-unit retry -- the
 back door M15.3 called hypothetical is confirmed to work, no elevation needed, a 53-character junction
 resolving to a 578-character target).
+
 ## Moved 2026-09-01 -- M15.9: guarding D-85's pass-through
 
 ### <a id="m159"></a>M15.9 -- Guard D-85's pass-through with tests, so a future "helpful" `\\?\` prefix fails the suite instead of silently changing what callers' paths mean. *(completed 2026-09-01 20:05:00 -04:00)*
@@ -793,6 +798,7 @@ over-escaped -- eight backslashes reached Rust where four were needed -- so ever
 23 tests failed instead of 5. The over-broad result is what exposed it; a subtler mis-escape would have
 read as a real finding. Redone with a direct file edit and a Rust raw string, which removes the escaping
 layer entirely. This is the same multi-layer escaping trap recorded earlier in this sweep.
+
 ## Moved 2026-09-01 -- M15.10: covering canonical_path's regrow
 
 ### <a id="m1510"></a>M15.10 -- Test `canonical_path`'s 512-unit retry through the junction back door. *(completed 2026-09-01 20:25:00 -04:00)*
@@ -820,6 +826,7 @@ excluding the NUL (needing room for it) while a too-small buffer returns the len
 was confirmed rather than argued -- an `assert_ne!` probe never fired across the whole suite, including
 the 508-516 walk that straddles the buffer size exactly. The reasoning is now a comment at the
 comparison, so the next sweep does not re-litigate it.
+
 ## Moved 2026-09-01 -- M15.4: isolating the last notification-filter categories
 
 ### <a id="m154"></a>M15.4 -- Isolate the last two notification-filter categories, or record that they cannot be isolated from outside. *(completed 2026-09-01 20:35:00 -04:00)*
@@ -864,6 +871,7 @@ operations -- the first run reported nothing firing, the second reported everyth
 harness artifacts. The fix is a fresh handle per probe plus decoding the returned records and matching by
 file name, and a built-in sanity check (a known operation under a known bit) so a broken harness announces
 itself instead of producing a plausible table.
+
 ## Moved 2026-09-01 -- M15.5: the arming contract, asserted instead of crashed into
 
 ### <a id="m155"></a>M15.5 -- Assert the arming contract in `arm_detailed_read`, so a broken one fails a test instead of *sometimes* corrupting the heap. *(completed 2026-09-01 20:45:00 -04:00)*
@@ -901,6 +909,7 @@ in every crash report) produced zero failures, and all sixteen crash reports car
 none equal to the clean build's -- each was its own mutant build. The test binary's filename derives from
 target and features rather than contents, which is why every report names the same `.exe` and why that
 name alone proves nothing.
+
 ## Moved 2026-09-01 -- M15.7: the test-side wait budget
 
 ### <a id="m157"></a>M15.7 -- Decide the test-side wait budget, so a mutation sweep is not dominated by tests that correctly fail slowly. *(completed 2026-09-01 21:05:00 -04:00)*
@@ -966,6 +975,7 @@ notification budget: every one is pinned by a single test,
 it is not**. Each of those mutants breaks that loop's exit condition, so it spins at full speed rather than
 failing. That is M15.6's shape one level up, and M15.6 missed it because the bound sits on the wait rather
 than on the loop -- lowering the budget further would not have touched it.
+
 ## Moved 2026-09-01 -- M15.11: a bounded wait inside an unbounded loop
 
 ### <a id="m1511"></a>M15.11 -- Bound the *loop* in `no_wakeup_is_lost_under_a_concurrent_burst`, not just the wait inside it. *(completed 2026-09-01 21:25:00 -04:00)*
@@ -1162,3 +1172,43 @@ after a reopen lands on a different directory. Independent of M10 above; M12 bel
 - [x] **M15.7** -- Decided and implemented: `NOTIFY_TIMEOUT` lowered 30s -> 5s across all three copies, after measuring that 45 of 46 waits finish in <=2.5ms and the whole tail is one structural ~515ms backoff, unchanged under 4x oversubscription. One previously-timing-out mutant: 93.6s -> 31.8s. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m157)
 
 - [x] **M15.11** -- Bounded the loop in `no_wakeup_is_lost_under_a_concurrent_burst` (a bounded wait inside an unbounded loop is still an unbounded loop) and aligned `await_signal`'s budget with M15.7's. The suite-wide sweep for the same shape found no other instance. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m1511)
+
+## Moved 2026-10-20 17:18:37 -04:00 -- M17: the ordinal comparison through win-text-sys
+
+### <a id="m171"></a>M17.1 -- `route.rs`'s case-insensitive comparison calls `win-text-sys`. *(completed 2026-10-20 17:18:37 -04:00)*
+
+The item as written:
+
+**`route.rs`'s case-insensitive comparison calls `win-text-sys`.** The crate's private
+  `CompareStringOrdinal` call in [route.rs](src/route.rs), the one `unsafe` block there, becomes the wrapper in the
+  new `win-text-sys` (the workspace's `M43.1`), which `windows-file-enumeration-sys` adopts in the same way. The
+  comparison's meaning, ordinal with case folded only when asked, is unchanged; the existing route tests are the
+  check.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [M43.1](../../COMPLETED-CHECKLIST.md#m431) (`win-text-sys` is created).
+
+What was done. [route.rs](src/route.rs)'s `names_match` is `compare_string_ordinal` with `Case::Sensitive` or
+`Case::Insensitive`, and `equal_from` reads the result: equal is a match, a failure of the call is not, and a name too
+long for the call's count is compared exactly. The `unsafe` block is gone, and so is the `Win32_Globalization` feature of
+`windows-sys`; `win-text-sys` is a dependency, and `win-error-codes` a path-only dev-dependency for the tests. The
+existing route tests passed unchanged. Recorded as [D-86](DESIGN-NOTES.md#d-86), which also records the one behaviour
+that changed, for a name of more than 2^31 units, and that it cannot be reached. Tests: seven new, of `names_match` in both
+modes, an interior NUL, and each result of the comparison. Evidence, in [sabotage.json](sabotage.json): five entries, all
+caught, and a control. The workspace's `M43` is complete with this and `SAFE-5` of `windows-file-enumeration-sys`.
+
+## Moved 2026-10-22 00:12:45 -04:00 -- M18: the doorbell as a shared handle
+
+### <a id="m181"></a>M18.1 -- The receiver's doorbell is held as a `SharedHandle`, and `doorbell_shared` hands out one more owner of it. *(completed 2026-10-22 00:12:45 -04:00)*
+
+The item as written:
+
+**Migrate `windows-file-watcher` to the shared owned handle.** The receiver's doorbell is the one place the crate
+shares a handle, and it shared it by `DuplicateHandle` per consumer. It is held as a `win-shared-os-owned-handle`
+`SharedHandle`, and `Receiver::doorbell_shared` returns a clone, so a `ThreadpoolWait` can take it through
+`WaitableHandle::assume_waitable_shared` without a duplicate. `doorbell` and `doorbell_owned` are unchanged.
+
+What was done. Recorded as [D-87](DESIGN-NOTES.md#d-87), which also records why [D-42](DESIGN-NOTES.md#d-42)'s two
+forms stand and what the shared form does not do. The directory handle needed nothing: it goes to
+`windows-overlapped-io-sys`, which holds it as a `SharedHandle` itself, and the coarse handle is closed by
+`FindCloseChangeNotification`, which `SharedHandle` is not for. Tests: eight new for the shared form and one for a
+client's own `ThreadpoolWait` on it. Evidence, in [sabotage.json](sabotage.json): two entries caught and a control.

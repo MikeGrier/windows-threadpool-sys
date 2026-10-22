@@ -11,7 +11,8 @@
 //!   actually opened.
 //! - **Name**: a directory subscription matches every name within its reach; a
 //!   file subscription (D-7) matches only its own leaf name. The comparison
-//!   is on raw UTF-16 units via `CompareStringOrdinal`, folding case only when
+//!   is on raw UTF-16 units via `win-text-sys`'s `compare_string_ordinal`,
+//!   which is `CompareStringOrdinal`, folding case only when
 //!   the directory itself is case-insensitive: the default Windows filesystem
 //!   is case-insensitive but case-preserving, so `CreateFileW` accepts a
 //!   target whose casing differs from the stored name, while a decoded
@@ -27,6 +28,9 @@
 //! A desync is never filtered by scope: it means "you may have missed something
 //! in this directory," which is equally true for every subscription within it.
 
+use std::cmp::Ordering;
+
+use win_text_sys::{Case, CompareStringOrdinalError, compare_string_ordinal};
 use wtf_string::Wtf16String;
 
 use crate::notify::Change;
@@ -93,7 +97,7 @@ fn is_direct_child(name: &[u16]) -> bool {
 /// `case_sensitive` selects exact ordinal comparison (a case-sensitive
 /// directory, a per-directory NTFS opt-in feature, e.g. via `fsutil file
 /// setCaseSensitiveInfo`, where `A.txt` and `a.txt` genuinely name different
-/// files) or `CompareStringOrdinal` with `bIgnoreCase = TRUE` -- the OS's own
+/// files) or `win-text-sys`'s `compare_string_ordinal` with `Case::Insensitive` -- the OS's own
 /// ordinal (per-UTF-16-unit) case folding -- for the overwhelmingly common
 /// case-insensitive-but-case-preserving directory. Either way this is never
 /// an ASCII-only fold: that silently drops a match whenever a subscription's
@@ -102,20 +106,27 @@ fn is_direct_child(name: &[u16]) -> bool {
 /// spelling `C9.txt`), which is exactly the kind of event this crate's
 /// completeness contract (D-77) promises never to drop.
 fn names_match(a: &[u16], b: &[u16], case_sensitive: bool) -> bool {
-    use windows_sys::Win32::Foundation::{FALSE, TRUE};
-    use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+    let case = if case_sensitive {
+        Case::Sensitive
+    } else {
+        Case::Insensitive
+    };
+    equal_from(compare_string_ordinal(a, b, case), a, b)
+}
 
-    let a_len = i32::try_from(a.len()).unwrap_or(i32::MAX);
-    let b_len = i32::try_from(b.len()).unwrap_or(i32::MAX);
-    let ignore_case = if case_sensitive { FALSE } else { TRUE };
-    // SAFETY: `a`/`b` are valid `u16` slices with lengths that fit the `i32`
-    // counts just computed; `CompareStringOrdinal` only reads the first
-    // `a_len`/`b_len` units of each and returns a plain `i32` result code.
-    let result = unsafe { CompareStringOrdinal(a.as_ptr(), a_len, b.as_ptr(), b_len, ignore_case) };
-    // A truncated length (from a name longer than `i32::MAX` units,
-    // unreachable in practice) would only ever make an equal pair look
-    // unequal, never the reverse, so the fallback direction is safe.
-    result == CSTR_EQUAL
+/// What a comparison's result says about whether `a` and `b` are the same name.
+///
+/// Only an `Equal` is a match, and a failure the call reports is not one. A name
+/// too long for the call's count, which no name is (that is more than 2^31 UTF-16
+/// units), is compared exactly: truncating the count would compare a prefix, and
+/// two names that share one would match. Reaching that arm takes a slice that
+/// long, so it is tested through the result.
+fn equal_from(result: Result<Ordering, CompareStringOrdinalError>, a: &[u16], b: &[u16]) -> bool {
+    match result {
+        Ok(ordering) => ordering == Ordering::Equal,
+        Err(CompareStringOrdinalError::TooLong { .. }) => a == b,
+        Err(CompareStringOrdinalError::Call(_)) => false,
+    }
 }
 
 /// One subscription's place within a coalesced directory watcher: what it wants
