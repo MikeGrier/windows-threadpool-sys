@@ -341,11 +341,11 @@ Confirmed: the cost probe shipped as this crate's `clock_costs` example rather t
 smallest step) with no ranking, no verdict, and no figure quoted in the crate's documentation. The
 ruling that no `windows-platform-probes` probe and no machine-readable row from `clock_costs` is
 wanted is in the decision's row, which schedules no work. So is what the confirmation was given
-knowing: a coarse clock's smallest step is the system timer resolution at that moment.
+knowing, which concerns how to read the smallest step.
 
 Two optional points were put to the engineer and are not scheduled: the example's `clock_nanos`
 reads a distance with the panicking operator rather than `checked_since`, which cannot overflow for
-any timeline in this crate; and no timer resolution is reported beside the step.
+any timeline in this crate; and nothing is reported beside the step that says what determined it.
 
 The item as it stood at completion:
 
