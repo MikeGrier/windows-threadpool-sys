@@ -4170,3 +4170,16 @@ crates' checklists; this is only the order and the links, and each item's own ch
   > **-> CROSS-COMPONENT HANDOFF:** next work is
   > [SAFE-4](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-4) in `crates/windows-file-enumeration-sys` and
   > [M17.1](crates/windows-file-watcher/COMPLETED-CHECKLIST.md#m171) in `crates/windows-file-watcher`.
+
+## Moved 2026-10-21 23:21:20 -04:00 -- M44: one handle duplication for the workspace
+
+`win-handles-sys` is where the Win32 handle functions live, and three crates had written their own same-process
+`DuplicateHandle`. The decision is [WH-D-6](crates/win-handles-sys/DESIGN-NOTES.md#wh-d-6-duplicate_handle-chooses-the-access-and-the-inheritance-and-is-the-one-duplicatehandle-call).
+
+- [x] **M44.1** -- `win-handles-sys`: `duplicate_handle`, choosing the access (the source's or a mask) and the inheritance.
+
+- [x] **M44.2** -- `windows-file-watcher`: its queue's `duplicate` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
+
+- [x] **M44.3** -- `windows-waitable-queues`: its doorbell's `duplicate` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
+
+- [x] **M44.4** -- `win-job-launcher`: `duplicate_inheritable` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.

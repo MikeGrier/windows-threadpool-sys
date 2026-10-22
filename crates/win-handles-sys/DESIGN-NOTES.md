@@ -187,4 +187,5 @@ no access, an inheritable one that is not, and the with-access form passing the 
 nonzero mask beside the same-access flag, which the page says is ignored. Whether an inheritable duplicate is received by a child
 process is the crate that creates one's to test, which `win-job-launcher` does.
 
-**Scheduled work.** The three crates' use of it is [M44](../../CHECKLIST.md): `M44.2`, `M44.3` and `M44.4`.
+**Scheduled work.** None. The three crates' use of it was `M44.2` to `M44.4`, done and archived in
+[COMPLETED-CHECKLIST.md](../../COMPLETED-CHECKLIST.md).
