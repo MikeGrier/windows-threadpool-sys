@@ -39,10 +39,7 @@ would allow.
 
 - [x] **DI-19.2** -- Begin and end events in the core, with the ETW provider and every sink following and the old delay events gone, and `PairingChecker` the one place the pairing rule lives. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-192)
 
-- [ ] **DI-19.3** -- **`win-etw-sys` writes an event with an explicit activity id.** `EventWriteTransfer` with an activity
-  id, and a related one, taken from the caller and not from the thread, so a begin and an end written on different threads
-  carry the same one. The call's page is read first, and its conditions on the arguments are the only ones refused. A session
-  test, elevated and `#[ignore]`d as the crate's others are, reads the activity id of a record written from two threads.
+- [x] **DI-19.3** -- `win-etw-sys` writes an event with the activity id and related activity id its caller gives, by `EventWriteTransfer`, and its session reads both back. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-193)
 
 - [ ] **DI-19.4** -- **The ETW provider writes the activity id.** Waits on `DI-19.2` and `DI-19.3`. The Start and Stop
   opcodes moved to `DI-19.2.4` (DI-D-87); this step writes each pair's activity id by the mapping the section above holds as

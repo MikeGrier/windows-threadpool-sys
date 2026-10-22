@@ -4112,3 +4112,14 @@ choices are [DI-D-92](DESIGN-NOTES.md#di-d-92).
 Done in five steps, each archived above: [DI-19.2.1](#di-1921), [DI-19.2.2](#di-1922), [DI-19.2.3](#di-1923),
 [DI-19.2.4](#di-1924) and [DI-19.2.5](#di-1925). The shapes and the engineer's rulings are
 [DI-D-87](DESIGN-NOTES.md#di-d-87); the choices of the steps are `DI-D-88` to `DI-D-92`.
+
+## Moved 2026-10-21 20:25:49 -04:00 -- DI-19.3: an event written with an explicit activity id
+
+### <a id="di-193"></a>DI-19.3 -- `win-etw-sys` writes an event with the activity id and related activity id its caller gives, by `EventWriteTransfer`, and its session reads both back. *(completed 2026-10-21 20:25:49 -04:00)*
+
+`Registration::write_transfer` takes each id as optional, as the call's page does, and refuses nothing about them, since
+the page calls no value invalid. A session's `Recorded` carries the activity and the related activity and is now
+`#[non_exhaustive]`, a breaking change to `win-etw-sys`. The session test the item named writes a begin on one thread and its
+end on another and reads the activity given on both; it and four others were run elevated and pass. The sabotages only a
+session can catch are a manifest of their own, `sabotage-session.json`, swept elevated. The choices are
+[WE-D-4](../win-etw-sys/DESIGN-NOTES.md#we-d-4).
