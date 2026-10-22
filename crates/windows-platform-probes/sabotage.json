@@ -1,6 +1,7 @@
 {
-  "description": "Sabotage manifest for windows-platform-probes. Each entry is a defect that was actually run by hand while building M3; the manifest exists so those one-off verifications stop being discarded. See CHECKLIST.md M2.14.1.",
+  "description": "Sabotage manifest for windows-platform-probes. Each entry is a defect that was actually run by hand while building M3; the manifest exists so those one-off verifications stop being discarded. See CHECKLIST.md M2.14.1. Run with --all-features because the corpus target, tests/a_real_report_agrees_with_itself.rs, requires oracle-in-renderer: with default features it is not built, so an entry only that target catches -- a wrong arm in its codes_for, for one -- would be scored as surviving.",
   "package": "windows-platform-probes",
+  "testArgs": ["-p", "windows-platform-probes", "--locked", "--all-features"],
   "sabotages": [
     {
       "name": "row drops the packages field",
@@ -78,8 +79,9 @@
     {
       "name": "a blocking state with no perturbation",
       "file": "src/topology/invariant.rs",
-      "expect": "caught",
-      "why": "An untested blocking state. Adds rather than deletes, deliberately: the completeness guard exists to catch an ADDITION, and a hand-written `ALL` was measured to let exactly this through while all ten invariant tests stayed green.",
+      "expect": "refused-by-build",
+      "buildError": "SabotageSentinel` not covered",
+      "why": "An untested blocking state. Adds rather than deletes, deliberately: a hand-written `ALL` was measured to let exactly this through while all ten invariant tests stayed green. Declared refused-by-build since M4.1 put this manifest on --all-features: the corpus target's `codes_for` matches every state exhaustively, so a state with no row code no longer compiles, which is the stronger rung. The perturbation guard this entry used to reach is sabotaged by the entry below instead.",
       "find": [
         "    BracketNotHeld => \"the bracket did not establish that the machine held still\","
       ],
@@ -88,6 +90,19 @@
         "    /// A state added by a sabotage, with no perturbation behind it.",
         "    SabotageSentinel => \"a state no perturbation produces\","
       ]
+    },
+    {
+      "name": "a blocking state loses its perturbation",
+      "file": "src/topology/invariant/tests.rs",
+      "expect": "caught",
+      "why": "The deletion twin of the entry above, and since --all-features the one that reaches every_blocking_state_has_a_perturbation: the state still exists, so everything compiles, and only the comparison against BlockingState::ALL notices that nothing shows it fires.",
+      "find": [
+        "        (",
+        "            BlockingState::NotMeasured,",
+        "            Box::new(|o: &mut Observation| o.topology_was_measured = false),",
+        "        ),"
+      ],
+      "replace": []
     },
     {
       "name": "prose reworded to carry the same fact",
@@ -143,7 +158,7 @@
       "expect": "caught",
       "why": "M7.1: the row that times what a request now does with a handle would silently leave the report and its NDJSON line, which the census of every label exists to refuse.",
       "find": [
-        "    timings.push(time_loop(\"share_handle\", ITERATIONS, || shared.clone()));"
+        "    timings.push(time_loop(\"share_handle\", iterations, || shared.clone()));"
       ],
       "replace": [
         "    let _ = time_loop(\"share_handle\", ITERATIONS, || shared.clone());"
@@ -155,10 +170,1420 @@
       "expect": "survives",
       "why": "A control: the same clone spelled another way, which no test can tell apart.",
       "find": [
-        "    timings.push(time_loop(\"share_handle\", ITERATIONS, || shared.clone()));"
+        "    timings.push(time_loop(\"share_handle\", iterations, || shared.clone()));"
       ],
       "replace": [
-        "    timings.push(time_loop(\"share_handle\", ITERATIONS, || Clone::clone(&shared)));"
+        "    timings.push(time_loop(\"share_handle\", iterations, || Clone::clone(&shared)));"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: the median ignores the repetitions the run was given",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "A run asked for more repetitions would report the default's median while its settings line said otherwise -- the settings would be decoration.",
+      "find": [
+        "    for round in 0..sampling.repetitions {"
+      ],
+      "replace": [
+        "    for round in 0..REPETITIONS {"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: each pass performs the default pushes whatever the run was given",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "The timed passes would push the default count while the divisor used the given one, so every per-operation figure would be off by their ratio. The timer and the divisor read one value so that this cannot happen.",
+      "find": [
+        "        .map(|_| timer(producers, pushes_per_producer))"
+      ],
+      "replace": [
+        "        .map(|_| timer(producers, PUSHES_PER_PRODUCER))"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: --producers is accepted and dropped",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "The flag would parse and validate and then change nothing, so a run asked for other producer counts would silently measure the defaults.",
+      "find": [
+        "            sampling.producer_counts = probe_args::positive_list(\"producers\", value)?;"
+      ],
+      "replace": [
+        "            let _ = probe_args::positive_list(\"producers\", value)?;"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: every sampling claims to be the default",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "A report sampled other than the defaults would say it was the published configuration -- the one confusion the settings line exists to prevent.",
+      "find": [
+        "        *self == Self::default()"
+      ],
+      "replace": [
+        "        true"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: every iteration multiplier claims to be the default",
+      "file": "src/probe_args.rs",
+      "expect": "caught",
+      "why": "The cost probes' settings line would call a scaled run the default, so its figures would pass for the published ones.",
+      "find": [
+        "        self == Self::default()"
+      ],
+      "replace": [
+        "        true"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: a refused command line exits as a success",
+      "file": "src/report.rs",
+      "expect": "caught",
+      "why": "A script that mistyped a flag would read status 0 and an empty stdout as a run that measured nothing.",
+      "find": [
+        "    std::process::exit(2)"
+      ],
+      "replace": [
+        "    std::process::exit(0)"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: the cost probe's NDJSON line drops the multiplier",
+      "file": "src/bin/request_cost.rs",
+      "expect": "caught",
+      "why": "A machine reader would see a scaled run's figures with nothing saying they were not the default's.",
+      "find": [
+        "        r#\"{{\"reason\":\"x-probe-request-cost\",\"arch\":\"{}\",\"iteration_multiplier\":{},{fields}}}\"#,"
+      ],
+      "replace": [
+        "        r#\"{{\"reason\":\"x-probe-request-cost\",\"arch\":\"{}\",\"ignored\":{},{fields}}}\"#,"
+      ]
+    },
+    {
+      "name": "M4.2 sampling control: the warmup pass is discarded another way",
+      "file": "src/queue_contention.rs",
+      "expect": "survives",
+      "why": "A control: the untimed pass still runs with the same arguments and its result is still thrown away, which no test can tell apart.",
+      "find": [
+        "    let _ = timer(producers, pushes_per_producer);",
+        "",
+        "    let results: Vec<Repetition> = (0..sampling.repetitions)"
+      ],
+      "replace": [
+        "    let _warmup = timer(producers, pushes_per_producer);",
+        "",
+        "    let results: Vec<Repetition> = (0..sampling.repetitions)"
+      ]
+    },
+    {
+      "name": "M4.1: cross_check forgets overlapping walk relations",
+      "file": "src/topology.rs",
+      "expect": "caught",
+      "why": "One of the eleven push sites blocking_states did not model before M4.1. Deleting it empties the list, so the verdict reaches agree beside an observation that still holds the overlap; only a rule reading the observation sees it.",
+      "find": [
+        "        if self.overlapping_walk_relations > 0 {"
+      ],
+      "replace": [
+        "        if false {"
+      ]
+    },
+    {
+      "name": "M4.1: cross_check forgets a cache level with no partitions",
+      "file": "src/topology.rs",
+      "expect": "caught",
+      "why": "The same class through a condition computed from the caches rather than read from a count, which is the case the old exclusion argument mistook for the cross-check's own arithmetic.",
+      "find": [
+        "        if !empty_levels.is_empty() {"
+      ],
+      "replace": [
+        "        if false {"
+      ]
+    },
+    {
+      "name": "M4.1: cross_check forgets a described relation",
+      "file": "src/topology.rs",
+      "expect": "caught",
+      "why": "Deleting this push does NOT reach agree: a described relation also files counts_include_unparsed_relations under not_compared, so the verdict stays incomplete and the invariant module has nothing to say. What is lost is the code a survey groups by. Two tests see that: a_relation_a_caller_described_is_not_a_measurement, which fails first and so is the one a sweep's transcript names, and the corpus's every_state_that_blocks_agreement_reaches_the_row, confirmed by running the corpus target alone against this patch.",
+      "find": [
+        "        if self.described_relations > 0 {"
+      ],
+      "replace": [
+        "        if false {"
+      ]
+    },
+    {
+      "name": "M4.1: blocking_states reads only the core half of an empty relation",
+      "file": "src/topology/invariant.rs",
+      "expect": "caught",
+      "why": "The perturbation table reaches this state through the core field alone, so dropping the package half passes every test that iterates the table. A package covering no processors would then leave cross_check free to lose its push unnoticed.",
+      "find": [
+        "    if observation.cores_without_processors > 0 || observation.packages_without_processors > 0 {"
+      ],
+      "replace": [
+        "    if observation.cores_without_processors > 0 {"
+      ]
+    },
+    {
+      "name": "M4.1: blocking_states drops the measured guard on absent counts",
+      "file": "src/topology/invariant.rs",
+      "expect": "caught",
+      "why": "cross_check files measured_but_counts_absent only for a measured topology. Without the guard the state fires for an unmeasured one too, and the per-state publication rule would demand a code the row never emits for it.",
+      "find": [
+        "    if observation.topology_was_measured",
+        "        && (observation.online_processors == 0 || observation.groups == 0)"
+      ],
+      "replace": [
+        "    if (observation.online_processors == 0 || observation.groups == 0)"
+      ]
+    },
+    {
+      "name": "M4.1: a state answers the wrong code",
+      "file": "tests/a_real_report_agrees_with_itself.rs",
+      "expect": "caught",
+      "why": "The schema between states and row codes is written by hand because neither side can derive it. A wrong arm leaves described_relations answered by no state, which the census test exists to refuse.",
+      "find": [
+        "        State::DescribedRelations => &[\"described_relations\"],"
+      ],
+      "replace": [
+        "        State::DescribedRelations => &[\"unreported_relations\"],"
+      ]
+    },
+    {
+      "name": "M4.1 control: a count compared with != rather than >",
+      "file": "src/topology/invariant.rs",
+      "expect": "survives",
+      "why": "A control: for a usize the two comparisons agree on every value, so no test can tell them apart.",
+      "find": [
+        "    if observation.numa_domains_unreported > 0 {"
+      ],
+      "replace": [
+        "    if observation.numa_domains_unreported != 0 {"
+      ]
+    },
+    {
+      "name": "M2.17: coherence is checked only when the bracket held",
+      "file": "src/topology.rs",
+      "expect": "caught",
+      "why": "A check selected by two dimensions at once: an unheld bracket hides a coherence disagreement, so the row publishes no enumerations_disagreed for an observation in that blocking state. The bracket once suppressed every parse check above it by an early return, so this is a defect this code has shipped. No hand-written shape varies the bracket and the coherence together; the generated cross product does.",
+      "find": [
+        "        match &self.coherence {"
+      ],
+      "replace": [
+        "        match if self.bracket == BracketOutcome::HeldStill { &self.coherence } else { &Coherence::Agreed } {"
+      ]
+    },
+    {
+      "name": "M2.17: a crossed value changes nothing",
+      "file": "tests/a_real_report_agrees_with_itself.rs",
+      "expect": "caught",
+      "why": "A dimension value that changes nothing collapses every combination it is in onto the one beside it: the product keeps its length and its names while reaching a third fewer states, and nothing that renders the shapes can tell. The independence test exists to refuse it.",
+      "find": [
+        "                o.bracket = BracketOutcome::NotEstablished;"
+      ],
+      "replace": [
+        "                let _ = o;"
+      ]
+    },
+    {
+      "name": "M2.17 control: a crossed value renamed",
+      "file": "tests/a_real_report_agrees_with_itself.rs",
+      "expect": "survives",
+      "why": "A control: the name is only how a failing shape is reported, so renaming one changes no state the corpus reaches.",
+      "find": [
+        "            (\"the bracket left open\", |o| {"
+      ],
+      "replace": [
+        "            (\"the bracket never closed\", |o| {"
+      ]
+    },
+    {
+      "name": "M8.1: the queue probe stops emitting its row",
+      "file": "src/bin/queue_contention/main.rs",
+      "expect": "caught",
+      "why": "The census runs this probe rather than reading its sources, so whether its row exists is decided by its output. Before M8.1 the census grepped for the literal \"reason\":\"x-probe, which a row built with Row::new never contains; since M8.2 the probe emits exactly such a row, and since M8.14 the census fails for any probe without one.",
+      "find": [
+        "        raw_row(",
+        "            &observation,",
+        "            &windows_platform_probes::build_identity::this_build().to_string()",
+        "        )",
+        "        .render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.2: the row publishes per-operation figures as elapsed times",
+      "file": "src/queue_contention/raw_row.rs",
+      "expect": "caught",
+      "why": "The elapsed fields are recovered by multiplying back by the run's total pushes; publishing the per-operation figure under an elapsed name is the plausible slip.",
+      "find": [
+        "                        Value::from((per_op * total as f64).round() as usize)"
+      ],
+      "replace": [
+        "                        Value::from(per_op.round() as usize)"
+      ]
+    },
+    {
+      "name": "M8.2: the recovered elapsed time is truncated instead of rounded",
+      "file": "src/queue_contention/raw_row.rs",
+      "expect": "caught",
+      "why": "Dividing by the pushes and multiplying back can land a hair below the whole nanosecond it started from; truncation then publishes one nanosecond less than the pass took.",
+      "find": [
+        "                        Value::from((per_op * total as f64).round() as usize)"
+      ],
+      "replace": [
+        "                        Value::from((per_op * total as f64) as usize)"
+      ]
+    },
+    {
+      "name": "M8.2: the fastest and slowest passes trade places",
+      "file": "src/queue_contention/raw_row.rs",
+      "expect": "caught",
+      "why": "Every test with one repetition has the three passes equal, so only distinct passes can tell the fields apart.",
+      "find": [
+        "                    (\"fastest_elapsed_ns\", elapsed(run.fastest_nanos_per_op)),",
+        "                    (\"slowest_elapsed_ns\", elapsed(run.slowest_nanos_per_op)),"
+      ],
+      "replace": [
+        "                    (\"fastest_elapsed_ns\", elapsed(run.slowest_nanos_per_op)),",
+        "                    (\"slowest_elapsed_ns\", elapsed(run.fastest_nanos_per_op)),"
+      ]
+    },
+    {
+      "name": "M8.2: a configuration that did not measure publishes zero",
+      "file": "src/queue_contention/raw_row.rs",
+      "expect": "caught",
+      "why": "Zero reads as an immeasurably fast pass; null says there was none.",
+      "find": [
+        "                        Value::Null"
+      ],
+      "replace": [
+        "                        Value::from(0usize)"
+      ]
+    },
+    {
+      "name": "M8.2 control: the row names its build before its architecture",
+      "file": "src/queue_contention/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.3: the peer-index probe stops emitting its row",
+      "file": "src/bin/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a measured run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&observation, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.3: the row publishes the per-item figure as the elapsed time",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "The elapsed field is recovered by multiplying back by the items; publishing the per-item cost under an elapsed name is the plausible slip.",
+      "find": [
+        "    Value::from((run.nanos_per_item * ITEMS as f64).round() as usize)"
+      ],
+      "replace": [
+        "    Value::from(run.nanos_per_item.round() as usize)"
+      ]
+    },
+    {
+      "name": "M8.3: the recovered elapsed time is truncated instead of rounded",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "Dividing by the items and multiplying back can land a hair below the whole nanosecond it started from; truncation then publishes one nanosecond less than the pass took.",
+      "find": [
+        "    Value::from((run.nanos_per_item * ITEMS as f64).round() as usize)"
+      ],
+      "replace": [
+        "    Value::from((run.nanos_per_item * ITEMS as f64) as usize)"
+      ]
+    },
+    {
+      "name": "M8.3: the consumer and producer read counts trade places",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "The two counts carry the finding -- which side's reads the technique removed -- and nothing about their types tells them apart.",
+      "find": [
+        "                    (\"consumer_refreshes\", Value::from(run.consumer_refreshes)),",
+        "                    (\"producer_refreshes\", Value::from(run.producer_refreshes)),"
+      ],
+      "replace": [
+        "                    (\"consumer_refreshes\", Value::from(run.producer_refreshes)),",
+        "                    (\"producer_refreshes\", Value::from(run.consumer_refreshes)),"
+      ]
+    },
+    {
+      "name": "M8.3: the shipping queue publishes its floor as counted reads",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "The shipping queue has no counter; its read fields hold ITEMS as a floor, and publishing that puts a constant under a name that says it was counted.",
+      "find": [
+        "                (\"consumer_refreshes\", Value::Null),",
+        "                (\"producer_refreshes\", Value::Null),"
+      ],
+      "replace": [
+        "                (\"consumer_refreshes\", Value::from(observation.calibration.consumer_refreshes)),",
+        "                (\"producer_refreshes\", Value::from(observation.calibration.producer_refreshes)),"
+      ]
+    },
+    {
+      "name": "M8.3: the strategies follow a different fixed order",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "The order is part of what the row states; a reader comparing two runs by position must find the same strategy in the same place.",
+      "find": [
+        "const STRATEGIES: [Strategy; 3] = [Strategy::Baseline, Strategy::Cached, Strategy::Warmed];"
+      ],
+      "replace": [
+        "const STRATEGIES: [Strategy; 3] = [Strategy::Cached, Strategy::Baseline, Strategy::Warmed];"
+      ]
+    },
+    {
+      "name": "M8.3: a measured row omits the declined field",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "Without it a reader can tell a measured row from a declined one only by which other fields happen to exist.",
+      "find": [
+        "        .with(\"declined\", Value::Null)"
+      ],
+      "replace": [
+        "        .with(\"declined_ignored\", Value::Null)"
+      ]
+    },
+    {
+      "name": "M8.3: a declined row loses the reason",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "A declined row that says null for why is indistinguishable from a measured one in that field.",
+      "find": [
+        "    preamble(build).with(\"declined\", error.to_string())"
+      ],
+      "replace": [
+        "    preamble(build).with(\"declined\", Value::Null)"
+      ]
+    },
+    {
+      "name": "M8.3 control: the row names its build before its architecture",
+      "file": "src/peer_index_cache.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.4: the core-affinity probe stops emitting its row",
+      "file": "src/bin/core_affinity.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a measured run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(",
+        "            observation,",
+        "            announced.as_ref().ok(),",
+        "            settled.as_ref().ok(),",
+        "            &this_build().to_string()",
+        "        )",
+        "        .render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.4: the row publishes the per-item figure as the elapsed time",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "The raw elapsed time now travels on the measurement; publishing the derived per-item cost under an elapsed name is the plausible slip.",
+      "find": [
+        "            Value::from(row.elapsed_nanos.round() as usize),"
+      ],
+      "replace": [
+        "            Value::from(row.nanos_per_item.round() as usize),"
+      ]
+    },
+    {
+      "name": "M8.4: the consumer and producer read counts trade places",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "Nothing about their types tells the two counts apart.",
+      "find": [
+        "        (\"consumer_refreshes\", Value::from(row.consumer_refreshes)),",
+        "        (\"producer_refreshes\", Value::from(row.producer_refreshes)),"
+      ],
+      "replace": [
+        "        (\"consumer_refreshes\", Value::from(row.producer_refreshes)),",
+        "        (\"producer_refreshes\", Value::from(row.consumer_refreshes)),"
+      ]
+    },
+    {
+      "name": "M8.4: the requested and achieved memory nodes trade places",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "A row whose request and result disagree did not measure the placement it names; swapping them reports the redirect backwards.",
+      "find": [
+        "            Value::from(row.requested_memory_node),",
+        "        ),",
+        "        (\"memory_node\", Value::from(row.memory_node)),"
+      ],
+      "replace": [
+        "            Value::from(row.memory_node),",
+        "        ),",
+        "        (\"memory_node\", Value::from(row.requested_memory_node)),"
+      ]
+    },
+    {
+      "name": "M8.4: an absent cache domain is published as not observed",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "The prose keeps 'no level partitions the machine' and 'this processor was left out of the level' apart; conflating them states a negative where nothing was observed, or the reverse.",
+      "find": [
+        "                Observed::Absent => Value::from(\"absent\"),"
+      ],
+      "replace": [
+        "                Observed::Absent => Value::from(\"not_observed\"),"
+      ]
+    },
+    {
+      "name": "M8.4: the reading after the run is published as the measured one",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "The three readings are what a reader compares to know which machine the rows belong to; publishing one twice hides a change.",
+      "find": [
+        "        .with(\"host_after\", after.map(ToString::to_string))"
+      ],
+      "replace": [
+        "        .with(\"host_after\", Some(observation.host.to_string()))"
+      ]
+    },
+    {
+      "name": "M8.4: the by-class list publishes the placement rows",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "Each list is a different selection of pairs; filling one from another is a row that names the wrong question.",
+      "find": [
+        "        .with(\"by_class\", pairs(&observation.by_class))"
+      ],
+      "replace": [
+        "        .with(\"by_class\", pairs(&observation.measurements))"
+      ]
+    },
+    {
+      "name": "M8.4: a declined row loses the reason",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "A declined row that says null for why is indistinguishable from a measured one in that field.",
+      "find": [
+        "    preamble(before, build).with(\"declined\", error.to_string())"
+      ],
+      "replace": [
+        "    preamble(before, build).with(\"declined\", Value::Null)"
+      ]
+    },
+    {
+      "name": "M8.4 control: the row names its build before its architecture",
+      "file": "src/core_affinity.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.5: the pool-growth probe stops emitting its row",
+      "file": "src/bin/pool_growth.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&growth, (RAISE_RUN, raise), &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.5: the runs-long flag is not taken from the run",
+      "file": "src/pool_growth/raw_row.rs",
+      "expect": "caught",
+      "why": "Two runs share a maximum and a submission count and differ only in this flag; without it their rows are indistinguishable but for the name.",
+      "find": [
+        "                (\"runs_long\", Value::from(run.runs_long)),"
+      ],
+      "replace": [
+        "                (\"runs_long\", Value::from(false)),"
+      ]
+    },
+    {
+      "name": "M8.5: the two observed counts trade places",
+      "file": "src/pool_growth/raw_row.rs",
+      "expect": "caught",
+      "why": "Callbacks started and threads used are equal on a healthy run, which is exactly why a swap would go unseen on one.",
+      "find": [
+        "                    Value::from(observed.started_while_blocked),",
+        "                ),",
+        "                (\"distinct_threads\", Value::from(observed.distinct_threads)),"
+      ],
+      "replace": [
+        "                    Value::from(observed.distinct_threads),",
+        "                ),",
+        "                (\"distinct_threads\", Value::from(observed.started_while_blocked)),"
+      ]
+    },
+    {
+      "name": "M8.5: whether the raise took effect is inverted",
+      "file": "src/pool_growth/raw_row.rs",
+      "expect": "caught",
+      "why": "The elapsed time means the raise's delay or the settle window according to this flag alone.",
+      "find": [
+        "                (\"took_effect\", Value::from(observed.took_effect)),"
+      ],
+      "replace": [
+        "                (\"took_effect\", Value::from(!observed.took_effect)),"
+      ]
+    },
+    {
+      "name": "M8.5: the raise's elapsed time is published in microseconds",
+      "file": "src/pool_growth/raw_row.rs",
+      "expect": "caught",
+      "why": "The arrivals are microseconds and the raise is nanoseconds; carrying the wrong unit under the `_ns` name is the plausible slip.",
+      "find": [
+        "                (\"elapsed_ns\", wide(observed.delay.as_nanos())),"
+      ],
+      "replace": [
+        "                (\"elapsed_ns\", wide(observed.delay.as_micros())),"
+      ]
+    },
+    {
+      "name": "M8.5: a yes-or-no renders backwards",
+      "file": "src/row.rs",
+      "expect": "caught",
+      "why": "Every boolean any row publishes goes through this one arm.",
+      "find": [
+        "            Self::Bool(held) => out.push_str(if *held { \"true\" } else { \"false\" }),"
+      ],
+      "replace": [
+        "            Self::Bool(held) => out.push_str(if *held { \"false\" } else { \"true\" }),"
+      ]
+    },
+    {
+      "name": "M8.5 control: the row names its build before its architecture",
+      "file": "src/pool_growth/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.6: the long-path probes stop emitting their row",
+      "file": "src/long_path_report.rs",
+      "expect": "caught",
+      "why": "Both binaries share this renderer, so the census sees two probes lose their row at once.",
+      "find": [
+        "        crate::long_path::raw_row(",
+        "            &observation,",
+        "            &crate::build_identity::this_build().to_string()",
+        "        )",
+        "        .render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.6: the row claims the manifest whatever the binary declares",
+      "file": "src/long_path/raw_row.rs",
+      "expect": "caught",
+      "why": "The finding is the difference between the two binaries; a row that does not say which one it came from cannot be paired.",
+      "find": [
+        "        .with(\"manifest_aware\", observation.manifest_aware)"
+      ],
+      "replace": [
+        "        .with(\"manifest_aware\", true)"
+      ]
+    },
+    {
+      "name": "M8.6: an attempt that opened publishes the error it never read",
+      "file": "src/long_path/raw_row.rs",
+      "expect": "caught",
+      "why": "The apparatus leaves the error at zero on success without calling GetLastError; publishing it reads as a code that was observed.",
+      "find": [
+        "                    Value::from((!attempt.opened).then_some(attempt.error)),"
+      ],
+      "replace": [
+        "                    Value::from(Some(attempt.error)),"
+      ]
+    },
+    {
+      "name": "M8.6: a registry value never read is published as off",
+      "file": "src/long_path/raw_row.rs",
+      "expect": "caught",
+      "why": "The module's own note records this exact defect in the prose: a refused run reporting the machine half absent on a host where it is set.",
+      "find": [
+        "        .with(\"registry_enabled\", observation.registry_enabled)"
+      ],
+      "replace": [
+        "        .with(\"registry_enabled\", observation.registry_enabled.unwrap_or(false))"
+      ]
+    },
+    {
+      "name": "M8.6: a refused run loses the reason",
+      "file": "src/long_path/raw_row.rs",
+      "expect": "caught",
+      "why": "When the apparatus fails the attempts say nothing about the machine, and this field is the only thing that says so.",
+      "find": [
+        "        .with(\"declined\", observation.apparatus_error.clone())"
+      ],
+      "replace": [
+        "        .with(\"declined\", None::<String>)"
+      ]
+    },
+    {
+      "name": "M8.6: two shapes trade record names",
+      "file": "src/long_path.rs",
+      "expect": "caught",
+      "why": "The two shapes that do not survive verbatim parsing are the hypothesis; swapping their names attributes each one's result to the other.",
+      "find": [
+        "            Self::DotDot => \"dot_dot\",",
+        "            Self::ForwardSlash => \"forward_slash\","
+      ],
+      "replace": [
+        "            Self::DotDot => \"forward_slash\",",
+        "            Self::ForwardSlash => \"dot_dot\","
+      ]
+    },
+    {
+      "name": "M8.6 control: the row names its build before its architecture",
+      "file": "src/long_path/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.7: the error-mode probe stops emitting its row",
+      "file": "src/bin/error_mode.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&observed, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.7: a bit that was set publishes the error it never read",
+      "file": "src/error_mode/raw_row.rs",
+      "expect": "caught",
+      "why": "The probe leaves the error at zero on success without calling GetLastError; publishing it reads as a code that was observed.",
+      "find": [
+        "                    Value::from((!outcome.set_ok).then_some(outcome.last_error)),"
+      ],
+      "replace": [
+        "                    Value::from(Some(outcome.last_error)),"
+      ]
+    },
+    {
+      "name": "M8.7: the combined call publishes only its valid bits as the attempt",
+      "file": "src/error_mode/raw_row.rs",
+      "expect": "caught",
+      "why": "The finding is what one invalid bit does to the valid ones beside it; an attempt without the invalid bit is a different experiment.",
+      "find": [
+        "                (\"attempted\", Value::from(COMBINED_ATTEMPT)),"
+      ],
+      "replace": [
+        "                (\"attempted\", Value::from(COMBINED_VALID)),"
+      ]
+    },
+    {
+      "name": "M8.7: the process and thread modes trade places",
+      "file": "src/error_mode/raw_row.rs",
+      "expect": "caught",
+      "why": "Whether the thread mode is a view of the process mode is read from exactly these two numbers.",
+      "find": [
+        "                (\"process_mode\", Value::from(versus.process_mode)),",
+        "                (\"thread_mode\", Value::from(versus.thread_mode)),"
+      ],
+      "replace": [
+        "                (\"process_mode\", Value::from(versus.thread_mode)),",
+        "                (\"thread_mode\", Value::from(versus.process_mode)),"
+      ]
+    },
+    {
+      "name": "M8.7: the alignment readings trade places",
+      "file": "src/error_mode/raw_row.rs",
+      "expect": "caught",
+      "why": "Stickiness is the bit present after the restore; swapping the two readings reports a sticky bit as cleared.",
+      "find": [
+        "                (\"before\", Value::from(before)),",
+        "                (\"after_restore\", Value::from(after)),"
+      ],
+      "replace": [
+        "                (\"before\", Value::from(after)),",
+        "                (\"after_restore\", Value::from(before)),"
+      ]
+    },
+    {
+      "name": "M8.7 control: the row names its build before its architecture",
+      "file": "src/error_mode/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.8: the handle-state probe stops emitting its row",
+      "file": "src/bin/handle_state.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&observed, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.8: the control publishes the duplicate's observation",
+      "file": "src/handle_state/raw_row.rs",
+      "expect": "caught",
+      "why": "The control is what makes the duplicate's continuation attributable to duplication; publishing one in place of the other erases the comparison.",
+      "find": [
+        "            Value::Object(cursor(&observation.separate_opens)),"
+      ],
+      "replace": [
+        "            Value::Object(cursor(&observation.duplicate)),"
+      ]
+    },
+    {
+      "name": "M8.8: a failed second call is published as an empty listing",
+      "file": "src/handle_state/raw_row.rs",
+      "expect": "caught",
+      "why": "Exhaustion is reported as an error code; an empty list would read as a call that succeeded and returned nothing.",
+      "find": [
+        "        Err(code) => (Value::Null, Value::from(*code)),"
+      ],
+      "replace": [
+        "        Err(code) => (Value::List(Vec::new()), Value::from(*code)),"
+      ]
+    },
+    {
+      "name": "M8.8: whether the source survived the close is not published",
+      "file": "src/handle_state/raw_row.rs",
+      "expect": "caught",
+      "why": "A design in which a request owns a duplicate and drops it depends on this one answer.",
+      "find": [
+        "        .with(\"source_survived_close\", observation.source_survived_close)"
+      ],
+      "replace": [
+        "        .with(\"source_survived_close\", true)"
+      ]
+    },
+    {
+      "name": "M8.8 control: the row names its build before its architecture",
+      "file": "src/handle_state/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.9: the worker-context probe stops emitting its row",
+      "file": "src/bin/worker_context.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(plain, impersonating, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.9: the submitter and its worker trade places",
+      "file": "src/worker_context/raw_row.rs",
+      "expect": "caught",
+      "why": "The finding is the asymmetry; swapping the two sides reports the worker as the one holding the token.",
+      "find": [
+        "                (\"submitter\", context(impersonating.submitter)),",
+        "                (\"worker\", context(impersonating.worker)),"
+      ],
+      "replace": [
+        "                (\"submitter\", context(impersonating.worker)),",
+        "                (\"worker\", context(impersonating.submitter)),"
+      ]
+    },
+    {
+      "name": "M8.9: a thread with a token publishes the error it never read",
+      "file": "src/worker_context/raw_row.rs",
+      "expect": "caught",
+      "why": "The probe leaves the error at zero when the token opens, without calling GetLastError; publishing it reads as a code that was observed.",
+      "find": [
+        "            Value::from((!seen.has_thread_token).then_some(seen.open_token_error)),"
+      ],
+      "replace": [
+        "            Value::from(Some(seen.open_token_error)),"
+      ]
+    },
+    {
+      "name": "M8.9 control: the row names its build before its architecture",
+      "file": "src/worker_context/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.10: the device-map probe stops emitting its row",
+      "file": "src/bin/device_map.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&finding, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.10: a letter that resolved to nothing is published as an empty list",
+      "file": "src/device_map/raw_row.rs",
+      "expect": "caught",
+      "why": "The finding is the letter vanishing under impersonation; an empty list reads as a definition with no targets rather than none at all.",
+      "find": [
+        "            } else {",
+        "                Value::Null",
+        "            },"
+      ],
+      "replace": [
+        "            } else {",
+        "                Value::List(Vec::new())",
+        "            },"
+      ]
+    },
+    {
+      "name": "M8.10: the logon session's halves trade places",
+      "file": "src/device_map/raw_row.rs",
+      "expect": "caught",
+      "why": "The session is an identifier a reader compares across rows; the prose prints it high:low, and the row must too.",
+      "find": [
+        "                    .map(|(low, high)| format!(\"{high:08x}:{low:08x}\")),"
+      ],
+      "replace": [
+        "                    .map(|(low, high)| format!(\"{low:08x}:{high:08x}\")),"
+      ]
+    },
+    {
+      "name": "M8.10: the two sessions trade places",
+      "file": "src/device_map/raw_row.rs",
+      "expect": "caught",
+      "why": "Which context the letter vanished in is the finding.",
+      "find": [
+        "        .with(\"own_session\", session(&finding.own_session))",
+        "        .with(\"anonymous_session\", session(&finding.anonymous_session))"
+      ],
+      "replace": [
+        "        .with(\"own_session\", session(&finding.anonymous_session))",
+        "        .with(\"anonymous_session\", session(&finding.own_session))"
+      ]
+    },
+    {
+      "name": "M8.10: a declined run loses the reason",
+      "file": "src/device_map/raw_row.rs",
+      "expect": "caught",
+      "why": "A declined row that says null for why is indistinguishable from a measured one in that field.",
+      "find": [
+        "    preamble(build).with(\"declined\", reason)"
+      ],
+      "replace": [
+        "    preamble(build).with(\"declined\", Value::Null)"
+      ]
+    },
+    {
+      "name": "M8.10 control: the row names its build before its architecture",
+      "file": "src/device_map/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.11: the IoRing probe stops emitting its row",
+      "file": "src/bin/ioring.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&registration, &agnosticism, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.11: the two registration readings trade places",
+      "file": "src/ioring/raw_row.rs",
+      "expect": "caught",
+      "why": "Index 0 is the control and index 1 the finding; swapped, a table that was replaced reads as a broken probe.",
+      "find": [
+        "                Value::from(observed.index_zero_usable_after_second),",
+        "            ),",
+        "            (",
+        "                \"index_one_usable_after_second\",",
+        "                Value::from(observed.index_one_usable_after_second),"
+      ],
+      "replace": [
+        "                Value::from(observed.index_one_usable_after_second),",
+        "            ),",
+        "            (",
+        "                \"index_one_usable_after_second\",",
+        "                Value::from(observed.index_zero_usable_after_second),"
+      ]
+    },
+    {
+      "name": "M8.11: the result code is published as a signed decimal",
+      "file": "src/ioring/raw_row.rs",
+      "expect": "caught",
+      "why": "A failing HRESULT is negative as an i32; published as a decimal it is a number nobody can look up.",
+      "find": [
+        "                Value::from(format!(\"{:#010x}\", observed.result_code)),"
+      ],
+      "replace": [
+        "                Value::from(format!(\"{}\", observed.result_code)),"
+      ]
+    },
+    {
+      "name": "M8.11: a declined run loses the reason",
+      "file": "src/ioring/raw_row.rs",
+      "expect": "caught",
+      "why": "A declined row that says null for why is indistinguishable from a measured one in that field.",
+      "find": [
+        "    preamble(build).with(\"declined\", reason)"
+      ],
+      "replace": [
+        "    preamble(build).with(\"declined\", Value::Null)"
+      ]
+    },
+    {
+      "name": "M8.11 control: the row names its build before its architecture",
+      "file": "src/ioring/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.12: the completion-port probe stops emitting its row",
+      "file": "src/bin/completion_port.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&support, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.12: the control publishes the associated read",
+      "file": "src/completion_port/raw_row.rs",
+      "expect": "caught",
+      "why": "The unassociated read is the negative control every other case is judged against; filling it from the test case erases the comparison.",
+      "find": [
+        "                (\"control_unassociated\", read(finding.control_unassociated)),"
+      ],
+      "replace": [
+        "                (\"control_unassociated\", read(finding.after_iocp_association)),"
+      ]
+    },
+    {
+      "name": "M8.12: the byte count and the first byte trade places",
+      "file": "src/completion_port/raw_row.rs",
+      "expect": "caught",
+      "why": "The probe's first version read a clean failure as a success by trusting one of these three fields alone; each must be published as itself.",
+      "find": [
+        "        (\"bytes\", Value::from(attempt.bytes)),",
+        "        (\"first_byte\", Value::from(attempt.first_byte)),"
+      ],
+      "replace": [
+        "        (\"bytes\", Value::from(attempt.first_byte)),",
+        "        (\"first_byte\", Value::from(attempt.bytes)),"
+      ]
+    },
+    {
+      "name": "M8.12: the port control is not taken from the run",
+      "file": "src/completion_port/raw_row.rs",
+      "expect": "caught",
+      "why": "It separates 'the IoRing path is refused' from 'the handle is broken'.",
+      "find": [
+        "        .with(\"port_still_works\", finding.port_still_works)"
+      ],
+      "replace": [
+        "        .with(\"port_still_works\", true)"
+      ]
+    },
+    {
+      "name": "M8.12: a host without a ring loses the reason",
+      "file": "src/completion_port/raw_row.rs",
+      "expect": "caught",
+      "why": "A declined row that says null for why is indistinguishable from a measured one in that field.",
+      "find": [
+        "        return row.with(\"declined\", NO_USABLE_IORING);"
+      ],
+      "replace": [
+        "        return row.with(\"declined\", Value::Null);"
+      ]
+    },
+    {
+      "name": "M8.12 control: the row names its build before its architecture",
+      "file": "src/completion_port/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.13: an attempt the watchdog abandoned is published as a cancel",
+      "file": "src/cancel_io/raw_row.rs",
+      "expect": "caught",
+      "why": "The wedge is the finding, and the item asks for exactly this case to reach the row.",
+      "find": [
+        "        CancelOutcome::Wedged => (\"wedged\", None),"
+      ],
+      "replace": [
+        "        CancelOutcome::Wedged => (\"cancelled\", None),"
+      ]
+    },
+    {
+      "name": "M8.13: a call that found nothing loses its code",
+      "file": "src/cancel_io/raw_row.rs",
+      "expect": "caught",
+      "why": "The raw code is what keeps a different failure from being read as ERROR_NOT_FOUND.",
+      "find": [
+        "        CancelOutcome::NotFound { code } => (\"not_found\", Some(code)),"
+      ],
+      "replace": [
+        "        CancelOutcome::NotFound { code: _ } => (\"not_found\", None::<u32>),"
+      ]
+    },
+    {
+      "name": "M8.13: the busy attempts are published in reverse",
+      "file": "src/cancel_io/raw_row.rs",
+      "expect": "caught",
+      "why": "Which attempt wedged, and what followed it, is read by position.",
+      "find": [
+        "        .with(\"busy\", busy.iter().copied().map(outcome).collect::<Value>())"
+      ],
+      "replace": [
+        "        .with(\"busy\", busy.iter().rev().copied().map(outcome).collect::<Value>())"
+      ]
+    },
+    {
+      "name": "M8.13 control: the row names its build before its architecture",
+      "file": "src/cancel_io/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.14: the cancel-io probe stops emitting its row",
+      "file": "src/bin/cancel_io.rs",
+      "expect": "caught",
+      "why": "Before M8.14 the census did not run this probe and checked only that its sources carried no emission literal, so it survived; the census now runs every registered probe and requires a row from each.",
+      "find": [
+        "        raw_row(idle, &busy, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.14: a report that never finishes is accepted when its time runs out",
+      "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
+      "expect": "caught",
+      "why": "The deadline is what keeps a probe whose subject can fail to return from hanging the suite; reading a timeout as a finished report would pass a probe that never wrote its row.",
+      "find": [
+        "                panic!(\"{name} did not finish its report within {limit:?}\");"
+      ],
+      "replace": [
+        "                return row;"
+      ]
+    },
+    {
+      "name": "M8.14: an unsuccessful exit is accepted",
+      "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
+      "expect": "caught",
+      "why": "A probe that failed part-way may still have written a row; a run that failed is not one the census can stand behind.",
+      "find": [
+        "                    status.success(),"
+      ],
+      "replace": [
+        "                    true,"
+      ]
+    },
+    {
+      "name": "M8.14: a probe excused from exiting is waited on anyway",
+      "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
+      "expect": "caught",
+      "why": "The excuse is what lets the census run the cancel-io probe at all; waiting on a process whose canceller may never return reintroduces the hang.",
+      "find": [
+        "                    if may_not_exit {"
+      ],
+      "replace": [
+        "                    if may_not_exit && false {"
+      ]
+    },
+    {
+      "name": "M8.14 control: the deadline is a second shorter",
+      "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
+      "expect": "survives",
+      "why": "A control: the deadline's size is margin over the slowest probe, not a claim the tests make.",
+      "find": [
+        "const DEADLINE: Duration = Duration::from_secs(120);"
+      ],
+      "replace": [
+        "const DEADLINE: Duration = Duration::from_secs(119);"
+      ]
+    },
+    {
+      "name": "M8.1 control: the short run takes two pushes fewer",
+      "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
+      "expect": "survives",
+      "why": "A control: how much a short run measures is incidental to which lines its report carries.",
+      "find": [
+        "        \"1000\","
+      ],
+      "replace": [
+        "        \"998\","
+      ]
+    },
+    {
+      "name": "M4.8: the capture script ignores the build",
+      "file": "captures/2026-10-19-interleaved-order/summarise.js",
+      "expect": "caught",
+      "why": "Runs of two builds would agree on every other attribution line and have their medians combined as though one procedure produced both -- the defect M4.8 exists to refuse.",
+      "find": [
+        "    build === undefined ? \"build: (not stamped)\" : build.trim(),"
+      ],
+      "replace": [
+        "    \"build: (ignored)\","
+      ]
+    },
+    {
+      "name": "M4.8: the queue report stops naming its build",
+      "file": "src/bin/queue_contention/main.rs",
+      "expect": "caught",
+      "why": "A report without the line would read as unstamped, which the capture scripts accept beside other unstamped runs -- so the build check would silently stop applying to new captures.",
+      "find": [
+        "        \"build: {}\","
+      ],
+      "replace": [
+        "        \"built: {}\","
+      ]
+    },
+    {
+      "name": "M4.8: the build script stops stamping this crate",
+      "file": "build.rs",
+      "expect": "refused-by-build",
+      "buildError": "PLATFORM_PROBES_COMMIT_OUT",
+      "why": "The identity is read with env!, so a build script that stamps nothing cannot produce a binary that reports a made-up identity: the compiler refuses it. Kept to show that rung holds.",
+      "find": [
+        "    stamp_build_identity(\"PLATFORM_PROBES\");"
+      ],
+      "replace": [
+        "    let _ = stamp_build_identity;"
+      ]
+    },
+    {
+      "name": "M4.8 control: the script test's scratch directory renamed",
+      "file": "tests/the_capture_scripts_refuse_runs_of_different_builds.rs",
+      "expect": "survives",
+      "why": "A control: the directory's name is incidental to what the scripts are given.",
+      "find": [
+        "        \"capture-scripts-{}-{}\","
+      ],
+      "replace": [
+        "        \"capture-script-runs-{}-{}\","
+      ]
+    },
+    {
+      "name": "M4.4: every run takes the sequential order",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "The default would be back to back again while the report said interleaved, so the control would be measured apart under a line claiming it was not.",
+      "find": [
+        "    if sampling.order == Order::Sequential {"
+      ],
+      "replace": [
+        "    if true {"
+      ]
+    },
+    {
+      "name": "M4.4: interleaved rounds stop rotating",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "Without the rotation the same configuration is always measured first in a round, so position in the round can align with whatever the first pass after the previous round's last absorbs. The balance the item asked for is the rotation.",
+      "find": [
+        "            let index = (round + position) % count;"
+      ],
+      "replace": [
+        "            let index = position;"
+      ]
+    },
+    {
+      "name": "M4.4: --order is accepted and dropped",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "A run asked for the sequential order would measure interleaved while the command line said otherwise, and the published figures could not be retaken.",
+      "find": [
+        "        if let Some(value) = given.get(\"order\") {"
+      ],
+      "replace": [
+        "        if let Some(value) = given.get(\"order\").filter(|_| false) {"
+      ]
+    },
+    {
+      "name": "M4.4: the sequential order is no longer the published one",
+      "file": "src/queue_contention/measure.rs",
+      "expect": "caught",
+      "why": "Swapping two configurations changes no row and no table, so only the test pinning the list notices -- and without it --order sequential would quietly stop retaking the figures it exists to retake.",
+      "find": [
+        "        (",
+        "            Regime::Isolated,",
+        "            shapes::SLOTWISE_MPSC,",
+        "            timer(time_isolated_mpsc),",
+        "        ),",
+        "        (",
+        "            Regime::Isolated,",
+        "            shapes::RESERVING_MPSC,",
+        "            timer(time_isolated_reserving),",
+        "        ),"
+      ],
+      "replace": [
+        "        (",
+        "            Regime::Isolated,",
+        "            shapes::RESERVING_MPSC,",
+        "            timer(time_isolated_reserving),",
+        "        ),",
+        "        (",
+        "            Regime::Isolated,",
+        "            shapes::SLOTWISE_MPSC,",
+        "            timer(time_isolated_mpsc),",
+        "        ),"
+      ]
+    },
+    {
+      "name": "M4.4: the report omits the order",
+      "file": "src/bin/queue_contention/main.rs",
+      "expect": "caught",
+      "why": "The order is a capture parameter: figures taken interleaved and back to back are measurements of different procedures, and a captured report that does not say which cannot be compared with anything.",
+      "find": [
+        "        sampling.order.described(),"
+      ],
+      "replace": [
+        "        \"\","
+      ]
+    },
+    {
+      "name": "M4.4 control: the configuration count read another way",
+      "file": "src/queue_contention.rs",
+      "expect": "survives",
+      "why": "A control: the same count by iteration, which no test can tell apart.",
+      "find": [
+        "    let count = timers.len();"
+      ],
+      "replace": [
+        "    let count = timers.iter().count();"
+      ]
+    },
+    {
+      "name": "review: the capacity has no minimum, so the smallest run panics",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "One producer making one push sized a queue of one, which the slotwise queue refuses; the probe panicked after its report had begun. The unit test asks each shape's own constructor, and the binary-level test runs the smallest run.",
+      "find": [
+        "        .max(MINIMUM_QUEUE_CAPACITY)\n"
+      ],
+      "replace": [
+        "        .max(1)\n"
       ]
     }
   ]

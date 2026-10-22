@@ -144,8 +144,10 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+pub mod build_identity;
 pub mod cancel_io;
 pub mod completion_port;
+pub mod core_affinity;
 pub mod device_map;
 pub mod doorbell_cost;
 pub mod error_mode;
@@ -153,7 +155,9 @@ pub mod handle_state;
 pub mod ioring;
 pub mod long_path;
 pub mod long_path_report;
+pub mod peer_index_cache;
 pub mod pool_growth;
+pub mod probe_args;
 pub mod queue_contention;
 pub mod report;
 /// The report oracle. **Test-support: present only where it is used.**

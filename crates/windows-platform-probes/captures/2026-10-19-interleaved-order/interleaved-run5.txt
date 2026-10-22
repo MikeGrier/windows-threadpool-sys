@@ -1,0 +1,215 @@
+host:  x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]
+== how does the array queue's push path scale with producer count? ==
+
+processors available to this process: 16
+
+profile: release
+sampling: 50000 pushes per producer, median of 5 repetitions, one untimed warmup pass, passes interleaved across configurations, producer counts 1, 2, 4, 8, 16, 32
+  (the defaults)
+
+-- isolated: producers only, capacity large enough that nothing is refused --
+shape               producers          ns/op          ops/sec       refusals        ns/op range    spread
+baseline_fetch_add          1            2.3        433275563              0            2.3-2.3     1.01x
+slotwise_mpsc               1            6.3        158378207              0            6.2-6.8     1.09x
+reserving_mpsc              1            5.4        184569952              0            5.4-6.1     1.12x
+permit_mpsc                 1            8.0        124470998              0            7.9-8.4     1.07x
+reserving(32/32)            1            5.4        184162063              0            5.4-6.9     1.28x
+reserving(16/48)            1            5.4        186846039              0            5.3-5.4     1.00x
+reserving(8/56)             1            5.6        178954903              0            5.4-7.1     1.33x
+reserving(64/64)            1            7.8        128402671              0            7.5-8.1     1.09x
+baseline_fetch_add          2           12.9         77663871              0          11.6-14.4     1.24x
+slotwise_mpsc               2           56.9         17575310              0          53.7-60.2     1.12x
+reserving_mpsc              2           32.8         30465513              0          26.0-36.3     1.40x
+permit_mpsc                 2           43.2         23140649              0          35.2-45.2     1.28x
+reserving(32/32)            2           34.6         28935185              0          32.8-36.4     1.11x
+reserving(16/48)            2           35.8         27972028              0          33.0-36.5     1.10x
+reserving(8/56)             2           34.3         29152819              0          31.9-34.9     1.09x
+reserving(64/64)            2           38.7         25858502              0          37.5-39.8     1.06x
+baseline_fetch_add          4           13.0         76890546              0          12.6-13.9     1.10x
+slotwise_mpsc               4           92.8         10770987              0          86.9-93.4     1.07x
+reserving_mpsc              4           39.5         25309087              0          36.9-40.3     1.09x
+permit_mpsc                 4           32.0         31252442              0          31.4-33.0     1.05x
+reserving(32/32)            4           38.2         26190009              0          32.2-40.8     1.27x
+reserving(16/48)            4           37.4         26729034              0          37.1-41.7     1.12x
+reserving(8/56)             4           33.1         30242088              0          30.1-39.1     1.30x
+reserving(64/64)            4           44.0         22719011              0          43.0-64.8     1.51x
+baseline_fetch_add          8           14.4         69414317              0          13.7-15.7     1.15x
+slotwise_mpsc               8          146.5          6824005              0        140.0-154.2     1.10x
+reserving_mpsc              8           40.1         24910168              0          35.6-54.4     1.53x
+permit_mpsc                 8           25.5         39281541              0          25.1-27.0     1.08x
+reserving(32/32)            8           38.8         25796965              0          35.5-52.7     1.49x
+reserving(16/48)            8           38.1         26254816              0          35.2-48.1     1.37x
+reserving(8/56)             8           39.2         25513947              0          35.4-46.7     1.32x
+reserving(64/64)            8           61.0         16399424              0          60.9-74.5     1.22x
+baseline_fetch_add         16           14.8         67405885              0          14.7-15.5     1.05x
+slotwise_mpsc              16          268.0          3730917              0        198.7-269.3     1.36x
+reserving_mpsc             16           53.9         18559074              0          48.2-55.2     1.14x
+permit_mpsc                16           20.3         49286880              0          19.8-32.8     1.66x
+reserving(32/32)           16           54.3         18431566              0          48.7-54.4     1.12x
+reserving(16/48)           16           70.8         14115621              0          56.8-73.6     1.30x
+reserving(8/56)            16           68.3         14641851              0          59.8-72.0     1.20x
+reserving(64/64)           16          217.4          4599205              0        161.7-237.6     1.47x
+baseline_fetch_add         32           14.8         67654993              0          14.6-15.3     1.05x
+slotwise_mpsc              32          232.0          4309864              0        204.1-263.4     1.29x
+reserving_mpsc             32           50.9         19654088              0          48.7-54.5     1.12x
+permit_mpsc                32           20.0         50006563              0          19.8-20.9     1.05x
+reserving(32/32)           32           53.9         18548531              0          48.9-54.5     1.11x
+reserving(16/48)           32           70.5         14179872              0          65.3-71.9     1.10x
+reserving(8/56)            32           73.7         13576546              0          62.3-74.7     1.20x
+reserving(64/64)           32          241.9          4133160              0        231.2-248.8     1.08x
+
+-- drained: a consumer looping on pop, capacity 1024 --
+shape               producers          ns/op          ops/sec       refusals        ns/op range    spread
+slotwise_mpsc               1           10.6         94286253             51          10.4-11.0     1.06x
+reserving_mpsc              1           25.0         39955250              0          23.1-28.1     1.21x
+permit_mpsc                 1           59.4         16821990             29          57.4-61.0     1.06x
+reserving(32/32)            1           23.3         42992261            674          22.6-30.5     1.35x
+reserving(16/48)            1           27.6         36258158           2268          25.7-30.8     1.20x
+reserving(8/56)             1           26.5         37721614           2154          25.0-33.7     1.35x
+reserving(64/64)            1           26.6         37613782              0          25.8-29.6     1.15x
+slotwise_mpsc               2           71.1         14060347            317          65.4-74.3     1.14x
+reserving_mpsc              2           67.7         14768213              0          63.3-68.8     1.09x
+permit_mpsc                 2           52.2         19143519           1187          51.0-53.3     1.04x
+reserving(32/32)            2           67.9         14721687            332          61.9-69.7     1.13x
+reserving(16/48)            2           68.6         14569401            934          66.1-71.5     1.08x
+reserving(8/56)             2           66.8         14964459            452          60.9-70.5     1.16x
+reserving(64/64)            2           66.3         15078180            904          61.6-74.2     1.20x
+slotwise_mpsc               4          108.4          9224369            103        104.2-112.7     1.08x
+reserving_mpsc              4           95.8         10437433           1251         85.9-100.1     1.17x
+permit_mpsc                 4           77.7         12868191          77791          70.2-94.5     1.35x
+reserving(32/32)            4           96.6         10348967            175          92.0-99.5     1.08x
+reserving(16/48)            4           94.6         10574961           1750          93.8-96.8     1.03x
+reserving(8/56)             4           95.1         10519782              0         91.2-101.5     1.11x
+reserving(64/64)            4          106.1          9426714              0         97.4-110.0     1.13x
+slotwise_mpsc               8          147.7          6768270              0        146.4-161.9     1.11x
+reserving_mpsc              8          163.4          6121731           2788        160.2-166.0     1.04x
+permit_mpsc                 8          125.3          7983713         454812        109.0-166.0     1.52x
+reserving(32/32)            8          174.6          5726237             64        154.9-180.4     1.16x
+reserving(16/48)            8          175.9          5683934           1822        165.4-181.7     1.10x
+reserving(8/56)             8          164.0          6098016           8273        154.0-174.0     1.13x
+reserving(64/64)            8          188.8          5297031              0        166.0-198.8     1.20x
+slotwise_mpsc              16          294.7          3392917        2302447        214.1-332.7     1.55x
+reserving_mpsc             16          324.6          3081035        2126214        255.0-351.1     1.38x
+permit_mpsc                16          293.1          3412340        3293944        251.5-299.9     1.19x
+reserving(32/32)           16          338.9          2951011        2645070        232.6-385.3     1.66x
+reserving(16/48)           16          271.3          3685659        1569245        239.0-361.3     1.51x
+reserving(8/56)            16          319.4          3130472        1984959        238.8-473.9     1.98x
+reserving(64/64)           16          272.2          3673828         932631        225.2-357.7     1.59x
+slotwise_mpsc              32          562.0          1779317       16515289        507.3-815.4     1.61x
+reserving_mpsc             32          545.5          1833227       14929473        482.2-643.1     1.33x
+permit_mpsc                32          491.8          2033260       11507535        445.2-646.6     1.45x
+reserving(32/32)           32          576.2          1735537       18913396        552.7-783.8     1.42x
+reserving(16/48)           32          547.3          1827048       18297121        536.7-750.3     1.40x
+reserving(8/56)            32          680.3          1469883       23104596        558.4-765.9     1.37x
+reserving(64/64)           32          676.1          1479128       19675639        514.0-750.9     1.46x
+
+interpretation:
+
+  1. push-path scaling with producer count (isolated regime)
+
+     producers                slotwise            reserving               permit         atomic floor
+     1               1.00x [1.00-1.00]    1.00x [1.00-1.00]    1.00x [1.00-1.00]    1.00x [1.00-1.00]
+     2               0.11x [0.10-0.13]    0.17x [0.15-0.23]    0.19x [0.17-0.24]    0.18x [0.16-0.20]
+     4               0.07x [0.07-0.08]    0.14x [0.13-0.16]    0.25x [0.24-0.27]    0.18x [0.16-0.18]
+     8               0.04x [0.04-0.05]    0.13x [0.10-0.17]    0.32x [0.29-0.34]    0.16x [0.15-0.17]
+     16              0.02x [0.02-0.03]    0.10x [0.10-0.13]    0.40x [0.24-0.42]    0.16x [0.15-0.16]
+     32              0.03x [0.02-0.03]    0.11x [0.10-0.12]    0.40x [0.38-0.42]    0.16x [0.15-0.16]
+
+     Read as: throughput at N producers divided by throughput at one.
+     1.00 means N threads together push no faster than one did.
+     The atomic floor is the cheapest possible contended operation,
+     so it says how much of any curve is the queue and how much is
+     simply what this processor does to a fought-over cache line.
+
+  2. reserving vs slotwise, drained (where `head` is written)
+
+     The ratio is the WHOLE push path of two different shapes, not the
+     price of reserving's extra `head` load on its own: they use
+     different claim protocols, slot metadata and retry behaviour. This
+     regime is where that load is at its most expensive -- but the
+     ratio still does not isolate it, or bound it either way.
+
+     producers      slotwise    reserving   reserving/slotwise       permit     permit/reserving
+                       ns/op        ns/op        ratio [bound]        ns/op        ratio [bound]
+     1                  10.6         25.0    2.36x [2.10-2.69]         59.4    2.38x [2.04-2.63]
+     2                  71.1         67.7    0.95x [0.85-1.05]         52.2    0.77x [0.74-0.84]
+     4                 108.4         95.8    0.88x [0.76-0.96]         77.7    0.81x [0.70-1.10]
+     8                 147.7        163.4    1.11x [0.99-1.13]        125.3    0.77x [0.66-1.04]
+     16                294.7        324.6    1.10x [0.77-1.64]        293.1    0.90x [0.72-1.18]
+     32                562.0        545.5    0.97x [0.59-1.27]        491.8    0.90x [0.69-1.34]
+
+     `reserving_mpsc` reads the consumer's position on every push and
+     `slotwise_mpsc` does not. This regime is where that read is at its
+     most expensive, because a consumer is writing the line being read
+     -- but the ratio does not decompose. It is an END-TO-END
+     comparison of two shapes: they also differ in claim protocol,
+     slot metadata and retry behaviour, and those differences are not
+     ordered. So this ratio neither isolates the read nor bounds it.
+
+     `permit_mpsc` is experimental and is the candidate replacement
+     for `reserving_mpsc`: it removes that read entirely, and with it
+     the stale room decision behind SH-14.1, by making admission a
+     read-modify-write on a permit count instead. The last column is
+     the trade. Read the INTERVAL, not the point: one that crosses
+     1.00 orders nothing, however far the point estimate sits from
+     it. An interval clear of
+     1.00 orders the two WHOLE PUSH PATHS and not the room-decision
+     race on its own: the shapes differ in refusal and retry
+     behaviour too, and here their refusal counts differ by orders
+     of magnitude this harness cannot attribute.
+
+  3. claim-word layout
+
+     4 apportionments of reserving_mpsc's claim word, measured on
+     the shipping type itself rather than on a stand-in. 32/32 is the
+     default; 16/48 and 8/56 are the same u64 exchange with the bits
+     apportioned differently; 64/64 is a u128 exchange (cmpxchg16b on
+     x86-64, ldxp/stxp on aarch64), measured only where that is native.
+     The three u64 rows issue the same instruction and differ only in
+     shift and mask constants, so there is no structural reason for one
+     to be slower -- but these rows time the WHOLE push path, so a
+     difference between them is not thereby noise. Read it against a
+     control before calling it either way: the reserving_mpsc row and
+     the 32/32 row above are the same code, so the gap between them is
+     what 'no difference' looks like on this host -- read it against
+     the layout rows before calling any of them apart.
+     64/64 vs 32/32 is the double-width layout's effect on the whole
+     push path -- what moving the recurrence to 2^64 costs, against
+     8/56 moving it to 2^56. Both defer the recurrence rather than
+     removing it. Not the exchange in isolation.
+
+     -- isolated --
+     producers  32/32 ns/op 16/48 ns/op  8/56 ns/op 64/64 ns/op             16/48 vs              8/56 vs             64/64 vs
+     1                  5.4         5.4         5.6         7.8    0.99x [0.77-0.99]    1.03x [0.78-1.31]    1.43x [1.08-1.50]
+     2                 34.6        35.8        34.3        38.7    1.03x [0.91-1.11]    0.99x [0.88-1.07]    1.12x [1.03-1.21]
+     4                 38.2        37.4        33.1        44.0    0.98x [0.91-1.29]    0.87x [0.74-1.21]    1.15x [1.05-2.01]
+     8                 38.8        38.1        39.2        61.0    0.98x [0.67-1.36]    1.01x [0.67-1.32]    1.57x [1.16-2.10]
+     16                54.3        70.8        68.3       217.4    1.31x [1.04-1.51]    1.26x [1.10-1.48]    4.01x [2.97-4.88]
+     32                53.9        70.5        73.7       241.9    1.31x [1.20-1.47]    1.37x [1.14-1.53]    4.49x [4.25-5.08]
+
+     -- drained --
+     producers  32/32 ns/op 16/48 ns/op  8/56 ns/op 64/64 ns/op             16/48 vs              8/56 vs             64/64 vs
+     1                 23.3        27.6        26.5        26.6    1.19x [0.84-1.36]    1.14x [0.82-1.49]    1.14x [0.84-1.31]
+     2                 67.9        68.6        66.8        66.3    1.01x [0.95-1.16]    0.98x [0.87-1.14]    0.98x [0.88-1.20]
+     4                 96.6        94.6        95.1       106.1    0.98x [0.94-1.05]    0.98x [0.92-1.10]    1.10x [0.98-1.20]
+     8                174.6       175.9       164.0       188.8    1.01x [0.92-1.17]    0.94x [0.85-1.12]    1.08x [0.92-1.28]
+     16               338.9       271.3       319.4       272.2    0.80x [0.62-1.55]    0.94x [0.62-2.04]    0.80x [0.58-1.54]
+     32               576.2       547.3       680.3       676.1    0.95x [0.68-1.36]    1.18x [0.71-1.39]    1.17x [0.66-1.36]
+
+     the 32/32 row and the reserving_mpsc row above are the same
+     configuration run twice, so the gap between them is this host's
+     same-code control: whatever it shows is dispersion, not a
+     difference between shapes. Do not read it as noise that can be
+     discounted -- its width is an open question about this
+     instrument. They
+     are no longer a control against a duplicated implementation: the
+     shipping type takes the layout as a parameter, so there is nothing
+     left that could drift away from what callers actually run.
+
+  CAUTION: the drained regime has ONE consumer, because that is what
+  MPSC means. At high producer counts it is expected to become
+  consumer-bound, and a plateau there says nothing about the claim.
+  The refusal counts above are what make that visible: a run with
+  many refusals met a full queue often, so the consumer is one term
+  in what it measured. That does not rule the tail out -- both can
+  bind at once, and these counts do not separate them.

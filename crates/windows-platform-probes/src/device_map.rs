@@ -54,6 +54,10 @@ use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken,
 };
 
+mod raw_row;
+
+pub use self::raw_row::*;
+
 /// What one observation of a drive letter found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MapObservation {

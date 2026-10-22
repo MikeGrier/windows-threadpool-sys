@@ -643,6 +643,15 @@ result -- so interleaving the control with its candidate has to land first. The
 paragraph above is kept as the reasoning that was current when the diagnosis was
 first written down; where the two disagree, the checklist is the execution order.
 
+**`M4.2` was then built before `M4.4` anyway, and that does not reverse the
+revision.** The revision orders *reading* a lengthened run after pairing the
+control. Building the settings that take one moves no figure -- the defaults are
+the old constants -- so it has nothing to be confounded by. What it changes is
+that the confounded reading is now one command away rather than one source edit
+away, which is why the decision that records it,
+[The probes' sampling is set on the command line](DESIGN-NOTES.md#d-settable-sampling),
+states the confound in its own body rather than leaving it to this paragraph.
+
 The other half is knowing when to stop. Every setup has a floor, and past it more
 runs buy nothing; the failure mode is a week spent establishing that two numbers
 are the same. What makes the floor easy to misjudge is the assumption that it
@@ -687,3 +696,152 @@ to the quality of the measurement instead of to its portability.
 The rule exists to forbid the quiet version: reporting a wide control as though a
 wide control were ordinary. It is not ordinary, and the moment it stops being
 remarked upon is the moment nobody investigates it.
+
+## Why the sampling is set by flags, and why the cost probes get only one
+
+Decided in [The probes' sampling is set on the command line](DESIGN-NOTES.md#d-settable-sampling).
+
+**Flags rather than environment variables.** A variable set in a shell outlives the
+run it was meant for, and the next run inherits it silently -- two runs differing
+without anyone noticing, which `M4.2` named as the thing to avoid. A flag belongs to
+one invocation and is visible in whatever ran it.
+
+**Refusal rather than a warning and the default.** A probe that met an unknown flag
+and ran anyway would publish default figures from a run its author believed was
+configured. The report would say "the defaults", truthfully, and the author would
+be reading it as something else.
+
+**One multiplier for the cost probes, not a flag per loop.** Each loop's length was
+chosen when it was written, and scaling them together keeps those lengths in the
+proportions they were written with. A flag per loop would let one run lengthen the
+row it is about while the row it is compared against stays short, which is a second
+variable entering the comparison. The item also said not to add knobs beyond what a
+diagnostic step needs, and the step for these probes is "time more iterations".
+Repetitions and concurrency, the other two axes `M4.2` anticipated, do not exist in
+those probes: each times a fixed loop and divides, and none repeats a measurement or
+varies a thread count.
+
+**The sampling travels inside `Observation`.** The alternative, passing it to the
+renderer next to the observation, would let a caller hand over the defaults with a
+non-default measurement -- the renderer cannot tell, and the report would mislabel
+its own figures. Carried inside, the label and the figures come from the one
+`measure` call. The test corpus accordingly requires a `sampling` key on every case
+rather than defaulting a missing one, because a defaulted key is exactly how a case
+written before this change would keep passing while describing a run nobody took.
+
+## Why the probe interleaves by rotation, and why the old order stays
+
+Decided in [The queue probe interleaves its passes](DESIGN-NOTES.md#d-interleaved-order).
+
+**The item allowed two designs.** One pairs each candidate with an adjacent control run of the same
+code; the other balances the order across repetitions so drift cannot align with position. Pairing
+adds a control measurement per candidate, lengthening every run, and gives each candidate its own
+copy of the control rather than the one row the published ratios divide by. Interleaving every
+configuration costs nothing extra -- the passes are the same passes, reordered -- and puts the
+control's two halves, and every candidate, inside the same rounds. So the rounds design was taken.
+
+**Rotation rather than shuffling.** A random order would balance position as well, but a run would
+then not be reproducible from its settings, and this repository's unit tests do not sample at
+runtime without the engineer's approval. Rotating the first position by one per round is
+deterministic, testable, and still keeps any configuration from always being measured first.
+
+**The old order stays, against the item's framing of it as something to replace.** The item treated
+interleaving as obsoleting every published figure. Keeping the sequential order turns that around:
+the published figures remain measurements of a procedure the probe still runs, and the two orders on
+one host are the comparison that says whether the change mattered. Removing it would have cost that
+comparison and the ability to retake any figure published before `M4.4`, to save one flag.
+
+**Every configuration at a producer count is interleaved together, both regimes**, rather than each
+regime on its own. The control exists in both regimes, and a single list of configurations is also
+what makes the sequential order exactly the old one: the old measurement already alternated between
+the regimes in a fixed pattern, and the list preserves it.
+
+## Why the coherence probes joined the CI job, and at what settings
+
+Decided in [The coherence probes run in CI](DESIGN-NOTES.md#d-coherence-probes-in-ci).
+
+**Prompted by a gap a previous round had only described.** `M2.15` put the probe suite on an ARM64
+runner, and correcting [the queue crate's README](../windows-waitable-queues/README.md) afterwards
+showed that the one probe whose ARM64 figures had been lost was not in that job. The engineer,
+2026-10-19: "please implement the missing coverage, I assume in the ci pipeline?"
+
+**The recorded reasons for keeping the queue probe out were a core count and a run time**, and both
+concern producer counts above the runner's processors. At 1, 2 and 4 producers neither applies, so
+the decision narrowed what CI runs rather than reversing why the full curve is manual. Reading the
+count from the runner instead was rejected: rows from different builds would then measure different
+configurations, and the fixed list costs nothing on a runner with more processors.
+
+**The peer-index probe was added in the same change, unasked**, because it is the probe whose finding
+inverts between the two architectures, it needs two threads, and the only reason recorded for its
+absence was the debug-build problem a release step solves. Leaving it out would have kept the ARM64
+gap open for the probe it matters most to.
+
+## Why the build identity is stamped by included code rather than a copy or a new crate
+
+Decided in [A queue report names the build that produced it](DESIGN-NOTES.md#d-report-names-its-build).
+
+The item pointed at `windows-placement-probe`'s build script as the worked example. Three ways to
+reuse it were weighed:
+
+- **A copy in this crate's build script** was rejected because that script is the record of several
+  measured staleness defects -- `HEAD` not changing on commit, packed refs, worktree `commondir` --
+  each fixed in place. A copy would carry today's fixes and miss tomorrow's.
+- **Reading `windows-placement-probe`'s own stamps at run time** was rejected because they describe
+  that crate's build: its version, and a dirty flag its script refreshes only when its own files
+  change.
+- **A shared build-dependency crate** would work, at the cost of a new crate for one function.
+
+So the stamping moved, unchanged, into `windows-placement-probe/build/stamp.rs` and became a function
+of a prefix; both build scripts include it with `include!`, which keeps it in each script's root
+module and changes no visibility. `windows-placement-probe` is `publish = false`, so a path outside
+this crate's directory costs no packaging.
+
+**Missing stays acceptable in the capture scripts** because every committed capture predates the
+line; refusing an unstamped run would have made all of them unregeneratable to gain nothing on runs
+nobody can retake.
+
+## Why every probe emits a row, and why a row is not a contract
+
+Decided in [Every probe's normal run emits a row of raw data](DESIGN-NOTES.md#d-every-probe-emits-a-row).
+
+`M4.10` found the crate with two conventions and no rule: three probes emitted a row and the rest
+printed prose only. Three rules were put to the engineer on 2026-10-19:
+
+- **A** -- every probe owes a row;
+- **B** -- a probe owes a row when something other than a person reads its output (a CI survey, a
+  committed script);
+- **C** -- a probe owes a row when it reports magnitudes that depend on the host, an asserted
+  behavioural finding being machine-readable already through its test result.
+
+The recommendation put forward was C. The engineer chose A for the normal run, keeping B and C as
+possible readings: "The answer is A for the normal simplified runs. We may have modes that give the
+other two interpretations/readings but in general they produce raw data." A sidesteps the question C
+and B each had to answer per probe -- which outputs count -- and makes a probe's default output the
+same kind of thing everywhere: what was observed, with interpretation as a separate, optional layer.
+
+The recommendation had assumed each new row would carry the obligations the topology row carries --
+asserted values, invariants and shape -- which is what made A look expensive. The engineer rejected
+that premise rather than the cost: "I don't necessarily see these as 'contractual'. Probes produce
+what they produce. If we retire a probe or if it measures something different over time, we need to
+be honest and give it a new name/identifier but I don't know if we need to think about this as
+formally as being a contract." And: "these probes are meant as somewhat informal means to validate
+platform behaviors. They are not a formal validation scheme." The "I don't know if" is recorded as
+said; what is settled is that a new row does not inherit the topology row's machinery, and that a
+change of meaning is a change of name.
+
+### How `M8` applied it
+
+**Floats.** The queue probe's first row needed per-operation figures, and the row writer's `Value`
+has no float, with a recorded reason. Adding one was the obvious move and was not made: the
+per-operation figure is the prose's division of an elapsed time by a push count, so under rule A it
+is a reading rather than the observation. The row publishes the elapsed time, recovered exactly from
+the stored figure, and every later timing row followed. Where a measurement had kept only derived
+figures -- `core_affinity` stored batch depths as `ITEMS / max(1, reads)`, which no division can
+undo at zero -- the raw values were added at the source in `windows-placement-probe`.
+
+**The cancel-io probe.** It had been excluded from the census because `Command::output` waits on a
+child without limit and its subject is a call that can fail to return. Excluding it again would have
+left the rule unenforced for exactly the probe least likely to be run by hand. The census instead
+runs every probe under a deadline, reading output as it arrives, and for this one probe stops at
+its row rather than waiting on an exit its own finding says may not come. The report streams line
+by line (`M1`), which is what lets the row arrive before `main` returns.

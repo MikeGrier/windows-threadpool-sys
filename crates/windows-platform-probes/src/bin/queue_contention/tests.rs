@@ -17,7 +17,7 @@
 use super::render_observation;
 use serde_json::Value;
 use std::panic::AssertUnwindSafe;
-use windows_platform_probes::queue_contention::{Observation, Run};
+use windows_platform_probes::queue_contention::{Observation, Order, Run, Sampling};
 
 /// Asserts every line of a table shares its header's width.
 ///
@@ -134,6 +134,38 @@ fn observation_from(value: &Value) -> Observation {
                 Some(usize::try_from(count).expect("a processor count fits a usize"))
             }
         },
+        sampling: sampling_from(value.get("sampling").unwrap_or_else(|| {
+            panic!("a case states the `sampling` its run used, as the report prints it")
+        })),
+    }
+}
+
+/// A case's `sampling`, every field stated. Required rather than defaulted, for
+/// the reason `available_parallelism` is: the report prints it, so a case that
+/// left it out would test a line nobody chose.
+fn sampling_from(value: &Value) -> Sampling {
+    let whole = |key: &str| -> usize {
+        let number = value[key]
+            .as_u64()
+            .unwrap_or_else(|| panic!("`sampling.{key}` is a whole number"));
+        usize::try_from(number).expect("a sampling count fits a usize")
+    };
+    Sampling {
+        pushes_per_producer: whole("pushes_per_producer"),
+        repetitions: whole("repetitions"),
+        producer_counts: value["producer_counts"]
+            .as_array()
+            .expect("`sampling.producer_counts` is an array")
+            .iter()
+            .map(|count| {
+                usize::try_from(count.as_u64().expect("a producer count is a whole number"))
+                    .expect("a producer count fits a usize")
+            })
+            .collect(),
+        order: value["order"]
+            .as_str()
+            .and_then(Order::from_name)
+            .expect("`sampling.order` is `interleaved` or `sequential`"),
     }
 }
 

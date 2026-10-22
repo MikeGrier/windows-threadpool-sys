@@ -117,6 +117,17 @@ pub enum Shape {
 }
 
 impl Shape {
+    /// A stable identifier for a record, separate from the prose
+    /// [`label`](Self::label) so the table can be reworded freely.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::DotDot => "dot_dot",
+            Self::ForwardSlash => "forward_slash",
+        }
+    }
+
     /// A short word for a table.
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -701,6 +712,10 @@ fn temp_dir_refusal(tmp: Option<&OsStr>, temp: Option<&OsStr>) -> Option<String>
 pub fn is_refusal(attempt: &Attempt) -> bool {
     !attempt.opened && matches!(attempt.error, ERROR_PATH_NOT_FOUND | ERROR_FILE_NOT_FOUND)
 }
+
+mod raw_row;
+
+pub use self::raw_row::*;
 
 #[cfg(test)]
 mod tests;

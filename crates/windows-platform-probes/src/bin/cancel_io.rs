@@ -11,8 +11,10 @@
 //! is a call that can fail to return, so every case here runs behind a
 //! watchdog; a wedged `#[test]` would take the whole suite with it.
 
+use windows_platform_probes::build_identity::this_build;
 use windows_platform_probes::cancel_io::{
-    CancelOutcome, WATCHDOG, cancel_against_busy_thread, cancel_against_idle_thread,
+    BUSY_ATTEMPTS, CancelOutcome, WATCHDOG, cancel_against_busy_thread, cancel_against_idle_thread,
+    raw_row,
 };
 use windows_platform_probes::report::emit_report;
 
@@ -65,7 +67,7 @@ fn render(out: &mut dyn std::fmt::Write) {
         out,
         "\ncase 2: cancel against a thread hammering synchronous reads"
     );
-    let busy = cancel_against_busy_thread(4);
+    let busy = cancel_against_busy_thread(BUSY_ATTEMPTS);
     for (attempt, outcome) in busy.iter().enumerate() {
         let _ = writeln!(out, "  attempt {}: {}", attempt + 1, describe(*outcome));
     }
@@ -114,4 +116,12 @@ fn render(out: &mut dyn std::fmt::Write) {
             "  Re-run, and vary the hammer loop, before concluding otherwise."
         );
     }
+
+    // The raw data, last, as every probe's normal run emits it (`M8.13`) --
+    // including an attempt the watchdog abandoned, which is the finding.
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(idle, &busy, &this_build().to_string()).render()
+    );
 }

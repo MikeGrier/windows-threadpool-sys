@@ -35,10 +35,14 @@ use windows_sys::Win32::System::Threading::GetCurrentProcess;
 ///
 /// A buffer large enough to drain the fixture in one call would answer none of
 /// these questions, because the cursor would never be left mid-directory.
-const BUFFER_BYTES: usize = 320;
+pub const BUFFER_BYTES: usize = 320;
 
 /// Enough entries that the small buffer needs several calls.
-const FIXTURE_FILES: usize = 14;
+pub const FIXTURE_FILES: usize = 14;
+
+mod raw_row;
+
+pub use self::raw_row::*;
 
 /// A temporary directory that removes itself.
 ///
@@ -225,6 +229,16 @@ pub enum SingleShot {
 }
 
 impl SingleShot {
+    /// A stable identifier for a record.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::BasicInfo => "basic_info",
+            Self::IdInfo => "id_info",
+            Self::NonEx => "non_ex",
+        }
+    }
+
     /// Perform the query. Returns whether it succeeded.
     fn run(self, handle: &DirHandle) -> bool {
         match self {
@@ -394,6 +408,30 @@ pub fn query_disturbs_cursor(
     on_duplicate: bool,
     truth: &[String],
 ) -> (bool, bool) {
+    let (succeeded, observation) = interleave_query(fixture, query, on_duplicate);
+    (succeeded, !observation.continued(truth))
+}
+
+/// Every query the probe binary interleaves, and whether it goes to a
+/// duplicate, in the order the report lists them.
+pub const QUERIES: [(SingleShot, bool); 4] = [
+    (SingleShot::BasicInfo, false),
+    (SingleShot::IdInfo, false),
+    (SingleShot::NonEx, false),
+    (SingleShot::BasicInfo, true),
+];
+
+/// Interleave `query` with an enumeration, and return whether it succeeded
+/// with the names the handle produced before and after it.
+///
+/// What [`query_disturbs_cursor`] reads its verdict from, kept whole so a
+/// record can publish the names rather than the verdict.
+#[must_use]
+pub fn interleave_query(
+    fixture: &Fixture,
+    query: SingleShot,
+    on_duplicate: bool,
+) -> (bool, CursorObservation) {
     let handle = DirHandle::open(fixture.path());
     let before = handle.enumerate(true).expect("the restart call");
     let succeeded = if on_duplicate {
@@ -402,9 +440,11 @@ pub fn query_disturbs_cursor(
         query.run(&handle)
     };
     let after = handle.enumerate(false);
-    let observation = CursorObservation {
-        source_first: before,
-        other_next: after,
-    };
-    (succeeded, !observation.continued(truth))
+    (
+        succeeded,
+        CursorObservation {
+            source_first: before,
+            other_next: after,
+        },
+    )
 }

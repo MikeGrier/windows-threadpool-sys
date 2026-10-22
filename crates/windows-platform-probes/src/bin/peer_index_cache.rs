@@ -6,7 +6,9 @@
 //! and are not for production use. Do not call them from production code, and
 //! do not lift a technique out of here. See this crate's DESIGN-NOTES.md.
 
-use windows_placement_probe::peer_index_cache::{CAPACITY, ITEMS, Strategy, measure};
+use windows_placement_probe::peer_index_cache::{CAPACITY, ITEMS, Observation, Strategy, measure};
+use windows_platform_probes::build_identity::this_build;
+use windows_platform_probes::peer_index_cache::{declined_row, raw_row};
 use windows_platform_probes::report::emit_report;
 
 fn main() {
@@ -54,10 +56,27 @@ fn render(out: &mut dyn std::fmt::Write) {
                 "Nothing below could be measured, so nothing below is reported. This is\n\
                  a refusal to measure the host, not a finding about it."
             );
+            let _ = writeln!(
+                out,
+                "{}",
+                declined_row(&error, &this_build().to_string()).render()
+            );
             return;
         }
     };
+    render_observation(out, &observation);
+    // The raw data, last, as every probe's normal run emits it (`M8.3`), and
+    // after the interpretation rather than inside it: the interpretation
+    // returns early when a strategy is missing, and the row is owed anyway.
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(&observation, &this_build().to_string()).render()
+    );
+}
 
+/// The table and its interpretation.
+fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) {
     let _ = writeln!(
         out,
         "{:<24} {:>10} {:>14} {:>14} {:>14}",

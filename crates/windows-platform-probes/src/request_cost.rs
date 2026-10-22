@@ -97,6 +97,8 @@ use wtf_string::Wtf16String;
 use std::os::windows::io::{AsHandle, OwnedHandle};
 
 use win_shared_os_owned_handle::SharedHandle;
+
+use crate::probe_args::IterationMultiplier;
 use windows_namespace_request_sys::OpenFile;
 use windows_sys::Win32::Foundation::GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, OPEN_EXISTING};
@@ -252,20 +254,31 @@ fn open_request(path: &Wtf16String) -> OpenFile {
         .with_creation_disposition(OPEN_EXISTING)
 }
 
+/// Iterations of each loop that only allocates, at the default multiplier.
+const ITERATIONS: u32 = 100_000;
+/// An open and a close are kernel calls, so these are timed over fewer
+/// iterations than the loops that only allocate.
+const PERFORM_ITERATIONS: u32 = 20_000;
+/// The duplication and close loops, also kernel calls.
+const HANDLE_ITERATIONS: u32 = 50_000;
+
+/// The longest loop [`measure`] runs at the default multiplier, which bounds the
+/// multiplier a command line may give (see [`IterationMultiplier::from_args`]).
+pub const LONGEST_LOOP: u32 = ITERATIONS;
+
 /// Time request construction, request cloning, performing an open, sharing a
-/// handle with a request, and duplicating a borrowed handle outside one.
+/// handle with a request, and duplicating a borrowed handle outside one, each
+/// loop run `multiplier` times its usual count (`M4.2`).
 ///
 /// # Panics
 ///
 /// Panics if a fixed sample path cannot build a request, or `kernel32.dll`
 /// cannot be opened, which would mean nothing here is meaningful.
 #[must_use]
-pub fn measure() -> Observation {
-    const ITERATIONS: u32 = 100_000;
-    // An open and a close are kernel calls, so these are timed over fewer
-    // iterations than the loops that only allocate.
-    const PERFORM_ITERATIONS: u32 = 20_000;
-    const HANDLE_ITERATIONS: u32 = 50_000;
+pub fn measure(multiplier: IterationMultiplier) -> Observation {
+    let iterations = multiplier.scale(ITERATIONS);
+    let perform_iterations = multiplier.scale(PERFORM_ITERATIONS);
+    let handle_iterations = multiplier.scale(HANDLE_ITERATIONS);
 
     // Resolved, not assumed. Windows is not always on `C:` -- a valid
     // installation can sit on any volume -- and hard-coding it made this probe
@@ -305,20 +318,20 @@ pub fn measure() -> Observation {
 
     // The owned string a build is handed, on its own. Every build below
     // includes this clone, so it is what to subtract to read the rest.
-    timings.push(time_loop("clone_path_string", ITERATIONS, || kept.clone()));
+    timings.push(time_loop("clone_path_string", iterations, || kept.clone()));
 
     // A request whose path is kept as given: an absolute path, at two lengths.
     // No directory is read.
-    timings.push(time_loop("build_request_kept", ITERATIONS, || {
+    timings.push(time_loop("build_request_kept", iterations, || {
         open_request(&kept)
     }));
-    timings.push(time_loop("build_request_kept_long", ITERATIONS, || {
+    timings.push(time_loop("build_request_kept_long", iterations, || {
         open_request(&kept_long)
     }));
 
     // A request whose path is grafted onto the current directory, which the
     // build reads.
-    timings.push(time_loop("build_request_grafted", ITERATIONS, || {
+    timings.push(time_loop("build_request_grafted", iterations, || {
         open_request(&relative)
     }));
 
@@ -348,12 +361,12 @@ pub fn measure() -> Observation {
         "the relative sample is meant to be grafted onto the current directory"
     );
 
-    timings.push(time_loop("clone_request_kept", ITERATIONS, || {
+    timings.push(time_loop("clone_request_kept", iterations, || {
         kept_request
             .try_clone()
             .expect("a request with no handle or security copies")
     }));
-    timings.push(time_loop("clone_request_grafted", ITERATIONS, || {
+    timings.push(time_loop("clone_request_grafted", iterations, || {
         grafted_request
             .try_clone()
             .expect("a request with no handle or security copies")
@@ -362,14 +375,14 @@ pub fn measure() -> Observation {
     // The call a request carries, against a real file: a built request
     // performed, and a request built and performed. The returned handle is
     // dropped inside the timed region, so each is an open-and-close cycle.
-    timings.push(time_loop("perform_open", PERFORM_ITERATIONS, || {
+    timings.push(time_loop("perform_open", perform_iterations, || {
         kept_request
             .perform()
             .expect("kernel32.dll opens for reading")
     }));
     timings.push(time_loop(
         "build_and_perform_open",
-        PERFORM_ITERATIONS,
+        perform_iterations,
         || {
             open_request(&kept)
                 .perform()
@@ -386,11 +399,11 @@ pub fn measure() -> Observation {
     // A clone and its drop. `shared` outlives the loop, so a dropped clone only
     // counts one holder fewer and closes nothing: this is the whole cost of
     // giving a request a handle the caller already shares.
-    timings.push(time_loop("share_handle", ITERATIONS, || shared.clone()));
+    timings.push(time_loop("share_handle", iterations, || shared.clone()));
 
     // The kept-path build again, now also carrying a template handle, to read
     // against `build_request_kept`. It is only built, never performed.
-    timings.push(time_loop("build_request_with_handle", ITERATIONS, || {
+    timings.push(time_loop("build_request_with_handle", iterations, || {
         open_request(&kept).with_template(Some(shared.clone()))
     }));
 
@@ -418,9 +431,9 @@ pub fn measure() -> Observation {
         let _ = std::hint::black_box(borrowed.try_clone_to_owned().expect("duplicating a handle"));
     }
 
-    let mut duplicates: Vec<OwnedHandle> = Vec::with_capacity(HANDLE_ITERATIONS as usize);
+    let mut duplicates: Vec<OwnedHandle> = Vec::with_capacity(handle_iterations as usize);
     let start = Instant::now();
-    for _ in 0..HANDLE_ITERATIONS {
+    for _ in 0..handle_iterations {
         duplicates.push(
             borrowed
                 .try_clone_to_owned()
@@ -430,8 +443,8 @@ pub fn measure() -> Observation {
     let duplicate_elapsed = start.elapsed();
     timings.push(Timing {
         label: "duplicate_borrowed_handle",
-        iterations: HANDLE_ITERATIONS,
-        nanos_per_op: duplicate_elapsed.as_nanos() as f64 / f64::from(HANDLE_ITERATIONS),
+        iterations: handle_iterations,
+        nanos_per_op: duplicate_elapsed.as_nanos() as f64 / f64::from(handle_iterations),
     });
 
     let start = Instant::now();
@@ -439,8 +452,8 @@ pub fn measure() -> Observation {
     let close_elapsed = start.elapsed();
     timings.push(Timing {
         label: "close_duplicate",
-        iterations: HANDLE_ITERATIONS,
-        nanos_per_op: close_elapsed.as_nanos() as f64 / f64::from(HANDLE_ITERATIONS),
+        iterations: handle_iterations,
+        nanos_per_op: close_elapsed.as_nanos() as f64 / f64::from(handle_iterations),
     });
 
     Observation { timings }
