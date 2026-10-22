@@ -13,6 +13,9 @@ Windows System Information > Handles and Objects*. Thin over Win32, adding no po
 - `compare_object_handles` is `CompareObjectHandles`: whether two handles name the same kernel object, which needs no access
   right on either. It returns the call's `TRUE` or `FALSE` as a `bool`. A duplicate is the same object; two opens of one file are
   not. It needs Windows 10 or Windows Server 2016.
+- `close_handle` is `CloseHandle` over an `OwnedHandle`: what dropping one does, with the result kept, for a caller that needs to
+  know the close worked. The handle is taken whether or not it succeeds and is not given back; one protected from close fails to
+  close and stays open, so clear the flag first.
 - `Access` is the mask, a newtype over the Win32 bits combined with `|`. `SYNCHRONIZE` and
   `EVENT_MODIFY_STATE` are named; any other right is `Access::from_bits`.
 

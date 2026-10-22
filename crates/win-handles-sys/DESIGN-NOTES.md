@@ -112,3 +112,41 @@ is always yes, one that is always no, and the first handle compared with itself;
 against a literal zero.
 
 **Scheduled work.** None; `WH-1.4` is the checklist's.
+
+## WH-D-5: `close_handle` takes the handle and does not give it back, and reports what `CloseHandle` returned
+
+**Read 2026-10-21** from the page for `CloseHandle` (`ms.date` 2018-12-05, `updated_at` 2024-02-22). The parameter is "A valid handle
+to an open object"; a failure is a zero return with extended error information from `GetLastError`; "If the application is running
+under a debugger, the function will throw an exception if it receives either a handle value that is not valid or a pseudo-handle
+value." The page lists the kinds of object the call closes, and says not to use it for a socket, for a handle from `FindFirstFile`,
+or for a registry key, of which it says "CloseHandle does not close the handle to the registry key, but does not return an error to
+indicate this failure". It says nothing of what state a handle is in after a failed close.
+
+**The function.** `close_handle(handle: OwnedHandle) -> io::Result<()>` takes the handle out of its owner with `into_raw_handle`, so
+the owner's drop cannot close it again, and makes the call. It is what dropping an `OwnedHandle` does, with the result kept: a drop
+cannot report a failure, which is the one thing this adds. A `File` and the other handle owners convert to an `OwnedHandle` by
+`From`, so a caller writes `close_handle(file.into())`.
+
+**The handle is taken whether or not the call succeeds, and is not given back.** The page is silent on the state after a failure, so
+a failure cannot be turned into a handle the caller may keep: one that was not open, dropped, would close a value that may by then be
+another handle's, which is the double close the type exists to prevent. That is an analytic ground and not a measurement, and it
+forecloses a caller retrying a close of a handle protected from close without the flag cleared. The way to meet that case is to clear
+the flag with `set_handle_information` before the close, which the function's documentation says. A handle that did fail to close and
+stayed open stays open for the life of the process.
+
+**Measured on Windows 11 build 26300 with no debugger attached, 2026-10-21, none of it a ruling.** Closing an open event succeeded.
+Closing the last handle to a named event removed the object, and closing one of two left it, as the page says of "the last handle".
+Closing a value twice, a null handle and a value that was never a handle failed with `ERROR_INVALID_HANDLE` (6), and a handle
+protected from close failed with the same code and was still open, with its flag set, afterward; clearing the flag let it close.
+The pseudo-handles `-1` and `-2` "succeeded" with no error, which the page does not describe and no `OwnedHandle` holds. A
+debugger's exception, which the page describes for an invalid or a pseudo handle, was not measured, nor whether one is raised for a
+protected handle; the test of a protected handle is for a run with none attached.
+
+**The tests** never ask a closed handle's value anything, since another test's thread may have been given it: what a close did is
+read from named events, whose object is removed with its last handle, and a protected handle is reclaimed by its raw value only
+because the close failed and left it open. The error path is the protected handle, the one failure a safe caller can reach. The
+sweep ([sabotage.json](sabotage.json)) catches a failed close read as success, a close that does nothing, a success read as failure,
+and an error that is not the call's; its control writes the test of the result against a literal zero. A handle closed twice is not
+injected: the second close would act on a value another thread may have been given.
+
+**Scheduled work.** None; the checklist is complete.

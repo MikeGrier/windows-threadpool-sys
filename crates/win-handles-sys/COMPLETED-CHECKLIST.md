@@ -34,3 +34,18 @@ The item as written:
 `compare_object_handles(first, second) -> bool`, read from the page and measured on real handles. The duplicate's tests, which
 called the raw function through a helper of their own, call it now. Why the answer is a `bool` and not a `Result`, and what was
 measured, are [WH-D-4](DESIGN-NOTES.md#wh-d-4).
+
+## Moved 2026-10-21 22:27:07 -04:00 -- the close of a handle, and the checklist is complete
+
+### <a id="wh-14"></a>WH-1.4 -- `CloseHandle`, taking an `OwnedHandle` and reporting the error the call can return, which dropping one cannot. *(completed 2026-10-21 22:27:07 -04:00)*
+
+The item as written:
+
+**WH-1.4** -- `CloseHandle`, taking an `OwnedHandle` and reporting the error the call can return, which
+  dropping one cannot. It is the last of the five the section lists.
+
+`close_handle(handle: OwnedHandle) -> io::Result<()>`, read from the page and measured on real handles. It takes the handle whether or
+not the call succeeds and does not give it back, which is [WH-D-5](DESIGN-NOTES.md#wh-d-5)'s ground and its cost.
+
+The checklist is complete: [WH-1.1](#wh-11), [WH-1.2](#wh-12), [WH-1.3](#wh-13) and WH-1.4 are the five functions the Learn section
+lists, and nothing is parked.

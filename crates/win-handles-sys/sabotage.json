@@ -1,7 +1,7 @@
 {
   "package": "win-handles-sys",
   "description": "Sabotages for win-handles-sys's duplicate_handle_with_access and Access, which were win-sync-sys's duplicate module until DI-14.8.3 moved them. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
-  "notCoveredHere": "DuplicateHandle's failure other than for a mask Windows refuses is absent: it fails only when the process cannot get another handle, which no test can produce on demand. duplicate.rs says so at the definition.",
+  "notCoveredHere": "DuplicateHandle's failure other than for a mask Windows refuses is absent: it fails only when the process cannot get another handle, which no test can produce on demand. duplicate.rs says so at the definition. A handle closed twice is not injected for close_handle: the second close would act on a value another thread may have been given, and the sweep would be measuring that and not a test.",
   "testArgs": ["-p", "win-handles-sys", "--lib", "--locked"],
   "sabotages": [
     {
@@ -195,6 +195,46 @@
       "why": "A control: FALSE is zero, so the same test by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["    same != FALSE"],
       "replace": ["    same != 0"]
+    },
+    {
+      "name": "WH-1.4: a failed close is reported as success",
+      "file": "src/close.rs",
+      "expect": "caught",
+      "why": "The point of the function is the result a drop throws away: a close the platform refused, which a handle protected from close is, must be an error.",
+      "find": ["    if unsafe { CloseHandle(raw) } == FALSE {"],
+      "replace": ["    if unsafe { CloseHandle(raw) } == FALSE && false {"]
+    },
+    {
+      "name": "WH-1.4: the handle is not closed",
+      "file": "src/close.rs",
+      "expect": "caught",
+      "why": "A close that does nothing and says it worked leaks every handle it is given; the last handle to a named object is what shows it, since the object is not removed.",
+      "find": ["    if unsafe { CloseHandle(raw) } == FALSE {"],
+      "replace": ["    if { let _ = raw; 1 } == FALSE {"]
+    },
+    {
+      "name": "WH-1.4: every close is reported as a failure",
+      "file": "src/close.rs",
+      "expect": "caught",
+      "why": "A close that succeeded is Ok: reported as failed, a caller cannot tell a handle that closed from one that did not.",
+      "find": ["    if unsafe { CloseHandle(raw) } == FALSE {"],
+      "replace": ["    if unsafe { CloseHandle(raw) } == FALSE || true {"]
+    },
+    {
+      "name": "WH-1.4: the error is not the call's",
+      "file": "src/close.rs",
+      "expect": "caught",
+      "why": "The code the call set is the whole of what a caller can learn of why it failed.",
+      "find": ["        return Err(io::Error::last_os_error());"],
+      "replace": ["        return Err(io::Error::from(io::ErrorKind::Other));"]
+    },
+    {
+      "name": "WH-1.4 control: the call's result is tested against a literal zero",
+      "file": "src/close.rs",
+      "expect": "survives",
+      "why": "A control: FALSE is zero, so the same test by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    if unsafe { CloseHandle(raw) } == FALSE {"],
+      "replace": ["    if unsafe { CloseHandle(raw) } == 0 {"]
     }
   ]
 }
