@@ -2574,7 +2574,22 @@ one commit agree while their sources may differ; the capture README is still the
 built for those, and for every capture taken before this. And the build identity does not replace
 the scripts' refusal of byte-identical runs: it names the build, which every run in a capture shares.
 
-**Scheduled work:** none.
+**A test cannot tell this crate's stamps from the placement probe's on a day both are released.** The
+engineer, 2026-10-22, choosing the first of three options put to him. `this_build()` is stamped under this
+crate's names and the placement probe's `BuildIdentity::current()` under its own, and the one test that
+holds the two apart reads the crates' versions. Both crates are calendar-versioned, so a release of both
+on one day gives them one version, and the release pull request of that day failed on it (the test
+asserted the versions differ). The test now asks a pure function, `whose_stamps`, whether the versions
+can say, and when they coincide it prints that it cannot tell and passes; `whose_stamps` is tested in
+both directions. What this leaves unchecked on such a day is `this_build()` being rewired to the
+placement probe's `BuildIdentity::current()`: the compiler already refuses the other crate's stamp
+variables, so that rewiring is the one way left to read the wrong crate. The skip is visible only with
+the test's output shown. **What would change the answer** is a crate name in `BuildIdentity`, so that
+the check holds on every date; that is a change to `windows-placement-probe`'s public type and to what a
+report renders, and was not chosen. No sabotage entry covers the rewiring, for the reason in
+[sabotage.json](sabotage.json)'s `notCoveredHere`.
+
+**Scheduled work:** none; the crate name in `BuildIdentity` is not scheduled.
 
 ## Every probe's normal run emits a row of raw data
 
