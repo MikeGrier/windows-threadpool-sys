@@ -64,7 +64,7 @@
       "file": "src/event.rs",
       "expect": "caught",
       "why": "A clone that is a different event looks like a working event in isolation; it fails only where the two are meant to be one, which is the whole use -- keeping one handle to signal while another is waited on.",
-      "find": ["    /// the process cannot get another handle.\n    pub fn try_clone(&self) -> io::Result<Self> {\n        Ok(Self {\n            handle: self.handle.try_clone()?,\n"],
+      "find": ["    /// the process cannot get another handle.\n    pub fn try_clone(&self) -> io::Result<Self> {\n        Ok(Self {\n            handle: SharedHandle::new(self.handle.as_handle().try_clone_to_owned()?),\n"],
       "replace": ["    /// the process cannot get another handle.\n    pub fn try_clone(&self) -> io::Result<Self> {\n        Ok(Self {\n            handle: Event::new(ResetMode::Manual, false)?.handle,\n"]
     },
     {
@@ -148,76 +148,28 @@
       "replace": ["    let code = unsafe { WaitForSingleObject(std::ptr::null_mut(), milliseconds) };\n"]
     },
     {
-      "name": "WS-1+.5: the duplicate ignores the access asked for",
-      "file": "src/duplicate.rs",
-      "expect": "caught",
-      "why": "The access is the whole point. A duplicate that gets none cannot be waited on, which the wait tests see, and cannot set, which the modify-state test sees.",
-      "find": ["            access.bits(),\n"],
-      "replace": ["            0,\n"]
-    },
-    {
-      "name": "WS-1+.5: the duplicate keeps the source's access",
-      "file": "src/duplicate.rs",
-      "expect": "caught",
-      "why": "DUPLICATE_SAME_ACCESS (2) makes the call ignore the mask, so every duplicate would be a full-access clone: the narrowing, which is the reason for the function, silently not happening. The synchronize-only tests see it as a set that succeeds.",
-      "find": ["            FALSE,\n            0,\n        )\n"],
-      "replace": ["            FALSE,\n            2,\n        )\n"]
-    },
-    {
-      "name": "WS-1+.5: the duplicate is inheritable",
-      "file": "src/duplicate.rs",
-      "expect": "caught",
-      "why": "A handle that a child process inherits is one the caller did not decide to hand over; the documented contract is that it is not inheritable.",
-      "find": ["            &mut duplicate,\n            access.bits(),\n            FALSE,\n"],
-      "replace": ["            &mut duplicate,\n            access.bits(),\n            1,\n"]
-    },
-    {
-      "name": "WS-1+.5: a refused duplicate is reported as success",
-      "file": "src/duplicate.rs",
-      "expect": "caught",
-      "why": "The error path is reached by a mask Windows refuses. Swallowing it would hand back a handle that is not one.",
-      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n"],
-      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n"]
-    },
-    {
-      "name": "WS-1+.5: combining access masks intersects them",
-      "file": "src/duplicate.rs",
-      "expect": "caught",
-      "why": "A mask built with | that comes out as the common bits asks for nothing: the modify-state-and-synchronize duplicates cannot set or cannot wait.",
-      "find": ["        Self(self.0 | other.0)\n"],
-      "replace": ["        Self(self.0 & other.0)\n"]
-    },
-    {
-      "name": "WS-1+.5: the SYNCHRONIZE constant is the modify-state right",
-      "file": "src/duplicate.rs",
-      "expect": "caught",
-      "why": "The named right the wait-only handle is built from. Wrong, the handle can set and cannot wait.",
-      "find": ["    pub const SYNCHRONIZE: Self = Self(SYNCHRONIZATION_SYNCHRONIZE);\n"],
-      "replace": ["    pub const SYNCHRONIZE: Self = Self(EVENT_MODIFY_STATE);\n"]
-    },
-    {
       "name": "WS-1+.5: a wait-only clone is made with the modify-state right too",
       "file": "src/event.rs",
       "expect": "caught",
       "why": "The guarantee of the type. A wait-only clone that can set is a typed promise the kernel does not back; every cannot-set test sees a set that succeeds.",
-      "find": ["            handle: duplicate_handle_with_access(self, Access::SYNCHRONIZE)?,\n"],
-      "replace": ["            handle: duplicate_handle_with_access(self, Access::SYNCHRONIZE | Access::EVENT_MODIFY_STATE)?,\n"]
+      "find": ["            handle: SharedHandle::new(duplicate_handle_with_access(self, Access::SYNCHRONIZE)?),\n"],
+      "replace": ["            handle: SharedHandle::new(duplicate_handle_with_access(self, Access::SYNCHRONIZE | Access::EVENT_MODIFY_STATE)?),\n"]
     },
     {
       "name": "WS-1+.5: a clone of a wait-only clone can set",
       "file": "src/event.rs",
       "expect": "caught",
       "why": "try_clone on the wait-only type must keep it wait-only; a clone made with more access is the narrowing undone by the one operation the type offers.",
-      "find": ["    /// [`Event::try_clone`].\n    pub fn try_clone(&self) -> io::Result<Self> {\n        Ok(Self {\n            handle: self.handle.try_clone()?,\n"],
-      "replace": ["    /// [`Event::try_clone`].\n    pub fn try_clone(&self) -> io::Result<Self> {\n        Ok(Self {\n            handle: duplicate_handle_with_access(&self.handle, Access::SYNCHRONIZE | Access::EVENT_MODIFY_STATE)?,\n"]
+      "find": ["    /// [`Event::try_clone`].\n    pub fn try_clone(&self) -> io::Result<Self> {\n        Ok(Self {\n            handle: SharedHandle::new(self.handle.as_handle().try_clone_to_owned()?),\n"],
+      "replace": ["    /// [`Event::try_clone`].\n    pub fn try_clone(&self) -> io::Result<Self> {\n        Ok(Self {\n            handle: SharedHandle::new(duplicate_handle_with_access(&self.handle, Access::SYNCHRONIZE | Access::EVENT_MODIFY_STATE)?),\n"]
     },
     {
       "name": "WS-1+.5: a wait-only clone is a different event",
       "file": "src/event.rs",
       "expect": "caught",
       "why": "A clone that waits on some other event looks right until the original is set.",
-      "find": ["            handle: duplicate_handle_with_access(self, Access::SYNCHRONIZE)?,\n"],
-      "replace": ["            handle: duplicate_handle_with_access(Event::new(ResetMode::Manual, false)?, Access::SYNCHRONIZE)?,\n"]
+      "find": ["            handle: SharedHandle::new(duplicate_handle_with_access(self, Access::SYNCHRONIZE)?),\n"],
+      "replace": ["            handle: SharedHandle::new(duplicate_handle_with_access(Event::new(ResetMode::Manual, false)?, Access::SYNCHRONIZE)?),\n"]
     },
     {
       "name": "WS-1+.1: an alerted wait is reported as a timeout",
@@ -351,7 +303,7 @@
       "name": "WS-1+.1: a refused APC is reported as queued",
       "file": "src/apc.rs",
       "expect": "caught",
-      "why": "The error path of the call itself, reached by a thread of this process whose handle lacks THREAD_SET_CONTEXT: a handle that is not a thread, or has no query access, is refused by the process check before the call is made. Swallowed, a routine that will never run is reported queued.",
+      "why": "The error path, reached by a handle that is not a thread. Swallowed, a routine that will never run is reported queued.",
       "find": ["    if queued == 0 {\n"],
       "replace": ["    if false {\n"]
     },
@@ -359,7 +311,7 @@
       "name": "WS-1+.1: a refused APC's routine is leaked",
       "file": "src/apc.rs",
       "expect": "caught",
-      "why": "When the call fails nothing was queued, so the routine is still the caller's to drop; kept alive it is a leak of everything it captured. The drop-count test of a handle the call itself refuses sees it; the refusals that come before the call never reach this line.",
+      "why": "When the call fails nothing was queued, so the routine is still the caller's to drop; kept alive it is a leak of everything it captured. The drop-count tests see it.",
       "find": ["        drop(unsafe { Box::from_raw(data) });\n"],
       "replace": ["        let _ = data;\n"]
     },
@@ -378,14 +330,6 @@
       "why": "The manifest checking itself on the new modules: TRUE is 1 and FALSE is 0, so this is an equivalent change on code every multiple wait runs. If it comes back caught, something is reacting to text rather than behaviour.",
       "find": ["            if wait_all { TRUE } else { FALSE },\n"],
       "replace": ["            if wait_all { 1 } else { 0 },\n"]
-    },
-    {
-      "name": "CONTROL: the duplicate's failure is tested against 0 rather than FALSE",
-      "file": "src/duplicate.rs",
-      "expect": "survives",
-      "why": "The manifest checking itself on the new module: FALSE is 0, so this is an equivalent change on code every duplicate runs. If it comes back caught, something is reacting to text rather than behaviour.",
-      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n"],
-      "replace": ["    if ok == 0 {\n        return Err(io::Error::last_os_error());\n"]
     },
     {
       "name": "CONTROL: set compares against 0 rather than FALSE",
@@ -410,6 +354,30 @@
       "why": "The manifest checking itself on the new module: rounding up by addition is the same value for every timeout a Duration can hold, so this must survive; if it comes back caught, something is matching incidental text.",
       "find": ["    let rounded_up = timeout.as_nanos().div_ceil(1_000_000);\n"],
       "replace": ["    let rounded_up = (timeout.as_nanos() + 999_999) / 1_000_000;\n"]
+    },
+    {
+      "name": "WS-2.1: an event never gives its handle back",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "try_into_owned gives the handle to its last holder; refusing always would leave a caller unable to recover an OwnedHandle at all.",
+      "find": ["    /// lost and the caller can try again once the clones have dropped.\n    pub fn try_into_owned(self) -> Result<OwnedHandle, Self> {\n        self.handle\n            .try_into_owned()\n"],
+      "replace": ["    /// lost and the caller can try again once the clones have dropped.\n    pub fn try_into_owned(self) -> Result<OwnedHandle, Self> {\n        Err::<OwnedHandle, SharedHandle>(self.handle)\n"]
+    },
+    {
+      "name": "WS-2.1: the wait-only operation shares the handle instead of narrowing a new one",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "Narrowing access needs a new handle, which is why this one operation still duplicates; sharing would hand out a handle that can set the event.",
+      "find": ["            handle: SharedHandle::new(duplicate_handle_with_access(self, Access::SYNCHRONIZE)?),\n"],
+      "replace": ["            handle: self.handle.clone(),\n"]
+    },
+    {
+      "name": "CONTROL: WS-2.1: the transitional conversion's panic message is reworded",
+      "file": "src/event.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. The message is reached only if duplicating fails, which no test can make happen.",
+      "find": ["            .expect(\"duplicating a handle this process holds\")\n"],
+      "replace": ["            .expect(\"a second handle\")\n"]
     }
   ]
 }

@@ -220,6 +220,8 @@ version = "0.1.0"
 name = "win-sync-sys"
 version = "0.0.2"
 dependencies = [
+ "win-handles-sys",
+ "win-shared-os-owned-handle",
  "windows-sys",
 ]
 
