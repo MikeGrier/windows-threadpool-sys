@@ -522,6 +522,19 @@ code written before it was stated. `win-durable-ioring`'s open is not here; it i
   commit, and give each contract refusal its citation and each narrowing its own error kind where it lacks
   them.
 
+## M44 -- One handle duplication for the workspace
+
+`win-handles-sys` is where the Win32 handle functions live, and three crates had written their own same-process
+`DuplicateHandle`. The decision is [WH-D-6](crates/win-handles-sys/DESIGN-NOTES.md#wh-d-6-duplicate_handle-chooses-the-access-and-the-inheritance-and-is-the-one-duplicatehandle-call).
+
+- [x] **M44.1** -- `win-handles-sys`: `duplicate_handle`, choosing the access (the source's or a mask) and the inheritance.
+
+- [ ] **M44.2** -- `windows-file-watcher`: its queue's `duplicate` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
+
+- [ ] **M44.3** -- `windows-waitable-queues`: its doorbell's `duplicate` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
+
+- [ ] **M44.4** -- `win-job-launcher`: `duplicate_inheritable` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.

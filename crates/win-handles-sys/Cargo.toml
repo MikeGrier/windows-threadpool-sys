@@ -10,7 +10,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
-description = "Memory-safe Rust over the Win32 handle and object API: duplicating a handle with a chosen access, with a typed access mask, and reading and setting a handle's flags, asking whether two handles name one object, and closing a handle with its result. Thin over Win32, adding no policy."
+description = "Memory-safe Rust over the Win32 handle and object API: duplicating a handle with the access kept or chosen and its inheritance chosen, with a typed access mask, and reading and setting a handle's flags, asking whether two handles name one object, and closing a handle with its result. Thin over Win32, adding no policy."
 keywords = ["windows", "handle", "duplicatehandle", "ffi"]
 categories = ["api-bindings", "os::windows-apis"]
 

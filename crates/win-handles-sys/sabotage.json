@@ -9,24 +9,24 @@
       "file": "src/duplicate.rs",
       "expect": "caught",
       "why": "The access is the whole point. A duplicate that gets none cannot be waited on, which the wait tests see, and cannot set, which the modify-state test sees.",
-      "find": ["            access.bits(),\n"],
-      "replace": ["            0,\n"]
+      "find": ["        DuplicateAccess::Chosen(mask) => (mask.bits(), 0),\n"],
+      "replace": ["        DuplicateAccess::Chosen(_) => (0, 0),\n"]
     },
     {
       "name": "WS-1+.5: the duplicate keeps the source's access",
       "file": "src/duplicate.rs",
       "expect": "caught",
       "why": "DUPLICATE_SAME_ACCESS (2) makes the call ignore the mask, so every duplicate would be a full-access clone: the narrowing, which is the reason for the function, silently not happening. The synchronize-only tests see it as a set that succeeds.",
-      "find": ["            FALSE,\n            0,\n        )\n"],
-      "replace": ["            FALSE,\n            2,\n        )\n"]
+      "find": ["        DuplicateAccess::Chosen(mask) => (mask.bits(), 0),\n"],
+      "replace": ["        DuplicateAccess::Chosen(mask) => (mask.bits(), DUPLICATE_SAME_ACCESS),\n"]
     },
     {
       "name": "WS-1+.5: the duplicate is inheritable",
       "file": "src/duplicate.rs",
       "expect": "caught",
       "why": "A handle that a child process inherits is one the caller did not decide to hand over; the documented contract is that it is not inheritable.",
-      "find": ["            &mut duplicate,\n            access.bits(),\n            FALSE,\n"],
-      "replace": ["            &mut duplicate,\n            access.bits(),\n            1,\n"]
+      "find": ["        Inheritance::NotInheritable => FALSE,\n"],
+      "replace": ["        Inheritance::NotInheritable => TRUE,\n"]
     },
     {
       "name": "WS-1+.5: a refused duplicate is reported as success",
@@ -235,6 +235,46 @@
       "why": "A control: FALSE is zero, so the same test by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["    if unsafe { CloseHandle(raw) } == FALSE {"],
       "replace": ["    if unsafe { CloseHandle(raw) } == 0 {"]
+    },
+    {
+      "name": "WH-2.1: a same-access duplicate gets no access",
+      "file": "src/duplicate.rs",
+      "expect": "caught",
+      "why": "DUPLICATE_SAME_ACCESS with the flag dropped and the mask zero is a handle that can do nothing: a same-access duplicate that cannot wait, which every same-access test sees.",
+      "find": ["        DuplicateAccess::Same => (0, DUPLICATE_SAME_ACCESS),\n"],
+      "replace": ["        DuplicateAccess::Same => (0, 0),\n"]
+    },
+    {
+      "name": "WH-2.1: an inheritable duplicate is not",
+      "file": "src/duplicate.rs",
+      "expect": "caught",
+      "why": "Asking for Inheritable and getting a handle a child does not receive hands the child nothing, silently: the flag read back from the duplicate is how it is seen.",
+      "find": ["        Inheritance::Inheritable => TRUE,\n"],
+      "replace": ["        Inheritance::Inheritable => FALSE,\n"]
+    },
+    {
+      "name": "WH-2.1: the with-access form keeps the source's access",
+      "file": "src/duplicate.rs",
+      "expect": "caught",
+      "why": "The wrapper that names a mask must pass it on. Passing Same instead makes every narrowed duplicate a full-access clone, which the synchronize-only tests see as a set that succeeds.",
+      "find": ["        DuplicateAccess::Chosen(access),\n        Inheritance::NotInheritable,\n"],
+      "replace": ["        DuplicateAccess::Same,\n        Inheritance::NotInheritable,\n"]
+    },
+    {
+      "name": "WH-2.1: the with-access form is inheritable",
+      "file": "src/duplicate.rs",
+      "expect": "caught",
+      "why": "The wrapper's documented contract is a duplicate that is not inheritable; the not-inheritable test reads the flag back through it.",
+      "find": ["        DuplicateAccess::Chosen(access),\n        Inheritance::NotInheritable,\n"],
+      "replace": ["        DuplicateAccess::Chosen(access),\n        Inheritance::Inheritable,\n"]
+    },
+    {
+      "name": "CONTROL: the mask given with the same-access flag is not zero",
+      "file": "src/duplicate.rs",
+      "expect": "survives",
+      "why": "DUPLICATE_SAME_ACCESS makes DuplicateHandle ignore the mask (the page for the call says so), so a nonzero mask beside the flag is the same observable by another spelling. If it comes back caught, something reacts to the text and not to the behaviour.",
+      "find": ["        DuplicateAccess::Same => (0, DUPLICATE_SAME_ACCESS),\n"],
+      "replace": ["        DuplicateAccess::Same => (1, DUPLICATE_SAME_ACCESS),\n"]
     }
   ]
 }

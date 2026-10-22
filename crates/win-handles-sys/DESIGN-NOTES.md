@@ -150,3 +150,41 @@ and an error that is not the call's; its control writes the test of the result a
 injected: the second close would act on a value another thread may have been given.
 
 **Scheduled work.** None; the checklist is complete.
+
+## WH-D-6: `duplicate_handle` chooses the access and the inheritance, and is the one `DuplicateHandle` call
+
+**Read 2026-10-21** from the page for `DuplicateHandle` (`ms.date` 2018-12-05, `updated_at` 2025-05-21). `dwDesiredAccess` "is ignored
+if the *dwOptions* parameter specifies the DUPLICATE_SAME_ACCESS flag"; `bInheritHandle`, if `TRUE`, makes the duplicate one "that can
+be inherited by new processes created by the target process", and if `FALSE` one that cannot; and a process "can use DuplicateHandle
+to create a noninheritable duplicate of an inheritable handle, or a handle with different access than the original handle". Both
+parameters are on the page for a same-process duplicate, and nothing on it calls either value invalid.
+
+**The function.** `duplicate_handle(handle, DuplicateAccess, Inheritance) -> io::Result<OwnedHandle>`. `DuplicateAccess::Same` is
+`DUPLICATE_SAME_ACCESS`; `DuplicateAccess::Chosen(Access)` is a mask, as `duplicate_handle_with_access` always was. `Inheritance` is
+`NotInheritable` or `Inheritable`. Each is an enum and not a `bool` or a pair of flags, so a call reads at the site without the
+reader looking up which argument is which, and `Same` is a case of its own and not a mask of nothing, which would be a handle that
+can do nothing. Both stay in the process: a duplicate into another process is not offered here.
+
+**Why the crate grew it.** Three crates each wrote their own same-process `DuplicateHandle` -- `windows-file-watcher`'s queue and
+`windows-waitable-queues`' doorbell, both with the source's access and not inheritable, and `win-job-launcher`'s redirected standard
+handles, with the source's access and inheritable. None could use `duplicate_handle_with_access`, which took a mask and was never
+inheritable. Two of the three do what `BorrowedHandle::try_clone_to_owned` does; they use this function anyway, so that the
+repository's duplicate is one call with one set of tests and one place to read what its attributes are, and not a fact about a
+standard library's internals that three crates happen to share.
+
+**`duplicate_handle_with_access` is the same call.** It passes `Chosen` and `NotInheritable` to `duplicate_handle`, so the process has
+one `DuplicateHandle` site and the two cannot disagree. Its signature and behaviour are unchanged, and the entries of
+[sabotage.json](sabotage.json) that named its body name the general function's.
+
+**Nothing is refused ahead of the call.** A mask Windows refuses (every bit set) is the call's error, `ERROR_ACCESS_DENIED`, as it
+was. The test of that goes through both inheritance values. There is no failing `Same` case a safe caller can build, since the handle
+is an open `AsHandle`.
+
+**The tests and the sweep** read a duplicate's access by what it can do to an event (wait, set, reset), and its inheritance by
+`get_handle_information`, never by anything this function reports. A same-access duplicate is made of a full, a wait-only and a
+set-only source, and an inheritable source is duplicated to a plain handle and back. The sweep catches a same-access duplicate with
+no access, an inheritable one that is not, and the with-access form passing the wrong access or inheritance; its control writes a
+nonzero mask beside the same-access flag, which the page says is ignored. Whether an inheritable duplicate is received by a child
+process is the crate that creates one's to test, which `win-job-launcher` does.
+
+**Scheduled work.** The three crates' use of it is [M44](../../CHECKLIST.md): `M44.2`, `M44.3` and `M44.4`.
