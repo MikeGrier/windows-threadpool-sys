@@ -4193,3 +4193,32 @@ created in it will have, which root [M39.3](../../CHECKLIST.md) holds. The reaso
 [DI-20.1](#di-201) was completed, and its findings stay as [DI-D-94](DESIGN-NOTES.md#di-d-94), the record of what Windows
 documents for a consumer that makes its own files durable. [DI-20.2](#di-202) is withdrawn above, and nothing was queued
 from it.
+
+## Moved 2026-10-22 01:10:02 -04:00 -- DI-M22: findings of the review of the branch
+
+### <a id="di-221"></a>DI-22.1 -- A fan-out hands every pair's end to every sink, so a sink that stopped wanting a kind is given the end that lets go of its pair. *(completed 2026-10-22 01:10:02 -04:00)*
+
+The item as written:
+
+- [x] **DI-22.1** -- **A fan-out hands every pair's end to every sink.** The ETW sink holds an activity for each pair from its
+  begin to its end, and a fan-out that asked `wants` of an end did not give it to the sink after its session stopped, so the
+  process's activity map kept the pair for the life of the process.
+
+What was done. Recorded as [DI-D-96](DESIGN-NOTES.md#di-d-96), which also records the standard producers are held to and that
+sinks assume none of it, and that a first attempt, which kept which sinks each begin was given to, was withdrawn. The fan-out
+holds no state. Tests: seven new in [diagnostics/tests.rs](src/diagnostics/tests.rs), over a sink whose answer to `wants` changes
+while a pair is open. Evidence, in [sabotage.json](sabotage.json): two entries caught and a control. The one in the sink that
+reads the leak, `a_pair_ended_through_a_fan_out_after_its_session_stopped_is_let_go`, is a session test.
+
+### <a id="di-222"></a>DI-22.2 -- Text in an ETW event ends at its first zero, so a later field is not misread. *(completed 2026-10-22 01:10:02 -04:00)*
+
+The item as written:
+
+- [x] **DI-22.2** -- **A zero in the text of an ETW event's field ends the text there.** A zero in a lock's name, which is
+  followed by the pair, made a reader take the rest of the text as the pair.
+
+What was done. Recorded as [DE-D-7](../durable-ioring-events/DESIGN-NOTES.md#de-d-7), which amends
+[DE-D-2](../durable-ioring-events/DESIGN-NOTES.md#de-d-2). Tests: five new in
+[encode/tests.rs](../durable-ioring-events/src/encode/tests.rs), and one session test that decodes the event as a reader does.
+Evidence, in [sabotage.json](../durable-ioring-events/sabotage.json): three entries caught and a control.
+
