@@ -101,6 +101,7 @@ Design record: [DESIGN-NOTES.md](DESIGN-NOTES.md) `D-13` through `D-23`, and
 [DESIGN-SESSION-2026-09-02-cache-locality-model.md](../../design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md).
 
 The context the milestones were written against, preserved because the items refer to it:
+
 ## What this is for
 
 This crate publishes a **refined view of what the platform publishes**

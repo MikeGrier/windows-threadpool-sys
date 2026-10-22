@@ -54,7 +54,7 @@
 //! domain through [`providers`]; a failed or abandoned domain is observed as a failed flush is, with
 //! its own reach: the files whose declared domains contain it, and every file declared with none.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::ops::Bound;
 use std::sync::Arc;
@@ -62,12 +62,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
-use crate::diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink};
+use crate::correlation::CorrelationId;
+use crate::diagnostics::{
+    Diagnostic, DiagnosticKind, DiagnosticSink, FlushOutcome, FlushPart, SealOutcome,
+};
 use crate::domains::DomainId;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::types::{
-    Entry, Epoch, Failed, FailureCause, FailureInfo, IoFault, IoTargetKey, Marking, MarkingKind,
-    Resolution, ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
+    Entry, Epoch, Failed, FailureCause, FailureInfo, FlushDomain, IoFault, IoTargetKey, Marking,
+    MarkingKind, Resolution, ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
 };
 
 mod files;
@@ -393,6 +396,9 @@ struct Seal<E> {
     stage: SealStage,
     /// Answered on the queue already, by `Failed` or `Blocked`; `Durable` is appended regardless.
     answered: bool,
+    /// Its pair's id while the pair is open: taken as the pair ends, at the seal's first answer,
+    /// so it ends once (DI-D-87).
+    pair: Option<CorrelationId>,
 }
 
 /// Where an unresolved failure stands.
@@ -535,8 +541,74 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     /// The domains the consumer's provider serves, sorted; empty without one.
     served: Arc<[DomainId]>,
     clock: K,
-    /// Where an inconsistency is reported before the panic (DI-D-51).
+    /// Where an inconsistency is reported before the panic (DI-D-51), and the seal and flush pairs
+    /// (DI-D-80).
     diagnostics: Arc<dyn DiagnosticSink>,
+    /// Each part of a seal's flush whose pair is open, kept only while the sink wants the pair, and
+    /// removed as the pair ends (DI-D-87).
+    flush_pairs: HashMap<(Key, u64, Part), FlushPair<E>>,
+    /// The consumer's name for each domain the provider serves, which a flush pair reports.
+    served_names: HashMap<DomainId, FlushDomain>,
+}
+
+/// An open flush pair: its id, and the seal it is part of.
+struct FlushPair<E> {
+    id: CorrelationId,
+    through: E,
+}
+
+/// `part`, as a flush pair reports it, the domain by the name `names` gives it.
+fn flush_part(part: Part, names: &HashMap<DomainId, FlushDomain>) -> Option<FlushPart<'_>> {
+    match part {
+        Part::File(file) => Some(FlushPart::File(file)),
+        Part::Domain(domain) => names.get(&domain).map(FlushPart::Domain),
+    }
+}
+
+/// Report the end of a seal's pair, if it has one open.
+fn end_seal<E: fmt::Debug>(
+    sink: &dyn DiagnosticSink,
+    instance: u64,
+    lineage: Key,
+    through: &E,
+    pair: Option<CorrelationId>,
+    outcome: SealOutcome,
+) {
+    if let Some(id) = pair {
+        sink.report(&Diagnostic::SealEnded {
+            instance,
+            lineage,
+            through: format_args!("{through:?}"),
+            id,
+            outcome,
+        });
+    }
+}
+
+/// Report the end of a flush part's pair.
+fn end_flush<E: fmt::Debug>(
+    sink: &dyn DiagnosticSink,
+    instance: u64,
+    lineage: Key,
+    pair: &FlushPair<E>,
+    part: FlushPart<'_>,
+    outcome: FlushOutcome,
+) {
+    sink.report(&Diagnostic::FlushEnded {
+        instance,
+        lineage,
+        through: format_args!("{:?}", pair.through),
+        part,
+        id: pair.id,
+        outcome,
+    });
+}
+
+/// One part of a seal's flush, as the core keys it while it is out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum Part {
+    File(IoTargetKey),
+    Domain(DomainId),
 }
 
 impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
@@ -559,6 +631,8 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             served: Arc::from([]),
             clock,
             diagnostics,
+            flush_pairs: HashMap::new(),
+            served_names: HashMap::new(),
         }
     }
 
@@ -790,11 +864,21 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         state.sealed_through = Some(through);
         let seq = state.next_seal;
         state.next_seal += 1;
+        let pair = CorrelationId::for_pair(&*self.diagnostics, DiagnosticKind::Seal);
+        if let Some(id) = pair {
+            self.diagnostics.report(&Diagnostic::SealBegan {
+                instance: self.instance.number(),
+                lineage,
+                through: format_args!("{through:?}"),
+                id,
+            });
+        }
         state.seals.push_back(Seal {
             seq,
             through,
             stage: SealStage::Waiting,
             answered: false,
+            pair,
         });
         Sealing::Submitted(self.advance(Due::default()))
     }
@@ -826,6 +910,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 return due;
             }
         };
+        let outcome = if result.is_ok() {
+            FlushOutcome::Succeeded
+        } else {
+            FlushOutcome::Failed
+        };
+        self.part_answered(lineage, seq, Part::File(file), outcome);
         match result {
             Ok(()) => self.cover(lineage, seq, &mut due),
             Err(fault) => {
@@ -1109,8 +1199,16 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             }
             let through = seal.through;
             let state = self.lineages.get_mut(&lineage).expect("found above");
-            state.seals.pop_front();
+            let popped = state.seals.pop_front().expect("found above");
             state.durable_through = Some(through);
+            end_seal(
+                &*self.diagnostics,
+                self.instance.number(),
+                lineage,
+                &through,
+                popped.pair,
+                SealOutcome::Durable,
+            );
             // Only writes whose flush failed are left at or below a finished seal; once the mark
             // passes them, no later failure can reach back to them (guarantee 3).
             self.writes
@@ -1128,6 +1226,15 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             if let Some(by) = self.blocking(lineage, through) {
                 let state = self.lineages.get_mut(&lineage).expect("counted above");
                 state.seals[index].answered = true;
+                let pair = state.seals[index].pair.take();
+                end_seal(
+                    &*self.diagnostics,
+                    self.instance.number(),
+                    lineage,
+                    &through,
+                    pair,
+                    SealOutcome::Blocked,
+                );
                 due.events.push(Event::Blocked {
                     lineage,
                     through,
@@ -1201,6 +1308,28 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     ok: false,
                 })
                 .collect();
+            let issued = files
+                .iter()
+                .map(|file| Part::File(file.file))
+                .chain(parts.iter().map(|part| Part::Domain(part.domain)));
+            for part in issued {
+                let Some(id) = CorrelationId::for_pair(&*self.diagnostics, DiagnosticKind::Flush)
+                else {
+                    break;
+                };
+                let Some(shown) = flush_part(part, &self.served_names) else {
+                    continue;
+                };
+                self.diagnostics.report(&Diagnostic::FlushBegan {
+                    instance: self.instance.number(),
+                    lineage,
+                    through: format_args!("{through:?}"),
+                    part: shown,
+                    id,
+                });
+                self.flush_pairs
+                    .insert((lineage, seq, part), FlushPair { id, through });
+            }
             if !parts.is_empty() {
                 due.calls.push(ProviderCall {
                     lineage,
@@ -1261,5 +1390,95 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         {
             self.lineages.remove(&lineage);
         }
+    }
+
+    /// Part `part` of `lineage`'s seal `seq` answered with `outcome`: end its pair, and, if it
+    /// failed, the seal's, whose answer the failure is.
+    pub(super) fn part_answered(
+        &mut self,
+        lineage: Key,
+        seq: u64,
+        part: Part,
+        outcome: FlushOutcome,
+    ) {
+        if let Some(pair) = self.flush_pairs.remove(&(lineage, seq, part))
+            && let Some(shown) = flush_part(part, &self.served_names)
+        {
+            end_flush(
+                &*self.diagnostics,
+                self.instance.number(),
+                lineage,
+                &pair,
+                shown,
+                outcome,
+            );
+        }
+        if outcome == FlushOutcome::Succeeded {
+            return;
+        }
+        if let Some(seal) = self
+            .lineages
+            .get_mut(&lineage)
+            .and_then(|state| state.seals.iter_mut().find(|seal| seal.seq == seq))
+        {
+            let pair = seal.pair.take();
+            end_seal(
+                &*self.diagnostics,
+                self.instance.number(),
+                lineage,
+                &seal.through,
+                pair,
+                SealOutcome::Failed,
+            );
+        }
+    }
+}
+
+impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
+    /// End every pair of `lineage` still open, or of every lineage: its seals' unanswered, and its
+    /// flushes' abandoned. For a lineage that ends, and for the instance's state as it is dropped.
+    pub(super) fn end_pairs(&mut self, only: Option<Key>) {
+        let instance = self.instance.number();
+        let mut flushes: Vec<((Key, u64, Part), FlushPair<E>)> = self
+            .flush_pairs
+            .extract_if(|(key, ..), _| only.is_none_or(|only| *key == only))
+            .collect();
+        flushes.sort_unstable_by_key(|((key, seq, _), pair)| (*key, *seq, pair.id));
+        for ((lineage, _, part), pair) in &flushes {
+            if let Some(shown) = flush_part(*part, &self.served_names) {
+                end_flush(
+                    &*self.diagnostics,
+                    instance,
+                    *lineage,
+                    pair,
+                    shown,
+                    FlushOutcome::Abandoned,
+                );
+            }
+        }
+        for (&lineage, state) in &mut self.lineages {
+            if only.is_some_and(|only| only != lineage) {
+                continue;
+            }
+            for seal in &mut state.seals {
+                let pair = seal.pair.take();
+                end_seal(
+                    &*self.diagnostics,
+                    instance,
+                    lineage,
+                    &seal.through,
+                    pair,
+                    SealOutcome::Ended,
+                );
+            }
+        }
+    }
+}
+
+impl<E: EpochId + 'static, T, I: Instant, K> Drop for Durability<E, T, I, K> {
+    /// Every pair still open ends as its instance does (DI-D-87): a seal unanswered, a flush
+    /// abandoned.
+    fn drop(&mut self) {
+        self.end_pairs(None);
     }
 }

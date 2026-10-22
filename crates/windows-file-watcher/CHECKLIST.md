@@ -15,8 +15,7 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: none.** M1 through M16 are done. Only the parked, ungated M-inf horizon items
-> remain, and none is a current obligation.
+> **NO ACTIONABLE ITEM.** M1 through M17 are done. The M-inf horizon items are parked in [PARKED.md](PARKED.md).
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -70,25 +69,10 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
 
 Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#m15).
 
-## M-inf -- Horizon (ungated, post-v1)
+## M17 -- The ordinal comparison through `win-text-sys`
 
-Parked, not pending. These are the deferred seams recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> D-19,
-an explicit design decision that places them outside the v1 scope. That recorded decision -- not the
-absence of a current consumer -- is why each is deferred, which is a legitimate deferral rationale (a
-resolved, recorded scope decision), not a scope-boundary excuse. Each graduates to a numbered milestone
-when a post-v1 line of work takes one up. None is an open obligation of any current milestone.
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#m171).
 
-- [ ] **M-inf.1** -- `ReadDirectoryChangesExW` extended records (`FILE_NOTIFY_EXTENDED_INFORMATION`): surface the
-  richer per-record fields on OS versions that support it, behind capability detection, without disturbing
-  the basic `FILE_NOTIFY_INFORMATION` surface (D-18/D-19). **Availability is per-filesystem, not merely
-  per-OS-version:** even on a build that exposes the API, some filesystems reject the extended structure --
-  e.g. ReFS still does not support it (for no good reason) -- so detection must probe the actual target
-  volume and fall back to `FILE_NOTIFY_INFORMATION`, never inferring support from the OS version alone.
+## M18 -- The doorbell as a shared handle
 
-- [ ] **M-inf.2** -- Digest-based change *verification*: an optional mode that confirms a reported change by
-  hashing content, trading cost for fewer spurious notifications (D-19).
-
-- [ ] **M-inf.3** -- Per-volume capability cache: remember detailed-vs-coarse (and extended-record) support per
-  volume so establish/re-establish need not re-probe each time (D-17/D-19).
-
-- [x] **M-inf.4** -- Root-caused M11.2's fast reopen path: not an IOCP defect at all, but Windows refusing a directory-change read on any by-id open, so the path was removed rather than fixed. -> [completed 2026-09-01, under M15.2's entry, which closed both](COMPLETED-CHECKLIST.md#m152)
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#m181).

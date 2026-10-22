@@ -106,7 +106,7 @@ fn a_wait_for_a_manual_reset_event_leaves_it_signalled() {
 #[test]
 fn a_set_after_the_wait_began_is_seen() {
     let event = auto(false);
-    let signaller = event.try_clone().expect("a second handle");
+    let signaller = event.clone();
     let setter = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(50));
         signaller.set().expect("set");
@@ -148,7 +148,7 @@ fn a_zero_timeout_polls_and_does_not_wait() {
 #[test]
 fn any_handle_that_lends_itself_can_be_waited_on() {
     let event = manual(true);
-    let owned: OwnedHandle = event.try_clone().expect("a clone").into();
+    let owned: OwnedHandle = event.as_handle().try_clone_to_owned().expect("a duplicate");
     assert_eq!(wait(&owned, Some(BOUND)), WaitOutcome::Signalled);
     assert_eq!(wait(owned.as_handle(), Some(BOUND)), WaitOutcome::Signalled);
     assert_eq!(wait(event, Some(BOUND)), WaitOutcome::Signalled);

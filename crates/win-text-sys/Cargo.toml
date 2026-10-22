@@ -1,0 +1,39 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-text-sys"
+version = "0.0.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "Memory-safe Rust over the Win32 text-handling API, starting with CompareStringOrdinal: an ordinal comparison of two counted UTF-16 strings, case-sensitive or not, as an Ordering. Thin over Win32, adding no policy."
+keywords = ["windows", "string", "unicode", "ffi"]
+categories = ["api-bindings", "os::windows-apis", "text-processing"]
+
+# Named under the workspace's `win-` prefix decision (DESIGN-NOTES.md at the repository root), and
+# placed as a safe layer more or less directly over a Win32 API area, the one Microsoft Learn files
+# the functions under: Internationalization for Windows Applications > Globalization Services >
+# National Language Support. The name is the subject, text, and not the section's (WT-D-1).
+
+[dependencies]
+# The failure a call reports, as the one type the workspace's crates give a Win32 code.
+win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
+
+# `default-features = false` matches every other crate in the workspace.
+#
+# `Win32_Foundation` is `TRUE` and `FALSE`, the values of the call's `bIgnoreCase`.
+# `Win32_Globalization` is `CompareStringOrdinal` and the three results it returns.
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = ["Win32_Foundation", "Win32_Globalization"]
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]

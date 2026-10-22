@@ -66,6 +66,10 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::ioring::{FILL, FIXTURE_LEN, Fixture, IoRingSupport, Ring, read_raw_handle};
 
+mod raw_row;
+
+pub use self::raw_row::*;
+
 /// The completion key the port is created with. Named rather than written as a
 /// bare literal, since it is checked on the way back out.
 const COMPLETION_KEY: usize = 0xD;

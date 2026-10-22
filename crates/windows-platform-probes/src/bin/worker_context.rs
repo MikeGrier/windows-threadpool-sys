@@ -12,9 +12,10 @@
 //! measurement can be eyeballed on a new host or a new Windows build without
 //! reading a test's output.
 
+use windows_platform_probes::build_identity::this_build;
 use windows_platform_probes::report::emit_report;
 use windows_platform_probes::worker_context::{
-    observe_on_worker, observe_on_worker_while_impersonating,
+    observe_on_worker, observe_on_worker_while_impersonating, raw_row,
 };
 
 fn main() {
@@ -103,4 +104,11 @@ conclusion:"
             "  UNEXPECTED: a worker starts with the handler suppressed."
         );
     }
+
+    // The raw data, last, as every probe's normal run emits it (`M8.9`).
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(plain, impersonating, &this_build().to_string()).render()
+    );
 }

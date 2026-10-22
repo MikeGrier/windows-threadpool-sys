@@ -57,7 +57,8 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             .collect();
         named.sort_unstable_by_key(|(id, _)| *id);
         core.served_names = named.into_iter().map(|(_, domain)| domain).collect();
-        core.durability.serve(Arc::clone(&served));
+        core.durability
+            .serve(Arc::clone(&served), core.served_names.clone());
         core.served = served;
         Ok(core)
     }

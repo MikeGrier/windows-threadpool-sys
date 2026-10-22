@@ -1152,8 +1152,9 @@ made the call fail with `ERROR_INVALID_HANDLE`. A handle whose call worked and r
 found, so the clearing of the last error is not exercised by any handle here; its sabotage is declared as
 surviving, with that reason, and the clearing rests on the page.
 
-**Scheduled work:** none in this crate. The consumer it was built for is `durable-ioring`'s `DI-14.12`, with
-`WV-3.1` in [win-volume-sys](../win-volume-sys/CHECKLIST.md).
+**Scheduled work:** none in this crate. The consumer it was built for was `durable-ioring`'s `DI-14.12`, with
+`WV-3.1` in [win-volume-sys](../win-volume-sys/CHECKLIST.md), which was withdrawn
+([DI-D-73](../durable-ioring/DESIGN-NOTES.md#di-d-73)); the entry stays, since it reports `GetFileType`'s documented values.
 
 ## <a id="d-30"></a>D-30: `AnchoredPath` is public, so a crate that builds a request of its own takes the path contract from here
 

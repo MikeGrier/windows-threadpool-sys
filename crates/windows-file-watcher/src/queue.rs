@@ -90,10 +90,10 @@ use std::ptr;
 use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, FALSE, TRUE};
-use windows_sys::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcess, ResetEvent, SetEvent,
-};
+use win_handles_sys::{DuplicateAccess, Inheritance, duplicate_handle};
+use win_shared_os_owned_handle::SharedHandle;
+use windows_sys::Win32::Foundation::{FALSE, TRUE};
+use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
 use crate::directory::{FaultDetail, VolumeIdentity};
 use crate::notify::{Change, DesyncCause};
@@ -288,7 +288,7 @@ struct Shared {
     ///
     /// Outside the lock so a borrow of it can outlive the guard, but only ever
     /// signalled or reset *under* the lock -- see [`refresh_doorbell`].
-    doorbell: OnceLock<OwnedHandle>,
+    doorbell: OnceLock<SharedHandle>,
 }
 
 /// A crate-owned producer that stopped because the queue was full, and must be
@@ -989,8 +989,9 @@ impl Receiver {
     /// arrive.
     ///
     /// The borrow is deliberate: the event belongs to this queue and must not be
-    /// closed by a caller. Use [`Receiver::doorbell_owned`] where ownership is
-    /// required, such as arming a `ThreadpoolWait`.
+    /// closed by a caller. Use [`Receiver::doorbell_shared`] or
+    /// [`Receiver::doorbell_owned`] where ownership is required, such as arming a
+    /// `ThreadpoolWait`.
     ///
     /// # Errors
     ///
@@ -1015,7 +1016,42 @@ impl Receiver {
     ///
     /// Returns the error from `CreateEventW` or `DuplicateHandle`.
     pub fn doorbell_owned(&self) -> io::Result<OwnedHandle> {
-        duplicate(self.doorbell()?)
+        duplicate_handle(
+            self.doorbell()?,
+            DuplicateAccess::Same,
+            Inheritance::NotInheritable,
+        )
+    }
+
+    /// The doorbell as a shared handle: the queue's own event, held by one more
+    /// owner.
+    ///
+    /// This is [`Receiver::doorbell`] with the ownership the borrow lacks, and no
+    /// new kernel handle: the result is a clone of the handle the queue holds, so
+    /// its raw handle is the borrow's, and the event closes when the last holder
+    /// of it, the queue's own included, drops. A `ThreadpoolWait` can take it
+    /// through `WaitableHandle::assume_waitable_shared`, which is what arming one
+    /// needs without a duplicate per waiter.
+    ///
+    /// The queue keeps the event in agreement with its contents only for as long as
+    /// the queue exists. Holding this does not keep the queue alive, and nothing
+    /// signals or resets the event once the queue is gone, so a holder that outlives
+    /// every sender and the receiver is waiting on an event nothing will change. Use
+    /// [`Receiver::doorbell_owned`] for a handle that is the caller's own and can be
+    /// closed whenever the caller likes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `CreateEventW` on the first call to any doorbell
+    /// method.
+    pub fn doorbell_shared(&self) -> io::Result<SharedHandle> {
+        self.ensure_doorbell()?;
+        Ok(self
+            .shared
+            .doorbell
+            .get()
+            .expect("the doorbell was just created")
+            .clone())
     }
 
     /// Create the doorbell if it does not exist yet.
@@ -1029,7 +1065,7 @@ impl Receiver {
         let state = lock(&self.shared.items);
         if self.shared.doorbell.get().is_none() {
             let event = create_event(state.pending())?;
-            let _ = self.shared.doorbell.set(event);
+            let _ = self.shared.doorbell.set(SharedHandle::new(event));
         }
         Ok(())
     }
@@ -1307,29 +1343,6 @@ fn create_event(signalled: bool) -> io::Result<OwnedHandle> {
     }
     // SAFETY: the call returned a fresh, exclusively owned event handle.
     Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
-}
-
-/// Duplicate a handle into this process, so the caller owns its own copy.
-fn duplicate(handle: BorrowedHandle<'_>) -> io::Result<OwnedHandle> {
-    let mut duplicated = ptr::null_mut();
-    // SAFETY: duplicates a live handle within this process with the same access;
-    // `duplicated` is a valid out-pointer for the call's duration.
-    let ok = unsafe {
-        DuplicateHandle(
-            GetCurrentProcess(),
-            handle.as_raw_handle(),
-            GetCurrentProcess(),
-            &raw mut duplicated,
-            0,
-            FALSE,
-            DUPLICATE_SAME_ACCESS,
-        )
-    };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: the call succeeded, so `duplicated` is a fresh owned handle.
-    Ok(unsafe { OwnedHandle::from_raw_handle(duplicated) })
 }
 
 #[cfg(test)]

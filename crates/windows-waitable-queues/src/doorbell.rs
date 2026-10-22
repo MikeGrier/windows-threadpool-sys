@@ -165,10 +165,9 @@ use std::ptr;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
 
-use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, FALSE, TRUE};
-use windows_sys::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcess, ResetEvent, SetEvent,
-};
+use win_handles_sys::{DuplicateAccess, Inheritance, duplicate_handle};
+use windows_sys::Win32::Foundation::{FALSE, TRUE};
+use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
 /// A lazily created manual-reset event that reports whether a queue has
 /// anything to take.
@@ -240,7 +239,11 @@ impl Doorbell {
     ///
     /// Returns the error from `CreateEventW` or `DuplicateHandle`.
     pub(crate) fn owned(&self) -> io::Result<OwnedHandle> {
-        duplicate(self.handle()?)
+        duplicate_handle(
+            self.handle()?,
+            DuplicateAccess::Same,
+            Inheritance::NotInheritable,
+        )
     }
 
     /// Report that the queue has something to take.
@@ -385,29 +388,6 @@ fn create_event() -> io::Result<OwnedHandle> {
     }
     // SAFETY: the call returned a fresh, exclusively owned event handle.
     Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
-}
-
-/// Duplicate a handle into this process, so the caller owns its own copy.
-fn duplicate(handle: BorrowedHandle<'_>) -> io::Result<OwnedHandle> {
-    let mut duplicated = ptr::null_mut();
-    // SAFETY: duplicates a live handle within this process with the same
-    // access; `duplicated` is a valid out-pointer for the call's duration.
-    let ok = unsafe {
-        DuplicateHandle(
-            GetCurrentProcess(),
-            handle.as_raw_handle(),
-            GetCurrentProcess(),
-            &raw mut duplicated,
-            0,
-            FALSE,
-            DUPLICATE_SAME_ACCESS,
-        )
-    };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: the call succeeded, so `duplicated` is a fresh owned handle.
-    Ok(unsafe { OwnedHandle::from_raw_handle(duplicated) })
 }
 
 #[cfg(test)]

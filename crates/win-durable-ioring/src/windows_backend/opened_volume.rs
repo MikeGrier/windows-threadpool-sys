@@ -15,17 +15,17 @@
 //! disks.
 
 use std::fmt;
-use std::fs::OpenOptions;
 use std::io;
 use std::marker::PhantomData;
-use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 
 use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::{DiskExtent, bytes_per_sector, lock_volume, volume_disk_extents};
 
 use super::opened_file::{Buffering, Unbuffered};
-use durable_ioring::{FlushDomain, Geometry};
+use super::raw_open;
+use super::share_mode::ShareMode;
+use durable_ioring::{DataAccess, FlushDomain, Geometry, ReadWrite};
 
 #[cfg(test)]
 mod tests;
@@ -117,61 +117,96 @@ impl VolumePath {
     }
 }
 
-/// How a volume is opened beyond its path.
-#[derive(Clone, Copy, Debug, Default)]
+/// How a volume is opened beyond its path: whether it is locked, and what other opens of the volume
+/// may request meanwhile.
+#[derive(Clone, Copy, Debug)]
 #[must_use]
 pub struct VolumeOptions {
     lock: bool,
+    share: ShareMode,
+}
+
+impl Default for VolumeOptions {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VolumeOptions {
-    /// Nothing requested beyond opening the volume for reading and writing.
+    /// Nothing requested beyond opening the volume, which is shared for reading, writing and
+    /// deletion, as `std::fs::OpenOptions` opens one.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            lock: false,
+            share: ShareMode::ALL,
+        }
+    }
+
+    /// What other opens of the volume may request while this handle is open (`dwShareMode`), as
+    /// [`FileOptions::share`](super::FileOptions::share) is for a file. [`ShareMode::NONE`] opens the
+    /// volume exclusively. An open the sharing of either side does not allow fails with a
+    /// [`SharingViolation`](super::SharingViolation). Calling this again replaces the mode.
+    ///
+    /// The `CreateFileW` page says that "When opening a volume or floppy disk, the *dwShareMode*
+    /// parameter must have the `FILE_SHARE_WRITE` flag" (read 2026-10-18). A mode without it is not
+    /// refused here, because the measurement contradicts the page: on Windows 11 build 26300, elevated,
+    /// an exclusive open of a volume succeeded and refused a second open until it closed (the test
+    /// `an_exclusive_raw_volume_refuses_a_second_open_until_it_closes`). Where the documentation is
+    /// shown to be wrong, this crate does not build the documented condition in as a refusal.
+    ///
+    /// This is not the lock: [`lock`](Self::lock) is a device control made once the volume is open,
+    /// and the share mode is judged by the open itself.
+    pub fn share(mut self, share: ShareMode) -> Self {
+        self.share = share;
+        self
     }
 
     /// Lock the volume once it is open, so that this handle is the only one that can use it until
     /// the handle closes. A file system on the volume is flushed and writes nothing more, which is
     /// what lets a raw write to its own sectors be made; a volume with no file system needs none.
     /// Opening fails, and nothing is held, if anything else has the volume open.
+    ///
+    /// The `FSCTL_LOCK_VOLUME` page names no right the handle needs, so the lock is offered with any
+    /// data access and the kernel's error is the answer if one is needed; which it is was not
+    /// measured, since it needs an administrator.
     pub fn lock(mut self, lock: bool) -> Self {
         self.lock = lock;
         self
     }
 }
 
-/// A raw volume this crate opened, in buffering mode `B` ([`Unbuffered`] unless said otherwise): a
-/// [`SharedHandle`], the disks it sits on, the sector it is addressed in and whether it is locked.
-/// Cloning shares the one handle.
+/// A raw volume this crate opened, in buffering mode `B` ([`Unbuffered`] unless said otherwise) and
+/// with data access `A` ([`ReadWrite`] unless said otherwise): a [`SharedHandle`], the disks it sits
+/// on, the sector it is addressed in and whether it is locked. Cloning shares the one handle.
 ///
-/// It is what [`Win32FileTarget::from_volume`](super::Win32FileTarget::from_volume) is made from.
+/// It is what [`Win32FileTarget::from_volume`](super::Win32FileTarget::from_volume) is made from, when
+/// `A` has a data right. The data access is the one the open was given, which `options` do not carry,
+/// so it is named in the type at the call: `OpenedVolume::<Unbuffered, ReadOnly>::open(..)`.
 #[derive(Clone, Debug)]
-pub struct OpenedVolume<B: Buffering = Unbuffered> {
+pub struct OpenedVolume<B: Buffering = Unbuffered, A: DataAccess = ReadWrite> {
     handle: SharedHandle,
     geometry: Geometry,
     extents: Vec<DiskExtent>,
     locked: bool,
-    buffering: PhantomData<B>,
+    mode: PhantomData<(B, A)>,
 }
 
-impl<B: Buffering> OpenedVolume<B> {
-    /// Open `path` for reading and writing in buffering mode `B`, find its disks and sector size,
-    /// and lock it if `options` say so.
+impl<B: Buffering, A: DataAccess> OpenedVolume<B, A> {
+    /// Open `path` with data access `A` in buffering mode `B`, find its disks and sector size, and
+    /// lock it if `options` say so.
     ///
-    /// Opening a volume for writing needs an account that is an administrator.
+    /// Opening a volume for writing needs an account that is an administrator. Opening it with
+    /// [`NoData`](super::NoData) asks for no data right, which is enough to query the volume, and the
+    /// result cannot be made into a target.
     ///
     /// # Errors
     ///
-    /// Whatever the open reports, and the device's own error from the extents or sector size
-    /// control: a volume that is remote, or a path that is not a volume, does not answer them, so
+    /// Whatever the open reports, a [`SharingViolation`](super::SharingViolation) among it, and the
+    /// device's own error from the extents or sector size control: a volume that is remote, or a path that is not a volume, does not answer them, so
     /// it is refused here. When the lock is asked for, the lock's own error, and then nothing is
     /// held.
     pub fn open(path: &VolumePath, options: VolumeOptions) -> io::Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(B::FLAGS)
-            .open(path.as_str())?;
+        let file = raw_open::open::<B, A>(path.as_str(), options.share)?;
         let extents = volume_disk_extents(&file)?;
         let sector = bytes_per_sector(&file)?;
         let geometry = B::sector_geometry(sector)
@@ -184,7 +219,7 @@ impl<B: Buffering> OpenedVolume<B> {
             geometry,
             extents,
             locked: options.lock,
-            buffering: PhantomData,
+            mode: PhantomData,
         })
     }
 
@@ -232,18 +267,18 @@ impl<B: Buffering> OpenedVolume<B> {
             geometry: B::sector_geometry(sector).expect("a power of two"),
             extents,
             locked,
-            buffering: PhantomData,
+            mode: PhantomData,
         }
     }
 }
 
-impl<B: Buffering> AsHandle for OpenedVolume<B> {
+impl<B: Buffering, A: DataAccess> AsHandle for OpenedVolume<B, A> {
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
     }
 }
 
-impl<B: Buffering> AsRawHandle for OpenedVolume<B> {
+impl<B: Buffering, A: DataAccess> AsRawHandle for OpenedVolume<B, A> {
     fn as_raw_handle(&self) -> RawHandle {
         self.handle.as_raw_handle()
     }

@@ -10,7 +10,8 @@ use std::ptr;
 use windows_sys::Win32::Foundation::{FALSE, TRUE};
 use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
-use crate::duplicate::{Access, duplicate_handle_with_access};
+use win_handles_sys::{Access, duplicate_handle_with_access};
+use win_shared_os_owned_handle::SharedHandle;
 
 /// How an event returns to unsignalled after it is set.
 ///
@@ -29,9 +30,12 @@ pub enum ResetMode {
 
 /// An owned event object.
 ///
-/// Holds a handle to an event and closes it on drop. Because the handle is
-/// owned and is known to be an event, [`set`](Self::set) and
-/// [`reset`](Self::reset) need no `unsafe`.
+/// Holds a handle to an event, shared by every clone, and closes it when the
+/// last clone drops. A clone is a second holder of the same handle, not a new
+/// handle: setting through one is seen through every other
+/// ([WS-D-10](../DESIGN-NOTES.md#ws-d-10)). Because the handle is owned and is
+/// known to be an event, [`set`](Self::set) and [`reset`](Self::reset) need no
+/// `unsafe`.
 ///
 /// **The handle being an event is what other crates may rely on**
 /// ([WS-D-4](../DESIGN-NOTES.md#ws-d-4)).
@@ -46,9 +50,9 @@ pub enum ResetMode {
 /// how often it was set.
 ///
 /// There is no `pulse`; see the crate documentation for why.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Event {
-    handle: OwnedHandle,
+    handle: SharedHandle,
 }
 
 impl Event {
@@ -74,7 +78,9 @@ impl Event {
         }
         // SAFETY: the call returned a new handle that nothing else owns.
         let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
-        Ok(Self { handle })
+        Ok(Self {
+            handle: SharedHandle::new(handle),
+        })
     }
 
     /// Adopt a handle the caller already owns as an event.
@@ -98,7 +104,9 @@ impl Event {
     ///   it.
     #[must_use]
     pub unsafe fn from_owned_handle(handle: OwnedHandle) -> Self {
-        Self { handle }
+        Self {
+            handle: SharedHandle::new(handle),
+        }
     }
 
     /// Set the event to signalled.
@@ -137,27 +145,25 @@ impl Event {
         Ok(())
     }
 
-    /// A second handle to the same event, with the same access.
-    ///
-    /// Setting or resetting either affects both, and the event lives until
-    /// every handle to it is closed, so a clone may outlive the original.
+    /// The handle, as an [`OwnedHandle`], if `self` is its last holder.
     ///
     /// # Errors
     ///
-    /// Returns the error from `DuplicateHandle`. Like [`new`](Self::new)'s, no
-    /// test reaches it: duplicating a handle this process owns fails only when
-    /// the process cannot get another handle.
-    pub fn try_clone(&self) -> io::Result<Self> {
-        Ok(Self {
-            handle: self.handle.try_clone()?,
-        })
+    /// If a clone still holds the handle, returns `self` unchanged, so nothing is
+    /// lost and the caller can try again once the clones have dropped.
+    pub fn try_into_owned(self) -> Result<OwnedHandle, Self> {
+        self.handle
+            .try_into_owned()
+            .map_err(|handle| Self { handle })
     }
 
-    /// A second handle to the same event that can wait on it and do nothing else.
+    /// A new handle to the same event that can wait on it and do nothing else: the one operation
+    /// here that makes a handle, because access belongs to a handle and narrowing it needs a new
+    /// one ([WS-D-10](../DESIGN-NOTES.md#ws-d-10)).
     ///
     /// The handle carries `SYNCHRONIZE` access alone, so it can neither set nor reset the event:
-    /// the kernel refuses a `SetEvent` or `ResetEvent` on it. That is something [`try_clone`] cannot
-    /// give, since its clone holds whatever access the original does. See [`WaitOnlyEvent`] for
+    /// the kernel refuses a `SetEvent` or `ResetEvent` on it. A clone cannot give that, since it
+    /// shares the original's handle and so its access. See [`WaitOnlyEvent`] for
     /// what the result is, why it is not an `Event`, and what the guarantee does not cover.
     ///
     /// A wait through it takes what a signalled event gives, as any wait does: waiting through a
@@ -166,21 +172,20 @@ impl Event {
     ///
     /// # Errors
     ///
-    /// Returns the error from `DuplicateHandle`. Like [`try_clone`](Self::try_clone)'s, no test
-    /// reaches it: duplicating a handle this process owns fails only when the process cannot get
-    /// another handle.
-    ///
-    /// [`try_clone`]: Self::try_clone
-    pub fn try_clone_wait_only(&self) -> io::Result<WaitOnlyEvent> {
+    /// Returns the error from `DuplicateHandle`. Like [`new`](Self::new)'s, no test reaches it:
+    /// duplicating a handle this process owns fails only when the process cannot get another
+    /// handle.
+    pub fn duplicate_wait_only(&self) -> io::Result<WaitOnlyEvent> {
         Ok(WaitOnlyEvent {
-            handle: duplicate_handle_with_access(self, Access::SYNCHRONIZE)?,
+            handle: SharedHandle::new(duplicate_handle_with_access(self, Access::SYNCHRONIZE)?),
         })
     }
 }
 
 /// A handle to an event that can wait on it and cannot set or reset it.
 ///
-/// Made by [`Event::try_clone_wait_only`], carrying `SYNCHRONIZE` access and no more. It is its own
+/// Made by [`Event::duplicate_wait_only`], carrying `SYNCHRONIZE` access and no more. Its clones
+/// share its handle, as an [`Event`]'s do. It is its own
 /// type, not an [`Event`] that fails when set, because what it cannot do is not an error to be
 /// discovered at run time: it has no `set` and no `reset`, and the kernel would refuse them if it
 /// were handed to code that tried ([WS-D-7](../DESIGN-NOTES.md#ws-d-7)).
@@ -197,24 +202,21 @@ impl Event {
 ///
 /// It lends its handle, so [`wait_for_single_object`](crate::wait_for_single_object) waits on it.
 /// `Send` and `Sync`, as an event is.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WaitOnlyEvent {
-    handle: OwnedHandle,
+    handle: SharedHandle,
 }
 
 impl WaitOnlyEvent {
-    /// A second wait-only handle to the same event.
-    ///
-    /// It holds the same access as this one, so the clone cannot signal either.
+    /// The handle, as an [`OwnedHandle`], if `self` is its last holder.
     ///
     /// # Errors
     ///
-    /// Returns the error from `DuplicateHandle`; no test reaches it, as for
-    /// [`Event::try_clone`].
-    pub fn try_clone(&self) -> io::Result<Self> {
-        Ok(Self {
-            handle: self.handle.try_clone()?,
-        })
+    /// If a clone still holds the handle, returns `self` unchanged.
+    pub fn try_into_owned(self) -> Result<OwnedHandle, Self> {
+        self.handle
+            .try_into_owned()
+            .map_err(|handle| Self { handle })
     }
 }
 
@@ -230,7 +232,8 @@ impl AsRawHandle for WaitOnlyEvent {
     }
 }
 
-impl From<WaitOnlyEvent> for OwnedHandle {
+/// The shared handle, given up by this holder; it is still an event's, with `SYNCHRONIZE` alone.
+impl From<WaitOnlyEvent> for SharedHandle {
     fn from(event: WaitOnlyEvent) -> Self {
         event.handle
     }
@@ -248,7 +251,9 @@ impl AsRawHandle for Event {
     }
 }
 
-impl From<Event> for OwnedHandle {
+/// The shared handle, given up by this holder: what a consumer that holds handles shared, such as
+/// the thread pool's wait target, takes.
+impl From<Event> for SharedHandle {
     fn from(event: Event) -> Self {
         event.handle
     }

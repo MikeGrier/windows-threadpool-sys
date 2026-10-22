@@ -85,7 +85,7 @@ pub const ITEMS: usize = 2_000_000;
 pub const CAPACITY: usize = 1024;
 
 /// Repetitions per configuration; the median is reported.
-const REPETITIONS: usize = 5;
+pub const REPETITIONS: usize = 5;
 
 /// Which peer-index strategy a run uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +102,15 @@ pub enum Strategy {
 }
 
 impl Strategy {
-    fn label(self) -> &'static str {
+    /// The prose a report's table prints for this strategy, and what
+    /// [`Run::label`] holds for its run.
+    ///
+    /// Prose, not a key: it may be reworded whenever the table reads better a
+    /// different way, so a stored record keys on [`name`](Self::name) instead.
+    /// Public so code building an [`Observation`] by hand -- a test of a
+    /// renderer -- can label a run without copying the text.
+    #[must_use]
+    pub fn label(self) -> &'static str {
         match self {
             Self::Baseline => "model: baseline",
             Self::Cached => "model: cached index",
@@ -112,7 +120,7 @@ impl Strategy {
 
     /// A stable identifier for a record.
     ///
-    /// Separate from the private `label` on purpose, and not a duplicate of it.
+    /// Separate from [`label`](Self::label) on purpose, and not a duplicate of it.
     /// The label is prose for a terminal table and may be reworded whenever the
     /// table reads better a different way; this is a token a stored record is
     /// keyed on, so rewording it would silently break every collector that ever

@@ -12,8 +12,9 @@
 
 use std::fmt::Write as _;
 
-use windows_platform_probes::report::emit_report;
-use windows_platform_probes::request_cost::{EVERY_LABEL, json_key, measure};
+use windows_platform_probes::probe_args::{IterationMultiplier, usage};
+use windows_platform_probes::report::{emit_report, refuse_arguments};
+use windows_platform_probes::request_cost::{EVERY_LABEL, LONGEST_LOOP, json_key, measure};
 
 /// Measured by `probe-doorbell-cost` on a **Snapdragon X2 (ARM64)** machine,
 /// and recorded in [the 2026-08-30 design session]. Restated here only to
@@ -43,14 +44,23 @@ const DOORBELL_NS_REFERENCE: f64 = 164.9;
 const ATOMIC_NS_REFERENCE: f64 = 7.2;
 
 fn main() {
+    // Read before anything is measured, so a command line the probe cannot honour
+    // is refused rather than half-run. See `M4.2`.
+    let multiplier = IterationMultiplier::from_args(std::env::args().skip(1), LONGEST_LOOP)
+        .unwrap_or_else(|error| {
+            refuse_arguments(
+                &error,
+                &usage("probe-request-cost", &IterationMultiplier::FLAGS),
+            )
+        });
     // The probe's whole output policy, and it is one line: hand the renderer to
     // the sink. Nothing here or below names a stream -- that is chosen once, in
     // `report`, so retargeting a probe is not a rewrite.
-    emit_report(render);
+    emit_report(|out| render(out, multiplier));
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut dyn std::fmt::Write) {
+fn render(out: &mut dyn std::fmt::Write, multiplier: IterationMultiplier) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a
@@ -60,9 +70,12 @@ fn render(out: &mut dyn std::fmt::Write) {
         "{}",
         windows_placement_probe::fingerprint::banner_line()
     );
+    // Beside the banner, because a figure is only interpretable with what
+    // produced it, and the span is settable (M4.2).
+    let _ = writeln!(out, "{}", multiplier.report_line());
     let _ = writeln!(out, "== what does a namespace request cost to build? ==\n");
 
-    let observation = measure();
+    let observation = measure(multiplier);
 
     let _ = writeln!(
         out,
@@ -380,7 +393,8 @@ fn render(out: &mut dyn std::fmt::Write) {
 
     let _ = writeln!(
         out,
-        r#"{{"reason":"x-probe-request-cost","arch":"{}",{fields}}}"#,
+        r#"{{"reason":"x-probe-request-cost","arch":"{}","iteration_multiplier":{},{fields}}}"#,
         std::env::consts::ARCH,
+        multiplier.get(),
     );
 }

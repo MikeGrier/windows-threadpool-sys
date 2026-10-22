@@ -1,0 +1,79 @@
+{
+  "package": "win-debugging-sys",
+  "description": "Sabotages for win-debugging-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "A string sent to the call with its terminator missing, or with a NUL before it, is not injected: the call would read past the buffer, and the sweep would be measuring a crash and not a test. The refusal and the terminator are each checked on the built string, in memory, and the call is checked by a debugger receiving what it sent (WD-D-2).",
+  "sabotages": [
+    {
+      "name": "WD-D-2: the terminator is added twice",
+      "file": "src/output.rs",
+      "expect": "caught",
+      "why": "The built string is the units and one terminator. A second changes what is sent and is seen by every test of the built string; a missing one is the sabotage that is not injected, see notCoveredHere.",
+      "find": ["    units.push(NUL);\n"],
+      "replace": ["    units.extend([NUL, NUL]);\n"]
+    },
+    {
+      "name": "WD-D-2: a NUL in the string is not looked for",
+      "file": "src/output.rs",
+      "expect": "caught",
+      "why": "A NUL in the units would end the string the call reads at that unit, and show only what came before. The refusal is what stops a string being cut without the caller being told.",
+      "find": ["    if let Some(index) = units.iter().position(|&unit| unit == NUL) {\n"],
+      "replace": ["    if let Some(index) = units.iter().position(|&unit| unit == NUL).filter(|_| false) {\n"]
+    },
+    {
+      "name": "WD-D-2: the refusal names the unit after the NUL",
+      "file": "src/output.rs",
+      "expect": "caught",
+      "why": "The index is where the first NUL is, in units, so a caller can find it; one more points at the wrong unit.",
+      "find": ["        return Err(OutputDebugStringError::EmbeddedNul { index });\n"],
+      "replace": ["        return Err(OutputDebugStringError::EmbeddedNul { index: index + 1 });\n"]
+    },
+    {
+      "name": "WD-D-2: the refusal names the last NUL and not the first",
+      "file": "src/output.rs",
+      "expect": "caught",
+      "why": "The first NUL is where the call would end the string, and the one a caller meets first.",
+      "find": ["    if let Some(index) = units.iter().position(|&unit| unit == NUL) {\n"],
+      "replace": ["    if let Some(index) = units.iter().rposition(|&unit| unit == NUL) {\n"]
+    },
+    {
+      "name": "WD-D-2: a str is sent as its first unit only",
+      "file": "src/output.rs",
+      "expect": "caught",
+      "why": "A str is every unit it encodes to, so the NUL in one is found wherever it is.",
+      "find": ["    units.extend(text.encode_utf16());\n"],
+      "replace": ["    units.extend(text.encode_utf16().take(1));\n"]
+    },
+    {
+      "name": "WD-D-2: the call is not made",
+      "file": "src/output.rs",
+      "expect": "caught",
+      "why": "Only a debugger can tell that the call was made, which is why the test of it starts one: nothing in the process sees the difference.",
+      "find": ["    unsafe { OutputDebugStringW(units.as_ptr()) };\n"],
+      "replace": ["    let _ = units.as_ptr();\n"]
+    },
+    {
+      "name": "WD-D-3: every string is taken as ANSI",
+      "file": "src/capture.rs",
+      "expect": "caught",
+      "why": "Whether a string arrived as Unicode is what the opt-in of WaitForDebugEventEx changes, and the observation of it is the point of the facility.",
+      "find": ["    let unicode = info.fUnicode != 0;\n"],
+      "replace": ["    let unicode = false;\n"]
+    },
+    {
+      "name": "WD-D-3: the terminator is kept in a received string",
+      "file": "src/capture.rs",
+      "expect": "caught",
+      "why": "The length an event carries counts the terminator the call sends; a string is what comes before it, so an empty one is empty.",
+      "find": ["        units.truncate(end);\n"],
+      "replace": ["        units.truncate(end + 1);\n"]
+    },
+    {
+      "name": "WD-D-2 control: the NUL is looked for by its literal value",
+      "file": "src/output.rs",
+      "expect": "survives",
+      "why": "A control: the same test by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    if let Some(index) = units.iter().position(|&unit| unit == NUL) {\n"],
+      "replace": ["    if let Some(index) = units.iter().position(|&unit| unit == 0) {\n"]
+    }
+  ]
+}

@@ -10,6 +10,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "durable-ioring-events"
+version = "0.0.1"
+dependencies = [
+ "durable-ioring",
+ "win-error-codes",
+ "win-etw-sys",
+]
+
+[[package]]
 name = "io-buffers"
 version = "0.1.0"
 
@@ -126,17 +135,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "win-debugging-sys"
+version = "0.0.1"
+dependencies = [
+ "win-debugging-sys",
+ "windows-sys",
+]
+
+[[package]]
 name = "win-durable-ioring"
 version = "0.3.2"
 dependencies = [
  "durable-ioring",
+ "durable-ioring-events",
  "io-buffers",
+ "win-authorization-sys",
+ "win-debugging-sys",
  "win-durable-ioring",
  "win-error-codes",
+ "win-etw-sys",
+ "win-handles-sys",
  "win-shared-os-owned-handle",
  "win-sync-sys",
  "win-time-sys",
  "win-volume-sys",
+ "windows-file-enumeration-sys",
  "windows-ioring-sys",
  "windows-namespace-request-sys",
  "windows-sys",
@@ -152,6 +175,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "win-etw-sys"
+version = "0.0.1"
+dependencies = [
+ "win-error-codes",
+ "win-etw-sys",
+ "windows-sys",
+]
+
+[[package]]
 name = "win-handles-sys"
 version = "0.1.0"
 dependencies = [
@@ -162,6 +194,7 @@ dependencies = [
 name = "win-job-launcher"
 version = "0.0.0"
 dependencies = [
+ "win-handles-sys",
  "windows-sys",
 ]
 
@@ -203,6 +236,16 @@ version = "0.1.0"
 name = "win-sync-sys"
 version = "0.0.2"
 dependencies = [
+ "win-handles-sys",
+ "win-shared-os-owned-handle",
+ "windows-sys",
+]
+
+[[package]]
+name = "win-text-sys"
+version = "0.0.1"
+dependencies = [
+ "win-error-codes",
  "windows-sys",
 ]
 
@@ -239,8 +282,13 @@ dependencies = [
 name = "windows-file-enumeration-sys"
 version = "0.2.2"
 dependencies = [
+ "io-buffers",
  "win-error-codes",
+ "win-shared-os-owned-handle",
+ "win-sync-sys",
+ "win-text-sys",
  "windows-impersonation-token-sys",
+ "windows-namespace-request-sys",
  "windows-sys",
  "windows-threadpool-sys",
  "wtf-string",
@@ -253,6 +301,10 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "win-error-codes",
+ "win-handles-sys",
+ "win-shared-os-owned-handle",
+ "win-text-sys",
  "windows-overlapped-io-sys",
  "windows-sys",
  "windows-threadpool-sys",
@@ -279,6 +331,7 @@ dependencies = [
 name = "windows-impersonation-token-sys"
 version = "0.1.1"
 dependencies = [
+ "win-shared-os-owned-handle",
  "windows-sys",
 ]
 
@@ -289,6 +342,7 @@ dependencies = [
  "io-buffers",
  "serde_json",
  "win-numa-sys",
+ "win-pipes-sys",
  "win-shared-os-owned-handle",
  "windows-guard-alloc",
  "windows-overlapped-io-sys",
@@ -329,6 +383,7 @@ name = "windows-overlapped-io-sys"
 version = "0.3.0"
 dependencies = [
  "io-buffers",
+ "win-pipes-sys",
  "win-shared-os-owned-handle",
  "windows-sys",
  "wtf-string",
@@ -351,6 +406,7 @@ version = "2026.1020.0"
 dependencies = [
  "serde",
  "serde_json",
+ "win-pipes-sys",
  "win-shared-os-owned-handle",
  "windows-namespace-request-sys",
  "windows-placement-probe",
@@ -401,6 +457,8 @@ dependencies = [
 name = "windows-threadpool-sys"
 version = "0.3.0"
 dependencies = [
+ "win-pipes-sys",
+ "win-shared-os-owned-handle",
  "win-sync-sys",
  "win-time-sys",
  "windows-overlapped-io-sys",
@@ -421,6 +479,7 @@ name = "windows-waitable-queues"
 version = "0.1.2"
 dependencies = [
  "portable-atomic",
+ "win-handles-sys",
  "windows-sys",
 ]
 

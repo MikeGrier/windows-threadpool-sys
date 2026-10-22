@@ -59,6 +59,13 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread}
 /// only question is whether it returns at all.
 pub const WATCHDOG: Duration = Duration::from_secs(5);
 
+/// How many cancels the probe binary aims at the busy thread.
+pub const BUSY_ATTEMPTS: usize = 4;
+
+mod raw_row;
+
+pub use self::raw_row::*;
+
 /// What one cancellation attempt did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CancelOutcome {

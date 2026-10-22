@@ -19,9 +19,43 @@ fn a_request_defaults_to_the_documented_bounds() {
 }
 
 #[test]
-fn a_request_stores_the_resolved_path() {
-    let subject = request("C:/Windows/../Windows");
-    assert_eq!(subject.path().to_string_lossy(), r"C:\Windows");
+fn an_absolute_path_is_kept_as_given_and_handed_to_win32_as_given() {
+    // Nothing is resolved or normalised here: `CreateFileW` normalises the
+    // separators and the `..` itself when the worker opens it.
+    for given in [
+        r"C:\Windows",
+        "C:/Windows/../Windows",
+        r"\\?\C:\Windows",
+        r"\\.\C:\Windows",
+        r"\\server\share\dir",
+        r"\Windows",
+        "C:Windows",
+    ] {
+        let subject = request(given);
+        assert_eq!(subject.path().to_string_lossy(), given);
+        assert_eq!(subject.win32_path().to_string_lossy(), given, "{given}");
+    }
+}
+
+#[test]
+fn a_relative_path_is_grafted_onto_the_current_directory_when_built() {
+    let subject = request(r"a-child\below");
+    assert_eq!(subject.path().to_string_lossy(), r"a-child\below");
+    let expected = std::env::current_dir()
+        .expect("the current directory")
+        .join(r"a-child\below");
+    assert_eq!(
+        subject.win32_path().to_string_lossy(),
+        expected.to_string_lossy()
+    );
+}
+
+#[test]
+fn a_relative_name_that_is_a_device_is_not_grafted() {
+    // The request crate's rule 5: a reserved device name is left for Win32 to
+    // resolve, as it would have been given.
+    let subject = request("NUL");
+    assert_eq!(subject.win32_path().to_string_lossy(), "NUL");
 }
 
 #[test]
@@ -40,9 +74,39 @@ fn a_request_can_be_built_from_a_std_path() {
 }
 
 #[test]
-fn an_invalid_path_is_reported_when_the_request_is_built() {
-    let error = EnumerationRequest::new(&Wtf16String::new()).expect_err("an empty path");
-    assert_eq!(error.failure(), RequestFailure::EmptyPath);
+fn an_interior_nul_is_refused_when_the_request_is_built() {
+    for given in ["\0", "a\0", "\0a", "C:\\Win\0dows"] {
+        let error = EnumerationRequest::new(&Wtf16String::from_units(
+            &given.encode_utf16().collect::<Vec<_>>(),
+        ))
+        .expect_err("an interior NUL");
+        assert_eq!(error.failure(), RequestFailure::InteriorNul, "{given:?}");
+        assert_eq!(error.code(), None, "no call was made");
+    }
+}
+
+#[test]
+fn an_empty_path_is_accepted_and_left_to_the_open() {
+    // The request crate's contract refuses nothing else: what an empty path
+    // names is `CreateFileW`'s to answer, as a terminal `DirectoryOpen`.
+    let subject = EnumerationRequest::new(&Wtf16String::new()).expect("accepted");
+    assert!(subject.path().is_empty());
+    assert!(subject.win32_path().is_empty());
+}
+
+#[test]
+fn a_path_longer_than_max_path_is_accepted_as_given() {
+    let long = format!(r"C:\{}", "x".repeat(300));
+    let subject = request(&long);
+    assert_eq!(subject.win32_path().to_string_lossy(), long);
+}
+
+#[test]
+fn a_verbatim_path_that_is_not_fully_qualified_is_accepted_as_given() {
+    for given in [r"\\?\", r"\\?\C:foo", r"\\?\name", r"\\?\UNC\server"] {
+        let subject = request(given);
+        assert_eq!(subject.win32_path().to_string_lossy(), given);
+    }
 }
 
 #[test]

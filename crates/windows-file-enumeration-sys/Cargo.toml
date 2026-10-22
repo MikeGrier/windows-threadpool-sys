@@ -36,6 +36,27 @@ windows-threadpool-sys = { version = "0.3.0", path = "../windows-threadpool-sys"
 # Paths and returned names remain native-width WTF-16 without lossy conversion.
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
+# The path contract (PATH-1): a path kept as given, and a relative one fixed to the current
+# directory when the request is built, so that it means the same directory on whichever worker
+# opens it. Taken from the crate that owns it, so this crate keeps no second copy (the request
+# crate's D-30), and below it in the layering, which is the direction D-9 recorded.
+windows-namespace-request-sys = { version = "0.5.0", path = "../windows-namespace-request-sys" }
+
+# The one buffer a refill reads into, made at 8 bytes because the directory-information records hold
+# `i64` fields. The request crate fills it (SAFE-2), so no `unsafe` here reads or writes it.
+io-buffers = { version = "0.1.0", path = "../io-buffers" }
+
+# The directory is held as one shared handle, and each query the request crate performs on it holds
+# a clone of that handle rather than a duplicate (SAFE-2).
+win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
+
+# The completion ring's doorbell is one of its events, set and reset through it and shared with the wait a
+# client arms rather than duplicated for it (SAFE-3).
+win-sync-sys = { version = "0.0.2", path = "../win-sync-sys" }
+
+# The case-insensitive name comparison, `CompareStringOrdinal` over counted slices (SAFE-4).
+win-text-sys = { version = "0.0.1", path = "../win-text-sys" }
+
 # `Win32Error`, re-exported under the name this crate has always used. Its `io::Error` form keeps a
 # code of 2^31 or more, where this crate's own earlier type panicked on one (WE-D-1).
 win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
@@ -45,7 +66,5 @@ version = "0.61.2"
 default-features = false
 features = [
 	"Win32_Foundation",
-	"Win32_Globalization",
 	"Win32_Storage_FileSystem",
-	"Win32_System_Threading",
 ]

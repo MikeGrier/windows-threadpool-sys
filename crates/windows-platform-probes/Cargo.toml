@@ -159,6 +159,9 @@ windows-topology-sys = { path = "../windows-topology-sys" }
 # describe. That banner is `windows-placement-probe`'s to render, not a second
 # copy here.
 windows-placement-probe = { path = "../windows-placement-probe" }
+# The io-ring probe's pending-read pipe is made with the workspace's safe wrapper of `CreateNamedPipeW`,
+# in place of an `unsafe` call of its own. Creating the pipe is not what the probe measures.
+win-pipes-sys = { path = "../win-pipes-sys" }
 # The request-cost probe measures the real request type the design would put on
 # a queue, not a stand-in, for the same reason the topology probe reads the
 # shipping parse: a reimplementation would measure the reimplementation.
@@ -267,7 +270,6 @@ features = [
 	"Win32_System_Environment",
 	"Win32_System_Diagnostics_Debug",
 	"Win32_System_IO",
-	"Win32_System_Pipes",
 	# GetSystemDirectoryW, so the request probe measures the real system
 	# directory instead of assuming Windows is installed on C:.
 	"Win32_System_SystemInformation",

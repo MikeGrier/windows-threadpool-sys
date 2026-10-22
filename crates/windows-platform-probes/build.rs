@@ -14,8 +14,27 @@
 //! opt every probe in this crate into long paths, silently changing what all
 //! the others measure -- stated without a count on purpose, so it stays true as
 //! probes are added.
+//!
+//! It also stamps the build's identity, so a report can name the build that
+//! produced it (`M4.8`). The stamping is `windows-placement-probe`'s, included
+//! rather than copied: its staleness rules were each found by measurement, and
+//! a second copy is one the next fix would miss.
+
+include!("../windows-placement-probe/build/stamp.rs");
 
 fn main() {
+    // CI sets `PLATFORM_PROBES_COMMIT` and `PLATFORM_PROBES_SOURCE`; the crate
+    // reads the stamps through `build_identity::this_build`.
+    stamp_build_identity("PLATFORM_PROBES");
+    // Emitting any `rerun-if-changed` replaces cargo's default of watching the
+    // whole package, so the package's own files are named, as
+    // `windows-placement-probe`'s script names its own -- and the included file,
+    // which lives in that crate.
+    println!("cargo::rerun-if-changed=src");
+    println!("cargo::rerun-if-changed=Cargo.toml");
+    println!("cargo::rerun-if-changed=build.rs");
+    println!("cargo::rerun-if-changed=../windows-placement-probe/build/stamp.rs");
+
     // Declared unconditionally, because the cfg's *absence* is as meaningful as
     // its presence and an undeclared name would warn under `unexpected_cfgs`.
     println!("cargo::rustc-check-cfg=cfg(long_path_manifest_embedded)");

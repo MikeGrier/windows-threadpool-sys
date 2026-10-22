@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use windows_ioring_sys::RegisteredSpan;
 
-use super::{TempFile, V, empty, setup};
+use super::{TempFile, V, empty, setup, wtf};
 
 /// A test buffer's length, as the oracle's push hook takes it.
 fn length(len: usize) -> u32 {
@@ -20,10 +20,10 @@ fn length(len: usize) -> u32 {
 use crate::InterruptStamps;
 use crate::dioring::{Dioring, Setup, TargetSetup, TimeBase};
 use crate::readiness::check_readiness;
-use crate::windows_backend::{FileOptions, OpenedFile, Win32FileTarget};
-use durable_ioring::IoTarget;
+use crate::windows_backend::{Cached, FileOptions, OpenedFile, ReadOnly, Win32FileTarget};
 use durable_ioring::backend::RefusalCause;
 use durable_ioring::oracle::ConformanceOracle;
+use durable_ioring::{Access, IoTarget};
 use durable_ioring::{
     DurabilityRequest, Entry, Epoch, EpochState, ImportScope, IoTargetKey, OpCompletion, OpKind,
     Outcome, PushRefusal, WriteCaching, WriteOptions,
@@ -51,8 +51,8 @@ pub(super) fn temp(content: &[u8]) -> TempFile {
     temp
 }
 
-pub(super) fn read_only(temp: &TempFile) -> OpenedFile {
-    OpenedFile::open(&temp.0, FileOptions::new().read(true)).expect("open read-only")
+pub(super) fn read_only(temp: &TempFile) -> OpenedFile<Cached, ReadOnly> {
+    OpenedFile::open(wtf(&temp.0), FileOptions::new().read()).expect("open read-only")
 }
 
 pub(super) fn instance(files: Vec<TargetSetup>, buffers: Vec<Vec<u8>>) -> Ring {
@@ -78,10 +78,7 @@ pub(super) fn instance_with_clock<K: TimeBase>(
 }
 
 pub(super) fn given(key: IoTargetKey, temp: &TempFile) -> TargetSetup {
-    TargetSetup {
-        key,
-        target: Win32FileTarget::new(temp.open()),
-    }
+    TargetSetup::new(key, Win32FileTarget::new(temp.open()))
 }
 
 /// An instance and the oracle watching its stream.
@@ -396,13 +393,69 @@ fn operation_identities_follow_push_order() {
 }
 
 #[test]
-fn a_write_the_kernel_fails_completes_as_failed() {
+fn a_write_to_a_read_only_target_is_refused_at_the_push_with_its_buffer() {
     let temp = temp(&[0; 16]);
     let mut harness = Harness::new(instance(Vec::new(), Vec::new()));
     harness
         .ring
         .add_target(ADDED, Win32FileTarget::new(read_only(&temp)))
         .expect("add a read-only file");
+    let refused = harness
+        .ring
+        .write(ADDED, 0, b"refused".to_vec(), harness.default.at(1), 5)
+        .expect_err("a write the access does not cover");
+    assert!(matches!(
+        refused.reason,
+        PushRefusal::Backend(RefusalCause::AccessDenied)
+    ));
+    assert_eq!(refused.buffer.as_deref(), Some(&b"refused"[..]));
+    assert_eq!(refused.context, 5);
+    assert_eq!(
+        fs::read(&temp.0).expect("read"),
+        [0; 16],
+        "nothing was written"
+    );
+    harness.finish();
+}
+
+#[test]
+fn a_read_from_a_write_only_target_is_refused_at_the_push_and_a_write_to_it_is_not() {
+    let temp = temp(&[0; 16]);
+    let mut harness = Harness::new(instance(Vec::new(), Vec::new()));
+    let file = OpenedFile::<Cached, _>::open(wtf(&temp.0), FileOptions::new().write())
+        .expect("open write-only");
+    harness
+        .ring
+        .add_target(ADDED, Win32FileTarget::new(file))
+        .expect("add a write-only file");
+    let refused = harness
+        .ring
+        .read(ADDED, 0, vec![0; 4], 6)
+        .expect_err("a read the access does not cover");
+    assert!(matches!(
+        refused.reason,
+        PushRefusal::Backend(RefusalCause::AccessDenied)
+    ));
+    assert_eq!(refused.buffer, Some(vec![0; 4]));
+
+    harness.write(ADDED, 0, b"taken", 1, 7);
+    assert_eq!(transferred(&harness.next()), 5);
+    harness.finish();
+}
+
+#[test]
+fn a_write_the_kernel_fails_completes_as_failed() {
+    // A handle that cannot write, stated by its target to be one that can: the core trusts what a
+    // target states, so what is exercised is the kernel's own refusal reaching the completion.
+    let temp = temp(&[0; 16]);
+    let mut harness = Harness::new(instance(Vec::new(), Vec::new()));
+    harness
+        .ring
+        .add_target(
+            ADDED,
+            Win32FileTarget::new(read_only(&temp)).claiming(Access::ReadWrite),
+        )
+        .expect("add a read-only file that claims to be writable");
     harness.write(ADDED, 0, b"refused", 1, 5);
     let completion = harness.next();
     assert!(

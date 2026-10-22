@@ -37,13 +37,11 @@ Windows contracts.
 ## Why these direct windows-sys features are sufficient
 
 `Win32_Foundation` provides native handles, errors, and metadata value types.
-`Win32_Globalization` provides `CompareStringOrdinal` for crate-owned
-non-linguistic name comparison.
 `Win32_Storage_FileSystem` provides directory open/enumeration APIs and record
-layouts. `Win32_System_Threading` provides signaling and resetting the lazily
-created manual-reset CQ event. Event creation itself comes from the safe
-`WaitableHandle` constructor in `windows-threadpool-sys`, so this crate does not
-need direct Security bindings. The enumeration API is not overlapped, so direct
+layouts. The lazily created manual-reset CQ event is a `win-sync-sys` `Event`
+(D-25), and the non-linguistic name comparison is `win-text-sys`'s (D-26), so
+this crate needs neither Threading nor Globalization bindings and no direct
+Security bindings. The enumeration API is not overlapped, so direct
 System IO bindings would claim a capability this design intentionally excludes.
 
 ## Why paths are snapshotted before submission
@@ -376,3 +374,123 @@ first was reverted once the actual defect was fixed: the original 30s ceiling
 was never the problem, and inflating it for every integration test would only
 have made a future genuine hang in any other test take four times as long to
 be reported as a failure.
+
+## Why the path contract is taken from the request crate, and what that gave up (D-22)
+
+`D-7` had this crate resolve an ordinary path with `GetFullPathNameW` when the request was built, cap it at
+`MAX_PATH` so that acceptance would not depend on the host executable's long-path manifest, and validate a
+`\\?\` path's qualification. The request crate was given a copy of that preparation when it was made, rather
+than a dependency, because this crate was released and that one was not (its D-9). The copy was then replaced
+there by a graft onto a captured root (its D-19), and the engineer decided on 2026-10-15 that this crate takes
+that contract and deletes its own (`PATH-1`, the workspace's `M26+.3`).
+
+What was given up is the manifest independence `D-7` argued for: an unprefixed path past `MAX_PATH` now opens
+or fails as the host's manifest and the machine's policy decide. `D-7` argued it for a layer that builds paths.
+This crate enumerates one directory and builds none; the layer that would build paths, a traversal composed on
+this one, does not exist, and whether it needs that contract is `REVIEW-1`'s question. The refusals that went
+were checks ahead of `CreateFileW` that its documentation does not make conditions of the call, which [the
+workspace rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) does not keep.
+
+The request crate's type had to be public for this (its D-30). Holding that crate's `OpenFile` in the request
+instead was not taken: it is not `Clone` or `Eq`, which `EnumerationRequest` is, and the worker's open, under
+the captured token, is this crate's.
+
+## Why the crate's target is `forbid(unsafe_code)` (D-23)
+
+**Asked on 2026-10-18**, after `NR-3.10` left this crate reading a volume serial with its own `unsafe` call
+because the request crate's typed entry would have duplicated the directory handle. The engineer ruled that
+duplication legacy and asked what moving this crate onto shared handles and the safe `win-*` wrappers would take.
+The census then was ten `unsafe` blocks outside tests: five in the native calls, one in the buffer, three in the
+completion ring's doorbell, one in the case-insensitive comparison. Each has a wrapper that exists or is planned
+(D-23), so the attribute can be the end state rather than an aspiration, and the build is what checks it.
+
+**What was not chosen.** Keeping the native calls private and only removing the duplication would have left this
+crate a second implementation of calls the request crate already makes faithfully, with its own reading of their
+codes; the typed outcomes this crate derives from those codes are kept, and only the calls move.
+
+## Why a refill is a request on a clone, and how the move went (D-24)
+
+**Built 2026-10-20** as `SAFE-2`. Of the census D-23 gives, the native calls and the buffer are gone: five `unsafe`
+blocks in `native.rs` and the one in the buffer's byte view. The completion ring's three and the comparison's one
+remain, for `SAFE-3` and `SAFE-4`.
+
+**A request per refill was chosen over holding the two queries.** The engine could build the restart and continuing
+`QueryFileInformation` once, when the directory opens, and perform them for the enumeration's life. That moves a
+clone of the handle from each refill to the open, and adds two fields of engine state to save one atomic increment per
+batch beside a system call. A request built where the query is made also keeps the class and the handle visible at the
+one site that uses them, which is what the class and handle test reads.
+
+**The buffer's replacement was not a new type.** This crate's own buffer was a `Vec<u64>` with a fallible reservation
+and a byte view that needed an `unsafe` slice. `io_buffers::AlignedBuf` is the type the request crate's
+`perform_into` takes, it states its alignment as a property of the type and reports an allocation failure instead of
+aborting, and its slice is safe. Considered and not taken: **keeping `NativeBuffer` and copying into an `AlignedBuf`
+per call**, which would have added a copy of every batch to keep a type whose only remaining job was the one the
+other type does.
+
+**The arm that cannot be reached.** `perform_into` returns a refusal ahead of the call as well as the call's code.
+Considered for the refusal: **a new `EnumerationError` variant**, a public addition for a case no caller can cause;
+**a panic**, which in a thread-pool callback loses the enumeration's terminal record; and **a failure with code zero**,
+which is what `engine::advance` already does for its own unreachable state and which says Windows produced no code.
+The third was taken. That it cannot be reached is an argument from the request crate's table of classes and this
+crate's buffer, not a measurement, so the sabotage that would make it report exhaustion is declared a survivor with
+what would reach it: a refusal added to the extended-directory classes.
+
+**What the request crate's entries changed about the open's error.** The old open read the thread's last error itself,
+before the guard restored the token, and said so in a comment. The request crate's `perform` reads it in the statement
+after the call, so the same ordering now holds without this crate arranging it, and the open's code reaches the
+enumeration unaltered for the missing directory and the file named as a directory, which the existing tests pin.
+
+## Why the doorbell's wait target shares the ring's handle, and what it gave up (D-25)
+
+**Built 2026-10-20** as `SAFE-3`. Of the census D-23 gives, the completion ring's three `unsafe` blocks are gone: the
+`SetEvent` and `ResetEvent` calls and the duplicate. The comparison's one remains, for `SAFE-4`.
+
+**A wait target was chosen over handing out the event.** The shared handle could have been a clone of the ring's
+`Event`, which is also a share. That clone can be set and reset in safe code, so a client could break the one
+invariant the doorbell has, that it is signalled exactly while there is something to take. A `WaitableHandle` made
+from the clone is the same handle, and it exposes only a borrowed view and the handle's return, so what a client can
+do with it is what a `ThreadpoolWait` needs. Considered and not taken: **a `WaitOnlyEvent`**, which needs a
+duplicate and so is the thing the item removes; and **keeping `doorbell_owned` beside the new method**, which would
+leave the duplicate in the public surface after the engineer's ruling that duplication is legacy.
+
+**The refresh's result.** `Event::set` and `Event::reset` return a result where the raw calls returned a value this
+crate ignored. The event is made by the ring with full access, so a failure would be a defect in this crate and not a
+condition a caller can cause; `debug_assert` reports it in a build that runs the tests, and a release build does what
+it always did. Considered: **returning the error from every mutation**, which would give sends and takes a failure
+that no caller could act on.
+
+**What the tests no longer need.** The model's check made a duplicate of the doorbell only to hand a wait an owned
+handle; the wait takes a borrowed one, so the duplicate is gone with the helper. The engine tests' raw byte write is
+not a wait and is `SAFE-5`'s to find.
+
+## Why a comparison's result is read in one function, and what the earlier fallbacks were (D-26)
+
+**Built 2026-10-20** as `SAFE-4`. Of the census D-23 gives, the comparison's one `unsafe` block is gone, and with it
+the last in this crate's non-test code: what remains is a raw byte write in an engine test, for `SAFE-5`.
+
+**The earlier code declared two fallbacks unreachable.** Both turned a run too long for the call's count into an exact
+comparison, and its mutation run showed them surviving, which it explained by the four gigabytes a test would need.
+The wrapper reports that case as an error and not as a count, so what the crate does with it is a function of a
+result, and a result can be made in a test. The fallback is therefore tested, where it had only been argued.
+Considered: **treating the refusal as a non-match**, which would make a name that long unequal to itself under
+`Insensitive` and equal under `Sensitive`; the exact comparison keeps the two consistent for a run that is the same
+units on both sides.
+
+**A failure of the call is a non-match, as it was.** Under the earlier code any result other than `CSTR_EQUAL` was
+unequal, a failure included. Reporting the failure instead would change `matches`' signature for a call that, with
+the arguments this crate passes, has no documented way to fail.
+
+## What `forbid(unsafe_code)` covers, and what the census ended at (D-23)
+
+**Built 2026-10-20** as `SAFE-5`. The census D-23 gives was ten `unsafe` blocks outside tests, and the last of them
+went with `SAFE-4`. The build then found one more, which the census did not count because it was in a test: a raw
+four-byte write that corrupted a record's `NextEntryOffset`. It is a slice write through the buffer's own
+`as_mut_slice`, which is why the engine's buffer being an `io_buffers::AlignedBuf` ([D-24](DESIGN-NOTES.md#d-24)) was what
+made the attribute reachable.
+
+**What the attribute covers.** It sits on the library root, so it covers the library and its unit tests, which are
+compiled into it. It does not reach the integration tests or the doctests, which are separate crates; neither holds
+an `unsafe` token, and what the attribute guarantees is only the library's.
+
+**The older attribute is replaced and not kept beside it.** `forbid(unsafe_op_in_unsafe_fn)` governs the body of an
+`unsafe fn`, and a crate with no `unsafe` has none.

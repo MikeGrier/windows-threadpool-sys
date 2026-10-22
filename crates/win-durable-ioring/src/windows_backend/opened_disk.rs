@@ -14,10 +14,8 @@
 //! partition and no volume, so that blocking is documented and not exercised by them.
 
 use std::fmt;
-use std::fs::OpenOptions;
 use std::io;
 use std::marker::PhantomData;
-use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 
 use win_shared_os_owned_handle::SharedHandle;
@@ -25,7 +23,9 @@ use win_volume_sys::bytes_per_sector;
 
 use super::opened_file::{Buffering, Unbuffered};
 use super::opened_volume::disk_flush_domain;
-use durable_ioring::{FlushDomain, Geometry};
+use super::raw_open;
+use super::share_mode::ShareMode;
+use durable_ioring::{DataAccess, FlushDomain, Geometry, ReadWrite};
 
 #[cfg(test)]
 mod tests;
@@ -61,34 +61,68 @@ impl fmt::Display for DiskPath {
     }
 }
 
+/// How a disk is opened beyond its path: what other opens of the disk may request meanwhile, as
+/// [`VolumeOptions`](super::VolumeOptions) carries for a volume.
+#[derive(Clone, Copy, Debug)]
+#[must_use]
+pub struct DiskOptions {
+    share: ShareMode,
+}
+
+impl Default for DiskOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DiskOptions {
+    /// Nothing requested beyond opening the disk, which is shared for reading, writing and
+    /// deletion, as `std::fs::OpenOptions` opens one.
+    pub fn new() -> Self {
+        Self {
+            share: ShareMode::ALL,
+        }
+    }
+
+    /// What other opens of the disk may request while this handle is open (`dwShareMode`), as
+    /// [`FileOptions::share`](super::FileOptions::share) is for a file. [`ShareMode::NONE`] opens the
+    /// disk exclusively. An open the sharing of either side does not allow fails with a
+    /// [`SharingViolation`](super::SharingViolation). Calling this again replaces the mode.
+    pub fn share(mut self, share: ShareMode) -> Self {
+        self.share = share;
+        self
+    }
+}
+
 /// A whole physical disk this crate opened, in buffering mode `B` ([`Unbuffered`] unless said
-/// otherwise): a [`SharedHandle`], its number and the sector it is addressed in. Cloning shares the
-/// one handle.
+/// otherwise) and with data access `A` ([`ReadWrite`] unless said otherwise): a [`SharedHandle`],
+/// its number and the sector it is addressed in. Cloning shares the one handle.
 ///
-/// It is what [`Win32FileTarget::from_disk`](super::Win32FileTarget::from_disk) is made from.
+/// It is what [`Win32FileTarget::from_disk`](super::Win32FileTarget::from_disk) is made from, when
+/// `A` has a data right. The data access is the one the open was given, which no argument carries, so
+/// it is named in the type at the call: `OpenedDisk::<Unbuffered, ReadOnly>::open(path, options)`.
 #[derive(Clone, Debug)]
-pub struct OpenedDisk<B: Buffering = Unbuffered> {
+pub struct OpenedDisk<B: Buffering = Unbuffered, A: DataAccess = ReadWrite> {
     handle: SharedHandle,
     geometry: Geometry,
     disk_number: u32,
-    buffering: PhantomData<B>,
+    mode: PhantomData<(B, A)>,
 }
 
-impl<B: Buffering> OpenedDisk<B> {
-    /// Open `path` for reading and writing in buffering mode `B`, and find its sector size.
+impl<B: Buffering, A: DataAccess> OpenedDisk<B, A> {
+    /// Open `path` with data access `A` in buffering mode `B`, and find its sector size.
     ///
-    /// Opening a disk for writing needs an account that is an administrator.
+    /// Opening a disk for writing needs an account that is an administrator. Opening it with
+    /// [`NoData`](super::NoData) asks for no data right, which is enough to query the disk, and the
+    /// result cannot be made into a target.
     ///
     /// # Errors
     ///
-    /// Whatever the open reports, such as `ERROR_FILE_NOT_FOUND` for a number no disk has, and the
-    /// device's own error from the sector size control.
-    pub fn open(path: DiskPath) -> io::Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(B::FLAGS)
-            .open(path.path())?;
+    /// Whatever the open reports, such as `ERROR_FILE_NOT_FOUND` for a number no disk has, a
+    /// [`SharingViolation`](super::SharingViolation) among it, and the device's own error from the
+    /// sector size control.
+    pub fn open(path: DiskPath, options: DiskOptions) -> io::Result<Self> {
+        let file = raw_open::open::<B, A>(path.path(), options.share)?;
         let sector = bytes_per_sector(&file)?;
         let geometry = B::sector_geometry(sector)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -96,7 +130,7 @@ impl<B: Buffering> OpenedDisk<B> {
             handle: SharedHandle::from(file),
             geometry,
             disk_number: path.disk_number(),
-            buffering: PhantomData,
+            mode: PhantomData,
         })
     }
 
@@ -132,18 +166,18 @@ impl<B: Buffering> OpenedDisk<B> {
             handle,
             geometry: B::sector_geometry(sector).expect("a power of two"),
             disk_number,
-            buffering: PhantomData,
+            mode: PhantomData,
         }
     }
 }
 
-impl<B: Buffering> AsHandle for OpenedDisk<B> {
+impl<B: Buffering, A: DataAccess> AsHandle for OpenedDisk<B, A> {
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
     }
 }
 
-impl<B: Buffering> AsRawHandle for OpenedDisk<B> {
+impl<B: Buffering, A: DataAccess> AsRawHandle for OpenedDisk<B, A> {
     fn as_raw_handle(&self) -> RawHandle {
         self.handle.as_raw_handle()
     }

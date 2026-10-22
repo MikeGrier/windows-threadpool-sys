@@ -152,6 +152,28 @@ blocking_states! {
     CoherenceNotCollected => "coherence between the two enumerations was not collected",
     /// The bracket did not establish that the machine held still.
     BracketNotHeld => "the bracket did not establish that the machine held still",
+    /// A cache level the survey carries has no partitions at all.
+    CacheLevelsWithoutPartitions => "a cache level has no partitions",
+    /// A measured topology reports no processors, or no groups.
+    MeasuredButCountsAbsent => "a measured topology reports no processors or no groups",
+    /// A NUMA domain was reported only by CPU Sets.
+    NumaDomainsOnlyInCpuSets => "a NUMA domain was reported only by CPU Sets",
+    /// A NUMA domain was reported by no source at all.
+    NumaDomainsUnreported => "a NUMA domain was reported by no source",
+    /// A NUMA domain carries more than one distinct node number.
+    NumaDomainsWithConflictingLabels => "a NUMA domain carries conflicting node numbers",
+    /// A core was reported only by CPU Sets.
+    CoresOnlyInCpuSets => "a core was reported only by CPU Sets",
+    /// A core or a package covers no processors.
+    RelationsWithoutProcessors => "a core or package covers no processors",
+    /// Two relationship-walk records of one kind claim the same processor.
+    OverlappingWalkRelations => "two walk records of one kind claim the same processor",
+    /// A relation was described by a caller rather than reported by the platform.
+    DescribedRelations => "a relation was described rather than reported",
+    /// A relation was reported by no source at all.
+    UnreportedRelations => "a relation was reported by no source",
+    /// A per-processor attribute carries more than one distinct value.
+    ProcessorAttributeConflicts => "a processor attribute carries conflicting values",
 }
 
 /// A state that forbids an agreeing verdict, found beside one.
@@ -240,21 +262,22 @@ impl fmt::Display for Violation {
 /// enumerating them separately is that a deleted push site leaves the state
 /// here and the list empty -- so this is what notices, and the list could not.
 ///
-/// **The converse does NOT hold, and the wording here used to imply it did.**
-/// This said the absentees were "derived counts whose only source IS the
-/// cross-check's own arithmetic", which would make their exclusion principled.
-/// It is false for most of them: `CacheLevelsWithoutPartitions`,
-/// `NumaDomainsOnlyInCpuSets`, `CoresOnlyInCpuSets`, `RelationsWithoutProcessors`
-/// and the rest read fields that sit on [`Observation`] in plain sight. So
-/// deleting one of THOSE push sites is not caught here -- the verdict can reach
-/// `agree` with `blocking_states` silent -- and the guarantee above covers the
-/// states actually listed below, not every condition `cross_check` can find.
-/// Reported by three review rounds against two different variants of the claim.
+/// **Every `parse_incomplete` condition `cross_check` can file has a state
+/// here**, and `every_parse_incomplete_code_is_answered_by_a_blocking_state` in
+/// `tests/a_real_report_agrees_with_itself.rs` fails when a new condition does
+/// not -- so the guarantee above covers the whole list rather than whichever
+/// part of it somebody remembered to model.
 ///
-/// The tautology argument is still the right test for what belongs here; it
-/// simply was not what excluded these. Closing the gap is queued as **M4.1** in
-/// [CHECKLIST.md](../../CHECKLIST.md) rather than recorded only here, because a
-/// decision written in a comment schedules nothing.
+/// It used to cover a part. Eleven conditions were left out on the grounds that
+/// they were "derived counts whose only source IS the cross-check's own
+/// arithmetic", which would have made leaving them out principled; it was false
+/// for all eleven, each of which reads fields that sit on [`Observation`] in
+/// plain sight. Reported by three review rounds against two wordings of the
+/// claim, and closed by `M4.1`.
+///
+/// The tautology test is still what decides membership: a state whose only
+/// source is `cross_check`'s own output does not belong, because it restates
+/// `verdict()` and goes blind to a deleted push site. None does yet.
 #[must_use]
 pub fn blocking_states(observation: &Observation) -> Vec<BlockingState> {
     let mut states = Vec::new();
@@ -323,6 +346,52 @@ pub fn blocking_states(observation: &Observation) -> Vec<BlockingState> {
 
     if observation.bracket != super::BracketOutcome::HeldStill {
         states.push(BlockingState::BracketNotHeld);
+    }
+
+    if observation.caches.iter().any(|cache| cache.domains() == 0) {
+        states.push(BlockingState::CacheLevelsWithoutPartitions);
+    }
+
+    if observation.topology_was_measured
+        && (observation.online_processors == 0 || observation.groups == 0)
+    {
+        states.push(BlockingState::MeasuredButCountsAbsent);
+    }
+
+    if observation.numa_domains_only_in_cpu_sets > 0 {
+        states.push(BlockingState::NumaDomainsOnlyInCpuSets);
+    }
+
+    if observation.numa_domains_unreported > 0 {
+        states.push(BlockingState::NumaDomainsUnreported);
+    }
+
+    if observation.numa_domains_with_conflicting_labels > 0 {
+        states.push(BlockingState::NumaDomainsWithConflictingLabels);
+    }
+
+    if observation.cores_only_in_cpu_sets > 0 {
+        states.push(BlockingState::CoresOnlyInCpuSets);
+    }
+
+    if observation.cores_without_processors > 0 || observation.packages_without_processors > 0 {
+        states.push(BlockingState::RelationsWithoutProcessors);
+    }
+
+    if observation.overlapping_walk_relations > 0 {
+        states.push(BlockingState::OverlappingWalkRelations);
+    }
+
+    if observation.described_relations > 0 {
+        states.push(BlockingState::DescribedRelations);
+    }
+
+    if observation.unreported_relations > 0 {
+        states.push(BlockingState::UnreportedRelations);
+    }
+
+    if observation.processor_attribute_conflicts > 0 {
+        states.push(BlockingState::ProcessorAttributeConflicts);
     }
 
     states

@@ -1,0 +1,43 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "durable-ioring-events"
+version = "0.0.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "The ETW provider for durable-ioring: its events and manifest, and EtwDiagnostics, a diagnostic sink that writes each event to the provider. Costs a test of whether a session is listening when nobody is."
+keywords = ["windows", "etw", "tracing", "durability", "diagnostics"]
+categories = ["os::windows-apis", "development-tools::debugging"]
+
+# Named by the engineer, 2026-10-20: "win-dioring, I'd put it in its own crate", and then "Change the name of the event source
+# to durable-ioring-events" (DE-D-1). It is the provider's name too.
+
+[dependencies]
+# The sink trait, the events it carries and the kinds it is asked about (DI-D-51).
+durable-ioring = { version = "0.2.0", path = "../durable-ioring" }
+# The provider's registration and the write of an event (DI-12.1.4). This crate has no `unsafe` of its own.
+win-etw-sys = { version = "0.0.1", path = "../win-etw-sys" }
+# The failure a registration reports.
+win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
+
+# Pairs the begins and ends of a trace's CSV dump (DE-D-6). Its tests run with the crate's.
+[[example]]
+name = "pair_trace"
+path = "examples/pair_trace/main.rs"
+test = true
+
+[dev-dependencies]
+# The trace session the tests use to see an event reach ETW (win-etw-sys' WE-D-3): it needs privilege, so the tests that use it
+# are ignored by default. A dev-dependency's features reach test builds only.
+win-etw-sys = { path = "../win-etw-sys", features = ["test-util"] }
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]

@@ -36,6 +36,15 @@ milestones when the next of these is taken up.
   dependency-version check ([check-dependency-versions.cjs](../../.github/release/check-dependency-versions.cjs)) does not cover this,
   since it asks only that a version exist. Gated on this crate's next release.
 
+  **Amended 2026-10-20: no `Release-As` footer is needed for the release that carries `WS-2.2`.** That release
+  includes a breaking commit (`feat(win-sync)!`), and with `bump-minor-pre-major` a breaking change takes 0.0.2
+  to 0.1.0 on its own. A pin there would also be refused by
+  [check-commit-scope.ps1](../../tools/check-commit-scope.ps1), which rejects a pin followed by a break in the
+  same release. What is left of this item is the dependents' re-pin after the release.
+
+WS-M2 -- an event's clones share one handle -- is complete and archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#ws-22).
+
 ## M-inf -- Parked
 
 - [ ] **WS-inf.1** -- **The in-process primitives**: SRW locks with condition variables (including

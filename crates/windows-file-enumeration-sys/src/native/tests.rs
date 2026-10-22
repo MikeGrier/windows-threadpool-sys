@@ -15,12 +15,14 @@ fn wide(path: &std::path::Path) -> Wtf16String {
     Wtf16String::from_os_str(path.as_os_str())
 }
 
-fn buffer() -> NativeBuffer {
-    NativeBuffer::try_new(MINIMUM_BUFFER_CAPACITY).expect("allocation")
+fn buffer() -> AlignedBuf {
+    AlignedBuf::zeroed(MINIMUM_BUFFER_CAPACITY, RECORD_ALIGNMENT).expect("allocation")
 }
 
-fn open(path: &std::path::Path) -> Result<OwnedHandle, EnumerationError> {
-    open_directory(&wide(path), &token())
+fn open(path: &std::path::Path) -> Result<SharedHandle, EnumerationError> {
+    let anchored =
+        AnchoredPath::new(wide(path)).expect("an absolute path has no current directory to read");
+    open_directory(&anchored, &token())
 }
 
 #[test]
@@ -211,4 +213,83 @@ fn an_unrecognised_code_is_an_ordinary_query_failure() {
         matches!(error, EnumerationError::DirectoryQuery(_)),
         "{error:?}"
     );
+}
+
+// --- The directory's calls are the request crate's entries (SAFE-2) ----------------------------
+
+#[test]
+fn the_open_asks_for_listing_with_every_share_and_backup_semantics_and_nothing_more() {
+    // The constraints M21.3 recorded, on the request the open performs: listing access and not
+    // `GENERIC_READ`; every share, so enumerating stops no one; an existing directory; and backup
+    // semantics, which a directory handle needs at all. The flags are exactly that one, so the
+    // handle is not overlapped.
+    // A relative path, so the Win32 form is the anchored one and differs from the given one: an
+    // open that anchored it a second time, or opened the given path, would not match.
+    let anchored = AnchoredPath::new(wide(std::path::Path::new("a-relative-child")))
+        .expect("the current directory is readable");
+    let request = open_request(&anchored);
+
+    assert_eq!(request.desired_access(), FILE_LIST_DIRECTORY);
+    assert_eq!(
+        request.share_mode(),
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+    );
+    assert_eq!(request.creation_disposition(), OPEN_EXISTING);
+    assert_eq!(request.flags_and_attributes(), FILE_FLAG_BACKUP_SEMANTICS);
+    assert!(request.security().is_none() && request.template().is_none());
+    assert_eq!(request.path(), anchored.given());
+    assert_eq!(request.win32_path(), anchored.win32());
+    assert_ne!(request.win32_path(), request.path());
+}
+
+#[test]
+fn an_open_directory_shares_delete_so_it_does_not_stop_a_rename() {
+    let scratch = Scratch::with_files(&["inside.txt"]);
+    let held = scratch.child("held");
+    std::fs::create_dir(&held).expect("a subdirectory");
+    let directory = open(&held).expect("open");
+
+    std::fs::rename(&held, scratch.child("renamed")).expect("a held directory can be renamed");
+    assert!(
+        volume_serial(&directory).is_ok(),
+        "the handle follows the rename"
+    );
+}
+
+#[test]
+fn a_refill_query_is_the_phases_class_on_the_handle_it_was_given() {
+    let scratch = Scratch::empty();
+    let directory = open(scratch.path()).expect("open");
+
+    let first = refill_query(&directory, Refill::First);
+    let next = refill_query(&directory, Refill::Next);
+
+    assert_eq!(
+        first.class(),
+        FileInformationClass::ID_EXTD_DIRECTORY_RESTART
+    );
+    assert_eq!(next.class(), FileInformationClass::ID_EXTD_DIRECTORY);
+    assert!(first.handle().same_handle(&directory));
+    assert!(next.handle().same_handle(&directory));
+}
+
+#[test]
+fn a_whole_read_leaves_the_directory_with_no_other_holder() {
+    // `try_into_owned` succeeds only for the last holder, so a clone kept by the open, the
+    // directory check, the serial read or any refill would show here. Together with the entries
+    // holding the very handle they are given, this is what "makes no handle beyond its open" is.
+    let scratch = Scratch::with_files(&["a.txt", "b.txt", "c.txt"]);
+    let directory = open(scratch.path()).expect("open");
+    let mut buffer = buffer();
+    volume_serial(&directory).expect("a serial");
+
+    assert!(matches!(
+        refill(&directory, &mut buffer, Refill::First),
+        RefillOutcome::Batch
+    ));
+    while let RefillOutcome::Batch = refill(&directory, &mut buffer, Refill::Next) {}
+
+    directory
+        .try_into_owned()
+        .expect("every query's share was released");
 }

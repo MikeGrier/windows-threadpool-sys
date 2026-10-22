@@ -3,7 +3,12 @@
 
 use wtf_string::Wtf16String;
 
-use super::{Route, RouteScope};
+use std::cmp::Ordering;
+
+use win_error_codes::Win32Error;
+use win_text_sys::{CompareStringOrdinalError, Operand};
+
+use super::{Route, RouteScope, equal_from, names_match};
 use crate::notify::{Change, ChangeKind, RelativeName};
 use crate::queue::{WatchId, channel};
 use crate::watch::{RetryMode, VolumeChangePolicy};
@@ -174,4 +179,77 @@ fn order_is_preserved_within_a_selection() {
         selected(&route, &["a.txt", "sub\\hidden.txt", "b.txt", "c.txt"]),
         vec!["a.txt", "b.txt", "c.txt"]
     );
+}
+
+fn units(text: &str) -> Vec<u16> {
+    text.encode_utf16().collect()
+}
+
+#[test]
+fn names_match_folds_case_only_when_the_directory_is_case_insensitive() {
+    for (left, right) in [("a.txt", "A.TXT"), ("\u{e9}", "\u{c9}"), ("Mixed", "mIXED")] {
+        assert!(names_match(&units(left), &units(right), false), "{left:?}");
+        assert!(!names_match(&units(left), &units(right), true), "{left:?}");
+    }
+}
+
+#[test]
+fn names_match_agrees_with_itself_on_identical_names_in_both_modes() {
+    for text in ["", "a", "target.txt", "\u{1f600}.txt", "a b"] {
+        assert!(names_match(&units(text), &units(text), false), "{text:?}");
+        assert!(names_match(&units(text), &units(text), true), "{text:?}");
+    }
+}
+
+#[test]
+fn names_match_rejects_different_names_in_both_modes() {
+    for (left, right) in [("a", "b"), ("a", ""), ("", "a"), ("ab", "a"), ("a", "ab")] {
+        assert!(!names_match(&units(left), &units(right), false), "{left:?}");
+        assert!(!names_match(&units(left), &units(right), true), "{left:?}");
+    }
+}
+
+#[test]
+fn names_match_compares_an_interior_nul_as_content() {
+    let with_b = [u16::from(b'a'), 0, u16::from(b'b')];
+    let with_c = [u16::from(b'a'), 0, u16::from(b'c')];
+    for case_sensitive in [false, true] {
+        assert!(names_match(&with_b, &with_b, case_sensitive));
+        assert!(!names_match(&with_b, &with_c, case_sensitive));
+        assert!(!names_match(
+            &[u16::from(b'a'), 0],
+            &[u16::from(b'a')],
+            case_sensitive
+        ));
+    }
+}
+
+#[test]
+fn a_comparison_result_is_a_match_only_when_it_says_equal() {
+    let a = [u16::from(b'a')];
+    let b = [u16::from(b'b')];
+    assert!(equal_from(Ok(Ordering::Equal), &a, &b));
+    assert!(!equal_from(Ok(Ordering::Less), &a, &a));
+    assert!(!equal_from(Ok(Ordering::Greater), &a, &a));
+}
+
+#[test]
+fn a_name_too_long_for_the_call_is_compared_exactly() {
+    let too_long = |len| {
+        Err(CompareStringOrdinalError::TooLong {
+            operand: Operand::First,
+            len,
+        })
+    };
+    let a = [u16::from(b'a')];
+    let upper_a = [u16::from(b'A')];
+    assert!(equal_from(too_long(1 << 32), &a, &a));
+    assert!(!equal_from(too_long(1 << 32), &a, &upper_a));
+}
+
+#[test]
+fn a_failure_of_the_call_is_not_a_match() {
+    let failed = Err(CompareStringOrdinalError::Call(Win32Error::from_code(87)));
+    let a = [u16::from(b'a')];
+    assert!(!equal_from(failed, &a, &a));
 }

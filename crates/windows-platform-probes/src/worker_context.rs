@@ -36,6 +36,10 @@ use windows_sys::Win32::System::Threading::{
     SetThreadToken, TP_CALLBACK_ENVIRON_V3, TrySubmitThreadpoolCallback,
 };
 
+mod raw_row;
+
+pub use self::raw_row::*;
+
 /// What a worker observed about the thread it was handed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WorkerContext {

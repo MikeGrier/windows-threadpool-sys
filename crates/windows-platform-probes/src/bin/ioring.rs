@@ -11,8 +11,10 @@
 //! this reports "cannot measure" rather than a false negative on a host that
 //! has no ring.
 
+use windows_platform_probes::build_identity::this_build;
 use windows_platform_probes::ioring::{
-    IoRingSupport, is_available, measure_registration, measure_thread_agnosticism,
+    IoRingSupport, NO_USABLE_IORING, declined_row, is_available, measure_registration,
+    measure_thread_agnosticism, raw_row,
 };
 use windows_platform_probes::report::emit_report;
 
@@ -37,10 +39,7 @@ fn render(out: &mut dyn std::fmt::Write) {
     let _ = writeln!(out, "== IoRing registration and thread agnosticism ==\n");
 
     if !is_available() {
-        let _ = writeln!(
-            out,
-            "this host has no usable IoRing, so nothing was measured."
-        );
+        let _ = writeln!(out, "{NO_USABLE_IORING}, so nothing was measured.");
         let _ = writeln!(
             out,
             "(Reported rather than measured: 'we could not ask' and 'the answer"
@@ -50,11 +49,17 @@ fn render(out: &mut dyn std::fmt::Write) {
             "is no' are different facts, and conflating them is how a design note"
         );
         let _ = writeln!(out, "ends up citing a measurement that never ran.)");
+        let _ = writeln!(
+            out,
+            "{}",
+            declined_row(NO_USABLE_IORING, &this_build().to_string()).render()
+        );
         return;
     }
 
     let _ = writeln!(out, "registration semantics:");
-    match measure_registration() {
+    let registration = measure_registration();
+    match &registration {
         IoRingSupport::Unavailable => {
             let _ = writeln!(out, "  (no ring)");
         }
@@ -87,7 +92,8 @@ fn render(out: &mut dyn std::fmt::Write) {
     }
 
     let _ = writeln!(out, "\nthread agnosticism:");
-    match measure_thread_agnosticism() {
+    let agnosticism = measure_thread_agnosticism();
+    match &agnosticism {
         IoRingSupport::Unavailable => {
             let _ = writeln!(out, "  (no ring)");
         }
@@ -130,4 +136,11 @@ fn render(out: &mut dyn std::fmt::Write) {
             }
         }
     }
+
+    // The raw data, last, as every probe's normal run emits it (`M8.11`).
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(&registration, &agnosticism, &this_build().to_string()).render()
+    );
 }

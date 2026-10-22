@@ -1,0 +1,232 @@
+{
+  "package": "windows-file-enumeration-sys",
+  "description": "Sabotages for windows-file-enumeration-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are. Begun with PATH-1, so it covers the path contract this crate now takes from windows-namespace-request-sys and nothing older.",
+  "notCoveredHere": "The graft's own rules are the request crate's and are sabotaged in its manifest (the NR-3.3 entries); this one covers only this crate's use of them. A failure to read the current directory cannot be made by a test, so the code it carries is a declared survivor.",
+  "sabotages": [
+    {
+      "name": "SAFE-1: the identity is read from a different file than the one enumerated",
+      "file": "tests/integration/metadata.rs",
+      "expect": "caught",
+      "why": "The test now hands the request crate a SharedHandle made from the opened file; this shows the comparison still tells one file from another rather than passing on any identity.",
+      "find": ["    let file = std::fs::File::open(scratch.child(\"identified.txt\")).expect(\"open the file\");"],
+      "replace": ["    let other = scratch.child(\"other.txt\");\n    std::fs::write(&other, b\"x\").expect(\"write a second file\");\n    let file = std::fs::File::open(other).expect(\"open the file\");"]
+    },
+    {
+      "name": "SAFE-1 control: the same file is opened another way",
+      "file": "tests/integration/metadata.rs",
+      "expect": "survives",
+      "why": "A control: how the file is opened is incidental; which file it is, is what the test claims.",
+      "find": ["    let file = std::fs::File::open(scratch.child(\"identified.txt\")).expect(\"open the file\");"],
+      "replace": ["    let file = std::fs::OpenOptions::new().read(true).open(scratch.child(\"identified.txt\")).expect(\"open the file\");"]
+    },
+    {
+      "name": "PATH-1: the worker opens the path as given and not the grafted one",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "The two name the same directory until the current directory moves, so only the child-process test that moves it after the request is built tells them apart. Since SAFE-2 the open takes the request's AnchoredPath, so this opens the given path anchored again at open time instead.",
+      "find": ["native::open_directory(engine.request.anchored_path(), &engine.token)"],
+      "replace": ["native::open_directory(&windows_namespace_request_sys::AnchoredPath::new(wtf_string::Wtf16String::from_units(engine.request.path().as_units())).expect(\"anchored\"), &engine.token)"]
+    },
+    {
+      "name": "PATH-1: the path as given is reported as the grafted one",
+      "file": "src/request.rs",
+      "expect": "caught",
+      "why": "path() is documented as the path the caller gave, and a relative one differs from what the worker opens.",
+      "find": ["    pub fn path(&self) -> &Wtf16Str {\n        self.path.given()\n"],
+      "replace": ["    pub fn path(&self) -> &Wtf16Str {\n        self.path.win32()\n"]
+    },
+    {
+      "name": "PATH-1: an interior NUL is reported as a failure to read the current directory",
+      "file": "src/request.rs",
+      "expect": "caught",
+      "why": "The two failures say different things to the caller, and only the first is about the path itself.",
+      "find": ["        PathCaptureError::InteriorNul => RequestError::new(RequestFailure::InteriorNul),\n"],
+      "replace": ["        PathCaptureError::InteriorNul => RequestError::new(RequestFailure::PathCapture),\n"]
+    },
+    {
+      "name": "PATH-1: the code of a failure to read the current directory is dropped",
+      "file": "src/request.rs",
+      "expect": "survives",
+      "why": "Declared, and not a gap a test can close: GetCurrentDirectoryW cannot be made to fail from a test without breaking the process it runs in. What would reach it is a fault seam in the request crate's current-directory read, which it does not have.",
+      "find": ["            RequestError::with_code(RequestFailure::PathCapture, code)\n"],
+      "replace": ["            {\n                let _ = code;\n                RequestError::new(RequestFailure::PathCapture)\n            }\n"]
+    },
+    {
+      "name": "PATH-1 control: the request's path is built through a binding",
+      "file": "src/request.rs",
+      "expect": "survives",
+      "why": "A control: the same value through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        Ok(Self {\n            path,\n"],
+      "replace": ["        Ok(Self {\n            path: { let anchored = path; anchored },\n"]
+    },
+    {
+      "name": "SAFE-2: the open drops delete sharing",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "A held enumeration would stop a rename of its directory; the rename test and the request-shape test see it.",
+      "find": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)\n"],
+      "replace": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)\n"]
+    },
+    {
+      "name": "SAFE-2: the open asks for read access instead of listing",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "M21.3's constraint: listing access and not GENERIC_READ, so a directory a caller may list but not read still opens.",
+      "find": ["        .with_desired_access(FILE_LIST_DIRECTORY)\n"],
+      "replace": ["        .with_desired_access(0x8000_0000)\n"]
+    },
+    {
+      "name": "SAFE-2: the open drops backup semantics",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "Without it CreateFileW fails on any directory.",
+      "find": ["        .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS)\n"],
+      "replace": ["        .with_flags_and_attributes(0)\n"]
+    },
+    {
+      "name": "SAFE-2: the open adds the overlapped flag",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "The handle must not be overlapped; the request-shape test pins the flags to backup semantics alone.",
+      "find": ["        .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS)\n"],
+      "replace": ["        .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS | 0x4000_0000)\n"]
+    },
+    {
+      "name": "SAFE-2: the first refill continues instead of restarting",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "The first query restarts the enumeration; the class test sees the swap.",
+      "find": ["        Refill::First => FileInformationClass::ID_EXTD_DIRECTORY_RESTART,\n"],
+      "replace": ["        Refill::First => FileInformationClass::ID_EXTD_DIRECTORY,\n"]
+    },
+    {
+      "name": "SAFE-2: every directory is taken for one",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "FILE_LIST_DIRECTORY opens an ordinary file too; the check is what keeps naming a file from reading as a capability failure.",
+      "find": ["    Ok(info.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0)\n"],
+      "replace": ["    let _ = info;\n    Ok(true)\n"]
+    },
+    {
+      "name": "SAFE-2: the volume serial is reported as zero",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "A real volume's serial is non-zero.",
+      "find": ["        .map(|info| info.volume_serial_number())\n"],
+      "replace": ["        .map(|_| 0)\n"]
+    },
+    {
+      "name": "SAFE-2: a refused refill buffer is reported as exhaustion",
+      "file": "src/native.rs",
+      "expect": "survives",
+      "why": "Declared: the arm cannot be reached. The request crate refuses a buffer ahead of the call only for classes whose structure page requires an alignment, neither extended-directory class is one, and this buffer is 8-aligned besides. What would reach it is a refusal added to those classes' table.",
+      "find": ["            RefillOutcome::Failed(EnumerationError::DirectoryQuery(Win32Error::from_code(0)))\n"],
+      "replace": ["            RefillOutcome::Exhausted\n"]
+    },
+    {
+      "name": "SAFE-2 control: the volume serial is read through a binding",
+      "file": "src/native.rs",
+      "expect": "survives",
+      "why": "A control: the same value through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        .map(|info| info.volume_serial_number())\n"],
+      "replace": ["        .map(|info| {\n            let serial = info.volume_serial_number();\n            serial\n        })\n"]
+    },
+    {
+      "name": "SAFE-3: the shared wait target is a second event, not the ring's",
+      "file": "src/completion_ring.rs",
+      "expect": "caught",
+      "why": "A wait armed on a separate event would never be woken by the ring; the shared-handle test and the thread pool test see it.",
+      "find": ["        Ok(WaitableHandle::from(self.doorbell_event()?.clone()))\n"],
+      "replace": ["        Ok(WaitableHandle::from(Event::new(ResetMode::Manual, false)?))\n"]
+    },
+    {
+      "name": "SAFE-3: the doorbell is set when nothing is pending and reset when something is",
+      "file": "src/completion_ring.rs",
+      "expect": "caught",
+      "why": "The doorbell's one invariant, inverted.",
+      "find": ["            event.set()\n        } else {\n            event.reset()\n"],
+      "replace": ["            event.reset()\n        } else {\n            event.set()\n"]
+    },
+    {
+      "name": "SAFE-3: the doorbell starts unsignalled however much has already arrived",
+      "file": "src/completion_ring.rs",
+      "expect": "caught",
+      "why": "A client that asks for the doorbell after records have arrived must find it signalled.",
+      "find": ["                let event = Event::new(ResetMode::Manual, state.pending())?;\n"],
+      "replace": ["                let event = Event::new(ResetMode::Manual, false)?;\n"]
+    },
+    {
+      "name": "SAFE-3: the doorbell is never refreshed",
+      "file": "src/completion_ring.rs",
+      "expect": "caught",
+      "why": "Without the refresh the event stays as it was created.",
+      "find": ["        let refreshed = if state.pending() {\n            event.set()\n        } else {\n            event.reset()\n        };\n"],
+      "replace": ["        let _ = event;\n        let refreshed: io::Result<()> = Ok(());\n"]
+    },
+    {
+      "name": "SAFE-3 control: the shared target is made through a binding",
+      "file": "src/completion_ring.rs",
+      "expect": "survives",
+      "why": "A control: the same clone through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        Ok(WaitableHandle::from(self.doorbell_event()?.clone()))\n"],
+      "replace": ["        let event = self.doorbell_event()?.clone();\n        Ok(WaitableHandle::from(event))\n"]
+    },
+    {
+      "name": "SAFE-4: a case-insensitive run is compared case-sensitively",
+      "file": "src/pattern.rs",
+      "expect": "caught",
+      "why": "The case choice is the only thing that makes the comparison insensitive; matching \"README\" against \"readme\" observes it.",
+      "find": ["        compare_string_ordinal(left, right, Case::Insensitive),\n"],
+      "replace": ["        compare_string_ordinal(left, right, Case::Sensitive),\n"]
+    },
+    {
+      "name": "SAFE-4: a comparison that says less is read as equal",
+      "file": "src/pattern.rs",
+      "expect": "caught",
+      "why": "Only an equal result is a match.",
+      "find": ["        Ok(ordering) => ordering == Ordering::Equal,\n"],
+      "replace": ["        Ok(ordering) => ordering != Ordering::Greater,\n"]
+    },
+    {
+      "name": "SAFE-4: a run too long for the call is not compared exactly",
+      "file": "src/pattern.rs",
+      "expect": "caught",
+      "why": "Reaching it takes a slice of more than 2^31 units, so it is observed through the comparison's result: the fallback is the exact comparison, and equal runs must still match.",
+      "find": ["        Err(CompareStringOrdinalError::TooLong { .. }) => left == right,\n"],
+      "replace": ["        Err(CompareStringOrdinalError::TooLong { .. }) => false,\n"]
+    },
+    {
+      "name": "SAFE-4: a failure of the call is read as equality",
+      "file": "src/pattern.rs",
+      "expect": "caught",
+      "why": "A failed comparison must never produce a match.",
+      "find": ["        Err(CompareStringOrdinalError::Call(_)) => false,\n"],
+      "replace": ["        Err(CompareStringOrdinalError::Call(_)) => true,\n"]
+    },
+    {
+      "name": "SAFE-4 control: the equal result is read through a binding",
+      "file": "src/pattern.rs",
+      "expect": "survives",
+      "why": "A control: the same comparison through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        Ok(ordering) => ordering == Ordering::Equal,\n"],
+      "replace": ["        Ok(ordering) => {\n            let equal = ordering == Ordering::Equal;\n            equal\n        }\n"]
+    },
+    {
+      "name": "SAFE-5: an unsafe block is added to the library",
+      "file": "src/lib.rs",
+      "expect": "refused-by-build",
+      "buildError": "usage of an `unsafe` block",
+      "why": "The attribute is the check D-23 rests on; a block added anywhere in the crate has to stop the build.",
+      "find": ["mod admission;\n"],
+      "replace": ["mod admission;\nconst _: u8 = unsafe { 0 };\n"]
+    },
+    {
+      "name": "SAFE-5 control: a constant is added to the library",
+      "file": "src/lib.rs",
+      "expect": "survives",
+      "why": "A control: the same item with no unsafe, which builds. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["mod admission;\n"],
+      "replace": ["mod admission;\nconst _: u8 = { 0 };\n"]
+    }
+  ]
+}

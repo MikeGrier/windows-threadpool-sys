@@ -34,6 +34,11 @@
 //! measurement, and stderr already separates it. Routing it through this sink
 //! would mix it into the evidence stdout carries.
 //!
+//! A refused command line ([`refuse_arguments`]) goes to stderr for the same
+//! reason: nothing was measured, so there is no report for it to be part of, and
+//! a probe that wrote it to stdout would leave a capture holding a usage message
+//! where a reader expects findings.
+//!
 //! # Every probe routes through this
 //!
 //! Every probe in this crate, with no exceptions -- stated without a count on
@@ -239,5 +244,17 @@ pub fn emit_report_to(report: &mut impl Report, render: impl FnOnce(&mut dyn std
     // `render` panics, which costs at most that fragment -- see `emit_report`.
     sink.finish();
 }
+
+/// Refuse a probe's command line: write why, and how to call the probe, to
+/// stderr, and exit with status 2 before anything is measured.
+///
+/// The one place a refusal is written, so every probe that takes settings
+/// refuses the same way. Status 2 and not 1, so a refusal is told apart from a
+/// probe that ran and failed.
+pub fn refuse_arguments(error: &dyn std::fmt::Display, usage: &str) -> ! {
+    eprintln!("{error}\n\n{usage}");
+    std::process::exit(2)
+}
+
 #[cfg(test)]
 mod tests;

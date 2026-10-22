@@ -203,6 +203,47 @@ fn only_whole_names_match() {
 }
 
 #[test]
+fn an_empty_run_is_equal_to_an_empty_run_under_either_case() {
+    assert!(ordinal_equal_ignoring_case(&[], &[]));
+    assert!(units_equal(&[], &[], CaseSensitivity::Insensitive));
+    assert!(units_equal(&[], &[], CaseSensitivity::Sensitive));
+}
+
+#[test]
+fn a_comparison_result_is_equal_only_when_it_says_equal() {
+    let left = [u16::from(b'a')];
+    let right = [u16::from(b'b')];
+    assert!(equal_from(Ok(Ordering::Equal), &left, &right));
+    assert!(!equal_from(Ok(Ordering::Less), &left, &left));
+    assert!(!equal_from(Ok(Ordering::Greater), &left, &left));
+}
+
+#[test]
+fn a_run_too_long_for_the_call_is_compared_exactly() {
+    use win_text_sys::Operand;
+
+    let too_long = |len| {
+        Err(CompareStringOrdinalError::TooLong {
+            operand: Operand::First,
+            len,
+        })
+    };
+    let a = [u16::from(b'a')];
+    let upper_a = [u16::from(b'A')];
+    assert!(equal_from(too_long(1 << 32), &a, &a));
+    assert!(!equal_from(too_long(1 << 32), &a, &upper_a));
+}
+
+#[test]
+fn a_failure_of_the_call_is_not_equality() {
+    use win_error_codes::Win32Error;
+
+    let failed = || Err(CompareStringOrdinalError::Call(Win32Error::from_code(87)));
+    let a = [u16::from(b'a')];
+    assert!(!equal_from(failed(), &a, &a));
+}
+
+#[test]
 fn sensitive_is_the_default_case_rule() {
     assert_eq!(CaseSensitivity::default(), CaseSensitivity::Sensitive);
 }

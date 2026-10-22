@@ -509,6 +509,7 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   than noise: across two rounds one reader raised this twice while two others cleared it, one of them
   explicitly after being pointed at the question. Nothing in the suite decides it either way, which is
   itself the argument for the oracle.
+
 ## Moved 2026-09-09 -- M2.6: what `GetFullPathNameW` does, and whether it stays
 
 ### <a id="m26"></a>M2.6 -- Say what `GetFullPathNameW` does, in the crate that owns it, and whether it stays. *(completed 2026-09-09 22:54:01 UTC-04:00)*
@@ -608,6 +609,7 @@ request as it was written, and quotes the module doc as it read before the corre
   operation completed successfully" under a message saying something failed. And attach it only to a
   condition that is genuinely an OS failure: a call that returned a size rather than an error should
   not carry one, since `GetLastError` says nothing about it.
+
 ## Moved 2026-09-10 -- M2.1: the report oracle
 
 ### <a id="m21"></a>M2.1 -- Add a report oracle to this crate. *(completed 2026-09-10 19:45:50 UTC-04:00)*
@@ -1797,3 +1799,317 @@ entries were added, one a control.
 
 > **-> CROSS-COMPONENT HANDOFF:** the request crate's
 > [NR-6.2](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-62-capture) no longer waits on this crate.
+
+## Moved 2026-10-19 13:14:01 -04:00 -- M4.2: the probes' sampling is set on the command line
+
+### <a id="m42"></a>M4.2 -- Give the measurement probes the controls needed to act on a dispersion finding, so "gather more data along this axis" does not require editing a `const` and rebuilding. *(completed 2026-10-19 13:14:01 -04:00)*
+
+The decision, with what was built and why, is
+[The probes' sampling is set on the command line](DESIGN-NOTES.md#d-settable-sampling); the
+alternatives are in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Built ahead of `M4.4`, against the
+item's own ordering note, because building the settings moves no figure; the note on `M4.4` in
+[CHECKLIST.md](CHECKLIST.md) was re-planned to say that reading a lengthened run still waits on it.
+
+Preceded by a pure-relocation split of `src/queue_contention.rs` (75 KiB, XL) into the facade plus
+`measure.rs` and `render.rs`, in its own commit. The sabotage harness's inert check was found to
+ignore case while writing this item's entries, and was fixed in its own commit.
+
+## Moved 2026-10-19 14:32:11 -04:00 -- M2.15: the probe suite runs on Windows ARM64 in CI
+
+### <a id="m215"></a>M2.15 -- Run the probe suite on a second architecture in CI. *(completed 2026-10-19 14:32:11 -04:00)*
+
+The `platform-probes` job in [ci.yml](../../.github/workflows/ci.yml) is a two-entry matrix:
+`windows-latest` (x64) and `windows-11-arm`, the GitHub-hosted Windows 11 ARM64 runner, which is
+free for public repositories. The x64 entry keeps its job name, and `fail-fast` is off so one
+architecture's result does not cancel the other's. Commit `11f595c2`.
+
+Run once before completion, from a throwaway branch carrying a temporary push trigger (deleted
+afterwards): the ARM64 entry ran on host `aarch64-pc-windows-msvc`, every probe's NDJSON row
+reported `"arch":"aarch64"`, and the whole job passed -- the suite with `--include-ignored`, the
+`oracle-in-renderer` target, and every probe binary.
+
+The engineer, 2026-10-19: "arm64 completes m2.15." The `i686-pc-windows-msvc` target the item
+also named, where the original five failures were measured, was therefore not added.
+
+## Moved 2026-10-19 14:51:46 -04:00 -- M4.1: every parse_incomplete condition is a blocking state
+
+### <a id="m41"></a>M4.1 -- Model the observation-readable `ParseIncomplete` conditions that `blocking_states` currently omits, so a deleted push site in `cross_check` is caught for all of them rather than for the subset. *(completed 2026-10-19 14:51:46 -04:00)*
+
+All eleven passed the tautology test: each reads fields on `Observation`, none reads
+`cross_check`'s lists. Each gained a `BlockingState` variant, a `blocking_states` branch, a
+`codes_for` arm and a perturbation. Seven gained a corpus shape; the other four were already reached
+by existing shapes, which the shapes' comment names.
+
+Two additions beyond the item's target:
+
+- `every_parse_incomplete_code_is_answered_by_a_blocking_state` compares
+  `ParseIncomplete::ALL_CODES` with the codes the states answer to, both generated lists, so the
+  census stays closed for conditions added later. It also checks the other direction: every code a
+  state names is one some diagnostic list can publish.
+- `a_state_read_from_two_fields_is_reached_by_each_of_them_alone`, because the perturbation table
+  reaches `RelationsWithoutProcessors` and `MeasuredButCountsAbsent` through one field each, and
+  checks the measured guard both ways.
+
+[sabotage.json](sabotage.json) now runs with `--all-features`, because the corpus target requires
+`oracle-in-renderer` and `codes_for` lives there. That changed one existing entry: a state added with
+no perturbation is now refused by the build, since `codes_for` matches every state exhaustively, so
+the entry is declared `refused-by-build` and a new entry deletes a perturbation row to keep the
+unit-test guard sabotaged. The sweep also found the two `share_handle` entries stale since `M4.2`
+renamed the loop count; their finds were repaired. A deleted `described_relations` push does not
+reach `agree`, because a described relation also files `counts_include_unparsed_relations`; it is
+caught by a dedicated unit test and by the corpus rule. See
+[DESIGN-NOTES.md](DESIGN-NOTES.md#d-encoded-row-is-the-contract).
+
+## Moved 2026-10-19 15:43:40 -04:00 -- M4.4: the queue probe interleaves its passes
+
+### <a id="m44"></a>M4.4 -- Interleave each candidate with a nearby control instead of measuring the control four runs away from it, and re-measure everything that changes. *(completed 2026-10-19 15:43:40 -04:00)*
+
+The decision is
+[The queue probe interleaves its passes](DESIGN-NOTES.md#d-interleaved-order), with the alternatives
+in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md); the measurement is
+[captures/2026-10-19-interleaved-order/](captures/2026-10-19-interleaved-order/README.md), seven runs of
+each order alternating on the host the earlier figures came from.
+
+**The item's blocker did not apply as written.** It said interleaving makes every published figure a
+measurement of a different procedure, and that doing it mid-branch would invalidate figures review
+rounds had been read against. That branch had long since merged, and keeping the old order as
+`--order sequential` means the published figures remain measurements of a procedure the probe still
+runs: each place that gives them now names the order that produced them, and none is retaken.
+"Re-measure everything that changes" was met by the paired capture rather than by replacing the
+published figures.
+
+## Moved 2026-10-19 16:16:40 -04:00 -- M2.17: the shape corpus is crossed
+
+### <a id="m217"></a>M2.17 -- Cross the corpus dimensions instead of varying one at a time. *(completed 2026-10-19 16:16:40 -04:00)*
+
+[tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs)'s `shapes()`
+now ends with the full cross product of `crossed_dimensions()`: the partitioning arm, the bracket,
+coherence, the processor counter (which fills `disagreements`), the NUMA counter (`not_compared`),
+anomalies (`parse_incomplete`) and the efficiency classes, which the renderer gates on the parse being
+in doubt. The verdict is not its own dimension, being a function of the three lists. The full product
+is 720 shapes and the target runs in well under a second, so the pairwise fallback the item allowed
+was not needed. Every existing per-shape check runs over them unchanged, as the item expected.
+
+Two guards were added because a product can collapse silently:
+`the_crossed_dimensions_are_independent_of_each_other` requires each non-first value to change the
+observation and every cross-dimension pair to commute, and
+`the_crossed_corpus_reaches_each_verdict_under_each_partitioning_arm` requires the crossing to have
+produced crossed states, including a shape filling all three diagnostic lists.
+
+Evidence, in [sabotage.json](sabotage.json): checking coherence only when the bracket held -- a
+two-dimension defect of the kind this code has shipped -- **survived** the corpus before this change
+and is caught after it, by `every_state_that_blocks_agreement_reaches_the_row`. A crossed value that
+changes nothing is caught by the independence guard, and renaming a value survives as the control.
+
+## Moved 2026-10-19 16:29:02 -04:00 -- M4.11: the coherence probes run in CI on both architectures
+
+### <a id="m411"></a>M4.11 -- Run the queue-contention and peer-index probes in the CI probe job, so each build carries an ARM64 run of both. *(completed 2026-10-19 16:29:02 -04:00)*
+
+Added and completed in one step on the engineer's direction, 2026-10-19: "please implement the
+missing coverage, I assume in the ci pipeline?" -- the coverage being the ARM64 run of
+`probe-queue-contention` that the queue crate's README recorded as lost.
+
+The `platform-probes` job's two matrix entries now run `probe-queue-contention --producers 1,2,4` and
+`probe-peer-index-cache`, both in release. The decision is
+[The coherence probes run in CI](DESIGN-NOTES.md#d-coherence-probes-in-ci), and the queue section of
+[DESIGN-NOTES.md](DESIGN-NOTES.md) was amended from "must not run in the CI probe job" to say what CI
+runs and why the full curve stays manual.
+
+Verified before recording, from a throwaway branch carrying a temporary push trigger (deleted
+afterwards): both steps passed on both entries, on runners whose banners read
+`aarch64 4p/4c smt- L2[1,1,1,1] ec[0:4] numa[4]` and `x86_64 4p/2c smt+ L2[2,2] ec[0:4] numa[4]` --
+four processors each, as the producer limit assumes.
+
+## Moved 2026-10-19 16:43:02 -04:00 -- M4.8: the queue report names its build
+
+### <a id="m48"></a>M4.8 -- Have the queue-contention report carry the build identity that produced it, and have the capture scripts require it to agree. *(completed 2026-10-19 16:43:02 -04:00)*
+
+The decision is
+[A queue report names the build that produced it](DESIGN-NOTES.md#d-report-names-its-build), and the
+choice of included code over a copy is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
+**The item's premise that this crate had no build script was out of date** -- it has carried one
+since the long-path probe, which embeds a manifest -- so the stamping was added to it rather than to a
+new one. The stamping itself was moved out of `windows-placement-probe`'s build script into
+`build/stamp.rs` in two commits of that crate, a pure-relocation split and then a refactor making it a
+function of a prefix, with `BuildIdentity::from_stamps` added so both crates read the stamps alike.
+
+The capture scripts treat a missing build line as "not stamped", so every committed capture
+regenerates byte for byte; both copies of each script were changed identically. Two script comments
+claimed `M4.8` would replace their byte-identical-run check, which it does not: a build identity
+names the build, which every run in a capture shares. Those comments were corrected.
+
+The sabotage the item asked for -- runs of two builds being combined -- is in
+[sabotage.json](sabotage.json) and caught by
+`tests/the_capture_scripts_refuse_runs_of_different_builds.rs`, alongside the report dropping its
+build line (caught), the build script stamping nothing (refused by the build) and a control.
+
+## Moved 2026-10-19 17:18:23 -04:00 -- M4.10: every probe's normal run emits a row of raw data
+
+### <a id="m410"></a>M4.10 -- Decide whether a probe's report owes a machine-readable row, and make the answer uniform. *(completed 2026-10-19 17:18:23 -04:00)*
+
+Decided by the engineer on 2026-10-19: every probe's normal run emits a row of raw data, with
+interpreting readings possible as other modes, and rows are not formal contracts but are renamed when
+their meaning changes. The decision is
+[Every probe's normal run emits a row of raw data](DESIGN-NOTES.md#d-every-probe-emits-a-row), with
+the three options put to the engineer and his words in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+"Make the answer uniform" is spawned as milestone `M8` in [CHECKLIST.md](CHECKLIST.md), one item per
+probe without a row; the census of which probes emit one still read 3 of 16 when this was decided.
+
+## Moved 2026-10-19 17:37:29 -04:00 -- M4 and M5 complete; M2.13 moved to the root checklist
+
+Every item of `M4` and `M5` was complete except `M2.13`, which moved to the root
+[CHECKLIST.md](../../CHECKLIST.md) as `M34.18` because the check it asks for spans the repository. The
+checked stubs that stood in the checklist for items already archived above were deleted rather than
+copied here, on the engineer's ruling of 2026-10-19 that such a placeholder "does not have to move, it
+may simply be deleted". The milestone's preamble, as it stood:
+
+> These were written under M2 and were blocked on M3, which is **now complete and archived** in
+> [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). They are unblocked, and each was RE-SCOPED rather
+> than merely delayed -- so each item below carries its own re-scoping note, in the item, where
+> somebody executing the list will actually meet it.
+>
+> **The IDs keep their M2 numbers deliberately.** [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) is
+> append-only and its entries are immutable, and two archived entries already cite M2.4 and M2.14 --
+> so renumbering would leave dangling references in a file that may not be edited to repair them.
+> Stable IDs cost a mismatch between an item number and its milestone; renumbering would cost
+> correctness in the archive.
+
+### <a id="m49"></a>M4.9 -- Route a placement probe's refusal-to-measure through the report sink instead of a panic, so a host that cannot be pinned is a reported observation rather than a crash.
+
+Its completion was recorded in the item itself rather than here; the item as it stood:
+
+- [x] **M4.9** -- Route a placement probe's refusal-to-measure through the report sink instead of a
+  panic, so a host that cannot be pinned is a reported observation rather than a crash.
+
+  **Gap:** `windows-placement-probe`'s pinning helper asserted on `SetThreadGroupAffinity`, and
+  `core_affinity::measure()` reaches it through `time_model_on` / `time_model_placed`. **The
+  decision to stop was correct and did not change** -- the assert's own message makes the argument,
+  that an unpinned thread "would produce a plausible number that answers a different question, and
+  nothing in the output would say so." What was wrong is the *mechanism*: a panic bypasses
+  `emit_report`, so the refusal landed on stderr while stdout carried a truncated report with no
+  row saying why it stopped.
+
+  **Measured, before and after.** With every pin forced to fail, the old binary wrote three lines
+  to stdout -- banner, heading, blank -- and exited 101, with the explanation only on stderr. It
+  now writes the refusal itself to stdout and exits 0, matching how the same binary already reports
+  a topology-discovery failure.
+
+  **Done:** `pin_current_thread` returns `io::Result`; `time_model`, `time_model_on`,
+  `time_model_placed`, `median` and `peer_index_cache::measure` propagate it; both probe binaries
+  handle it. The assert's message text is kept -- it was the right message, in the wrong channel.
+  `PinSignal` still publishes `PIN_FAILED`, now on the early-return path as well as on an unwind,
+  so the consumer never waits on a producer that has left.
+
+  **Two things a later review corrected in the first attempt at this item, both the same mistake --
+  a claim made about the code rather than from it.**
+
+  `check_group_support` (then `assert_group_support`) tests the *same* predicate as the
+  `usize::BITS` branch, over every discovered processor, and runs before any pin. So converting
+  only the branch left this one deciding the outcome: the probe still died with banner, heading and
+  nothing else. Fixing one site of a rule and leaving its twin is the blast-radius miss this
+  repository has a rule against, and the before/after measurement recorded here did not catch it
+  because it forced the pin argument rather than the discovered set. Both sites now refuse.
+
+  `peer_index_cache::measure` **cannot** refuse -- it starts only unpinned runs -- so its `# Errors`
+  section documented a failure mode no host can produce, and the entry here said "both probe
+  binaries render it" as though both could decline. Only `probe-core-affinity` pins. The signature
+  stays `Result` because its helpers are fallible in general; the docs now say that instead of the
+  opposite.
+
+  **Also corrected:** the refusal text was shared by both causes while being written for one. For
+  the mask-width cause it claimed the processor "was reported by this machine's own topology, so
+  this is unexpected rather than a limit of the tool" and invited a bug report -- the exact reverse
+  of that cause, which *is* a limit of the tool. The explanation is now a parameter, verified in
+  both directions.
+
+  **One correction to this item as written.** The blocker recorded when queuing was **wrong** --
+  `windows-placement-probe` was absent from release-please configuration at the
+  time. It is now a managed binary release under the root
+  [DESIGN-NOTES.md](../../DESIGN-NOTES.md#d-probe-releases) -> `D-PB`; `publish = false`
+  prohibits crates.io publication, not binary releases. The `x-probe-*` row
+  it called for is deferred to `M4.10`, which turned out to be a larger question than these two
+  probes.
+
+## Moved 2026-10-19 17:49:58 -04:00 -- M8.1: the row census runs the queue probe
+
+### <a id="m81"></a>M8.1 -- Run `probe-queue-contention` in the row census with a short sampling, replacing the exclusion whose reason `M4.2` made false. *(completed 2026-10-19 17:49:58 -04:00)*
+
+[tests/the_probes_that_emit_a_machine_readable_row.rs](tests/the_probes_that_emit_a_machine_readable_row.rs)
+excluded the probe as "about sixty-five seconds, with no short mode"; `M4.2` gave it one. The census
+now runs it with `--producers 1 --repetitions 1 --pushes-per-producer 1000`, from a `SHORT_RUNS`
+table guarded like the exclusions are against a renamed probe, which costs about half a second. Only
+`probe-cancel-io` is still excluded, for its own reason, and the copilot instructions' description of
+the census was corrected from two exclusions to one.
+
+Evidence, in [sabotage.json](sabotage.json): the queue probe emitting a row built with `Row::new` --
+whose source carries no `"reason":"x-probe` literal for the old source check to find -- **survived**
+the census as it stood, checked by running the entry against the previous test file, and is caught by
+the census that runs the probe. A control changing the short run's push count survives. Once `M8.2`
+gave the probe its real row, the entry was re-targeted to delete that row, which the census catches.
+
+## Moved 2026-10-19 18:58:37 -04:00 -- M8.6: the long-path probes emit a row
+
+### <a id="m86"></a>M8.6 -- Both long-path probes emit one `x-probe-long-path` row, told apart by `manifest_aware`. *(completed 2026-10-19 18:58:37 -04:00)*
+
+The item as written: "`probe-long-path-aware` and `probe-long-path-unaware` emit rows, one item
+because the finding is the difference between them."
+
+One reason for both binaries, because their finding is the difference between two runs: a reader
+pairs two rows of one shape rather than two shapes. Each carries `manifest_aware`, the machine's
+`LongPathsEnabled` (`null` when a refused run never read it), the content ceiling, and every attempt
+by shape record name with its resolved length, whether it opened, and the Win32 error only when it
+did not. An apparatus failure is published as `declined`. The row is emitted after the shared
+renderer's body, which returns early on an apparatus failure. `Shape` gained a stable `name` beside
+its prose label.
+
+Evidence, in [sabotage.json](sabotage.json): six `M8.6` entries are each caught by their intended
+test -- among them the row claiming the manifest whatever the binary declares, and an unread
+registry value published as off, the defect the module's own note records against the prose -- and
+a key-order control survives.
+
+## Moved 2026-10-19 20:00:57 -04:00 -- M8: every probe's normal run emits a row of raw data
+
+Applied [Every probe's normal run emits a row of raw data](DESIGN-NOTES.md#d-every-probe-emits-a-row),
+decided by `M4.10`. `M8.1` and `M8.6` were archived above when they completed; their stubs were
+deleted with the milestone. Each item's row, its refusal form and its sabotage evidence are in the
+commit that completed it; the conventions the rows share are recorded in the decision.
+
+- [x] **M8.2** -- `probe-queue-contention` emits a row.
+- [x] **M8.3** -- `probe-peer-index-cache` emits a row.
+- [x] **M8.4** -- `probe-core-affinity` emits a row, including when it declines to measure.
+- [x] **M8.5** -- `probe-pool-growth` emits a row.
+- [x] **M8.7** -- `probe-error-mode` emits a row.
+- [x] **M8.8** -- `probe-handle-state` emits a row.
+- [x] **M8.9** -- `probe-worker-context` emits a row.
+- [x] **M8.10** -- `probe-device-map` emits a row.
+- [x] **M8.11** -- `probe-ioring` emits a row.
+- [x] **M8.12** -- `probe-completion-port` emits a row.
+- [x] **M8.13** -- `probe-cancel-io` emits a row, including for a case its watchdog abandons.
+
+### <a id="m814"></a>M8.14 -- The row census asserts that every registered probe emits a row. *(completed 2026-10-19 20:00:57 -04:00)*
+
+The item as written: "Make the row census assert that every registered probe emits a row, so a probe
+added later without one fails rather than joining an exception list."
+
+[tests/the_probes_that_emit_a_machine_readable_row.rs](tests/the_probes_that_emit_a_machine_readable_row.rs)
+no longer keeps a list of the probes that emit a row; it runs every `[[bin]]` the manifest registers
+and fails naming any whose report carries none. Every probe runs under a deadline, its output read
+as it arrives, so no probe can hang the suite. `probe-cancel-io`, excluded until now because its
+subject is a call that can fail to return, is run too: the census stops at its row rather than
+waiting on an exit its own finding says may not come, which the report's line-by-line streaming
+(`M1`) makes possible. Its old stand-in -- a check that its sources carried no emission literal --
+is gone, since a row built with `Row::new` answers it falsely.
+
+The deadline paths are each driven by a test against a `cmd.exe` child: a report that never
+finishes, a probe excused from exiting that prints its row and then blocks (and the same child, not
+excused, running into the deadline), an unsuccessful exit, and a report read as written with and
+without a row. The one path no test reaches -- a child that closes its output and keeps running --
+says so at its definition.
+
+Evidence, in [sabotage.json](sabotage.json): `probe-cancel-io` losing its row **survived** the census
+as it stood, checked by running the entry before the rewrite, and is caught by the census that runs
+it. Accepting a timed-out report, accepting an unsuccessful exit, and waiting on an excused probe are
+each caught by their intended test; a control shortening the deadline survives. Two `M4.2` entries
+whose find text the `M4.4` rewrite had left matching zero and two times were repaired in the same
+change, and every entry in the manifest now matches exactly once.

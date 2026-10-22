@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 
 use io_buffers::AlignedBuf;
 
-use super::{QUEUE, TempFile};
+use super::{QUEUE, TempFile, wtf};
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
-use crate::windows_backend::{FileOptions, OpenedFile, Unbuffered, Win32FileTarget};
+use crate::windows_backend::{FileOptions, OpenedFile, ReadWrite, Unbuffered, Win32FileTarget};
 use durable_ioring::backend::RefusalCause;
 use durable_ioring::{
     DurableRing, Entry, IoTarget, IoTargetKey, LineageHandle, OpCompletion, Outcome, PushRefusal,
@@ -21,21 +21,24 @@ const BOUND: Duration = Duration::from_secs(10);
 
 type AlignedRing = Dioring<AlignedBuf, u64, u32>;
 
-fn unbuffered(temp: &TempFile) -> Win32FileTarget {
+fn unbuffered(temp: &TempFile, options: FileOptions<ReadWrite>) -> Win32FileTarget {
     Win32FileTarget::new(
-        OpenedFile::<Unbuffered>::open(&temp.0, FileOptions::new().read(true).write(true))
-            .expect("open unbuffered"),
+        OpenedFile::<Unbuffered>::open(wtf(&temp.0), options).expect("open unbuffered"),
     )
 }
 
 fn instance(temp: &TempFile) -> (AlignedRing, LineageHandle) {
-    let target = unbuffered(temp);
+    instance_with(temp, FileOptions::new().read().write())
+}
+
+fn instance_with(temp: &TempFile, options: FileOptions<ReadWrite>) -> (AlignedRing, LineageHandle) {
+    let target = unbuffered(temp, options);
     assert_eq!(target.warranty(), WarrantyClass::SharedDevice);
     assert!(target.capabilities().write_through());
     AlignedRing::new(Setup {
         submission_queue_size: QUEUE,
         completion_queue_size: QUEUE,
-        files: vec![TargetSetup { key: FILE, target }],
+        files: vec![TargetSetup::new(FILE, target)],
         buffers: Vec::<Vec<u8>>::new(),
         provider: None,
         diagnostics: None,
@@ -60,6 +63,40 @@ fn completion(ring: &mut AlignedRing) -> OpCompletion<crate::WindowsIds<u64>, Al
                 std::thread::sleep(Duration::from_millis(1));
             }
         }
+    }
+}
+
+// A cache hint is passed to an unbuffered file and not refused (`DI-14.1`), so the ring has to be
+// able to run it: every way of asking for the two hints, against the kernel and through the ring.
+#[test]
+fn an_unbuffered_file_opened_with_cache_hints_runs_through_the_ring() {
+    for (random, sequential) in [(false, false), (true, false), (false, true), (true, true)] {
+        let temp = TempFile::new("unbuffered-hints");
+        let options = FileOptions::new()
+            .read()
+            .write()
+            .random_access(random)
+            .sequential_scan(sequential);
+        let (mut ring, lineage) = instance_with(&temp, options);
+        ring.write_with(
+            FILE,
+            0,
+            sector(3),
+            lineage.at(1),
+            8,
+            WriteOptions::new().caching(WriteCaching::WriteThrough),
+        )
+        .expect("push an aligned write-through write");
+        let done = completion(&mut ring);
+        assert!(
+            matches!(done.outcome, Outcome::Transferred(n) if n as usize == SECTOR),
+            "hints {random}, {sequential}: {:?}",
+            done.outcome
+        );
+        assert_eq!(
+            std::fs::read(&temp.0).expect("read back")[..SECTOR],
+            vec![3u8; SECTOR]
+        );
     }
 }
 

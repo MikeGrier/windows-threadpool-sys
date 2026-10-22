@@ -7,9 +7,42 @@ use win_volume_sys::DiskExtent;
 use super::{
     OpenedVolume, VolumeOptions, VolumePath, VolumePathError, disk_flush_domain, domains_of,
 };
-use crate::dioring::tests::TempFile;
-use crate::windows_backend::{Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget};
-use durable_ioring::{Capabilities, FlushDomain, Geometry, IoTarget, WarrantyClass};
+use crate::dioring::tests::{TempFile, wtf};
+use crate::windows_backend::{
+    Cached, FileOptions, OpenedFile, ReadOnly, ReadWrite, ShareMode, Unbuffered, Win32FileTarget,
+    WriteOnly,
+};
+use durable_ioring::{Access, Capabilities, FlushDomain, Geometry, IoTarget, WarrantyClass};
+
+#[test]
+fn a_volume_is_opened_sharing_every_member_unless_told_otherwise() {
+    assert_eq!(VolumeOptions::new().share, ShareMode::ALL);
+    assert_eq!(VolumeOptions::default().share, ShareMode::ALL);
+    assert_eq!(
+        VolumeOptions::new().share(ShareMode::NONE).share,
+        ShareMode::NONE
+    );
+    assert_eq!(
+        VolumeOptions::new()
+            .share(ShareMode::NONE)
+            .share(ShareMode::READ)
+            .share,
+        ShareMode::READ,
+        "the last call replaces the mode"
+    );
+}
+
+#[test]
+fn the_share_mode_and_the_lock_are_independent_options() {
+    let locked_exclusively = VolumeOptions::new().lock(true).share(ShareMode::NONE);
+    assert!(locked_exclusively.lock);
+    assert_eq!(locked_exclusively.share, ShareMode::NONE);
+    let the_other_order = VolumeOptions::new().share(ShareMode::NONE).lock(true);
+    assert!(the_other_order.lock);
+    assert_eq!(the_other_order.share, ShareMode::NONE);
+    assert!(!VolumeOptions::new().share(ShareMode::NONE).lock);
+    assert_eq!(VolumeOptions::new().lock(true).share, ShareMode::ALL);
+}
 
 fn extent(disk_number: u32) -> DiskExtent {
     DiskExtent {
@@ -27,7 +60,7 @@ fn assembled<B: crate::windows_backend::Buffering>(
     locked: bool,
 ) -> (OpenedVolume<B>, TempFile) {
     let temp = TempFile::new("ov-assembled");
-    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read(true).write(true))
+    let file = OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write())
         .expect("open a file");
     (
         OpenedVolume::assembled(file.handle().clone(), extents, sector, locked),
@@ -48,6 +81,40 @@ fn a_disk_is_named_as_it_answers_and_two_targets_share_a_domain_by_equal_bytes()
     assert_eq!(disk_flush_domain(3), disk_flush_domain(3));
     assert_ne!(disk_flush_domain(3), disk_flush_domain(30));
     assert_ne!(disk_flush_domain(1), disk_flush_domain(2));
+}
+
+#[test]
+fn a_volumes_target_states_the_access_the_volume_was_opened_with() {
+    let temp = TempFile::new("ov-access");
+    let file = OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write())
+        .expect("open a file");
+    let handle = file.handle().clone();
+    let volume = OpenedVolume::<Unbuffered, ReadOnly>::assembled(
+        handle.clone(),
+        vec![extent(1)],
+        512,
+        false,
+    );
+    assert_eq!(
+        Win32FileTarget::from_volume(volume).access(),
+        Access::ReadOnly
+    );
+    let volume = OpenedVolume::<Unbuffered, WriteOnly>::assembled(
+        handle.clone(),
+        vec![extent(1)],
+        512,
+        false,
+    );
+    assert_eq!(
+        Win32FileTarget::from_volume(volume).access(),
+        Access::WriteOnly
+    );
+    let volume =
+        OpenedVolume::<Unbuffered, ReadWrite>::assembled(handle, vec![extent(1)], 512, false);
+    assert_eq!(
+        Win32FileTarget::from_volume(volume).access(),
+        Access::ReadWrite
+    );
 }
 
 #[test]
@@ -193,7 +260,45 @@ fn a_cached_volumes_target_claims_best_effort_and_no_write_through() {
 }
 
 #[test]
-fn a_volumes_target_is_never_complete() {
+fn an_attested_volumes_target_is_complete_and_nothing_else_changes() {
+    for locked in [false, true] {
+        let (volume, _temp) = assembled::<Unbuffered>(vec![extent(5), extent(2)], 512, locked);
+        let (sibling, _temp2) = assembled::<Unbuffered>(vec![extent(5), extent(2)], 512, locked);
+        let attested = Win32FileTarget::from_volume_attested_exclusive(volume);
+        let plain = Win32FileTarget::from_volume(sibling);
+
+        assert_eq!(attested.warranty(), WarrantyClass::Complete);
+        assert_eq!(plain.warranty(), WarrantyClass::SharedDevice);
+        assert_eq!(attested.flush_domains(), plain.flush_domains());
+        assert_eq!(
+            attested.flush_domains(),
+            [disk_flush_domain(2), disk_flush_domain(5)]
+        );
+        assert_eq!(attested.geometry(), plain.geometry());
+        assert_eq!(attested.capabilities(), plain.capabilities());
+        assert_eq!(attested.access(), plain.access());
+    }
+}
+
+#[test]
+fn an_attested_volume_still_adds_declared_domains_and_never_loses_a_found_one() {
+    let (volume, _temp) = assembled::<Unbuffered>(vec![extent(1), extent(2)], 512, false);
+    let other = FlushDomain::new(b"a share".to_vec());
+    let target =
+        Win32FileTarget::from_volume_attested_exclusive(volume).with_domains([other.clone()]);
+    assert_eq!(target.warranty(), WarrantyClass::Complete);
+    assert_eq!(
+        target.flush_domains(),
+        [disk_flush_domain(1), disk_flush_domain(2), other]
+    );
+    assert_eq!(
+        target.with_domains([]).flush_domains(),
+        [disk_flush_domain(1), disk_flush_domain(2)]
+    );
+}
+
+#[test]
+fn a_volumes_target_is_not_complete_unless_attested() {
     // However it was opened and whether or not it is locked: a lock keeps other handles off the
     // volume, not other writers off its disks.
     for locked in [false, true] {
@@ -237,8 +342,8 @@ fn declared_domains_are_added_to_a_volumes_and_never_take_one_away() {
 #[test]
 fn a_file_targets_domains_are_only_what_is_declared() {
     let temp = TempFile::new("ov-file-domains");
-    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read(true).write(true))
-        .expect("open");
+    let file =
+        OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write()).expect("open");
     let target = Win32FileTarget::new(file).with_domains([disk_flush_domain(9)]);
     assert_eq!(target.flush_domains(), [disk_flush_domain(9)]);
 }

@@ -292,8 +292,20 @@ rules.
 providers**. The built-in default flushes each file through the instance's own ring and is the only
 code that touches it. `Setup::provider` may add **one** consumer `DurabilityProvider`, which states
 the flush domains it serves when the instance is built (a domain named twice refuses construction);
-everything else, files declared with no domains included, is the default's. Several providers are
-composed by a router dioring ships, itself a provider (DI-3.8).
+everything else, files declared with no domains included, is the default's.
+
+Several providers are composed by `RoutingProvider`, which dioring ships and which is itself a
+provider ([DI-D-81](DESIGN-NOTES.md#di-d-81), [DI-D-82](DESIGN-NOTES.md#di-d-82),
+[DI-D-83](DESIGN-NOTES.md#di-d-83)). `RoutingProvider::builder()` takes providers by `register`, and
+`build` reads each one's `domains()` once: each serves exactly the domains it declares, the router
+serves their union, and a domain claimed twice refuses the build with `RoutedTwice`, naming both
+registrations. Each seal's request is split by domain, and each provider with a part is called once,
+in registration order, with its completions as they came, so each answer reaches the instance
+directly. A file whose domains span providers is in each one's call and is durable when every one
+has succeeded; coupled domains split across providers are correct but each costs its provider a
+flush, since the router merges nothing across them -- documented, not enforced. A panic in one
+provider propagates and abandons the domains of those not yet called; a domain no provider serves
+is a caller breaking the protocol, and is panicked on.
 
 Once every write a seal covers has completed, dioring hands the provider one `FlushRequest`: per
 domain it serves, the files (`FileKey`, `SharedHandle`) and the `OpId`s named for each -- identities,
@@ -1180,6 +1192,38 @@ impl DomainCompletion {
     pub fn fail(self, error: io::Error) {
         todo!()
     }
+}
+
+/// Several providers as one (DI-D-81 to DI-D-83): each serves exactly the domains it declares,
+/// read once at `build`; the router serves their union and dispatches each seal's request by domain.
+pub struct RoutingProvider<V: Identities> { /* the registrations and their domains */ }
+
+impl<V: Identities> RoutingProvider<V> {
+    pub fn builder() -> RouterBuilder<V> {
+        todo!()
+    }
+}
+
+impl<V: Identities> DurabilityProvider<V> for RoutingProvider<V> { /* as section 15 says */ }
+
+pub struct RouterBuilder<V: Identities> { /* the providers registered so far */ }
+
+impl<V: Identities> RouterBuilder<V> {
+    pub fn register(self, provider: impl DurabilityProvider<V> + 'static) -> Self {
+        todo!()
+    }
+
+    /// Refuses a domain claimed twice, by two registrations or twice by one.
+    pub fn build(self) -> Result<RoutingProvider<V>, RoutedTwice> {
+        todo!()
+    }
+}
+
+/// The domain, and the two registrations that claimed it, numbered from 0 in registration order.
+pub struct RoutedTwice {
+    pub domain: FlushDomain,
+    pub first: usize,
+    pub second: usize,
 }
 
 // ---------------------------------------------------------------------------------------------

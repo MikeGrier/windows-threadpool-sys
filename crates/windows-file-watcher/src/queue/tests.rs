@@ -11,7 +11,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle};
 use std::sync::Arc;
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 
@@ -1292,6 +1292,119 @@ fn an_owned_doorbell_refers_to_the_same_event() {
     assert!(is_signalled(receiver.doorbell().expect("still there")));
 }
 
+// --- the shared doorbell (D-87) ---
+
+#[test]
+fn a_shared_doorbell_is_the_queues_own_handle_and_not_a_duplicate() {
+    let (_sender, receiver) = channel();
+    let shared = receiver.doorbell_shared().expect("the shared doorbell");
+    assert_eq!(
+        shared.as_raw_handle(),
+        receiver.doorbell().expect("borrow").as_raw_handle(),
+        "a shared holder is one more owner of the queue's handle, so no new handle exists"
+    );
+    let owned = receiver.doorbell_owned().expect("a duplicate");
+    assert_ne!(
+        shared.as_raw_handle(),
+        owned.as_raw_handle(),
+        "the owned form is a duplicate, which is what the shared one is not"
+    );
+}
+
+#[test]
+fn every_shared_doorbell_is_a_holder_of_one_handle() {
+    let (_sender, receiver) = channel();
+    let first = receiver.doorbell_shared().expect("first");
+    let second = receiver.doorbell_shared().expect("second");
+    let cloned = first.clone();
+    assert!(first.same_handle(&second), "two asks share one handle");
+    assert!(first.same_handle(&cloned), "and so does a clone");
+    assert_eq!(first.as_raw_handle(), second.as_raw_handle());
+}
+
+#[test]
+fn asking_for_the_shared_doorbell_first_creates_it_for_every_other_form() {
+    let (_sender, receiver) = channel();
+    let shared = receiver.doorbell_shared().expect("create");
+    assert_eq!(
+        receiver.doorbell().expect("reuse").as_raw_handle(),
+        shared.as_raw_handle(),
+        "the doorbell is created once, whichever method asks first"
+    );
+}
+
+#[test]
+fn a_shared_doorbell_follows_the_queue_in_both_directions() {
+    let (sender, receiver) = channel();
+    let shared = receiver.doorbell_shared().expect("the shared doorbell");
+    assert!(!is_signalled(shared.as_handle()), "an empty queue is quiet");
+
+    deliver(&sender, batch(WatchId::from_raw(1), &["a.txt"]));
+    assert!(is_signalled(shared.as_handle()), "a send reaches it");
+
+    assert!(receiver.try_recv().is_some());
+    assert!(
+        !is_signalled(shared.as_handle()),
+        "draining the queue resets it"
+    );
+}
+
+#[test]
+fn a_shared_doorbell_asked_for_late_finds_the_queues_state() {
+    let (sender, receiver) = channel();
+    deliver(&sender, batch(WatchId::from_raw(1), &["early.txt"]));
+    let shared = receiver.doorbell_shared().expect("the shared doorbell");
+    assert!(
+        is_signalled(shared.as_handle()),
+        "notifications that arrived before the first ask are already signalled"
+    );
+}
+
+#[test]
+fn dropping_a_shared_holder_leaves_the_queues_doorbell_working() {
+    let (sender, receiver) = channel();
+    let shared = receiver.doorbell_shared().expect("the shared doorbell");
+    let other = shared.clone();
+    drop(shared);
+    drop(other);
+
+    deliver(&sender, batch(WatchId::from_raw(1), &["a.txt"]));
+    assert!(
+        is_signalled(receiver.doorbell().expect("still there")),
+        "the queue's own holder keeps the handle open"
+    );
+}
+
+#[test]
+fn a_shared_doorbell_outlives_the_queue_as_a_valid_handle() {
+    let (sender, receiver) = channel();
+    let shared = receiver.doorbell_shared().expect("the shared doorbell");
+    deliver(&sender, batch(WatchId::from_raw(1), &["a.txt"]));
+    drop(sender);
+    drop(receiver);
+
+    // SAFETY: the shared holder keeps the handle open for the call.
+    let waited = unsafe { WaitForSingleObject(shared.as_raw_handle(), 0) };
+    assert_ne!(waited, WAIT_FAILED, "the handle is still a live event");
+    assert!(shared.try_into_owned().is_ok(), "it is the last holder now");
+}
+
+#[test]
+fn a_waiting_client_on_a_shared_doorbell_is_woken_by_a_send() {
+    let (sender, receiver) = channel();
+    let shared = receiver.doorbell_shared().expect("the shared doorbell");
+
+    let handle = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        deliver(&sender, batch(WatchId::from_raw(1), &["late.txt"]));
+    });
+    // SAFETY: the shared holder keeps the handle open for the call.
+    let waited = unsafe { WaitForSingleObject(shared.as_raw_handle(), 10_000) };
+    assert_eq!(waited, WAIT_OBJECT_0, "the send woke the waiter");
+    handle.join().expect("the sender thread");
+    assert!(receiver.try_recv().is_some());
+}
+
 #[test]
 fn a_waiting_client_is_woken_by_a_send() {
     let (sender, receiver) = channel();
@@ -1431,6 +1544,61 @@ fn a_client_can_drain_from_its_own_threadpool_wait() {
     assert_eq!(seen.len(), 64, "every notification reached the client");
     let expected: Vec<String> = (0..64).map(|index| format!("f-{index}")).collect();
     assert_eq!(seen, expected);
+}
+
+#[test]
+fn a_client_can_arm_its_own_threadpool_wait_on_the_shared_doorbell() {
+    // The same integration as above with no duplicate: the pool object holds the
+    // queue's own event as one more owner (D-87).
+    let (sender, receiver) = channel();
+    let doorbell = receiver.doorbell_shared().expect("the doorbell");
+
+    let receiver = Arc::new(receiver);
+    let drained = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let consumer = Arc::clone(&receiver);
+    let count = Arc::clone(&drained);
+    let signal = Arc::clone(&finished);
+
+    // SAFETY: an event is a supported wait target, and the shared handle keeps it
+    // open for as long as the wait object holds it.
+    let waitable = unsafe { WaitableHandle::assume_waitable_shared(doorbell) };
+    let wait = ThreadpoolWait::new(
+        waitable,
+        move |activation| {
+            while consumer.try_recv().is_some() {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            if consumer.is_disconnected() {
+                signal.store(true, std::sync::atomic::Ordering::SeqCst);
+            } else {
+                activation.rearm(None);
+            }
+        },
+        None,
+    )
+    .expect("create the wait");
+    wait.arm(None);
+
+    for index in 0..32 {
+        deliver(
+            &sender,
+            batch(WatchId::from_raw(1), &[&format!("f-{index}")]),
+        );
+    }
+    drop(sender);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !finished.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the pool callback never drained the queue"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    wait.stop_and_drain();
+    assert_eq!(drained.load(std::sync::atomic::Ordering::SeqCst), 32);
 }
 
 // --- has_pending: the predicate the doorbell is signalled on (D-41, M14.3) ---

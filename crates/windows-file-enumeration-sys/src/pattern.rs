@@ -18,16 +18,18 @@
 //! # Case
 //!
 //! [`CaseSensitivity::Sensitive`] is exact code-unit comparison, which needs no
-//! Win32 call. [`CaseSensitivity::Insensitive`] uses `CompareStringOrdinal`,
-//! Windows' own non-linguistic uppercase table -- the same notion of "equal
-//! ignoring case" the filesystem uses, rather than a locale-dependent collation
-//! that would make matching depend on the caller's user profile.
+//! Win32 call. [`CaseSensitivity::Insensitive`] is `win-text-sys`'s
+//! `compare_string_ordinal`, which is `CompareStringOrdinal`: Windows' own
+//! non-linguistic uppercase table -- the same notion of "equal ignoring case"
+//! the filesystem uses, rather than a locale-dependent collation that would
+//! make matching depend on the caller's user profile.
 //!
 //! Ordinal case folding is one-to-one per code unit, which is what lets a
 //! literal run consume exactly its own length even when matched insensitively.
 
-use windows_sys::Win32::Foundation::TRUE;
-use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+use std::cmp::Ordering;
+
+use win_text_sys::{Case, CompareStringOrdinalError, compare_string_ordinal};
 use wtf_string::{Wtf16Str, Wtf16String};
 
 /// How a name comparison treats case.
@@ -187,37 +189,37 @@ fn units_equal(left: &[u16], right: &[u16], case: CaseSensitivity) -> bool {
 
 /// Whether two runs are equal through Windows' ordinal uppercase table.
 ///
-/// `CompareStringOrdinal` accepts explicit lengths, so an interior NUL in a name
-/// is compared as content rather than terminating the comparison. An empty run
-/// is handled here rather than passed on, because a zero length would otherwise
-/// have to be distinguished from the API's own "NUL-terminated" convention.
+/// The comparison is given each run with its length, so an interior NUL in a
+/// name is compared as content rather than terminating the comparison, and an
+/// empty run is an ordinary comparison.
 fn ordinal_equal_ignoring_case(left: &[u16], right: &[u16]) -> bool {
     if left.len() != right.len() {
         return false;
     }
-    if left.is_empty() {
-        return true;
+    equal_from(
+        compare_string_ordinal(left, right, Case::Insensitive),
+        left,
+        right,
+    )
+}
+
+/// What a comparison's result says about whether `left` and `right` are equal.
+///
+/// A failure of the call is not equality. A run too long for the call's count
+/// cannot be a filesystem name, and is compared exactly rather than truncated
+/// to a prefix; reaching it takes a slice of more than 2^31 UTF-16 units, over
+/// four gigabytes of name, which no unit test should allocate, so it is tested
+/// here through the result and not through a slice that long.
+fn equal_from(
+    result: Result<Ordering, CompareStringOrdinalError>,
+    left: &[u16],
+    right: &[u16],
+) -> bool {
+    match result {
+        Ok(ordering) => ordering == Ordering::Equal,
+        Err(CompareStringOrdinalError::TooLong { .. }) => left == right,
+        Err(CompareStringOrdinalError::Call(_)) => false,
     }
-    // Both fallbacks below survive a mutation run, and neither is a test gap:
-    // reaching one needs a slice of more than 2^31 UTF-16 units, which is over
-    // four gigabytes of name. No filesystem produces that and no unit test
-    // should allocate it, so these are unreachable in practice rather than
-    // untested. They are kept because "cannot happen" and "is handled" are
-    // different claims, and the second one costs two lines.
-    let Ok(left_len) = i32::try_from(left.len()) else {
-        // A run this long cannot be a filesystem name; fall back to the exact
-        // comparison rather than truncating the length and comparing a prefix.
-        return left == right;
-    };
-    let Ok(right_len) = i32::try_from(right.len()) else {
-        return left == right;
-    };
-    // SAFETY: both pointers address `left_len`/`right_len` initialised code
-    // units, which is exactly the counted form this API documents; the call
-    // reads only that many units and writes nothing.
-    let result =
-        unsafe { CompareStringOrdinal(left.as_ptr(), left_len, right.as_ptr(), right_len, TRUE) };
-    result == CSTR_EQUAL
 }
 
 /// How many code units the first code point of `units` occupies, or `None` when

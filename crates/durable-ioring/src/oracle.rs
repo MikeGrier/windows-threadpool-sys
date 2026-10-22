@@ -114,8 +114,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::contract::Identities;
 use crate::types::{Entry, Epoch, IoFault, Marking, MarkingKind, OpKind, Outcome, SuspectWrite};
 
+mod pairing;
 #[cfg(test)]
 mod tests;
+
+pub use pairing::{PairingChecker, PairingViolation};
 
 /// What a push gave the instance, kept until its completion.
 struct Pushed<V: Identities, C> {

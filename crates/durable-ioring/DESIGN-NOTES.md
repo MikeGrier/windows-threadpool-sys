@@ -18,7 +18,7 @@ appear here.
 | <a id="di-d-4"></a>DI-D-4 | **Amended by [DI-D-49](#di-d-49): owning forms are the Windows backend's file target's concern; the core takes targets, not handles. `#![forbid(unsafe_code)]` is unchanged.** **Amended by [DI-D-29](#di-d-29): the owning form a consumer gives is `SharedHandle`, which dioring hands to the ring unchanged.** **No unsafe code, enforced by `#![forbid(unsafe_code)]` from the first commit.** The `epoch_log` sample needs `unsafe` only because it pushes through raw handles; this crate takes files in owning forms (`SharedHandle`, `RegisteredFile`, `flush_owned`) and never a `RawHandle`, which its per-write bookkeeping wants anyway for file identity. If a Win32 call is ever needed that no lower crate wraps safely, the safe wrapper is added to the lower crate (the workspace's fix-the-layer policy), never an `unsafe` block here. A build that fails on the `forbid` is the moment to raise it, not a lint to relax. |
 | <a id="di-d-5"></a>DI-D-5 | **Two consumer classes, and a layering that serves both: this crate reports and resolves; retention is a layer above it.** Naive consumers want durability without expertise; expert consumers -- storage engines with their own logs -- want truthful reporting and no buffering imposed on them. So this crate owns, for both:<br><br>**(a)** a high-water mark that never reports a point durable while an earlier failure is unresolved -- Scenarios 1 and 2 in the session show a later successful flush reporting data durable that is gone, and an expert needs this guarantee as much as anyone;<br><br>**(b)** a resolution protocol by which the consumer, not this crate, decides what a failure means;<br><br>**(c)** an inventory, by identity, of the writes a failure puts in doubt -- a fact about what was issued, not a policy about what to do.<br><br>Retaining written data until durable, rewriting it, and replaying it are **policy, and belong to a separate future crate above this one**, which uses (b) and (c) rather than re-tracking every write. A naive consumer on this crate alone gets truthful durability and a precise loss report -- correct, if not graceful; the retention crate is what makes it graceful. That crate is a deliberate layer, not work deferred for want of a consumer, and is queued in [CHECKLIST.md](CHECKLIST.md). |
 | <a id="di-d-6"></a>DI-D-6 | **Ordering overlapping writes is the consumer's responsibility; this crate tracks an identity per write and nothing more.** The engineer's decision. Two overlapping writes in flight together land in an unspecified order, and replaying suspect writes after a failure can clobber newer data if overlaps are not resolved newest-wins; both are the consumer's to handle, and the contract states the first as a requirement on the consumer. This crate does not track in-flight byte ranges, refuse overlaps, or resolve them. Whether the per-write identity carries an order usable for newest-wins resolution was left open here; it does -- `OpId` is ordered by push order ([DI-D-15](#di-d-15)). **Applied 2026-10-06 (the engineer: "drop the extents. The consumer may track them themselves via the OpId."):** a failure's `SuspectWrite` and the durability provider's request (DI-2.12) carry a write's `OpId`, never its offset or length. |
-| <a id="di-d-7"></a>DI-D-7 | **The `epoch_log` sample stays as it is until this crate is proven; then a merge-or-delete decision is taken.** The repository's duplicate-then-decide rule: this crate is a new path beside the sample, not a rewrite of it. The decision -- rebuild the sample on this crate, keep both, or retire one -- is queued in [CHECKLIST.md](CHECKLIST.md) so the duplication cannot become permanent by default. A defect the session found in the sample's own reasoning is queued separately in the ring crate, since it is wrong whatever happens here. |
+| <a id="di-d-7"></a>DI-D-7 | **Superseded by [DI-D-85](#di-d-85).** **The `epoch_log` sample stays as it is until this crate is proven; then a merge-or-delete decision is taken.** The repository's duplicate-then-decide rule: this crate is a new path beside the sample, not a rewrite of it. The decision -- rebuild the sample on this crate, keep both, or retire one -- is queued in [CHECKLIST.md](CHECKLIST.md) so the duplication cannot become permanent by default. A defect the session found in the sample's own reasoning is queued separately in the ring crate, since it is wrong whatever happens here. |
 | <a id="di-d-8"></a>DI-D-8 | **Amended by [DI-D-9](#di-d-9): a durability point is now identified by the consumer's own ordered number, and what stays opaque is the mechanism, not the identity.** As first written: durability points are opaque to the consumer -- the consumer names and waits on a point without seeing how it is represented, so the epoch stays an implementation detail ([DI-D-2](#di-d-2)). That intent survives DI-D-9: which flushes are issued, under which commit strategy, and how the suspect window is tracked remain dioring's and invisible; only the *label* of a point became the consumer's. |
 | <a id="di-d-9"></a>DI-D-9 | **Amended by [DI-D-27](#di-d-27): rule (c)'s "covered" now means named in a durability-provider call.** **Amended by [DI-D-19](#di-d-19): every rule below applies within one lineage. A write's epoch is a lineage plus an epoch id (formerly "epoch number"), and a seal covers only its own lineage's prefix.** **The durability model: the consumer tags each write with an epoch id of its own choosing, and `make_durable_through(n)` seals and requests durability for every epoch at or below `n`.** The engineer's decision, reached as a what-if and then adopted. Tags may be issued in any order, higher and lower intermixed; a journal transaction ID or log sequence number can be the tag directly. `make_durable_through(n)` seals a *prefix* of the number space, so "n durable implies every m < n durable" holds by construction and epochs above `n` remain open -- several open epochs come free, with no open or seal ceremony and no handles. Rules:<br><br>**(a)** once `n` is sealed, a write tagged at or below `n` is an API violation, refused before anything is reserved, as [D-28](../windows-ioring-sys/DESIGN-NOTES.md#d-28) treats every legality check;<br><br>**(b)** `make_durable_through(m)` with `m` at or below an already-sealed number is a no-op that reports `m`'s current state -- durable, pending, or failed -- rather than a single "already durable" code that would be false in two of the three cases;<br><br>**(c)** writes of still-open epochs that a commit's flush happens to cover are not reported durable, and may appear in a failure's suspect set with their tags -- they are simply not yet guaranteed.<br><br>Why it fits: a covering flush covers everything pushed before it whatever its tag, so the prefix is the physical truth of the ring and the tag is bookkeeping over it; and because rule (a) forces a rewrite of a failed epoch's data to carry a higher tag, healing composes with it without a special rule. Named in a storage idiom rather than a database one (prepare/commit): **"through" states the prefix property in the name**, and the report is `durable_through()` (the high-water mark the sample already calls by that name). Costs carried: a bare number compares across instances, losing a type-level guard on C-3's per-domain rule (since answered in the DI-2.1 draft by making the epoch type generic, so the consumer chooses comparability through types); sparse tags mean an ordered map of open epochs inside dioring; a consumer whose native sequence wraps (jbd2's 32-bit transaction IDs do) maps it onto a non-wrapping one. The tag's concrete type is [DI-2.1](CHECKLIST.md)'s. **Supersedes the explicit-handle model** explored in the session (open and seal as separate operations, positions assigned at seal), which this model makes unnecessary. |
 | <a id="di-d-10"></a>DI-D-10 | **Amended by [DI-D-49](#di-d-49): the ring dioring owns is its backend; the consumer reaches the backend only through dioring.** **The consumer cannot put an operation on the ring that interferes with dioring's control of it.** The engineer's decision. dioring owns its ring outright: the consumer reaches it only through dioring's own operations -- reads, tagged writes, and durability requests -- and never through `IoRing`, `Batch`, a `RingScope`, or `windows-ioring-sys`' raw-SQE seam ([D-7](../windows-ioring-sys/DESIGN-NOTES.md#d-7)). Anything that would interfere -- a flush whose failure the suspect window would not hear, a cancel that silently changes a tagged write's fate, a registration that replaces what dioring registered -- either is not offered or is offered only as a dioring-mediated operation whose effect dioring accounts for. **Enforced by the types, not by documentation**: no public method returns a borrow through which an underlying ring operation can be pushed, which is the same shape as [D-43](../windows-ioring-sys/DESIGN-NOTES.md#d-43)'s `RingScope` and is checked by the borrow question in [DESIGN-INSTRUCTIONS.md](../windows-ioring-sys/DESIGN-INSTRUCTIONS.md). **No escape hatch, including for experts**, and this is consistent with OPTION INTEGRITY rather than an exception to it: that rule permits foreclosing an option on a demonstrated wrong answer, and an interfering operation produces exactly that -- a durability report that is false. |
@@ -37,12 +37,12 @@ appear here.
 | <a id="di-d-23"></a>DI-D-23 | **Amended by [DI-D-46](#di-d-46): the seal a heal waits for is the first made after it that reaches the highest epoch pushed in the lineage by then.** **Amended by [DI-D-43](#di-d-43): a seal that would close a cycle is refused too, since a seal decides which held writes reaching an epoch needs.** **Gate cycles are detected, and the push that would close one is refused.** The engineer's decision under DI-2.4 point 4, 2026-10-06: "I think we have to detect it. The alternative leads to a lot of extra work around enumeration, modification and cancellation of lineages that I don't really want to have to do." A gated write tagged `L:a` with gate `M:b` adds the dependency "L reaching a needs M reaching b"; because durability is a prefix, a cycle exists when M reaching b already needs, transitively, L reaching a or beyond. The push that would close a cycle is refused before anything is reserved, as every legality check is ([D-28](../windows-ioring-sys/DESIGN-NOTES.md#d-28)), with an error naming the cycle; a write gated on its own lineage at or above its own epoch is the one-edge case. Edges leave the graph when a gate releases or its epoch is abandoned. **Limits:** only gates dioring sees are covered -- a consumer that waits in its own code for one lineage before writing another can still deadlock itself -- and a lineage its holder never finishes strands gates on it without forming a cycle, which is DI-2.13's question. **For the implementation:** a heal takes effect only when the first seal made after it completes, so reaching a failed epoch can depend on reaching a later one; the search must not assume reaching `b` depends only on writes at or below `b`. Gated reads take no epoch and so cannot be part of a cycle. |
 | <a id="di-d-24"></a>DI-D-24 | **Refined by DI-2.15: `Epoch` and every other shared type that carries an identity is generic over one `Identities` bundle -- the implementation's identity types plus the consumer's epoch-id type -- since an epoch holds a lineage; only the plain values stay concrete ([API.md](API.md) section 17).** **The contract is a trait, generic only, with identity types associated to each implementation.** The engineer's decision under DI-2.5, 2026-10-06: "I would prefer a trait", then, point by point, "yes associated types", "yes generic only. We will make things free functions when needed", "agreed", "yes", and on the readiness signal, "why wouldn't it have such a signal?". The contract is something layers above implement as well as consume -- the fault-injecting implementation (DI-3.3) and the retention layer (DI-5+.1) -- so it is a trait from the start rather than extracted later. **Identity types are associated types** (`Lineage`, `OpId`, `FailureId`, `FailureToken`): each embeds a private instance identity or a cell into its instance, so only its own implementation can mint it, and associated types keep that invariant per implementation; plain values -- `Epoch`, `FileKey`, `FlushDomain`, the options builders -- stay shared. **Generic only, not object-safe:** consumers write `D: DurableRing<...>`; construction stays on concrete types, and what cannot sit on the trait becomes free functions. **A core trait plus an extension trait for registered buffers**, since an implementation without a wioring may have none. **The trait carries a readiness signal**, set whenever an entry becomes available from any source -- a ring completion or a durability provider's out-of-band completion -- so the Model A and Model B front ends are written once over the trait; its form and wake-up rules are DI-2.14's. **dioring ships a conformance oracle** over the event stream, which every implementation's tests run, because a trait makes [CONTRACT.md](CONTRACT.md) bind implementations dioring does not own. **Consequence carried:** a public trait others implement cannot gain a required method without a major release, so additions come as default methods or extension traits. |
 | <a id="di-d-25"></a>DI-D-25 | **Ending an instance -- `close()` or drop -- seals nothing, waits for everything outstanding, and `close()` hands back what is left.** The engineer's decisions under DI-2.7, 2026-10-06 (points 1-6: "yes"; then "add close here also", and on provider calls in flight: "the responsibilities w.r.t. outstanding calls to durability providers are similar to the responsibilities to around outstanding ring operations. so in the end we have to await them."). **No implicit durability:** ending issues no final seal or flush -- that would be policy, would block, and a failure would have nobody to report to. **It waits** for every kernel operation (the ring's own rundown, which leaks rather than frees buffers if it cannot prove quiescence, [D-4](../windows-ioring-sys/DESIGN-NOTES.md#d-4)) and for every durability-provider call in flight, because both may still be using memory or state the instance owns; dioring adds no other waiting, and a provider call that never completes means ending never completes, as a kernel operation that never completes would. **No cancellation notification to the provider:** considered, and the engineer doubts it is worthwhile ("perhaps there should be a cancellation notification but I doubt it's worthwhile"); no work is scheduled. **`close(self) -> Leftovers`** returns the gated operations the kernel never saw (with buffer and context), the unresolved failures, and every lineage with its final high-water mark; drop discards them. Nothing reported is undone. **Model A teardown** quiesces delivery before releasing anything its callback reaches ([D-13](../windows-ioring-sys/DESIGN-NOTES.md#d-13)), so no callback runs after ending returns. **While unwinding,** problems are traced, not panicked ([D-79](../windows-ioring-sys/DESIGN-NOTES.md#d-79)). A failure token's drop is its `close()` (DI-1.2). **Not an instance's rule:** ending a *lineage* need not wait -- the engineer: there is "not a lifetime issue and there is not a dependency around durability" -- which is DI-2.13's. Implementation constraint: the wait must not hold dioring's lock, or a provider completion that takes it deadlocks the end. |
-| <a id="di-d-26"></a>DI-D-26 | **Amended by [DI-D-51](#di-d-51): diagnostics go to a sink the consumer chooses; ETW is one sink, the Windows driver's default, and no longer the single surface.** **Amended by [DI-D-50](#di-d-50): the portable core reports through a tracing hook; the ETW provider is the Windows driver's.** **dioring publishes one ETW provider, manifest-based, as the single diagnostic surface for durability delays; it costs nothing when no session listens.** The engineer's decisions under DI-2.11, 2026-10-06: "delays are inevitable with shared resources. we should plan for etw logging for delays"; "I have two major concerns for delays: flushes and locks. Locks are in our control and flushes are up to the flush domains control"; "nothing" (cost when disabled); "manifest"; "we are generating events about durability delays, so we own it"; and "the etw events we publish give a surface for diagnosis of issues; clients don't want to search around across providers to try to correlate issues." Lineages and instances share submission-queue capacity, the deliverer and dioring's lock, so delays are made observable rather than promised away. **Primary events: lock waits and flushes.** Locks are timed by the engineer's pattern: try-lock; only on failure read the clock, block, and on acquiring record the wait; emit after releasing, so the event does not lengthen the hold it measures; one wrapper type, a name per lock; poisoning handled separately. Flushes are timed at the durability-provider boundary -- call issued, and each domain's outcome -- so an event names the slow domain; a provider's internals are its own to report. **Secondary:** a seal's other phases (waiting for covered writes, and for gated writes to be released), which the engineer doubts will be warranted. **One surface:** whatever dioring calls -- the wioring, a provider -- is timed at the boundary, so the wioring's own lock appears as a slow call into the ring and the ring crate publishes no provider (its `M31+.1` was withdrawn). **Nothing when disabled:** no clock read and no event built unless a session is listening. **Consequence carried:** manifest events decode by name only where the manifest is installed, an administrative step an application must take or document. What each event names, the time base (chosen from observed timelines), and the provider's name and GUID are DI-3.6's. |
+| <a id="di-d-26"></a>DI-D-26 | **Amended by [DI-D-80](#di-d-80) and [DI-D-91](#di-d-91): a delay is reported as a begin and an end sharing an id, and its length is the gap a reader measures between them; nothing is timed, so the lock pattern below reads no clock and its event is written before blocking and on acquiring, with the lock held.** **Amended by [DI-D-76](#di-d-76): the provider is named `durable-ioring-events`, lives in its own crate, and records without its manifest being installed.** **Amended by [DI-D-51](#di-d-51): diagnostics go to a sink the consumer chooses; ETW is one sink, the Windows driver's default, and no longer the single surface.** **Amended by [DI-D-50](#di-d-50): the portable core reports through a tracing hook; the ETW provider is the Windows driver's.** **dioring publishes one ETW provider, manifest-based, as the single diagnostic surface for durability delays; it costs nothing when no session listens.** The engineer's decisions under DI-2.11, 2026-10-06: "delays are inevitable with shared resources. we should plan for etw logging for delays"; "I have two major concerns for delays: flushes and locks. Locks are in our control and flushes are up to the flush domains control"; "nothing" (cost when disabled); "manifest"; "we are generating events about durability delays, so we own it"; and "the etw events we publish give a surface for diagnosis of issues; clients don't want to search around across providers to try to correlate issues." Lineages and instances share submission-queue capacity, the deliverer and dioring's lock, so delays are made observable rather than promised away. **Primary events: lock waits and flushes.** Locks are timed by the engineer's pattern: try-lock; only on failure read the clock, block, and on acquiring record the wait; emit after releasing, so the event does not lengthen the hold it measures; one wrapper type, a name per lock; poisoning handled separately. Flushes are timed at the durability-provider boundary -- call issued, and each domain's outcome -- so an event names the slow domain; a provider's internals are its own to report. **Secondary:** a seal's other phases (waiting for covered writes, and for gated writes to be released), which the engineer doubts will be warranted. **One surface:** whatever dioring calls -- the wioring, a provider -- is timed at the boundary, so the wioring's own lock appears as a slow call into the ring and the ring crate publishes no provider (its `M31+.1` was withdrawn). **Nothing when disabled:** no clock read and no event built unless a session is listening. **Consequence carried:** manifest events decode by name only where the manifest is installed, an administrative step an application must take or document. What each event names, the time base (chosen from observed timelines), and the provider's name and GUID are DI-3.6's. |
 | <a id="di-d-27"></a>DI-D-27 | **Amended by [DI-D-50](#di-d-50): the built-in default provider issues one commit per target the seal touched, through the backend, and covered means a write's deciding commit succeeded.** **Amended by [DI-D-29](#di-d-29): a request names files as `SharedHandle`, not `SharedFile`.** **Seals are made durable by a built-in default provider and at most one consumer-supplied durability provider, which flushes by any means and answers per flush domain.** The engineer's decisions under DI-2.12, 2026-10-06: the provider shape ("I generally like this, it's what I expect dioring to be on top of the wioring"), "drop the extents", "one provider per instance seems too restrictive" then "do your clean form of b", and the assistant's stances on the rest ("seems right, let's move on"). **Built-in default plus one consumer provider:** the default -- each file synced through dioring's own wioring -- is the only code that touches that ring ([DI-D-10](#di-d-10)); the consumer's provider states at construction the domains it serves, and everything else, including files declared with no domains, goes to the default. Several providers are composed by a router dioring ships, itself a provider (DI-3.8). **The call:** one request per seal, made only after dioring has observed every named write complete, with an entry per domain naming its files (`FileKey`, `SharedFile`) and each file's `OpId`s -- identities, never extents -- and one completion handle per domain, consumed once with success or an error. **Any means:** the provider never issues or carries writes and never touches dioring's wioring; deduplicating across coupled domains or calls is its own business, and coupled domains dedupe only within one provider. **Outcomes:** a write is durable when every domain of its file has succeeded; a domain's success covers exactly the `OpId`s named for it and is the consumer's warranty; a domain's failure reaches the files whose sets contain that domain, plus unknown files -- narrower than [DI-D-21](#di-d-21)'s file-intersection rule, which still governs the default provider's per-file failures; a handle dropped uncompleted is a failure of its domain with its own cause; a call that never completes leaves the seal pending, with no timeout in dioring. **Call rules:** the call returns promptly, handles may complete on any thread at any time, the provider holds no reference to the instance, a completion only records the outcome and sets the readiness signal, and a provider panic propagates with its dropped handles counted as abandoned. **"Covered" is redefined** as named in a provider call made after the write's completion was observed, and covered successfully once every domain of its file reports success; it drives the seal's file set, suspect sets, `remove_file`'s `FileBusy`, and crediting (DI-6+.7). Writing this into CONTRACT.md and API.md is DI-2.16. |
-| <a id="di-d-28"></a>DI-D-28 | **Amended by [DI-D-58](#di-d-58): the signal is also set when a `pop` has a failure to report -- a doorbell that failed, or completions that could not be read -- not only after an entry is poppable.** **Amended by [DI-D-50](#di-d-50): the readiness signal's type is the driver's, an associated type of the contract; the Windows driver's is the `Event` below, and the rules are unchanged.** **Amended by `DI-3.2.2.1` (2026-10-07): the duplicate is a `win-sync-sys` `Event`, not a bare `OwnedHandle`, so a front end can give it to a thread-pool wait without `unsafe` -- which dioring forbids ([DI-D-4](#di-d-4)) and which a bare handle would need, since nothing in its type says it is not a mutex. The engineer created `win-sync-sys` for this.** **The trait's readiness signal is an auto-reset event its implementation owns, with the wioring's wake-up rules; dioring's is its own event, relayed from `EventDelivery`.** The engineer's decisions under DI-2.14, 2026-10-06: "relay to a second event" and "yes" to the rest. **Form:** an auto-reset event the implementation owns, the consumer receiving a duplicate, the shape of the wioring's `IoRing::completion_event` ([D-20](../windows-ioring-sys/DESIGN-NOTES.md#d-20)). **Wake-up rules**, the wioring's ([D-19](../windows-ioring-sys/DESIGN-NOTES.md#d-19), [D-21](../windows-ioring-sys/DESIGN-NOTES.md#d-21)) restated for the trait: an implementation sets the signal only after an entry is poppable, and at least on every empty-to-non-empty transition; a front end pops to `None` after every wake before waiting again; a wake with nothing to pop is normal; one waiter per instance, matching the single deliverer. **dioring's implementation** keeps `EventDelivery`, so the ring's arm-and-drain discipline stays in the ring crate where it is solved, and [DI-D-18](#di-d-18)'s binding to its callback contract (ring `M31.1`) stands: the callback records each ring completion into dioring's core under dioring's own lock, assuming no order among overlapping callbacks, then sets dioring's event; a provider completion sets it too. Rejected: making dioring's signal the ring's own event, set by hand -- one hop fewer, but it tied dioring's contract to the ring's event semantics. **Consequence:** in both delivery models the ring is drained by `EventDelivery`'s pool callbacks; Model A and Model B differ only in who delivers. **Conformance:** the oracle sees entries, not wakes, so a harness check -- push into an empty queue and assert the signal is set; drain; assert the next push sets it again -- runs beside it in every implementation's tests (built in `DI-3.2.2.1`). |
+| <a id="di-d-28"></a>DI-D-28 | **Amended by `win-sync-sys`' [WS-D-10](../win-sync-sys/DESIGN-NOTES.md#ws-d-10) (2026-10-18): the consumer's `Event` is a clone sharing the instance's handle, not a duplicate.** **Amended by [DI-D-58](#di-d-58): the signal is also set when a `pop` has a failure to report -- a doorbell that failed, or completions that could not be read -- not only after an entry is poppable.** **Amended by [DI-D-50](#di-d-50): the readiness signal's type is the driver's, an associated type of the contract; the Windows driver's is the `Event` below, and the rules are unchanged.** **Amended by `DI-3.2.2.1` (2026-10-07): the duplicate is a `win-sync-sys` `Event`, not a bare `OwnedHandle`, so a front end can give it to a thread-pool wait without `unsafe` -- which dioring forbids ([DI-D-4](#di-d-4)) and which a bare handle would need, since nothing in its type says it is not a mutex. The engineer created `win-sync-sys` for this.** **The trait's readiness signal is an auto-reset event its implementation owns, with the wioring's wake-up rules; dioring's is its own event, relayed from `EventDelivery`.** The engineer's decisions under DI-2.14, 2026-10-06: "relay to a second event" and "yes" to the rest. **Form:** an auto-reset event the implementation owns, the consumer receiving a duplicate, the shape of the wioring's `IoRing::completion_event` ([D-20](../windows-ioring-sys/DESIGN-NOTES.md#d-20)). **Wake-up rules**, the wioring's ([D-19](../windows-ioring-sys/DESIGN-NOTES.md#d-19), [D-21](../windows-ioring-sys/DESIGN-NOTES.md#d-21)) restated for the trait: an implementation sets the signal only after an entry is poppable, and at least on every empty-to-non-empty transition; a front end pops to `None` after every wake before waiting again; a wake with nothing to pop is normal; one waiter per instance, matching the single deliverer. **dioring's implementation** keeps `EventDelivery`, so the ring's arm-and-drain discipline stays in the ring crate where it is solved, and [DI-D-18](#di-d-18)'s binding to its callback contract (ring `M31.1`) stands: the callback records each ring completion into dioring's core under dioring's own lock, assuming no order among overlapping callbacks, then sets dioring's event; a provider completion sets it too. Rejected: making dioring's signal the ring's own event, set by hand -- one hop fewer, but it tied dioring's contract to the ring's event semantics. **Consequence:** in both delivery models the ring is drained by `EventDelivery`'s pool callbacks; Model A and Model B differ only in who delivers. **Conformance:** the oracle sees entries, not wakes, so a harness check -- push into an empty queue and assert the signal is set; drain; assert the next push sets it again -- runs beside it in every implementation's tests (built in `DI-3.2.2.1`). |
 | <a id="di-d-29"></a>DI-D-29 | **Superseded by [DI-D-50](#di-d-50): the contract names targets by `IoTargetKey`, and a provider request names `IoTargetWrites { key, writes }`; no handle crosses the contract.** **Revised 2026-10-07: the type is `SharedHandle`, from the workspace crate `win-shared-os-owned-handle`; first decided, on 2026-10-06, as a crate-local `DurableFile`.** **A file is given to the contract as a `SharedHandle`: an owning, cheaply shared handle that lends itself.** The engineer, under DI-2.17 and after it. Details, and what the contract adds on top of the type, are in [the section below](#di-d-29-a-file-is-a-sharedhandle). |
 | <a id="di-d-30"></a>DI-D-30 | **Amended by [DI-D-43](#di-d-43): a new gate on an ended lineage's epoch is refused as a lineage the instance cannot answer for, not as `GateAbandoned`; and a held write of the ended lineage ends as never issued too.** **Amended by [DI-D-40](#di-d-40): a lineage also ends when its last handle is released, and `end` takes the last handle by value.** **A lineage its holder will not finish is ended: every epoch of it not yet durable is abandoned, its handle refused at once, and it is retired once drained; nothing waits and no I/O is cancelled.** The engineer's decisions under DI-2.13, 2026-10-06: shutting down a lineage "does not have to wait because there is not a lifetime issue and there is not a dependency around durability"; "I believe that entire larger structures may be abandoned but not surgical I/O cancellation" (DI-2.6); then "close it" on the assistant's stances. **In v1.** **Everything not yet durable is abandoned**, sealed epochs whose flushes are in flight included; a flush that finishes afterwards reports nothing. **Dependants end, by existing rules:** gated operations on its epochs, in any lineage, end as `NeverIssued` and new gates on them are refused as `GateAbandoned` (contract guarantee 9, [DI-D-23](#di-d-23)) -- the case cycle detection cannot see, closed without new machinery. **No waiting, no cancellation:** operations in flight complete normally and are delivered, unlike ending an instance ([DI-D-25](#di-d-25)), which must wait because the instance owns their memory. **Ending retires:** the handle is refused at once and the lineage retired once its operations drain, so the consumer need not retry `retire_lineage`. **Shared failures:** a failure that also holds another lineage's writes stays unresolved for that lineage. **Reported** by a fifth synthesized entry, `LineageEnded { lineage, abandoned_through }`, in order with every other. **The default lineage cannot be ended**, as it cannot be retired. Operation cancel stays parked (DI-6+.4). The authoritative text is [CONTRACT.md](CONTRACT.md) "Ending a lineage" and [API.md](API.md) section 18. |
-| <a id="di-d-31"></a>DI-D-31 | **The Model A front end is `EntryDelivery<D>`, built by `EntryDelivery::new(ring, on_entry, env)` from any `D: DurableRing`; the handler is `FnMut(EntryOf<D>, &DeliveryHandle<D>)`, and a failed construction hands back the ring and the handler.** The engineer's decision, 2026-10-07 ("write it in"), on the assistant's proposal under `DI-3.2.2.2`. **Name:** what `windows-ioring-sys`' `EventDelivery` is for a ring, one layer up -- it owns the instance and delivers on pool threads -- named for what it delivers rather than for this repository's "Model A". Model B has no type of its own, since its consumer uses the trait directly. **Constructor:** takes `ring: D` by value, because the front end owns the delivery ([DI-D-18](#di-d-18)), and is written once over the trait ([DI-D-24](#di-d-24)), so it serves dioring, the fault-injecting implementation and layers above alike. `env: Option<&mut CallbackEnviron>` selects a private pool or a callback priority, as `EventDelivery::new` does. Bound: `D: Send + 'static`. (`EntryOf<D>: Send` was proposed with it and proved unnecessary in `DI-3.2.2.2`: a `Send` instance carries its queued entries across threads with it.) **Refusal:** `DeliverySetupError<D, F> { error, ring, on_entry }`, by the rule that every refusal hands back what it took ([API.md](API.md) section 10); it fails when duplicating the readiness signal or creating the thread-pool wait fails. **Handler:** `FnMut`, because entries are delivered strictly one at a time (DI-2.3 point 8), so calls never overlap and a consumer keeps plain mutable state without its own synchronisation. Choosing `Fn + Sync` instead would have kept room to relax that serialisation, at the cost of making every consumer synchronise; the serialisation is a decided contract, so `FnMut` binds to it. **The handler receives a `&DeliveryHandle<D>`**, a view that does not own the front end, rather than a reference to the owner: it is how the handler calls back in -- pushing the next write, say -- without the set-a-`Weak`-after-construction step `EventDelivery` leaves to its callers, and because it cannot keep the front end alive, a handler cannot cause the front end to be dropped from inside its own callback. The owner and the handle offer the same operations; which, and in what form, is still open under `DI-3.2.2.2`. **Handover:** entries already queued when the ring is handed over are delivered: `new` arms its wait and then sets the readiness event itself, since the signal may already have been consumed -- the guarantee `EventDelivery::new` had to earn (its `M26.12`), tested from the start here. Setting it needs no `unsafe` because the readiness duplicate is an `Event` ([DI-D-28](#di-d-28)). |
+| <a id="di-d-31"></a>DI-D-31 | **Amended by `win-sync-sys`' [WS-D-10](../win-sync-sys/DESIGN-NOTES.md#ws-d-10) (2026-10-18): setup clones the readiness signal rather than duplicating it, so it fails only when the instance cannot give the signal or the pool cannot create a wait.** **The Model A front end is `EntryDelivery<D>`, built by `EntryDelivery::new(ring, on_entry, env)` from any `D: DurableRing`; the handler is `FnMut(EntryOf<D>, &DeliveryHandle<D>)`, and a failed construction hands back the ring and the handler.** The engineer's decision, 2026-10-07 ("write it in"), on the assistant's proposal under `DI-3.2.2.2`. **Name:** what `windows-ioring-sys`' `EventDelivery` is for a ring, one layer up -- it owns the instance and delivers on pool threads -- named for what it delivers rather than for this repository's "Model A". Model B has no type of its own, since its consumer uses the trait directly. **Constructor:** takes `ring: D` by value, because the front end owns the delivery ([DI-D-18](#di-d-18)), and is written once over the trait ([DI-D-24](#di-d-24)), so it serves dioring, the fault-injecting implementation and layers above alike. `env: Option<&mut CallbackEnviron>` selects a private pool or a callback priority, as `EventDelivery::new` does. Bound: `D: Send + 'static`. (`EntryOf<D>: Send` was proposed with it and proved unnecessary in `DI-3.2.2.2`: a `Send` instance carries its queued entries across threads with it.) **Refusal:** `DeliverySetupError<D, F> { error, ring, on_entry }`, by the rule that every refusal hands back what it took ([API.md](API.md) section 10); it fails when duplicating the readiness signal or creating the thread-pool wait fails. **Handler:** `FnMut`, because entries are delivered strictly one at a time (DI-2.3 point 8), so calls never overlap and a consumer keeps plain mutable state without its own synchronisation. Choosing `Fn + Sync` instead would have kept room to relax that serialisation, at the cost of making every consumer synchronise; the serialisation is a decided contract, so `FnMut` binds to it. **The handler receives a `&DeliveryHandle<D>`**, a view that does not own the front end, rather than a reference to the owner: it is how the handler calls back in -- pushing the next write, say -- without the set-a-`Weak`-after-construction step `EventDelivery` leaves to its callers, and because it cannot keep the front end alive, a handler cannot cause the front end to be dropped from inside its own callback. The owner and the handle offer the same operations; which, and in what form, is still open under `DI-3.2.2.2`. **Handover:** entries already queued when the ring is handed over are delivered: `new` arms its wait and then sets the readiness event itself, since the signal may already have been consumed -- the guarantee `EventDelivery::new` had to earn (its `M26.12`), tested from the start here. Setting it needs no `unsafe` because the readiness duplicate is an `Event` ([DI-D-28](#di-d-28)). |
 | <a id="di-d-32"></a>DI-D-32 | **`EntryDelivery`'s operations are `&self` methods on `DeliveryHandle` that mirror the trait's, the owner derefs to its handle, and no `&mut` to the instance is ever given out; ending quiesces the delivery first, and `into_inner` hands the instance back.** The two questions DI-D-31 left open, decided by the assistant while implementing `DI-3.2.2.2` on analytic grounds; **confirmed by the engineer, 2026-10-07** ("yes mirrored"; of ending by stopping delivery first, "I don't see how else it could work"). **Mirrored methods, not a closure over the instance:** a closure taking `&mut D` -- like a `DerefMut` scope -- lets safe code replace the instance while the wait stays armed on the old one's signal, and delivery then stops without an error; that is the ring crate's measured [D-43](../windows-ioring-sys/DESIGN-NOTES.md#d-43), whose record says outright that a closure does not close it. It would also let a caller `pop`, taking entries out of order, or take `readiness`, stealing wakes from the one waiter ([DI-D-28](#di-d-28)). So the handle offers every trait operation a consumer calls on a live instance, with the registered-span forms when `D: RegisteredBufferRing`, and registered bytes through closures over the bytes alone (`with_registered_buffer`, `with_registered_buffer_mut`); `pop` and `readiness` are withheld. [delivery.rs](src/delivery.rs) is the list. Each call takes the front end's lock on the instance for its duration; the handler is called with it released, under a lock of its own that only the deliverer takes. **The cost, owned:** the handle restates the trait's consumer operations, so each later step that adds one must add it here too; `DI-3.2`'s parent item says so, which is where a later step will read it. **Ending:** drop and `into_inner` both quiesce first -- disarm, wait for a delivery in progress, release the deliverer's reference -- before the instance is released ([DI-2.7](COMPLETED-CHECKLIST.md) point 5). Drop then drops the instance with any entry not yet delivered; `into_inner` returns it with those entries still queued, so it can be popped directly (Model B) or closed, which needs the instance by value. **Serialisation is structural:** the deliverer re-arms only after popping to `None`, and the readiness event is auto-reset and stays set until a wait takes it, so a wake that lands mid-drain starts a new delivery only after this one's last handler call. A failed `pop` ends the wake as `None` does. |
 | <a id="di-d-33"></a>DI-D-33 | **Amended by [DI-D-40](#di-d-40): `epoch_state` for a lineage the instance does not have answers that explicitly, instead of panicking.** **Amended by [DI-D-34](#di-d-34): a failed flush is now observed as a failure and finishes its seal; only a write a consumer provider answers for still leaves one pending.** **One lineage's durability is an I/O-free state machine held under dioring's lock with the queue; the delivery callback records each completion there and pushes the flushes it makes due while still holding it.** Decided by the assistant while implementing `DI-3.2.3`, as the mechanism for [DI-D-9](#di-d-9) and [DI-D-22](#di-d-22); **confirmed by the engineer, 2026-10-07** ("all is true"), including one `Durable` per seal rather than one coalesced entry. **The machine** ([durability.rs](src/durability.rs)) decides and the relay acts, as [DI-D-18](#di-d-18)'s I/O-free core intends, so its rules are tested without a ring. A seal of n waits until no write of the lineage at or below n is in flight -- a flush issued before a write completes does not cover it, because coverage is by observation -- then names every completed write at or below n not yet named, and asks for one flush per file the built-in default answers for -- the default's unit is the file, because `IoRing`'s flush is a file handle's; a consumer provider is asked per flush domain instead ([DI-D-27](#di-d-27), `DI-3.2.6`) -- pushed with `FlushCoverage::Unordered` because it is issued only after what it covers has completed. Each write therefore belongs to exactly one seal, the first at or above its epoch, since later writes at or below a seal are refused. Seals may finish out of order; the high-water mark advances over finished seals in order, and one `Durable` is appended per seal as the mark passes it (guarantee 2). **Order on the queue:** a completion's `Op` entry is appended before anything it makes due, so a `Durable` follows the completions it covers whichever pool thread recorded them (guarantee 5). **Locks:** dioring's before the ring's (DI-2.3 point 10). A push holds dioring's lock across the ring push, so a write is recorded before its completion can be; the callback pushes due flushes while holding it, which the ring crate's [D-83](../windows-ioring-sys/DESIGN-NOTES.md#d-83) permits. A flush the ring refuses is kept and pushed at the next chance. **Reaching the ring from the callback without a cycle:** the delivery owns the callback, so the relay holds a `Weak` to it, upgraded only under dioring's lock and released before unlocking; dropping the instance first marks the core closed under that lock. So no callback holds the delivery once the instance ends, and it is dropped on the instance's own thread -- never inside one of its callbacks, where dropping it would wait for itself. **Left pending, not approximated:** a failed flush leaves its seal pending until `DI-3.2.4` reports it as `Failed`, and a write a consumer provider must answer for leaves its seal pending until `DI-3.2.6` asks the provider. **Not decided:** `epoch_state` for an epoch of a lineage the instance does not have; `EpochState` has no value for it, so dioring panics, documented on the method, while `make_durable_through` refuses with `InvalidInput` and `durable_through`/`sealed_through` answer `None`. Queued for the engineer under `DI-3.2.5`, where retired lineages raise the same question. |
 | <a id="di-d-34"></a>DI-D-34 | **Confirmed by the engineer under `DI-3.9.1`, 2026-10-08, with three amendments recorded in [DI-D-46](#di-d-46): `import_failure` reports the domains it could not match; a heal waits for a seal that reaches the re-issue; and an inconsistency is panicked on where it is found.** **Amended by [DI-D-41](#di-d-41) and [DI-D-42](#di-d-42): a heal takes effect per lineage, a failure that suspects nothing heals at once, and `ImportScope::Lineage` reaches only that lineage's writes.** **Amended by [DI-D-36](#di-d-36): a suspect write that completes as failed after its failure was observed gains a nullifier.** **Amended by [DI-D-35](#di-d-35): a write tagged with an abandoned epoch is refused.** **Failures are held in the same I/O-free core as seals: every write is recorded, in push order, from its push until it is covered successfully, fails, or its epoch is passed by the high-water mark, and a failure's suspect set is the recorded writes its reach covers, frozen when it is observed.** Decided by the assistant while implementing `DI-3.2.4`, as the mechanism for [DI-D-12](#di-d-12) and [DI-D-21](#di-d-21), and confirmed by the engineer under `DI-3.9.1` (see the status above). **One transition** (DI-1.2 Q4): a failed flush and an import both go through `observe(cause, reach)`; the cause is data on the failure, and nothing about a failure depends on which it was. **Reach**, by the declared flush domains: a failed flush of a file declared with domains reaches files whose domains intersect them, and files declared with none; a file declared with none reaches every file; `ImportScope::Domains` by the same rule, with a domain no file declared reaching only the undeclared files; `ImportScope::Lineage` reaches every file while the default lineage is the only one, and nothing for another instance's. Built here rather than in `DI-3.2.5` because the suspect set is defined here: an instance-wide interim would over-report, and an abandon would then abandon epochs nothing put at risk. **What is recorded:** a write that failed leaves the record when its completion arrives, so a failure observed after that does not suspect it, while one observed during its flight keeps it (frozen); a write whose flush failed stays recorded, and so is suspected again by every later failure, until its epoch passes the mark -- which is CONTRACT.md's many-to-many example, A@41 in both failures. **An epoch passes** only when no unresolved failure contains it. **Abandon** records the failure's epochs as abandoned at once, reported by `epoch_state` from then on even for an open epoch; the mark still waits for every other failure containing them. **Heal** takes effect when the first seal made after it finishes with every flush successful -- not merely the first seal made, so a seal whose own flush fails does not count, and the heal waits for the next. Until then the failure is unresolved and in the inventory, and the pending heal holds its token: `token_live` is true and `take_token` answers `None`. **Answers:** a seal whose own flush fails is answered by that `Failed`; one whose flushes succeed while a failure holds an epoch at or below it is answered `Blocked` once, naming the earliest such failure observed; every seal still gets its `Durable` when the mark passes it ([DI-D-33](#di-d-33)), including those answered `Failed` or `Blocked`. **Resolve** refuses another instance's token, handing every token back in the order given, and applies the rest together, appending `Abandoned` entries and then what the change makes due. **Inconsistencies on a pool thread:** the core records an internal inconsistency instead of asserting, because most changes arrive on the delivery callback, where a panic aborts the process and names no test; `pop` asserts on it in debug builds, on the consumer's thread. Two sabotages were caught only by such an abort before this. **The fault seam:** `Dioring::fail_next_flush(file, code)`, behind the `fault-injection` feature, makes the next flush of `file` to complete report a Win32 error, by transforming its real completion through `windows-ioring-sys`' own seam, so the flush still reaches the kernel. A self dev-dependency enables it for every test build, so CONTRACT.md's worked examples, compiled as doctests, always run. **Not decided:** whether a write to an open epoch already abandoned should be refused; it is accepted, and the question is queued under `DI-3.2.5`, beside `GateAbandoned`. **CONTRACT.md corrected:** the many-to-many example's second ending said the mark moves past the abandoned epochs; by the contract's own resolution rule it does so once F1's heal takes effect, at the next seal, and the example now makes that seal. |
@@ -53,7 +53,7 @@ appear here.
 | <a id="di-d-39"></a>DI-D-39 | **Amended by [DI-D-50](#di-d-50): `MarkingKind::Short` is withdrawn and a nullifier carries an `IoFault`.** **Confirmed by the engineer under `DI-3.9.2`, 2026-10-08, with amendments recorded in [DI-D-47](#di-d-47): every report cites where it came from; a covered marking means covered successfully and cites who answered; and a nullifier's code is a plain `ErrorCode`, a code-less failed write being an inconsistency.** **Amended by [DI-D-42](#di-d-42): the oracle no longer requires a `Durable` that passes a healed failure to follow its `Healed` entry -- a heal takes effect per lineage ([DI-D-41](#di-d-41)), so one lineage's `Durable` may come first.** **How DI-D-36's markings and error codes are built.** Decided by the assistant while implementing `DI-3.2.4.2`, and reviewed by the engineer under `DI-3.9.2`. **A marking** is `Marking { write, observed, kind }`, with `MarkingKind` non-exhaustive -- `Nullified { code }`, `Short { transferred }`, `Covered` -- so new kinds can be added. **When one is made:** a nullifier or short marking at the suspect write's completion, which only a write still in flight when the failure was observed can have after it; short means fewer bytes than the write asked for, so the core now records each write's requested length at push. A covered marking when the write's **own file's** flush succeeds after the failure was observed. `DI-3.2.4.2`'s text said "in a seal that later succeeded", and that computes the wrong answer: a seal that fails on file A has still committed file B, whose writes are on the device. The stream cannot show seals per file either. A write is marked in every unresolved failure suspecting it, at one clock reading. **Where markings are read:** a `Marked` entry for each; `FailureInfo::markings`; and the final record, `Abandoned { markings }` or a new `Healed { failure, suspect, markings }`, emitted when a heal takes effect and before any `Durable` it lets through. `Failed` gets no field, since it would always be empty at observation. A failure abandoned or healed gains no more. **Error codes** are `ErrorCode`, an `HRESULT` newtype: the I/O ring reports every failure as one, and a Win32 code is the `HRESULT_FROM_WIN32` form. `ErrorCode::of(&io::Error)` reads the code from any error dioring reports, which answers [DI-D-34](#di-d-34)'s question of how a consumer reads it without the ring crate's `IoRingErrorExt`. The code is **not** stored beside the `io::Error` in `Outcome::Failed` or `Cause::Flush`: the error already holds it, and a second copy could disagree. It is stored in a nullifier, which has no error to read it from; that field is an `Option` because it is read from an `io::Error`, and it is `Some` for every completion the kernel reports. **The oracle** checks each marking against the write's own completion, keeps one stamp order across `Failed` and `Marked`, and checks that a final record carries exactly the markings reported. Because `Healed` exists, it now also requires a `Durable` that passes a failure to follow that failure's `Healed` or `Abandoned` entry. It does not check which markings *should* have been made: whether a write was in flight at observation, its length, and per-file flushes are not in the stream. |
 | <a id="di-d-40"></a>DI-D-40 | **A lineage is held through a `Clone` handle, and ends when its last handle is released. Operations that act on a lineage take its handle; operations that name or ask about a lineage or epoch take the plain value, and say explicitly when it is not one the instance can answer for.** The engineer's decisions, 2026-10-08, reached in discussion and confirmed as "the coherent answer". **The handle** wraps an `Arc` in a newtype, is `Clone` and `#[must_use]`, and is an associated type of the contract beside `FailureToken`. It carries the lineage's `Copy` name, `Lineage`, which stays the identity used in entries, reports and persisted epochs. **Ending:** releasing the last handle ends the lineage ([DI-D-30](#di-d-30)), abandoning every epoch not yet durable: a holder that has let go of every handle will not finish it, and a panic unwinding past the last handle ends it the same way. `#[must_use]` warns only when a returned handle is discarded unused -- not on `let _ =`, nor for a handle dropped with the struct holding it -- so the documentation says plainly that releasing the last handle abandons pending work. `end(handle)` and `retire(handle)` take the handle by value and succeed only when it is the last, handing it back otherwise, so any existing handle proves its lineage live; `retire` is the non-destructive close, succeeding only when nothing is pending. **The default lineage:** construction returns its handle, and the instance keeps one reference itself. So the default never ends while the instance lives, and `end` or `retire` of it never succeeds: [DI-D-19](#di-d-19)'s and DI-D-30's rule that it cannot be ended or retired follows from ownership instead of being an exception. The instance hands out a clone on request. A handle reaches dioring through a `Weak`, so a handle that outlives its instance does nothing, and the instance's own reference makes no cycle. **The rule**, applied to every operation (the engineer: "apply the rule that makes them consistent, I don't want to mis-specify"): acting on a lineage -- pushing a write into it, sealing it, ending or retiring it -- takes its handle, with a run-time refusal kept for another instance's handle. Naming or asking -- a gate (which may name another lineage), `ImportScope::Lineage`, `epoch_state`, `durable_through`, `sealed_through`, and every entry and report -- takes the plain `Lineage` or `Epoch`, checked at run time, and answers "not a lineage this instance can answer for" explicitly, never by panicking. That settles [DI-D-33](#di-d-33)'s open question, and corrects two answers that were already inconsistent: `durable_through` and `sealed_through` answered `None` both for "nothing yet" and for "not this instance's", and must tell them apart; and `import_failure` naming a lineage the instance does not have made a failure that suspects nothing, and must refuse instead. A retired lineage answers as a foreign one does: the instance keeps no memory of it, as it keeps none of a resolved failure. **Why handles** (the engineer: "Should we register a lineage, get a lifetime managed type back and not pass arbitrary values around?"): the Rust API Guidelines' C-VALIDATE prefers ruling a bad argument out by its type to checking it. A handle makes an operation on a lineage that is not live impossible to express, while values that must outlive an instance -- epochs written into a consumer's own logs -- stay plain and are checked. Branded lifetimes, which would also rule out another instance's handle at compile time, were not taken: they tie handles to a scope, so handles could not be stored freely. **Provenance, amended 2026-10-14 after the review of PR 126:** the refusal of another instance's handle cannot rest on the instance named in the handle's `Lineage`, since `LineageHandle::detached` and `mint` are public (a fake in another crate needs them) and take that name as an argument; a handle made for a real lineage has a reference count of its own, so ending or retiring through it would abandon epochs while the genuine handles were live, and the genuine last release would then find the lineage gone and panic. The check is the home the handle reports to, which a driver compares with its own and which a caller holding no reference to the instance cannot name; a handle whose home is not the instance's is refused as `Foreign`, and handed back. No work is queued behind this. |
 | <a id="di-d-41"></a>DI-D-41 | **Amended by [DI-D-46](#di-d-46): the releasing seal must also reach the highest epoch pushed in the lineage when the heal was made, which is where the re-issued writes are.** **A heal takes effect per lineage: a healed failure stops holding lineage L once L's first seal made after the heal finishes with every flush successful, and is resolved as healed -- its `Healed` entry emitted -- only once that has happened in every lineage it belongs to.** The engineer's decision, 2026-10-08, on the assistant's proposal: "let's go with per lineage for now. we can worry about more complex cases later if necessary." It generalises [DI-D-12](#di-d-12) (c)'s "the first seal made after the heal", which named no lineage once a failure could span several ([DI-D-19](#di-d-19)). **Why per lineage:** the consumer re-issues a failure's lost writes into each lineage they belonged to, and each lineage's re-issued writes are committed only by its own next seal. Letting one lineage's seal end the failure everywhere would let another lineage's mark pass epochs whose re-issued writes it had not committed -- a wrong answer, not a weaker one. **Its cost, accepted:** a failure one of whose lineages never seals again stays in the inventory, healing, indefinitely, while the lineages that did seal are released. **"For now":** the engineer left more complex cases for later, if they prove necessary; nothing names one yet, so no work is queued for them. Built by `DI-3.2.5.1`; `DI-3.2.5.2`'s cycle search follows the dependency it creates, reaching L:a waiting on L's next seal. |
-| <a id="di-d-42"></a>DI-D-42 | **How [DI-D-40](#di-d-40)'s handles and [DI-D-41](#di-d-41)'s per-lineage heals are built.** Decided by the assistant while implementing `DI-3.2.5.1`, to be confirmed by the engineer under `DI-3.9.3`. **Confirmed by the engineer, 2026-10-13 (`DI-9.1.1` to `DI-9.1.4`): a handle's release runs on the thread that drops the last copy; an ended lineage is not live from the moment it ends; heals take effect as soon as nothing can delay them; and the oracle drops DI-D-39's tightening, with the four ended-lineage rules. The oracle's weaker rule cannot check when a heal takes effect; making it able to is parked as [DI-6+.9](CHECKLIST.md), scheduling nothing now. **Ratified by the engineer, 2026-10-13 (`DI-9.1.5`): the shapes, so the whole row is confirmed.** **The tag:** a write and a seal take `Tag<'_, V>`, an epoch id with a borrowed handle, made by `LineageHandle::at(id)`; it borrows the handle, never the instance, so the lineage cannot end while a push or a seal that names it is under way, even if another thread drops a copy. **Construction** returns `(Dioring, LineageHandle)`, the default lineage's handle beside the instance. **Answers for a name the instance cannot answer for:** `durable_through`, `sealed_through` and `epoch_state` return `Result<_, UnknownLineage>` -- `epoch_state` no longer panics -- and `import_failure` returns `Result<FailureId, UnknownLineage>`, refusing a `Lineage` scope it cannot answer for and recording nothing. A foreign handle is refused as `PushRefusal::UnknownLineage` by a push and as `InvalidInput` by a seal. **Refusals:** `EndLineageRefusal` is `Foreign`, `Default` or `Shared`, and `RetireLineageRefusal` adds `Busy(LineageBusy)`; both errors hand the handle back, and are checked in that order. `LineageBusy.held_for_gate` is zero until gates exist (`DI-3.2.5.2`), and `in_flight` counts writes, clearing as their completions arrive rather than when they are popped. Retiring reports no entry: it abandons nothing. **An ended lineage is not live from the moment it ends**, though it stays recorded until its writes in flight complete: its name is answered as unknown, a flush of its that answers afterwards reports nothing, and a write of its that completes afterwards is let go -- still marking any failure that already suspected it, which a failure observed after the end cannot. **`LineageEnded.abandoned_through`** is the highest epoch above the lineage's mark that it sealed or wrote, `None` if there is none. **A failure belongs to no lineage when its suspect set is empty, and healing it takes effect at once** -- the per-lineage rule applied to zero lineages. With one lineage, such a heal used to wait for the next seal. **Ending a lineage a heal waits for releases the heal there**, so its `Healed` entry may follow `LineageEnded` directly. **The oracle** drops DI-D-39's tightening: a `Durable` may pass a failure once the consumer has healed it, because the stream cannot show which lineage's seal made the heal effective. It gains four rules for an ended lineage: it is reported ended once, no `Durable` or `Blocked` names it afterwards, no write into it is accepted, and no later failure suspects a write of it. **A handle's release** runs on whichever thread drops the last copy, and takes dioring's lock and then the ring's, as a completion callback does; a handle that outlives its instance releases nothing. **The core** keys each lineage's state by its sequence number, the default's being zero, and keeps writes and failures per instance; lifecycle lives in `durability/lineages.rs`. |
+| <a id="di-d-42"></a>DI-D-42 | **How [DI-D-40](#di-d-40)'s handles and [DI-D-41](#di-d-41)'s per-lineage heals are built.** Decided by the assistant while implementing `DI-3.2.5.1`, to be confirmed by the engineer under `DI-3.9.3`. **Confirmed by the engineer, 2026-10-13 (`DI-9.1.1` to `DI-9.1.4`): a handle's release runs on the thread that drops the last copy; an ended lineage is not live from the moment it ends; heals take effect as soon as nothing can delay them; and the oracle drops DI-D-39's tightening, with the four ended-lineage rules. The oracle's weaker rule cannot check when a heal takes effect; making it able to is parked as [DI-6+.9](PARKED.md), scheduling nothing now. **Ratified by the engineer, 2026-10-13 (`DI-9.1.5`): the shapes, so the whole row is confirmed.** **The tag:** a write and a seal take `Tag<'_, V>`, an epoch id with a borrowed handle, made by `LineageHandle::at(id)`; it borrows the handle, never the instance, so the lineage cannot end while a push or a seal that names it is under way, even if another thread drops a copy. **Construction** returns `(Dioring, LineageHandle)`, the default lineage's handle beside the instance. **Answers for a name the instance cannot answer for:** `durable_through`, `sealed_through` and `epoch_state` return `Result<_, UnknownLineage>` -- `epoch_state` no longer panics -- and `import_failure` returns `Result<FailureId, UnknownLineage>`, refusing a `Lineage` scope it cannot answer for and recording nothing. A foreign handle is refused as `PushRefusal::UnknownLineage` by a push and as `InvalidInput` by a seal. **Refusals:** `EndLineageRefusal` is `Foreign`, `Default` or `Shared`, and `RetireLineageRefusal` adds `Busy(LineageBusy)`; both errors hand the handle back, and are checked in that order. `LineageBusy.held_for_gate` is zero until gates exist (`DI-3.2.5.2`), and `in_flight` counts writes, clearing as their completions arrive rather than when they are popped. Retiring reports no entry: it abandons nothing. **An ended lineage is not live from the moment it ends**, though it stays recorded until its writes in flight complete: its name is answered as unknown, a flush of its that answers afterwards reports nothing, and a write of its that completes afterwards is let go -- still marking any failure that already suspected it, which a failure observed after the end cannot. **`LineageEnded.abandoned_through`** is the highest epoch above the lineage's mark that it sealed or wrote, `None` if there is none. **A failure belongs to no lineage when its suspect set is empty, and healing it takes effect at once** -- the per-lineage rule applied to zero lineages. With one lineage, such a heal used to wait for the next seal. **Ending a lineage a heal waits for releases the heal there**, so its `Healed` entry may follow `LineageEnded` directly. **The oracle** drops DI-D-39's tightening: a `Durable` may pass a failure once the consumer has healed it, because the stream cannot show which lineage's seal made the heal effective. It gains four rules for an ended lineage: it is reported ended once, no `Durable` or `Blocked` names it afterwards, no write into it is accepted, and no later failure suspects a write of it. **A handle's release** runs on whichever thread drops the last copy, and takes dioring's lock and then the ring's, as a completion callback does; a handle that outlives its instance releases nothing. **The core** keys each lineage's state by its sequence number, the default's being zero, and keeps writes and failures per instance; lifecycle lives in `durability/lineages.rs`. |
 | <a id="di-d-43"></a>DI-D-43 | **A seal that would close a gate cycle is refused, as a push that would is; and the search keeps one bound per lineage over its held writes sorted by epoch, naming the cycle only once there is one.** The engineer's decision, 2026-10-08, choosing the first of three options the assistant set out -- refuse such a seal; split seals at gated epochs; or leave seal-closed cycles undetected as a limit. **Why a seal can close one:** which held writes a lineage must complete to reach epoch `b` depends on the seal that will cover `b`, whose extent the consumer chooses after the gated writes were accepted, and a pending heal waits for the next seal however far it reaches ([DI-D-41](#di-d-41)). A write at `M:4` gated on `L:9` and one at `L:9` gated on `M:3` close no cycle when pushed, yet sealing `M` through 5 deadlocks: reaching 3 needs that seal, which waits for the write at 4. Sealing through 3 first does not. **The engineer's direction on the search:** "we need to strongly lean towards the normal non-error case being fast"; reduce it to small identifiers, sorted lists and closures over the lineages and heals in flight; "once we find that we're in the non-success case, we can take more time to give the more detailed diagnostic data"; and do not shape the exploration to gather that data up front if that costs more than a trivialized algorithm. **As built** (`durability/gates.rs`): the *extent* of `L:y` is `y`, raised to the first seal of `L` at or above `y` and, while a healing failure holds an epoch of `L` at or below `y`, to the seal its heal waits for; a seal not yet made adds nothing, because it is checked when made. Needs are monotone in `y`, so the search keeps one bound per lineage, only raises it, and scans only the newly covered range of that lineage's held writes; each lineage's held writes are scanned once, in any order of arrival. A push gated on `M:b` searches from `M:b` for its own lineage needing its epoch. A seal searches once from every held write beneath it together -- if that never needs the lowest, none is on a cycle -- and only then from each alone. The cycle is named by a second, breadth-first search with a parent per step, run only on that path. A push with no gate, and a seal over no held write, search nothing. **Decided by the assistant while implementing `DI-3.2.5.2`, confirmed by the engineer under `DI-3.9.4`, 2026-10-13 (`DI-9.2.1`: a held write whose own epoch is abandoned ends as never issued naming that epoch, and the gate is named when both are abandoned; `DI-9.2.2`: a held write is outstanding for its lineage's seals and no failure suspects it until released; `DI-9.2.3`: `SealError` in place of `io::Error`; `DI-9.2.4`: the rest, ratified):** a gate naming an ended or retired lineage is refused as `UnknownLineage`, since [DI-D-42](#di-d-42) makes such a lineage one the instance cannot answer for; a held write whose own epoch is abandoned first ends as `NeverIssued` naming that epoch, since no write may join it ([DI-D-35](#di-d-35)), and the gate is named when both are; a held write is outstanding for its lineage's seals, as one in flight is, and no failure suspects it until it is released; `make_durable_through` returns `SealError::{UnknownLineage, GateCycle}` in place of an `io::Error`; a cycle is listed as each held write's epoch followed by its gate; and released operations are pushed at the consumer's next call on the instance -- normally the `pop` that returns the `Durable` releasing them -- because a registered-span push needs the registration and an owned push its buffer's bound, which a held owned operation carries as a function pointer made where the bound held. The oracle gains: a gated operation completes only after its gate is reported durable, `NeverIssued` comes only for one and names its gate or own epoch once reported abandoned, and no failure suspects a held write. |
 | <a id="di-d-44"></a>DI-D-44 | **Amended by [DI-D-50](#di-d-50): a request names `IoTargetWrites` in place of a file and its handle.** **Amended by [DI-D-46](#di-d-46): an answer no request asked for is panicked on where it is found, not recorded.** **The consumer's provider is called from the consumer's own next call on the instance, with dioring's lock released; and its answers and failures are built from what [DI-D-27](#di-d-27) already decided.** Decided by the assistant while implementing `DI-3.2.6`, and confirmed by the engineer under `DI-3.9.5`, 2026-10-13 (`DI-9.3.1`, `DI-9.3.2`, `DI-9.3.3`), as amended above. **When the provider is called:** a seal that becomes ready to start queues its request in the core; the request is made by the consumer's next `pop`, `make_durable_through`, `resolve` or `end_lineage`, after the lock is released -- never by a completion callback on a pool thread, and never with the lock held. Two constraints force this: [DI-D-27](#di-d-27) lets a provider answer inside `make_durable`, and that answer takes the lock; and a provider panic propagates, which it can only do to a caller. Under entry delivery the `pop` is the deliverer's, so the call is made on its thread. Nothing is stranded: a seal starts at the seal call itself, or at the completion of its last write, which always queues an entry the consumer pops. **Building before calling:** every request in the queue is built before any is handed over, so a panic drops the rest, and each completion dropped unanswered is a failure of its domain, `Cause::ProviderAbandoned`. **A request:** one per seal, naming only the domains the provider serves that the seal's writes touched, in the order of their interned ids; each file in a domain, with the handle the instance was given; and each file's writes in push order. A seal that names no write the provider serves asks it nothing. **Coverage:** a write is covered successfully when its file's flush succeeded, if the default answers for the file, and every served domain of its file answered success; the seal finishes once every flush and every domain has answered. **A failure** of domain D is observed with `Reach::Domains([D])`, which is exactly DI-D-27's rule -- files whose domains contain D, and files declared with none -- so it needs no reach of its own; it is the seal's answer, and later answers for that seal cover writes without reporting anything more. **An answer that cannot be applied:** one for a lineage no longer live reports nothing, as a late flush does ([DI-D-42](#di-d-42)); one for a seal the lineage does not have, one for a seal not flushing, one for a domain the seal did not ask about, and a second answer for a domain are recorded as inconsistencies and change nothing. A seal reported durable is no longer kept, so an answer for it is one for a seal the lineage does not have. |
 | <a id="di-d-45"></a>DI-D-45 | **Amended by [DI-D-51](#di-d-51): the `trace` feature it introduced is removed; an inconsistency is reported to the instance's diagnostic sink.** **Amended by [DI-D-46](#di-d-46): an internal inconsistency is no longer looked for at the end; it is traced and panicked on where it is found, and only traced while unwinding.** **How `remove_file`'s refusal and [DI-D-25](#di-d-25)'s ending are built: one ending path for `close()` and drop, which closes the core and takes what is left in one locked step, lets the provider go, and waits for the completions still out.** Decided by the assistant while implementing `DI-3.2.7`, and **confirmed by the engineer, 2026-10-08** ("di-3.2.8: confirmed!"). **`FileBusy`:** `in_flight` counts the file's consumer operations from their push to the record of their completion, so it clears as completions arrive, which may be before they are popped -- the rule [DI-D-42](#di-d-42) chose for `LineageBusy`; a seal's own flush is not counted, since a write it is for is still uncovered. `uncovered` is the file's completed writes not yet covered and outside every unresolved failure's suspect set, and `failures` every unresolved failure, healing ones included, whose frozen suspect set names a write to the file -- even one covered since, because [API.md](API.md) section 8 has every write in such a set hold its file. `remove_file` pushes no released operation, so one waiting to be pushed counts as held. A file given at construction comes back and its key is free at once, while the registration holds it open until the instance ends. **The ending step:** under the lock, the core is marked closed, the held operations taken in push order, the caller's snapshot read -- `close()` reads the failures and the live lineages -- and requests for the provider not yet made, flushes not yet pushed and released operations not yet pushed are discarded. A completion recorded afterwards is dropped with what it held: no entry, no readiness signal. **Letting the provider go:** the provider is dropped next, before the wait, because a provider that keeps completions in itself would otherwise answer them only when dropped -- after a wait they hold up. **The wait:** every completion is counted when it is made and counted down when it is answered or dropped, after the end included; ending waits on a condition variable until the count is zero, which releases the lock while it waits, as DI-D-25 requires. The kernel is waited for by the ring's rundown when the instance's fields are dropped. **While unwinding:** an internal inconsistency found at the end is recorded through `windows-threadpool-sys`' trace under target `dioring` -- compiled in by the crate's new `trace` feature -- and asserted, in debug builds, only when the thread is not already unwinding, as the ring crate's [D-79](../windows-ioring-sys/DESIGN-NOTES.md#d-79) does. **Model A:** `EntryDelivery::close` quiesces delivery and closes the instance, and `DeliveryHandle::remove_file` forwards. |
@@ -62,7 +62,7 @@ appear here.
 | <a id="di-d-48"></a>DI-D-48 | **Amended by [DI-D-49](#di-d-49): targets sit beneath dioring's core, served by a backend that runs their I/O; a layer such as a partition or VHDX driver is a target, not an implementation of the contract.** **The contract's unit of I/O and durability is a target: a placeholder defined only by its contractual obligations. Files leave the contract's vocabulary; a Win32 file object is one way to back a target, and a separate concern.** The engineer's decision, 2026-10-09 ("Let's switch to this. I think it's a much stronger position. Then focusing on the win32 file object as a target can be a separate concern"), on the engineer's own proposal ("I wonder if we should perhaps abstract away from 'files' entirely and instead have a placeholder object with only its contractual obligations called out") and its direction for the substrate ("Let's describe an interface and implement to it"). **Why:** the principal consumers -- a filesystem over a raw partition or over a dynamic VHDX driver that consumes dioring and itself produces the contract, and databases opening unbuffered handles -- sit on substrates of different strength, and buffered I/O "can only be done on a 'best effort' basis" (the engineer), so a contract stated over files either overpromises for a cached file or says nothing a raw volume could warrant. Stated over obligations, each kind of backing says how far it honours them, and dioring's guarantee is durable to the extent its targets honour theirs. **The obligations, as the assistant drafted them** (to be settled under `DI-3.10.1`; the name "target" is provisional): a write of bytes at an offset is accepted and its completion reported, transferred or failed; a commit that reports success warrants that every write it completed before the commit was issued is on stable media, and one that reports failure claims nothing for writes not yet covered; a target states which others' writes its commit's failure can affect (today's flush domains); every failure affecting it that it learns of is reported, and a later success never implies an earlier failure repaired; alignment constraints on offsets and lengths; optional capabilities such as per-write write-through. **Every cause is relayed** (the engineer: "it's true of all cases, we're always just relaying"): a cause names its source -- the layer below, which for dioring over Windows is the kernel and for the VHDX driver is a lower dioring, the consumer, or the provider -- which [DI-D-47](#di-d-47)'s provenance rule then governs; `Cause::Flush`'s "kernel-reported" is the first case of "reported by the layer below". **What is restated, under `DI-3.10`:** the file vocabulary through the trait and types (`FileKey`, `add_file`, `remove_file`, `FileBusy`, `FileOptions`), what a provider request names ([DI-D-29](#di-d-29)), the built-in default provider as a target's own commit ([DI-D-27](#di-d-27)), flush domains as a target's failure-sharing obligation ([DI-D-21](#di-d-21)), and CONTRACT.md throughout; those rows gain amendment markers as each is restated. Until then the code and those rows stand as built. **Open:** whether [D-44](../windows-ioring-sys/DESIGN-NOTES.md#d-44)'s spike-before-wrapping rule is revisited, or applies inside each backing's implementation rather than gating the design -- the assistant proposed the latter; the engineer has not ruled. |
 | <a id="di-d-49"></a>DI-D-49 | **dioring is an algorithm: a portable, public state machine at the core, with targets and the backend that runs their I/O beneath it and a threaded driver above it. Layers are targets. The code is restated in place.** The engineer's decisions, 2026-10-09. **Portable** (the engineer: "the crate is 'durable-ioring', not 'win-durable-ioring', so perhaps it can be non-windows-only? ... There is no hard requirement for disabling non-windows building"; "if our dioring solution can be algorithmic only that's actually ideal"): the core names no platform type and is built and tested off Windows by CI's `portable` job, as `wtf-string`'s portable core already is. It supersedes [DI-D-3](#di-d-3), whose one retained consequence stands: the contract is written in terms of durability, not a platform's incidental behaviour. **Layering** (the engineer: "the state machine would be public ideally with the threaded driver on top, possibly as a separate 'win-' crate since it *is* windows specific"): the core takes calls and completions and returns what is due -- ring entries to issue, entries to deliver -- with no threads, I/O or clock reads of its own; a driver owns a backend, the lock, the notification and delivery, runs the core, and implements `DurableRing`. A consumer with its own ring-shaped substrate can embed the core directly. **Targets beneath the core** (the engineer, on the assistant's backend/target refinement: "seems OK", provided the I/O interface is "shaped like a ring with a sq/cq and a doorbell and notification mechanism"): a backend submits and completes I/O for the targets registered with it; a target carries obligations ([DI-D-48](#di-d-48)). **Layers are targets** (the engineer: "yes that seems like the right refinement. I didn't see why a partition driver would provide an entire dioring"): a partition is a window over another target, and a VHDX driver is a target whose commit succeeds once its own writes are durable in the order its format needs; lineages, failures and resolution live once, in the core at the top. **Restated in place** (the engineer), with today's tests and sabotages as the proof the Windows backend passes. **Assigned to the assistant:** `DI-3.10.1`'s design, as concrete proposals the engineer approves or rejects (the engineer: "I am suffering from 'design fatigue' at this moment and to make better progress you should make concrete proposals that I approve or disapprove"). **Open:** the driver's crate and name -- the workspace's [naming decision](../../DESIGN-NOTES.md#new-crates-take-the-win-prefix) keeps `win-` for crates that raise a Windows API into safe Rust and gives a new facility its own name, so the assistant proposes a name under `DI-3.10.1`. |
 | <a id="di-d-50"></a>DI-D-50 | **The target design (`DI-3.10.1`): `IoTarget` and its obligations, `DurableIoCore` and its backend, `FailureCause` and `IoFault`, and two crates.** **Amended by [DI-9.7.11](COMPLETED-CHECKLIST.md#di-9711): `ErrorCode` no longer has `from_win32` or `win32`; it carries and prints the number, and `win-durable-ioring` wraps a Win32 code into one (`error_code_from_win32`) and reads one back (`win32_code_of`), on `win-error-codes`' `HResult`.** Proposed by the assistant as P1-P13 and approved by the engineer, 2026-10-09 ("otherwise yes good. In-memory is a good basis for unit testing and driving"); the reasoning behind P2 is in the session log. **Names** (P1; the engineer chose the first two, and asked for names that are not "overly short"): `IoTarget`, `IoTargetKey`, `IoTargetBusy`, `IoTargetWrites`, `DurableIoCore`, `CoreActions`, `FailureCause`, `IoFault`; `add_target`, `remove_target` and `ErrorCode` keep their names. **Obligations** (P2): every write, read and commit completes exactly once; a write completes in full or with an `IoFault`, never short; for each write that completed successfully, the first commit submitted after its completion decides it -- success puts its bytes on stable media, failure ends every statement about it, and a later commit's success does not warrant it; a write that completes with a fault is never warranted; a target declares failure domains, meaning a failed commit may have lost any completed write not yet decided by a successful commit, on it or on a target sharing a domain, which dioring acts on; and a target states its alignment and capabilities. Covered is then a write whose deciding commit succeeded, and suspect one whose deciding commit failed or a sharing target's commit failed first -- dioring's behaviour is unchanged. **Short writes:** on Linux a backend handles a short count under a policy the client chooses when building it -- `Fault` by default, `Reissue { max_attempts }` for a client that handles `SIGXFSZ` (the engineer: "Can we just ask the client for how to proceed?" ... "yeah go with (i)"); asking per event would report the short completion after a seal may already be committing its epoch, and checking `getrlimit` first races `prlimit(2)`. The Windows backend never sees one. **Warranty class** (P3), reported by each target and informational only: `Complete`, `SharedDevice`, `BestEffort`; dioring's behaviour does not depend on it and `Durable` is not labelled with it ([DI-D-47](#di-d-47) (F)). **Failure sharing** (P4): a target declares its own domains; [DI-D-21](#di-d-21)'s and [DI-D-27](#di-d-27)'s rules are unchanged, a target with none shares fate with everything, and `FileOptions` goes. **Adding and removing** (P5): `add_target(key, target)` hands the target back on a duplicate key; `remove_target(key)` returns it, refused with `IoTargetBusy` for the holds that refuse `remove_file` today. **Provider requests** (P6) name `IoTargetWrites { key, writes }`; a provider keeps its own access to whatever backs a target. **The default provider** (P7) issues one commit per target the seal touched, through the backend. **Causes** (P8): `FailureCause::Commit { target, fault }`, `Imported`, `Provider`, `ProviderAbandoned`; `IoFault { source, code: Option<ErrorCode>, error }`, `source` naming the reporting layer; `ErrorCode` a portable integer whose meaning is the source's, an `HRESULT` from the Windows backend; `Outcome::Failed` carries an `IoFault`, and `Nullified { fault }`. This revises [DI-D-47](#di-d-47)'s ruling C: a code is optional again because a layer other than the kernel may have none. **A protocol breach** (P9) -- a completion twice, or for an entry never submitted -- is panicked on under [DI-D-46](#di-d-46), naming the backend; an ordinary fault, with or without a code, never is. **The ring** (P10): a backend is push, submit as the doorbell, pop, and a notification on every empty-to-non-empty completion transition; commits cover a whole target; completions are learned by waiting on the notification and draining; buffers go in owned and come back; registered buffers are a backend capability. **The core** (P11): `DurableIoCore` is public; its operations and `complete(cqe)` return `CoreActions { submit, deliver }`; its clock is a portable type parameter, tracing goes through a hook, and the driver's readiness is an associated type. **Crates** (P12): `durable-ioring`, portable -- the core, the contract trait and types, the `IoTarget` and backend traits, the in-memory backend, the oracle; and `win-durable-ioring` (the engineer's name) -- the threaded driver, the Windows backend, and the file and volume targets. **`DI-3.3`** (P13) is an in-memory backend in the portable crate whose targets and backend both fault on a script -- fail, hold, or complete late or out of order; refuse a submission; fill the queue; report a short count, to test a backend's policy -- public and deterministic. The 2026-10-05 purpose of a public second implementation of the contract is served by the target interface instead, which has two public backends. The fault seam behind `fault-injection` stays until the in-memory backend is proven, and its merge-or-delete decision is queued as `DI-3.11`. **The word is "flush domain"** (`FlushDomain`): what P2 and P4 call a target's failure domains keeps the contract's existing name (the engineer, on `DI-3.10.2`'s restatement: "let's call it a FlushDomain"). **`win-durable-ioring` is a recorded exception** to the workspace's [naming decision](../../DESIGN-NOTES.md#new-crates-take-the-win-prefix), which gives `win-` only to crates raising a Windows API into safe Rust; the engineer chose an exception over amending the rule ("record this as an exception"), and it is recorded there. |
-| <a id="di-d-51"></a>DI-D-51 | **Diagnostics go to a sink the consumer chooses: a `DiagnosticSink` trait in the portable core, receiving typed events, with ETW one sink among several.** Proposed by the assistant as T1-T5 and approved by the engineer, 2026-10-09 ("approved"), on the engineer's point: "I think that we need another level of indirection for the tracing on Windows or maybe is it just in general? At least even a windows only consumer may not want to use ETW and may want to just have their own stderr based or OutputDebug based printing." **In general** (T1), because the core is portable: the core reports typed events -- [DI-D-26](#di-d-26)'s delay events and the inconsistency report of [DI-D-46](#di-d-46) -- so an ETW manifest maps each one-to-one and a text sink formats them as it likes. **Free when unwanted** (T2): a sink states which kinds it wants, and the core checks before building an event, so a sink that wants nothing costs a branch -- DI-D-26's "costs nothing when no session listens" carries over. **Sinks shipped** (T3): `NoDiagnostics`, `StderrDiagnostics` and `FanOutDiagnostics` in `durable-ioring`; `EtwDiagnostics` and `DebugOutputDiagnostics` (`OutputDebugStringW`) in `win-durable-ioring`; a consumer may implement its own. **Defaults** (T4): the Windows driver's is `EtwDiagnostics`, so a consumer who chooses nothing still gets DI-D-26's surface; any sink, `NoDiagnostics` included, can be passed when the driver is built; the core alone defaults to `NoDiagnostics`. **The `trace` feature goes** (T5): the inconsistency report goes through the sink, its panic message unchanged, and the dependency on `windows-threadpool-sys` for tracing with it. Built under `DI-3.10.3` (the trait, the portable sinks, the inconsistency report) and `DI-3.6` (the delay events and the Windows sinks). |
+| <a id="di-d-51"></a>DI-D-51 | **Amended by [DI-D-91](#di-d-91): the typed events are [DI-D-80](#di-d-80)'s begin and end pairs and the inconsistency report; DI-D-26's delay events are gone.** **Amended by [DI-D-76](#di-d-76): `EtwDiagnostics` is in the `durable-ioring-events` crate, not in `win-durable-ioring`, which depends on it for its default.** **Diagnostics go to a sink the consumer chooses: a `DiagnosticSink` trait in the portable core, receiving typed events, with ETW one sink among several.** Proposed by the assistant as T1-T5 and approved by the engineer, 2026-10-09 ("approved"), on the engineer's point: "I think that we need another level of indirection for the tracing on Windows or maybe is it just in general? At least even a windows only consumer may not want to use ETW and may want to just have their own stderr based or OutputDebug based printing." **In general** (T1), because the core is portable: the core reports typed events -- [DI-D-26](#di-d-26)'s delay events and the inconsistency report of [DI-D-46](#di-d-46) -- so an ETW manifest maps each one-to-one and a text sink formats them as it likes. **Free when unwanted** (T2): a sink states which kinds it wants, and the core checks before building an event, so a sink that wants nothing costs a branch -- DI-D-26's "costs nothing when no session listens" carries over. **Sinks shipped** (T3): `NoDiagnostics`, `StderrDiagnostics` and `FanOutDiagnostics` in `durable-ioring`; `EtwDiagnostics` and `DebugOutputDiagnostics` (`OutputDebugStringW`) in `win-durable-ioring`; a consumer may implement its own. **Defaults** (T4): the Windows driver's is `EtwDiagnostics`, so a consumer who chooses nothing still gets DI-D-26's surface; any sink, `NoDiagnostics` included, can be passed when the driver is built; the core alone defaults to `NoDiagnostics`. **The `trace` feature goes** (T5): the inconsistency report goes through the sink, its panic message unchanged, and the dependency on `windows-threadpool-sys` for tracing with it. Built under `DI-3.10.3` (the trait, the portable sinks, the inconsistency report) and `DI-3.6` (the delay events and the Windows sinks). |
 | <a id="di-d-52"></a>DI-D-52 | **Amended by [DI-D-53](#di-d-53): pool delivery is a waker the ring crate provides beside a threadless backend, not `EventDelivery` owning the backend's ring; and by [DI-D-54](#di-d-54): a gated operation is put to the backend's `check` before it is held, and a submission of the core's own refused for a cause that is not retryable ends as failed.** **`DI-3.10.3.5`'s shape: the core emits a submission shape of its own; a refused push names its cause; delivery is factored out of the backend, under both of the ring crate's models.** The assistant's Q1-Q6, ruled by the engineer, 2026-10-10; the exchange is in the session log. **Submissions** (Q2; the engineer: "I feel confident we had already approved this" -- [DI-D-50](#di-d-50) P11's `CoreActions` implied it): the core holds no backend and does no I/O; it emits a portable submission -- a write, read or commit naming an `IoTargetKey`, an offset and a token, its buffer owned or a registered region -- and the backend maps the key to its own handle. **Traits** (Q3): `IoTarget` reports its flush domains, warranty class, alignment and capabilities; the backend has a target, buffer and notification type, `attach` and `detach`, and `push`, `submit` and `pop`; the driver gives the target to the backend and its description to the core. The engineer reviews the source as it lands and is not a gate on it ("I cannot be the blocking factor"). **Refusal** (Q4): a refused consumer operation is undone and hands its buffer back; a refused commit is kept and emitted again; nothing blocks inside the core or a callback. **A refusal names its cause** (the engineer: "ensure that the cause of the refusal is clear so that the caller can take the correct action (submit, drain) without having to probe for why the refusal occurred. At least, if the cause of the refusal is known, pass it through"): the backend reports a typed cause -- a submission needed, a drain needed, both, and an unknown cause carrying the backend's `IoFault`, the full set fixed with the code in `DI-3.10.3.5.1` -- the core keeps it with the refusal, and the driver passes it to the consumer unchanged, replacing `PushRefusal::Ring(io::Error)`. Each backend maps its own conditions; the Windows backend's mapping of `windows-ioring-sys`' `RingCondition`s is stated and tested in its step. A blocking push the driver could offer above refusal was proposed and is not ruled (`DI-3.10.3.5.8`). **Delivery** (Q5; "Yes but factored out hopefully? But the threadless vs. numa domain bound aspect seems like it should be retained"): the backend has no threads; who waits on its notification is a delivery layer in the driver, in the two models of the ring crate's [D-3](../windows-ioring-sys/DESIGN-NOTES.md#d-3) that [DI-D-18](#di-d-18) names -- pool delivery (Model A), with an optional callback environment so the pool may be bound to a NUMA node, and pumped delivery (Model B), in which the consumer's own thread waits and drains. As built, dioring had Model A only, on the default pool. **Readiness** (Q6): the ring trait's readiness becomes an associated type when the driver moves onto the core, ahead of the crate split. **Steps** (Q1): the assistant's to size; they are `DI-3.10.3.5.1` to `DI-3.10.3.5.8`. |
 | <a id="di-d-53"></a>DI-D-53 | **Delivery wakes the driver, and the driver drains its backend: a backend stays threadless on every platform, and pool delivery is a waker beside it, built in the ring crate as a wake-only form of `EventDelivery`.** The assistant's R2, chosen by the engineer, 2026-10-11 ("yes, i thought r2 was better for this reason, its good to have a detailed analysis"), after asking which shape fits a Linux `io_uring` backend best; the analysis is in the session log. **Why** (the deciding argument): an `io_uring` backend is naturally threadless -- push and pop through shared memory, `io_uring_enter` the doorbell -- and its notification is an eventfd that something outside the ring waits on (epoll, a runtime's reactor, a thread), with no pool-callback primitive to own the ring; so a waker that tells an owner to drain, and an owner that pops its own backend under its own lock, is the one shape every platform shares: backend (`IoRing` / `io_uring`), notification (completion event / eventfd), waker (a thread-pool wait, optionally NUMA-bound / epoll, a runtime or a thread). [DI-D-18](#di-d-18)'s rule that no lock is shared across layers holds, because the waker only says "drain now". **Rejected: R1**, the Windows backend handing its ring to `EventDelivery` in a pool form, which puts delivery inside one platform's backend, gives every pool-form backend a `pop` that means nothing, and leaves each future platform to build its own. **What this obliges**: the ring crate gains the waker, keeping `EventDelivery`'s protocol -- the event attached unsignalled, the wait armed, then the setup signal; wake, re-arm, wake -- in one place, its [D-84](../windows-ioring-sys/DESIGN-NOTES.md#d-84) and `M33.1`; and the woken owner must drain to empty on every wake, because the event is an edge ([D-19](../windows-ioring-sys/DESIGN-NOTES.md#d-19)). This fixes [DI-D-52](#di-d-52)'s delivery layer: pool delivery is that waker, with the optional callback environment, and pumped delivery a thread the consumer owns. **Steps**: the ring crate's `M33.1` first, then `DI-3.10.3.5.6.1` and `DI-3.10.3.5.6.2`. |
 | <a id="di-d-54"></a>DI-D-54 | **The assistant's choice, confirmed by the engineer under `DI-3.9.6`, 2026-10-13 (`DI-9.6.1`): what the backend refuses for good, the core ends. A gated operation is put to the backend's `IoBackend::check` before it is held, so it is refused at push for what an ungated one would be; and a submission of the core's own -- an operation its gate released, or a commit -- that the backend refuses for a cause that is not retryable completes with a `REFUSED` fault instead of being re-emitted.** Found while mapping the old driver onto the core for `DI-3.10.3.5.6.2`, 2026-10-11. **The defect it closes:** the core held a gated operation without asking whether the backend could ever issue it, and [DI-D-52](#di-d-52)'s rule kept every refused submission of its own for re-emission. A cause that cannot clear -- no target, an operation the backend cannot perform, one malformed for its target, a backend now unusable or unable to say -- therefore re-emitted forever: the operation never completed, its target stayed busy, and a seal waiting on it never resolved. Today's driver refused one such case up front (a span operation on an instance with no registration) and shared the rest ("no test reaches that"). **`check`** answers whether `push` would refuse for a cause that does not depend on the queues; a push it admits may still be refused for a full queue, or by a backend become unusable. The core asks only for an operation it will hold, and only after every check of its own, so the core's refusals keep their order and the backend's word comes last; an ungated operation is answered by its push. The Windows backend's `check` is its pre-ring refusal plus the registration's own span check, asked without pushing ([`windows-ioring-sys`' M34.1](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m341)) -- the check its push leaves to the ring, so neither can drift from the other. **Ending:** `refused` keeps a submission whose cause `is_retryable` -- submit, drain, or wait for another submission -- and otherwise completes it as the backend would have with a fault: an operation as `Failed`, a write nullified as one its target failed is, a commit failing its seal's flush of its target. The fault names the source `REFUSED`, carries the backend's code where the cause has one, and its error is the `RefusalCause` itself, recovered by downcasting. `refused` returns what that makes due, and the driver acts on it in turn. **Unknown is treated as permanent:** a cause the backend could not name may clear, but retrying it blind is the hang this closes, and a failure is visible to the consumer, who can resolve it. **Rejected:** keeping every refusal and reporting a permanent one as a diagnostic, which leaves the hang in place; refusing at push only, which cannot reach a backend that becomes unusable between hold and release. |
@@ -71,10 +71,19 @@ appear here.
 | <a id="di-d-57"></a>DI-D-57 | **The split (`DI-8.2`): [DI-D-50](#di-d-50)'s P12 built, and what Rust's coherence rules made of it.** The plan is the engineer's, P12; what follows are the assistant's choices in carrying it out, confirmed by the engineer under `DI-9.7`, 2026-10-13 (`DI-9.7.5`, the portable crate's public surface for a driver; `DI-9.7.6`, the renames and the clock's bounds). **Where things went.** `durable-ioring` keeps the contract, the core (`DurableIoCore` and the durability state under it), the target and backend traits, the in-memory backend, the oracle, and the clock, fault and id types; it depends only on `io-buffers`, and builds for a non-Windows target. `win-durable-ioring` holds the threaded driver `Dioring`, the Windows backend and its file target, the three deliveries, the readiness `Event` and its harness check, the interrupt-time clock, and the worked examples, which moved to its [README.md](../win-durable-ioring/README.md) and run there as doctests; [CONTRACT.md](CONTRACT.md) links them. It re-exports the portable crate's API, so a Windows consumer names one crate. **What the orphan rule forced**, each a change to a public name: **(1)** a `win-time-sys` clock cannot be made a `StampClock` by a blanket impl in the driver, because the trait is the portable crate's and the clock the other crate's, so `TimeBase` is now `StampClock<Instant = WinInstant>`; the default clock is a local `InterruptStamps`, and `FromClock<K>` adapts any `win-time-sys` clock on interrupt time that keeps `Steady`'s promise. **(2)** The backend's notification is `CompletionEvent`, a local type, not a bare `OwnedHandle`, for the same reason: `Waitable` is the portable crate's and a handle std's. **(3)** `ErrorCode::of`, which reads the Windows ring's error type, is `error_code_of`, a function, because an inherent method cannot be added from another crate; `ErrorCode` itself and its HRESULT arithmetic stay portable. **(4)** `DioringIds<E, I>` has no default time type, since the default was Windows' time; the driver names it `WindowsIds<E>`. `LineageHandle::at` takes the time type as a parameter, normally inferred from the instance it is passed to. **What the portable crate shows a driver.** A `driver` module, documented as not the consumer's surface, re-exports what a driver builds on: the engine and its lock, the pump, `Home` and `Answer` and `DomainCall`, `InstanceId`, and two helpers the core and the driver both need. `Lineage` and `OpId` have public fields, since a driver mints them and a fake does; they identify, and an instance refuses another's. **Checked:** the portable crate builds all targets for `x86_64-unknown-linux-gnu`; its CI job is `DI-8.3`. **Not changed:** the contract, the core's behaviour and every test's assertions; the sabotage manifest is split in two, the portable one running both crates' tests, because the driver's tests also pin the core. **The clock's bounds (`DI-9.7.6`):** asked whether the portable clock wants bounds beyond `StampClock`, the answer is none, and the reasons are recorded so the question is not reopened without them. `StampClock` is `Send + 'static` and its `Instant` is `Copy + Ord + Debug + Send + Sync + 'static`. `Send` without `Sync` because the clock is only read under the engine's lock; `Ord` because the core and the oracle order stamps; `Copy` and `Debug` because the entries and records that hold a stamp are copied and printed; `Send + Sync` on the stamp because entries cross threads. `Hash`, `Clone` or `Sync` would exclude clocks that work and be used by nothing. **No marker for "never decreases":** a type cannot establish monotonicity, and implementing `StampClock` is already the implementor stating that promise; the Windows driver has a type-level guard exactly where a clock arrives from another crate that never made the promise to dioring, `FromClock` requiring `win-time-sys`' `Steady`. **What is not enforced:** nothing in the core checks that a reading did not go backwards. A clock that does yields stamps on failures and markings out of order and unreported; the conformance oracle checks one stamp order across `Failed` and `Marked`, so a test that reports to it sees a bad clock and a production instance does not. Only reported timestamps are affected: durability does not read stamps, and nothing orders by stamp alone ([DI-D-37](#di-d-37)). **Not done, and what it would take:** the core could remember the last reading and stamp the larger of it and the new one, which costs a comparison per failure or marking, needs no new bound since `Ord` is already required, and would make the ordering dioring's own guarantee rather than the clock's; the cost is a broken clock silently smoothed over unless a non-panicking diagnostic kind reports it, and [DI-D-46](#di-d-46)'s panic does not fit, a bad clock being the consumer's input and not dioring's defect. The engineer took the clock as it is; this schedules no work, and the option is recorded here as a working position, not a decision. |
 | <a id="di-d-58"></a>DI-D-58 | **The doorbell is the engine's: a backend's push only queues, the engine rings once after the pushes it makes, and a doorbell that failed, or completions that could not be read, are told to the consumer once -- with no timer and no loop.** Raised by the review of PR 126, whose findings on the Windows backend's push, the engine's drain and `detach` were one gap, and decided by the engineer, 2026-10-13: "I don't like retry policies that end up needing timers. A one-time retry based on some one time condition that required a single fallback strategy is acceptable"; "we should more generally be forward only and if the caller gets stuck their remedy is to drop the thing they are working on whether it's a lineage, epoch, or a ring"; and, of making the push queue only, "this seems like the right fix to me". **What was wrong**: the Windows backend submitted inside every push, because the ring crate's batch submits as it drops ([D-5](../windows-ioring-sys/DESIGN-NOTES.md#d-5)). A push whose submit failed was accepted -- the ring holds the entry and cannot give it back, so `Refused` could not carry it -- with the failure kept in a flag that nobody was told of; and with nothing else in flight no completion would ever drive the drain that retried it, so a pool instance waiting on readiness waited for ever. It also made one submission per push, where the core already hands the engine batches. **The decision**: (1) a backend's `push` queues, and the ring crate gained `Batch::leave_queued` for it ([D-90](../windows-ioring-sys/DESIGN-NOTES.md#d-90)); (2) the engine rings the doorbell once at the end of `act`, which every path that pushes for the core passes through, and after a consumer's own write or read; (3) a push refused for want of room is rung for and pushed once more -- the one condition that retry is for, and the only retry the engine makes; (4) a doorbell that fails, in `act`, in `drain` or after a consumer's push, raises the readiness signal once, and the consumer's `pop` rings it again and reports the cause **only when it has no entry to return** (an entry is progress); (5) a drain whose backend cannot read its completions ends, keeps the first fault until a later read works, raises the signal once, and `pop` reports it once. **What it asks of the consumer**: nothing retries unprompted, so a cause that stays reaches the consumer on every pop, and its remedy is to drop the instance. A pool instance has no next wake to read a ring that could not be read -- the event is an edge, the wake that could not read took it, and the completion it left keeps the queue from going from empty to non-empty again -- so for it a fault is final; a pumped instance's next pump reads, since a pump drains before it waits. **Readiness amended**: [DI-D-28](#di-d-28)'s signal is also set when a `pop` has something to report; a wake with nothing to pop was already normal. **`detach`**: a backend that cannot take a queued submission back (the Windows ring cannot) issues it as pushed rather than faulting it, still completing exactly once; the core never detaches a target with an operation outstanding, so a driver does not meet this, and the contract in `IoBackend::detach` says so. **The memory backend** executes at its submit, so the engine's doorbell runs what it is pushed at once, and a pushed-and-unissued state exists there only while a doorbell fails. **Model A**: the handler an `EntryDelivery` is given receives a `DeliveryEvent`, an entry or the instance's own `pop` failure, because the wake that took the readiness edge is the only thing that told the consumer, and a failure collapsed into an empty queue left an accepted operation queued with nothing reaching the handler (the review of PR 126). A failure is told once per wake and the delivery goes on; the handler's remedy for one that stays is the same as everywhere here, to drop the delivery. **Tested**: the engine's tests over a scripted backend, the Windows backend's, and the driver's over real files with the ring crate's submit and call responders; the sabotage manifests carry the entries and the blind spots. |
 | <a id="di-d-59"></a>DI-D-59 | **A panic or a fault is for a programming error, ours or a caller's -- an implementation of a trait that models behaviour included -- and never for normal error reporting; and the Windows backend's ring is an owned one, so a completion the ring held nothing for is not a case it has.** The engineer, 2026-10-14: "Panics and faults must occur only on programming errors on either our part or on the part of our callers (and that includes implementations of traits that model aspects of behavior). It is never acceptable behavior to have as part of normal error reporting to panic or fault the process. That said, if an inconsistency is found, a panic/fault is absolutely appropriate to prevent miscomputation downstream"; and of a ring the OS has driven into a state with no remedy but dropping it, "as long as this is diagnosable and attributable that is acceptable". [DI-D-46](#di-d-46) is the second half, which this states beside the first. **Applied**: a ring that cannot be read is reported to the consumer as an `IoFault` carrying its source, its `HRESULT` and the OS's own error ([DI-D-58](#di-d-58)), and the remedy is to drop the instance. `WindowsBackend::pop` returned that same kind of error for "a completion for an operation the backend did not push" -- which is not an OS state but an inconsistency in this crate's own bookkeeping, since the backend pushes only owned operations and waits for each registration -- so by this rule it should not have been an ordinary error. **It is now not a case**: the ring crate types a ring by whether it can have an operation in flight that it holds nothing for ([D-91](../windows-ioring-sys/DESIGN-NOTES.md#d-91)); the backend seals its ring with `into_owned` once its registrations are made and waited on, and an owned ring's pop returns what it held with no case of nothing, so the branch is deleted and not turned into a panic. If a registration were somehow still in flight at the seal, that is an inconsistency and the construction panics, naming it; no test can reach that, since making one needs a raw push and this crate forbids `unsafe`, so it is a declared blind spot. **What it leaves**: the converse rule has no checker; a panic reachable from a consumer's input or from a failure of the OS is the thing to look for in review. |
-| <a id="di-d-60"></a>DI-D-60 | **A file target is made from a file this crate opened, and from nothing else: how a file was opened is recorded by construction, never read back from a handle.** The engineer, 2026-10-14, closing `DI-10.1`. **The ruling that forced it:** "We may not call the Nt*() APIs from this repo", so that published code is not read as Microsoft endorsing an undocumented interface (the repository's instructions record it as "DOCUMENTED APIS ONLY"). An open handle's no-buffering and write-through modes are reported only by `NtQueryInformationFile(FileModeInformation)`, and no documented `GetFileInformationByHandleEx` class reports them, so [DI-D-29](#di-d-29)'s "no open-mode inspection" was not a choice to revisit but the only available answer, and a declaration of the class was the only other: the engineer, "We've investigated this problem before and the only real solution is to structurally require that handles have provenance that guarantees what we need in any given situation", the pattern `WaitableHandle` and the overlapped-io sealed endpoint types already follow. **The shape:** `OpenedFile<B>` in `win-durable-ioring`, opened through `std::fs::OpenOptions` with `custom_flags` (no `unsafe`, no new crate, no native surface), and `B` a sealed `Buffering` marker, `Cached` or `Unbuffered`, that fixes what a target made from it can claim: `Cached` is `BestEffort`, needs no alignment and has no write-through; `Unbuffered` is `SharedDevice`, needs a sector's alignment and offers per-write write-through. `Win32FileTarget::new` takes an `OpenedFile` and nothing else, so `Complete`, which needs knowledge of what else shares the device, is never a file's. A consumer that needs the stronger warranty names `OpenedFile<Unbuffered>` in its own signature, and a cached file cannot be passed (a `compile_fail,E0308` doctest). **Foreign handles are disallowed in this version** (the engineer: "foreign handles: disallow for v1?", then the breaking change accepted): the setters `with_warranty`, `with_geometry` and `with_capabilities` and construction from a `SharedHandle` are removed, which is a breaking change to `win-durable-ioring` 0.1.0. What a handle opened elsewhere would need is queued as `DI-10.3`. **Write-through** is derived, the engineer leaving it to the assistant's judgement: the ring's per-write write-through flag fails with error 509 on a cached handle, including one opened with `FILE_FLAG_WRITE_THROUGH`, and completes on an unbuffered one (measured 2026-10-07; `the_caching_choice_reaches_the_kernel` and the unbuffered counterpart keep both), so the capability follows the buffering mode and the handle's own write-through flag is not opened. **Geometry** is stated, not queried: an unbuffered file starts at 4096, the largest sector size in general use, which every smaller one divides and so no device refuses, and `with_sector_size` lowers it for a device that allows less; the OS refuses an unaligned transfer on the first operation that needs more, as an error on its completion, never as silent damage. (`FileStorageInfo` would report the sector size by a documented call, but needs `unsafe` and a crate to put it in; it is not needed.) **Remote devices:** an unbuffered file is refused where the path's final location, which `std::fs::canonicalize` resolves through links and mapped drives, is a UNC share, in either of its forms: a remote device's report is the remote system's, not the device's, so the claim cannot hold. The decision is taken before anything is created, from the file's own location or the directory it would be created in, so the window is the time between that and the open; the refusal is an `io::ErrorKind::Unsupported` error carrying a `RemoteDevice`. A cached file is allowed on a share, claiming only `BestEffort`. **What a measurement showed and this does not change:** an unbuffered handle refuses even an unaligned *seek* (error 87), so a test that seeks and then writes fails at the seek. **Not decided here:** whether a handle opened elsewhere can be accepted at all, and under what attestation; `DI-10.3` carries it. |
-| <a id="di-d-61"></a>DI-D-61 | **A raw volume is a file target made from a volume this crate opened: one handle, one commit per volume, regions that are offsets the consumer allocates inside it, flush domains found from its disks, and never `Complete`.** The engineer, 2026-10-14 and 2026-10-15, closing `DI-10.2`. **Whole volume, not region targets** (the engineer: "the first is the intent"): the target is the volume, and "regions in it" are offsets the consumer chooses, so one commit per volume needs no change to the core; region targets over a shared handle, which the contract's "window over part of another" would be, would need commits coalesced across targets and are a different item. **The unsafe home** (the engineer: "unsafe home: sounds good, do it"): a new crate, [win-volume-sys](../win-volume-sys/DESIGN-NOTES.md#wv-d-1), over documented device controls only ([DI-D-60](#di-d-60)'s rule): `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`, `IOCTL_DISK_GET_DRIVE_GEOMETRY`, `FSCTL_LOCK_VOLUME` and `FSCTL_UNLOCK_VOLUME`. **Provenance by construction**, as for a file: `OpenedVolume<B>` is opened here, by a `VolumePath` that can only be a drive letter or a volume GUID, and `Win32FileTarget::from_volume` takes it and nothing else. A volume that does not answer the extents control, which a remote volume and a handle that is not a volume do not, is refused, so a volume target is over this machine's own disks. **Alignment is the sector the device reports**, not a default: offsets and lengths, and the buffer's address when unbuffered. **Flush domains are found from the disks**, which the contract makes a backing's own obligation (its "Complete flush-domain declarations"): one per distinct disk, named `\\.\PhysicalDriveN` by `disk_flush_domain`, so a consumer declares the same bytes for a file on that disk and the two share a domain exactly when their bytes agree. A consumer's declaration on a volume adds to the found domains and never removes one, since a missing domain leaves a failure unreported. **The class is `SharedDevice` when unbuffered (`BestEffort` when cached, below) and never `Complete`** (the engineer: "your call. I don't feel strongly"): `Complete` is a device held exclusively with nothing else on it, and a volume's lock keeps other handles off the volume, not other writers off its disks, so a handle cannot show it, even locked and even with no other volume on the disks (an unmounted partition, a raw user of the disk, or another machine sharing a LUN is invisible to it). Claiming it would compute the wrong thing, which is the ground this repository removes an option on. What would change the answer is an attestation by a consumer that knows the disk is theirs alone, which is [`DI-10.3`](CHECKLIST.md)'s mechanism, not a new one; enumerating the machine's other volumes to rule out the visible sharers is parked in win-volume-sys as `WV-inf.2`, and would narrow the claim, not make it. **The lock** is `VolumeOptions::lock`: `FSCTL_LOCK_VOLUME` after the open, which flushes a file system and stops it writing, what a raw write to a mounted volume's own sectors needs and a volume with no file system does not, and which fails, holding nothing, if any other handle has the volume open. It is released when the handle closes, which for a target is when the instance ends. **A cached volume is allowed** (`OpenedVolume<Cached>`: `BestEffort`, offsets and lengths aligned to the sector, buffers not), so the option exists though the default is unbuffered. **D-44** ([windows-ioring-sys](../windows-ioring-sys/DESIGN-NOTES.md#d-44)'s spike-before-wrapping rule, left open under [DI-D-48](#di-d-48)): the assistant's proposal, which the engineer did not contradict, is that it applies inside a backing's implementation and does not gate the design; a flush-failure spike on a volume needs a disk that fails on demand, which a virtual disk does not, so it stays `DI-4.1`'s. **Evidence:** the raw I/O, the lock and the durable write were run elevated on 2026-10-15 against a scratch virtual disk created with `diskpart` (the engineer approved the run and `sudo`), five tests that are ignored by default and that CI runs on its administrator account; everything that needs no privilege runs by default. The lock being taken is a declared survivor of the default sabotage sweep, since only those tests can tell it from a lock that was not. |
-| <a id="di-d-62"></a>DI-D-62 | **A whole physical disk is a file target made from a disk this crate opened by number: its own flush domain, sector-aligned, and never `Complete`.** The engineer, 2026-10-15, asking for the volume target to be repeated against the disk rather than a partition on it, and then "since we're operating at a somewhat fundamental level of storage, you should be precise". Recorded as `DI-10.4`; the request was not a checklist item. **Provenance by construction**, as for a file and a volume ([DI-D-60](#di-d-60), [DI-D-61](#di-d-61)): `OpenedDisk<B>` is opened here, from a `DiskPath` that can only be a disk number, `\\.\PhysicalDriveN`, and `Win32FileTarget::from_disk` takes it and nothing else. **The disk is its own flush domain**, named by `disk_flush_domain` exactly as a volume on that disk names it, so a target on the disk and a target on a volume on it share one domain and a flush is not issued twice for the same device. A consumer's `with_domains` adds to it and never removes it, as for a volume. **Alignment is the sector the device reports**, through the same documented control as a volume (`IOCTL_DISK_GET_DRIVE_GEOMETRY`, in [win-volume-sys](../win-volume-sys/DESIGN-NOTES.md#wv-d-1)); `Buffering::volume_geometry` was renamed `sector_geometry` because it no longer describes only volumes. **The class is `SharedDevice` when unbuffered and `BestEffort` when cached, never `Complete`**, for the reason a volume's is: a handle to a disk cannot show that nothing else writes it. Only an attestation by a consumer that knows could claim more, and that is [DI-10.3](CHECKLIST.md). **Windows blocks a direct write under a mounted volume** (documented); a disk with volumes on it is written through them, or has them locked, or is taken offline first. The tests use a disk with no partition and no volume, so the blocking is documented here and not exercised. **The test helper is the safety, because the data is the disk's.** `ScratchDisk` creates and attaches an unpartitioned VHDX, then takes the disk number only from `diskpart`'s own report of the file it just made: exactly one `Filename:` equal to the canonical long path of that file, and exactly one `Associated disk#:` that is not 0. Anything else is a refusal, so no test writes to a disk it did not create. **Evidence**, an elevated run on 2026-10-15 of the five `raw_disk` tests on a 64 MiB scratch disk, all passing, with no disk or file left behind: `bytes_per_sector` answers on a physical-disk handle opened for reading and writing; the last sector is accepted and a transfer starting at the end transfers nothing; a per-write write-through request is accepted on the unbuffered handle. **Not verified:** the exact outcome of a transfer past the end, which the test pins only as "nothing transfers"; whether `bytes_per_sector` answers on a disk handle opened with no access; any disk that has a volume on it. **Scheduled work:** none beyond `DI-10.3`, which already carries the attestation question. |
-| <a id="di-d-63"></a>DI-D-63 | **A file is opened through `windows-namespace-request-sys`'s `OpenFile`: that crate carries every parameter of `CreateFileW` and decides none, and what an open means is decided here.** The engineer, 2026-10-15: "yes take that dependency, and do those checks", after it was found that the workspace already had a memory-safe, un-narrowed wrapper for the open calls ([windows-namespace-request-sys](../windows-namespace-request-sys/README.md): `OpenFile`, `OpenFileByIdentifier`, and the handle queries). A new unsafe crate for opening, or a widened [win-volume-sys](../win-volume-sys/README.md), would have duplicated working, tested code, and the mono-repo rule is to fix the layer. **The division:** the request crate takes raw access, share and flag words and a path, and adds nothing; `win-durable-ioring` states which of them an open may use ([DI-D-60](#di-d-60)'s provenance), so `FileOptions` and `Buffering` stay here and the crate keeps `forbid(unsafe_code)`. **What std did that `CreateFileW` alone does not, kept so that a caller sees no difference**, each with a test and a sabotage: a path longer than `MAX_PATH` is opened in its verbatim form (the request crate refuses an ordinary path past `MAX_PATH` by design, so the conversion is the load-bearing step, and the test shows the request alone refuses the same path); a file that is created and truncated is opened `OPEN_ALWAYS` and emptied once open, as std does to avoid `CREATE_ALWAYS`'s semantics (rust-lang/rust#115745); a new file keeps `FILE_FLAG_OPEN_REPARSE_POINT`; every file is shared for reading, writing and deletion; no access, or creating or truncating without write access, is `InvalidInput`. **The two checks the engineer asked for.** First, that a synchronous `perform` is acceptable for an open: it is one `CreateFileW` call on the calling thread, which is what `std::fs::OpenOptions` was, so nothing is added. Second, that the handle is plain and unassociated, which the request crate documents and its code shows (no completion-port association, no flag added or removed): every ring test of this crate, which now opens its files this way and drives them through the ring, passes, and that is the empirical check. **Differences found and kept honest:** a created-and-truncated file is emptied after the open and not atomically with it, so another handle can see the old content in between; std's source (1.98) has one route for the combination that overwrites in a single kernel call and one that is `OPEN_ALWAYS` plus a manual truncation, and which of them an open takes was not established here, so whether std was atomic is unknown; and an ordinary path is judged by `GetFullPathNameW` as the request crate documents (a legacy device name such as `CON` resolves to the device), which was not compared with std's handling here. **Not verified:** the handle's inheritability is not read back, since this crate forbids `unsafe` and has no safe query for it; it follows from `OpenFile` passing no security attributes, which `CreateFileW` documents as a non-inheritable handle. **Scheduled work:** `DI-13.5` and `DI-13.6` (the SDDL constructor and the `ReOpenFile` entry, which the request crate lacks; [NR-3](../windows-namespace-request-sys/CHECKLIST.md)), and `DI-14.5` (the remote check is still made on the path). |
+| <a id="di-d-60"></a>DI-D-60 | **A file target is made from a file this crate opened, and from nothing else: how a file was opened is recorded by construction, never read back from a handle.** The engineer, 2026-10-14, closing `DI-10.1`. **Its "not decided here", on foreign handles and on what could claim more than `SharedDevice`, is decided by [DI-D-68](#di-d-68).** **Amended by [DI-D-64](#di-d-64): the remote-device refusal below, which canonicalises the path before the open, moves to the opened handle and nowhere else ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)); nothing is checked before the open.** **The ruling that forced it:** "We may not call the Nt*() APIs from this repo", so that published code is not read as Microsoft endorsing an undocumented interface (the repository's instructions record it as "DOCUMENTED APIS ONLY"). An open handle's no-buffering and write-through modes are reported only by `NtQueryInformationFile(FileModeInformation)`, and no documented `GetFileInformationByHandleEx` class reports them, so [DI-D-29](#di-d-29)'s "no open-mode inspection" was not a choice to revisit but the only available answer, and a declaration of the class was the only other: the engineer, "We've investigated this problem before and the only real solution is to structurally require that handles have provenance that guarantees what we need in any given situation", the pattern `WaitableHandle` and the overlapped-io sealed endpoint types already follow. **The shape:** `OpenedFile<B>` in `win-durable-ioring`, opened through `std::fs::OpenOptions` with `custom_flags` (no `unsafe`, no new crate, no native surface), and `B` a sealed `Buffering` marker, `Cached` or `Unbuffered`, that fixes what a target made from it can claim: `Cached` is `BestEffort`, needs no alignment and has no write-through; `Unbuffered` is `SharedDevice`, needs a sector's alignment and offers per-write write-through. `Win32FileTarget::new` takes an `OpenedFile` and nothing else, so `Complete`, which needs knowledge of what else shares the device, is never a file's. A consumer that needs the stronger warranty names `OpenedFile<Unbuffered>` in its own signature, and a cached file cannot be passed (a `compile_fail,E0308` doctest). **Foreign handles are disallowed in this version** (the engineer: "foreign handles: disallow for v1?", then the breaking change accepted): the setters `with_warranty`, `with_geometry` and `with_capabilities` and construction from a `SharedHandle` are removed, which is a breaking change to `win-durable-ioring` 0.1.0. What a handle opened elsewhere would need is queued as `DI-10.3`. **Write-through** is derived, the engineer leaving it to the assistant's judgement: the ring's per-write write-through flag fails with error 509 on a cached handle, including one opened with `FILE_FLAG_WRITE_THROUGH`, and completes on an unbuffered one (measured 2026-10-07; `the_caching_choice_reaches_the_kernel` and the unbuffered counterpart keep both), so the capability follows the buffering mode and the handle's own write-through flag is not opened. **Geometry** is stated, not queried: an unbuffered file starts at 4096, the largest sector size in general use, which every smaller one divides and so no device refuses, and `with_sector_size` lowers it for a device that allows less; the OS refuses an unaligned transfer on the first operation that needs more, as an error on its completion, never as silent damage. (`FileStorageInfo` would report the sector size by a documented call, but needs `unsafe` and a crate to put it in; it is not needed.) **Remote devices:** an unbuffered file is refused where the path's final location, which `std::fs::canonicalize` resolves through links and mapped drives, is a UNC share, in either of its forms: a remote device's report is the remote system's, not the device's, so the claim cannot hold. The decision is taken before anything is created, from the file's own location or the directory it would be created in, so the window is the time between that and the open; the refusal is an `io::ErrorKind::Unsupported` error carrying a `RemoteDevice`. A cached file is allowed on a share, claiming only `BestEffort`. **What a measurement showed and this does not change:** an unbuffered handle refuses even an unaligned *seek* (error 87), so a test that seeks and then writes fails at the seek. **Not decided here:** whether a handle opened elsewhere can be accepted at all, and under what attestation; decided by [DI-D-68](#di-d-68). |
+| <a id="di-d-61"></a>DI-D-61 | **A raw volume is a file target made from a volume this crate opened: one handle, one commit per volume, regions that are offsets the consumer allocates inside it, flush domains found from its disks, and never `Complete`.** The engineer, 2026-10-14 and 2026-10-15, closing `DI-10.2`. **Amended by [DI-D-68](#di-d-68): a volume is never `Complete` by derivation, and is by a consumer's attestation.** **Whole volume, not region targets** (the engineer: "the first is the intent"): the target is the volume, and "regions in it" are offsets the consumer chooses, so one commit per volume needs no change to the core; region targets over a shared handle, which the contract's "window over part of another" would be, would need commits coalesced across targets and are a different item. **The unsafe home** (the engineer: "unsafe home: sounds good, do it"): a new crate, [win-volume-sys](../win-volume-sys/DESIGN-NOTES.md#wv-d-1), over documented device controls only ([DI-D-60](#di-d-60)'s rule): `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`, `IOCTL_DISK_GET_DRIVE_GEOMETRY`, `FSCTL_LOCK_VOLUME` and `FSCTL_UNLOCK_VOLUME`. **Provenance by construction**, as for a file: `OpenedVolume<B>` is opened here, by a `VolumePath` that can only be a drive letter or a volume GUID, and `Win32FileTarget::from_volume` takes it and nothing else. A volume that does not answer the extents control, which a remote volume and a handle that is not a volume do not, is refused, so a volume target is over this machine's own disks. **Alignment is the sector the device reports**, not a default: offsets and lengths, and the buffer's address when unbuffered. **Flush domains are found from the disks**, which the contract makes a backing's own obligation (its "Complete flush-domain declarations"): one per distinct disk, named `\\.\PhysicalDriveN` by `disk_flush_domain`, so a consumer declares the same bytes for a file on that disk and the two share a domain exactly when their bytes agree. A consumer's declaration on a volume adds to the found domains and never removes one, since a missing domain leaves a failure unreported. **The class is `SharedDevice` when unbuffered (`BestEffort` when cached, below) and never `Complete`** (the engineer: "your call. I don't feel strongly"): `Complete` is a device held exclusively with nothing else on it, and a volume's lock keeps other handles off the volume, not other writers off its disks, so a handle cannot show it, even locked and even with no other volume on the disks (an unmounted partition, a raw user of the disk, or another machine sharing a LUN is invisible to it). Claiming it would compute the wrong thing, which is the ground this repository removes an option on. What would change the answer is an attestation by a consumer that knows the disk is theirs alone, which is the mechanism [DI-D-68](#di-d-68) builds; enumerating the machine's other volumes to rule out the visible sharers is parked in win-volume-sys as `WV-inf.2`, and would narrow the claim, not make it. **The lock** is `VolumeOptions::lock`: `FSCTL_LOCK_VOLUME` after the open, which flushes a file system and stops it writing, what a raw write to a mounted volume's own sectors needs and a volume with no file system does not, and which fails, holding nothing, if any other handle has the volume open. It is released when the handle closes, which for a target is when the instance ends. **A cached volume is allowed** (`OpenedVolume<Cached>`: `BestEffort`, offsets and lengths aligned to the sector, buffers not), so the option exists though the default is unbuffered. **D-44** ([windows-ioring-sys](../windows-ioring-sys/DESIGN-NOTES.md#d-44)'s spike-before-wrapping rule, left open under [DI-D-48](#di-d-48)): the assistant's proposal, which the engineer did not contradict, is that it applies inside a backing's implementation and does not gate the design; a flush-failure spike on a volume needs a disk that fails on demand, which a virtual disk does not, so it stays `DI-4.1`'s. **Evidence:** the raw I/O, the lock and the durable write were run elevated on 2026-10-15 against a scratch virtual disk created with `diskpart` (the engineer approved the run and `sudo`), five tests that are ignored by default and that CI runs on its administrator account; everything that needs no privilege runs by default. The lock being taken is a declared survivor of the default sabotage sweep, since only those tests can tell it from a lock that was not. |
+| <a id="di-d-62"></a>DI-D-62 | **A whole physical disk is a file target made from a disk this crate opened by number: its own flush domain, sector-aligned, and never `Complete`.** **Amended by [DI-D-68](#di-d-68): a disk is never `Complete` by derivation, and is by a consumer's attestation.** The engineer, 2026-10-15, asking for the volume target to be repeated against the disk rather than a partition on it, and then "since we're operating at a somewhat fundamental level of storage, you should be precise". Recorded as `DI-10.4`; the request was not a checklist item. **Provenance by construction**, as for a file and a volume ([DI-D-60](#di-d-60), [DI-D-61](#di-d-61)): `OpenedDisk<B>` is opened here, from a `DiskPath` that can only be a disk number, `\\.\PhysicalDriveN`, and `Win32FileTarget::from_disk` takes it and nothing else. **The disk is its own flush domain**, named by `disk_flush_domain` exactly as a volume on that disk names it, so a target on the disk and a target on a volume on it share one domain and a flush is not issued twice for the same device. A consumer's `with_domains` adds to it and never removes it, as for a volume. **Alignment is the sector the device reports**, through the same documented control as a volume (`IOCTL_DISK_GET_DRIVE_GEOMETRY`, in [win-volume-sys](../win-volume-sys/DESIGN-NOTES.md#wv-d-1)); `Buffering::volume_geometry` was renamed `sector_geometry` because it no longer describes only volumes. **The class is `SharedDevice` when unbuffered and `BestEffort` when cached, never `Complete`**, for the reason a volume's is: a handle to a disk cannot show that nothing else writes it. Only an attestation by a consumer that knows could claim more, and that is [DI-D-68](#di-d-68). **Windows blocks a direct write under a mounted volume** (documented); a disk with volumes on it is written through them, or has them locked, or is taken offline first. The tests use a disk with no partition and no volume, so the blocking is documented here and not exercised. **The test helper is the safety, because the data is the disk's.** `ScratchDisk` creates and attaches an unpartitioned VHDX, then takes the disk number only from `diskpart`'s own report of the file it just made: exactly one `Filename:` equal to the canonical long path of that file, and exactly one `Associated disk#:` that is not 0. Anything else is a refusal, so no test writes to a disk it did not create. **Evidence**, an elevated run on 2026-10-15 of the five `raw_disk` tests on a 64 MiB scratch disk, all passing, with no disk or file left behind: `bytes_per_sector` answers on a physical-disk handle opened for reading and writing; the last sector is accepted and a transfer starting at the end transfers nothing; a per-write write-through request is accepted on the unbuffered handle. **Not verified:** the exact outcome of a transfer past the end, which the test pins only as "nothing transfers"; whether `bytes_per_sector` answers on a disk handle opened with no access; any disk that has a volume on it. **Scheduled work:** none beyond [DI-10.5](CHECKLIST.md), which carries the attestation. |
+| <a id="di-d-63"></a>DI-D-63 | **A file is opened through `windows-namespace-request-sys`'s `OpenFile`: that crate carries every parameter of `CreateFileW` and decides none, and what an open means is decided here.** **Amended by [DI-D-64](#di-d-64): this crate reflects Win32 and not `std`, so the principle that a caller sees no difference from `std` no longer stands, and the list of what was kept for it is replaced below (`DI-13.7`).** The engineer, 2026-10-15: "yes take that dependency, and do those checks", after it was found that the workspace already had a memory-safe, un-narrowed wrapper for the open calls ([windows-namespace-request-sys](../windows-namespace-request-sys/README.md): `OpenFile`, `OpenFileByIdentifier`, and the handle queries). A new unsafe crate for opening, or a widened [win-volume-sys](../win-volume-sys/README.md), would have duplicated working, tested code, and the mono-repo rule is to fix the layer. **The division:** the request crate takes raw access, share and flag words and a path, and adds nothing; `win-durable-ioring` states which of them an open may use ([DI-D-60](#di-d-60)'s provenance), so `FileOptions` and `Buffering` stay here and the crate keeps `forbid(unsafe_code)`. **What the open is now** ([DI-D-64](#di-d-64)): the path is handed over as given (`DI-13.7.1`); the disposition is Win32's own, three of its five, and `FILE_FLAG_OPEN_REPARSE_POINT` is an explicit option (`DI-13.7.3`); the share mode is an option, starting at all three members (`DI-13.4`); every combination of the options is a request, so none is refused, until [DI-14.4](CHECKLIST.md) adds the refusals [the documented-contract rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) allows; and the open is a build and a perform (`DI-13.7.4`). What `std` did that `CreateFileW` alone does not, and this crate once kept (the verbatim form past `MAX_PATH`, `OPEN_ALWAYS` plus an emptying for a created-and-truncated file, the reparse flag on a new file, and the refusal of a create or truncate without write access), is gone. **The two checks the engineer asked for.** First, that a synchronous `perform` is acceptable for an open: it is one `CreateFileW` call on the calling thread, so nothing is added, and `OpenRequest` lets a caller make it on another thread. Second, that the handle is plain and unassociated, which the request crate documents and its code shows (no completion-port association, no flag added or removed): every ring test of this crate, which now opens its files this way and drives them through the ring, passes, and that is the empirical check. **Left as the request crate documents:** an ordinary path is judged by `GetFullPathNameW` (a legacy device name such as `CON` resolves to the device). **Handle inheritability** follows from `OpenFile` passing no security attributes, which `CreateFileW` documents as a non-inheritable handle, and is read back (`DI-14.8.5`). **Scheduled work:** `DI-13.5` and `DI-13.6` (the SDDL constructor and the `ReOpenFile` entry, which the request crate lacks; [NR-3](../windows-namespace-request-sys/CHECKLIST.md)). **Where the remote check is made** is [DI-14.5](COMPLETED-CHECKLIST.md#di-145), in "What building DI-14.5 settled" below. |
+| <a id="di-d-64-index"></a>DI-D-64 | **The open surface, parameter by parameter (`DI-13.1`): which parameters of `CreateFileW`, `CreateFile2`, `OpenFileById` and `ReOpenFile` are exposed and as which type, which are excluded and why, and what each does to a target's claim.** The engineer, 2026-10-15 and 2026-10-16. This crate reflects Win32 and not `std`, so [DI-D-63](#di-d-63)'s parity with `std` is amended. The table, its sources, what was not verified and the engineer's rulings of 2026-10-16 on the calls the assistant had made are in [the section below](#di-d-64). **Amended by [DI-D-65](#di-d-65) for the data rights.** |
+| <a id="di-d-65-index"></a>DI-D-65 | **Data access is a type parameter of every handle this crate opens, and the rights set carries only the rest.** The engineer, 2026-10-16, on the observation that requiring a data right of the type while access is a parameter of the open is odd, and that the pattern should reach disks and volumes and not only a file in the ring. Four markers, `NoData`, `ReadOnly`, `WriteOnly` and `ReadWrite`; a file target is made only from a handle with a data right, at compile time. The ring sees it through [DI-D-66](#di-d-66). [Section below](#di-d-65). |
+| <a id="di-d-66-index"></a>DI-D-66 | **A target states its data access to the core, and a key can carry it.** The engineer, 2026-10-16: "it seems like IoTarget should have the same sort of type-based encoding of the access to the target that we just litigated in di-13.8", then "do both, schedule both". `IoTarget` gains a required `access()` read once into its description, the core refuses what the access does not cover, and a typed `Key<A>` lets a wrong submission fail to compile. [Section below](#di-d-66). |
+| <a id="di-d-67-index"></a>DI-D-67 | **What a name reaches is the caller's responsibility: an open is not checked, refused, bounded or cancelled on account of where its name leads.** The engineer, 2026-10-18: "The responsibility is only on the caller." No check of a name can be complete, since object-manager links and intermediate reparse points redirect regardless of `FILE_FLAG_OPEN_REPARSE_POINT`; a check of the handle cannot reach an open that has not returned; and `CancelSynchronousIo` targets a thread rather than a call and is not guaranteed by its documentation. See [DI-D-67](#di-d-67). |
+| <a id="di-d-68-index"></a>DI-D-68 | **A handle opened elsewhere is not accepted by a file target in this version, and a consumer who knows a device is theirs alone can attest it, which is the only way a Win32 target is `Complete`.** The engineer, 2026-10-18, closing `DI-10.3`: "do the attestation approach", on the assistant's recommendation. Foreign handles stay out, with the residue a `ReOpenFile` cannot convert named; the attestation is a constructor for each of the three kinds of target that takes an unbuffered handle this crate opened. [Section below](#di-d-68). |
+| <a id="di-d-69-index"></a>DI-D-69 | **A file's identity is this crate's `FileId`: the volume serial and the 128-bit identifier `FileIdInfo` reports, read through the handle shared.** The assistant, implementing `DI-15.1`. The type is owned here and not the request crate's; it is read from any `SharedHandle` and from an `OpenedFile` of any access, and nothing is duplicated to read it. [Section below](#di-d-69). |
+| <a id="di-d-70-index"></a>DI-D-70 | **An open by identifier is `OpenedFile::open_by_id`, taking one of three identifier kinds, its own `ByIdOptions`, and any handle as the hint; a `FileId` is checked against the file opened.** The assistant, implementing `DI-15.2`. The checks are the path open's, by the same code; a sharing violation names the file by `OpenedBy`. Observed: a directory opens by identifier without the backup flag, which the engineer ruled allowed, [DI-D-72](#di-d-72). [Section below](#di-d-70). |
+| <a id="di-d-71-index"></a>DI-D-71 | **A reopen is `OpenedFile::reopen`, from any handle, with its own `ReopenOptions`; the result is a new file of the type asked for, judged by the path open's checks.** The assistant, implementing `DI-15.4`. A sharing violation names the file by `OpenedBy::Reopen`. Observed: every pair of an original and a reopen is refused or accepted as the page's sharing rule says; a volume and a disk do not reopen, unelevated. [Section below](#di-d-71). |
+| <a id="di-d-72-index"></a>DI-D-72 | **A directory reached by an open by identifier is allowed, and what it does is documented.** The engineer, 2026-10-19: "I think these results are 'harmless'. We can document our findings but there is no harm in allowing it to happen." A target made from one faults every read and write with the kernel's error and completes every commit; a faulted write is covered by no durability report, so the commits vouch for nothing. [Section below](#di-d-72). |
 
 ## <a id="di-d-29-a-file-is-a-sharedhandle"></a>DI-D-29: a file is a `SharedHandle`
 
@@ -120,3 +129,1707 @@ is authoritative):
 
 **Considered and left out:** querying a file's volume and file id to detect the same file opened
 twice. A consumer can do it through the lent handle.
+
+## <a id="di-d-64"></a>DI-D-64: the open surface, parameter by parameter
+
+**Amended by [DI-D-65](#di-d-65): the rows for zero access, `FILE_READ_DATA` and `FILE_WRITE_DATA`, and the generic rights are superseded for the data rights, which are a type and no longer members of the rights set.**
+
+**What is decided.** Which parameters of `CreateFileW`, `CreateFile2`, `OpenFileById` and `ReOpenFile`
+this crate exposes and as which type, which it excludes and why, and what each does to a target's
+claim. The engineer's rulings of 2026-10-15 and 2026-10-16 are applied as given; a row that is the
+assistant's call and not a ruling says so in the last column and is listed again at the end for the
+engineer to confirm. It amends [DI-D-63](#di-d-63), which made the open match `std`; the code follows in
+[DI-13.7](COMPLETED-CHECKLIST.md#di-137).
+
+**Sources.** The Microsoft Learn pages for the four calls and for "File Access Rights Constants", read
+on 2026-10-16. The `CreateFileW` remarks were read through the section on physical disks and volumes;
+the sections after it (consoles, communications resources, tape drives, mailslots, pipes) were not read
+for this table.
+
+**The rules the table applies.**
+
+- **This crate reflects Win32, not the Rust standard library.** A disposition, a share mode and an
+  access right are the call's own, as a typed set or an enum and never a word of flags to OR, with no
+  raw `u32` to construct one from. No default is added. A combination is refused ahead of the open only
+  as [the repository's rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) (the engineer,
+  2026-10-18) allows: where the documented contract calls it invalid on the arguments alone, with the
+  citation, or where this crate chooses not to support it, named as its own; never because a run showed
+  the kernel refuse or accept it. [DI-14.4](CHECKLIST.md) builds that check. Where a ruling excludes an
+  option it is unrepresentable in the types, so nothing is refused at run time on its account.
+- **Paths are opaque.** A `Wtf16String`, passed through untouched ([DI-13.1 ruling (a)](COMPLETED-CHECKLIST.md#di-131)).
+- **No check of the target before the open.** [DI-13.1 ruling (b)](COMPLETED-CHECKLIST.md#di-131) put one syntactic
+  check ahead of it; the engineer amended that on 2026-10-16, ruling that finding out late is
+  acceptable and that the check on the opened handle ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)) is the only
+  one. The refusal of an unbuffered file on a remote device stays, since `OpenedFile<Unbuffered>` promises
+  `SharedDevice` and a remote file cannot keep it. It is made inside `OpenRequest::perform`, after the
+  call, where it can block with it.
+- **What a target claims follows from how the file was opened** ([DI-D-60](#di-d-60)). The buffering
+  mode is the type: it decides the warranty class, the alignment and whether per-write write-through is
+  offered, and no other row changes the class.
+- **`open` is a build and a perform** ([DI-13.7](COMPLETED-CHECKLIST.md#di-137)). The build is where a
+  refusal of the arguments is made ([DI-14.4](CHECKLIST.md)), and every validation of the result is made
+  on the opened handle.
+
+**Calls.** `CF` is `CreateFileW` and `CreateFile2`, which have the same parameters; `ID` is
+`OpenFileById`; `RO` is `ReOpenFile`. Each row says which calls have the parameter.
+
+| Parameter (calls) | Disposition | Surface | What it does to a claim, or why it is excluded | Ruling |
+|---|---|---|---|---|
+| `CreateFileW` as the route | Exposed | The open goes through it | As [DI-D-63](#di-d-63) records. | engineer 2026-10-15 |
+| `CreateFile2` as a second route | Excluded | None | Its parameters are `CreateFileW`'s, packed into `CREATEFILE2_EXTENDED_PARAMETERS` (attributes, flags, security quality of service, security attributes, template), so a second route adds a second set of behaviours to test and expresses nothing the first cannot. Its page documents two share-mode conditions that `CreateFileW`'s does not (exclusive access is granted only to a caller with write access, and a missing `FILE_SHARE_READ` fails a caller without it); whether that is a behavioural difference was not measured. | engineer 2026-10-16 (excluded; see Rulings below); assistant (the text) |
+| `CreateFileTransacted` | Excluded | None | A transacted write is durable at the transaction's commit, so an epoch's warranty would mean nothing. | engineer 2026-10-15 |
+| `OpenFileById` as a call | Exposed | `OpenedFile::open_by_id` and `request_by_id` ([DI-15.2](COMPLETED-CHECKLIST.md#di-152)), with an options type of its own, `ByIdOptions` ([DI-D-70](#di-d-70)) | Its page lists no creation disposition, takes no attributes, and marks the security-attributes parameter reserved. It lists SMB as not supported, so an open by ID on a remote share is the kernel's to refuse. So its options are its own type, carrying the access, share mode and flags it takes, and not `FileOptions`, whose disposition and attributes it has no place for. | engineer 2026-10-15; its own options type, engineer 2026-10-18 ("I would assume its own type") |
+| `ReOpenFile` as a call | Exposed | `OpenedFile::reopen` and `request_reopen` ([DI-15.4](COMPLETED-CHECKLIST.md#di-154)), with an options type of its own, `ReopenOptions` ([DI-D-71](#di-d-71)) | Takes access, share mode and flags only; its page says the flags cannot include attributes, and that the original must have been created by `CreateFile`. Reopening with a different buffering mode is a new `OpenedFile` of the other type. | engineer 2026-10-15 |
+| `lpFileName` (CF) | Exposed | `Wtf16String`, opaque | Passed through for Win32 to interpret: `\\?\`, long paths where the process opts in, `/` against `\`, a stream name, a device name. An open of a device is not stopped here, and where a name leads is the caller's responsibility ([DI-D-67](#di-d-67)); what such an `OpenedFile` claims is not decided: it gets a file's default geometry and no flush domains until [DI-14.6.2](CHECKLIST.md) decides it, from the measurements under "Measured for DI-14.6" below. Nothing about the path is checked before the open. An unbuffered file on a remote device is refused on the opened handle ([DI-14.5](CHECKLIST.md)), so a create refused there has already created the file, and the open has touched the network before it is refused; both are documented and not prevented. | engineer 2026-10-15, 2026-10-16 |
+| `hVolumeHint` (ID) | Exposed | Any handle | The hint only tells the call which volume the ID is on and is never the file opened, so its mode reaches nothing the result claims: the opened handle's buffering and access are this crate's choice, and the checks run on it ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)). The page accepts any file on the volume or share. The same reasoning as `hOriginalFile`'s ([DI-D-68](#di-d-68)). | engineer 2026-10-18 ("It should be any handle"), replacing the plan that took only what this crate opened |
+| `lpFileId` (ID) | Exposed | The three kinds the `FILE_ID_DESCRIPTOR` page lists: `FileIdType` (a 64-bit `LARGE_INTEGER`), `ObjectIdType` (a `GUID`), and `ExtendedFileIdType` (a `FILE_ID_128`, "not supported before Windows 8 and Windows Server 2012") | The page was read for [DI-15.1](COMPLETED-CHECKLIST.md#di-151) and its list is the request crate's `OpenFileByIdentifier`'s, so the ruling stands as made. The page says the extended ID "is used on ReFS file systems"; an NTFS file's 16 bytes from `FileIdInfo` were observed to open as it (`D-31` in [the request crate's notes](../windows-namespace-request-sys/DESIGN-NOTES.md#d-31)). The identity this crate reads from a handle is the extended form, [DI-D-69](#di-d-69). | engineer 2026-10-15; the page read 2026-10-18 |
+| `hOriginalFile` (RO) | Exposed | Any handle ([DI-D-68](#di-d-68)) | The reopened handle's mode is this crate's choice, recorded by its type, so the original's provenance is not what the claim rests on. The page says the original must have been created by `CreateFile`; what it cannot convert stays out ([DI-D-68](#di-d-68), ruled 2026-10-19). A handle that came from `OpenFileById` was observed to reopen, and a volume's and a disk's were observed not to, unelevated ([DI-D-71](#di-d-71)). | engineer 2026-10-18, [DI-D-68](#di-d-68) |
+| `dwDesiredAccess` (CF, ID, RO): zero | **Superseded by [DI-D-65](#di-d-65):** the type `NoData`, excluded only from a file target | `NoData` | A zero-access open is valid Win32 (it queries attributes without access). A handle opened so cannot become a file target, which the `HasData` bound refuses at compile time and not when the first operation fails. | engineer 2026-10-16 ([DI-D-65](#di-d-65)) |
+| `FILE_READ_DATA`, `FILE_WRITE_DATA` | **Superseded by [DI-D-65](#di-d-65):** the data access type, not members of the rights set | `ReadOnly`, `WriteOnly`, `ReadWrite` | Read and write operations. A target needs one of them, which is the `HasData` bound. | engineer 2026-10-15; engineer 2026-10-16 ([DI-D-65](#di-d-65)) |
+| `FILE_APPEND_DATA` | Excluded as a member | None on its own | Its page says that without `FILE_WRITE_DATA` a write does not overwrite existing data, and the core addresses by offset, so an append-only handle would compute the wrong answer. With no member for it and no raw constructor, append-only access cannot be built; the bit is still carried by the generic rights below, each of which includes `FILE_WRITE_DATA`. | engineer 2026-10-15 (the rule); assistant (the representation) |
+| `FILE_READ_ATTRIBUTES`, `FILE_WRITE_ATTRIBUTES` | Exposed | Members | None. | engineer 2026-10-15 |
+| `FILE_READ_EA`, `FILE_WRITE_EA` | Exposed | Members | None. | standing |
+| `FILE_EXECUTE` | Exposed | Member | None. | standing |
+| `DELETE` | Exposed | Member | Allows delete and rename. | engineer 2026-10-15 |
+| `READ_CONTROL`, `WRITE_DAC`, `WRITE_OWNER` | Exposed | Members | None. | engineer 2026-10-15 |
+| `SYNCHRONIZE` | Exposed | Member | None. | standing |
+| `ACCESS_SYSTEM_SECURITY` | Exposed | Member | A caller who lacks what the kernel requires for it gets the kernel's error, not a panic; which privilege that is was not measured here. | standing |
+| `GENERIC_READ`, `GENERIC_WRITE`, `GENERIC_EXECUTE`, `GENERIC_ALL`, `FILE_ALL_ACCESS` | **Superseded for the data rights by [DI-D-65](#di-d-65):** not members of the rights set | Named constants of the same set, as ruled before [DI-D-65](#di-d-65) | These are the call's own documented values and the commonest ones. Each that includes a write right includes `FILE_WRITE_DATA`. Measured in `DI-13.3` on Windows 11 build 26300: `FILE_ALL_ACCESS`, which names the append bit itself, is refused by an unbuffered open with `ERROR_INVALID_PARAMETER`, while `GENERIC_WRITE` and `GENERIC_ALL` are taken unbuffered. The refusal is the kernel's and reaches the caller as it is; the constant stays and its documentation says so. **Corrected 2026-10-18 by [DI-14.4.1](CHECKLIST.md)'s reading:** this called the pair one "the kernel documents as incompatible". The pages `CreateFileW` is governed by do not say so; `ZwCreateFile`'s does, for its own flags, and this crate does not make that call. | engineer 2026-10-16; assistant |
+| `FILE_ADD_FILE`, `FILE_ADD_SUBDIRECTORY`, `FILE_LIST_DIRECTORY`, `FILE_TRAVERSE`, `FILE_DELETE_CHILD`, `FILE_CREATE_PIPE_INSTANCE` | Excluded | None | These name the directory or pipe meaning of a right. A directory is opened only with `FILE_FLAG_BACKUP_SEMANTICS` (the page says so), which is not offered in v1, and a pipe is not a file; the bits shared with the file rights are already members. The directory rights are revisited when `FILE_FLAG_BACKUP_SEMANTICS` is offered. That the pipe right is never offered is a working position ("almost certainly never"), not a decision. | engineer 2026-10-16 (directory); assistant |
+| `dwShareMode` (CF, ID, RO) | Exposed | A set of `FILE_SHARE_READ`, `FILE_SHARE_WRITE`, `FILE_SHARE_DELETE`, any subset including none | Does not change the class, the alignment or the offsets. The default stays today's all three; an exclusive open (none) is expressible, since a database that owns its file wants it. A sharing violation reaches the caller as a `SharingViolation` that keeps the kernel's error as its source ([DI-13.4](COMPLETED-CHECKLIST.md#di-134); see "What building DI-13.4 settled" below). | engineer 2026-10-15 (the set, the default, exclusive); assistant (the error's form) |
+| `lpSecurityAttributes`: the security descriptor (CF) | Exposed | A `SecurityDescriptor` built from SDDL ([DI-13.5](CHECKLIST.md)), owned by it | The page says an existing file's descriptor is ignored on open, so a caller who passes one to an open of an existing file gets none applied; that is Win32's and is documented here. | engineer 2026-10-15 |
+| `lpSecurityAttributes`: `bInheritHandle` (CF) | Not in v1 | None; the handle is never inheritable | An inheritable handle reaches child processes that can write through it, and no call this crate makes chooses inheritance. A ruling for v1, not a rejection. | engineer 2026-10-15 |
+| `lpSecurityAttributes` (ID) | Not exposed | None | The page marks it reserved. It does not say whether the handle is inheritable, so a test reads that back: observed not inheritable ([DI-D-70](#di-d-70)). | assistant |
+| `dwCreationDisposition` (CF) | Exposed, **narrowed for v1** | An enum of `CREATE_NEW`, `OPEN_EXISTING` and `OPEN_ALWAYS`. **`CREATE_ALWAYS` and `TRUNCATE_EXISTING` are excluded for v1 and are to be revisited** ([DI-6+.11](PARKED.md)) | Three of the call's five: the three that never change or empty a file that exists, so no data access is gated by the disposition. The two left out are unrepresentable, so nothing is refused at run time on their account. `create`, `create_new` and `truncate` go, and with them the `OPEN_ALWAYS` plus an emptying that [DI-D-63](#di-d-63) used; a caller empties a file through the lent handle. What an answer to the two needs is measured below. | engineer 2026-10-15 (the five); engineer 2026-10-16 (the two left out for v1, "just to simplify the matrix", to be revisited at a later date) |
+| `FILE_ATTRIBUTE_ARCHIVE`, `HIDDEN`, `OFFLINE`, `READONLY`, `SYSTEM` (CF) | Exposed | Members of the attributes set, for a created file | None. The page says an existing file's attributes are generally combined with the flags and the supplied attributes ignored, and says applications should not change `OFFLINE` arbitrarily. `ID` ignores attributes and `RO` cannot take them, so those entries have none. | plan, [DI-14.3](CHECKLIST.md) |
+| `FILE_ATTRIBUTE_TEMPORARY` (CF) | Exposed | Member | The page says it lets a file system hold data in the cache and avoid writing it back while memory allows, which is within `BestEffort` for a cached file. For an unbuffered file the pages do not say what it does, so the pair is not a contract refusal, and it is **supported** (the engineer, 2026-10-18, [DI-14.4.3](COMPLETED-CHECKLIST.md#di-1443)): the attribute concerns when cached data is written back, and an epoch's durability here comes from the flush this crate issues, never from write-back timing, so there is no analytic ground to narrow. | standing |
+| `FILE_ATTRIBUTE_NORMAL` (CF) | Not a member | The empty set | The page says it is valid only alone and that any other attribute overrides it, so it is the absence of attributes and not one. What is passed for an empty set, zero or `NORMAL`, and whether it matters, is for [DI-14.3](CHECKLIST.md)'s tests. | engineer 2026-10-16; assistant |
+| `FILE_ATTRIBUTE_ENCRYPTED` (CF) | Excluded | None | It brings a set of certificate problems this crate does not take on; the page says it is not supported on every edition. | engineer 2026-10-15 |
+| `FILE_FLAG_NO_BUFFERING` (CF, ID, RO) | Exposed | The buffering type, `Unbuffered` | It is the type, not a separate option: the class `SharedDevice`, a sector's alignment of offset, length and buffer, per-write write-through, and a local device only. | [DI-D-60](#di-d-60) |
+| `FILE_FLAG_WRITE_THROUGH` (CF, ID, RO) | Not in v1 | None | What it can warrant is unclear: the pages say that with `FILE_FLAG_NO_BUFFERING` it also requests a write-through of the disk's own cache, and without it the data is written to the system cache and flushed without delay. The per-write flag is a different mechanism and is unaffected, and is known to fail with error 509 on a cached handle even one opened with this flag. A ruling for v1, not a rejection. | engineer 2026-10-15 |
+| `FILE_FLAG_RANDOM_ACCESS`, `FILE_FLAG_SEQUENTIAL_SCAN` (CF, ID, RO) | Exposed | Builder methods | None. Passed to an unbuffered file as well and documented there, not refused. The `CreateFileW` page says they have no effect "if the file system does not support cached I/O and FILE_FLAG_NO_BUFFERING", a sentence that can be read two ways, so what they do on an unbuffered file is shown by a test ([DI-14.1](CHECKLIST.md)). The page calls using both together self-defeating and does not refuse it, so neither does this crate. | engineer 2026-10-16 |
+| `FILE_FLAG_DELETE_ON_CLOSE` (CF, RO) | Exposed | Builder method | The file is deleted when the last handle closes, so a durability report is about data that will not outlive the handle. The caller's choice. `ID` does not list it. | plan, [DI-14.2](CHECKLIST.md) |
+| `FILE_FLAG_OPEN_REPARSE_POINT` (CF, ID, RO) | Exposed | Builder method, explicit | The handle is to the reparse point and not its target, so the remote check has to look at the target ([DI-14.5](CHECKLIST.md)). No longer set automatically on a new file. | engineer 2026-10-15 |
+| `FILE_FLAG_OPEN_NO_RECALL` (CF, ID, RO) | Exposed | Builder method | None. Intended for remote storage systems. | plan, [DI-14.2](CHECKLIST.md); engineer 2026-10-16 |
+| `FILE_FLAG_POSIX_SEMANTICS` (CF, RO) | Exposed | Builder method | None. The page says files made with it may not be reachable by older applications. `ID` does not list it. | plan, [DI-14.2](CHECKLIST.md); engineer 2026-10-16 |
+| `FILE_FLAG_BACKUP_SEMANTICS` (CF, ID, RO) | Not in v1 | None | It serves backup and restore applications and is required to open a directory. A ruling for v1, with nothing against it. An open by identifier was observed to open a directory without it, though the `OpenFileById` page says it is required ([DI-D-70](#di-d-70)), and that is allowed ([DI-D-72](#di-d-72)). | engineer 2026-10-15; the directory by identifier, engineer 2026-10-19 |
+| `FILE_FLAG_OVERLAPPED` (CF, ID, RO) | Exposed | Builder method, [DI-14.9](COMPLETED-CHECKLIST.md#di-149) | The pages say the system then does not maintain the file pointer and I/O is not serialised. The core addresses every operation by offset, so the pointer is not what it reads; what the ring does on such a handle was measured in [DI-14.7](COMPLETED-CHECKLIST.md#di-147). The run opened through `CreateFileW` only, which is all `FileOptions` reaches today. Earlier ruled out of v1 unless the ring needed it. | engineer 2026-10-15, 2026-10-16, 2026-10-18 |
+| `FILE_FLAG_SESSION_AWARE` (CF) | Not in v1 | None | The page says it matters to processes in session 0 and is supported only on server editions; a small interest and hard to test. | engineer 2026-10-15 |
+| `SECURITY_SQOS_PRESENT` and the `SECURITY_*` flags (CF, RO) | Excluded | None | The `ReOpenFile` page confines them to the client side of a named pipe, and the `CreateFileW` page does not say what they do for a file. A file target does not impersonate a server. | engineer 2026-10-15 |
+| `FILE_FLAG_FIRST_PIPE_INSTANCE` | Excluded | None | It is for pipes and is not a parameter of these calls. | standing |
+| `hTemplateFile` (CF) | Excluded | None | It copies attributes and extended attributes from another file onto a new one, and is ignored for an existing file. It would bring in, through a handle, the attributes this table excludes, and extended attributes this crate has no way to state or check. | engineer 2026-10-15; reason confirmed 2026-10-16 |
+| The returned handle | Not exposed | A plain handle, owned | Unassociated with a completion port, as the request crate documents; no flag is added or removed. | [DI-D-63](#di-d-63) |
+
+**How the calls differ, from their pages.** `ID` takes no creation disposition and no attributes and has
+no security descriptor; its flags are the buffering, caching, reparse, recall, overlapped,
+write-through and backup ones, without `FILE_FLAG_DELETE_ON_CLOSE` or `FILE_FLAG_POSIX_SEMANTICS`. `RO`
+takes access, share mode and flags, with `DELETE_ON_CLOSE` and `POSIX_SEMANTICS` among them and no
+attributes. The typed entries for those two offer no attributes, which is the call's shape and not a
+check. A flag a page does not list for a call is passed to it like any other: a page's silence is not
+invalidity, so it is not refused, and what the kernel does with it is measured and recorded as
+documentation, never made a check ([the documented-contract rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)).
+
+**Not verified, and stated as such.**
+
+- Whether `CreateFile2` behaves differently from `CreateFileW` beyond what the pages say.
+- Whether the handles `OpenFileById` and `ReOpenFile` return are inheritable: their pages do not say, and both were
+  observed not to be ([DI-D-70](#di-d-70), [DI-D-71](#di-d-71)). Kept here because an observation is not the page.
+- What `FILE_ATTRIBUTE_TEMPORARY` does with `FILE_FLAG_NO_BUFFERING`.
+- What an `OpenedFile` claims for a stream name or a device name.
+- Whether `ReOpenFile` accepts a handle that came from `OpenFileById`: observed to ([DI-D-71](#di-d-71)); the
+  page's condition is that the original was created by `CreateFile`.
+- Whether passing no attributes is the same as passing `FILE_ATTRIBUTE_NORMAL`.
+- Anything the `CreateFileW` remarks say about devices other than physical disks and volumes.
+
+**Rulings of 2026-10-16 on the calls the assistant had made.** Each row above names who ruled on it;
+the list is kept here so that the answers are in one place and are not asked again.
+
+- `CreateFile2` is not a second route: ruled. The engineer's reason was that it is available only to
+  apps on the unified app model. Its page lists desktop apps as a supported target, so that reason is
+  not recorded as a fact; the exclusion stands on the row's own reason.
+- The generic rights and `FILE_ALL_ACCESS` are named constants and the set has no raw constructor:
+  ruled, and then superseded for the data rights by [DI-D-65](#di-d-65). The no-raw-constructor part
+  stands, with its cost: a right Win32 adds later cannot be expressed until the set gains it.
+- The directory-only rights are not members until `FILE_FLAG_BACKUP_SEMANTICS` is offered: ruled. The
+  pipe right never being offered is a working position, not a decision.
+- `FILE_ATTRIBUTE_NORMAL` is the empty set and not a member: ruled.
+- `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS` are exposed: ruled.
+- The reason given for excluding `hTemplateFile`: ruled.
+
+**Zero access** (`dwDesiredAccess` of zero, which the engineer named "no access") was the one call not
+ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as the type `NoData`.
+
+**What building DI-13.4 settled** ([DI-13.4](COMPLETED-CHECKLIST.md#di-134)). None of these was a ruling.
+
+- `ShareMode` is a set of `READ`, `WRITE` and `DELETE` with `NONE` and `ALL`, built as `FileRights` is, with
+  no constructor from a raw mask and no `Default`: the empty set is the exclusive one and the set a file
+  is opened with is every member, so either would be a surprising answer from `default()`.
+  `FileOptions::share` replaces the mode; the default is `ALL`, which is what every file was opened with.
+- The row said a sharing violation is the kernel's error, and the checklist item said it is a typed error
+  that names which side conflicted where the kernel says. The kernel does not say: the `CreateFileW` page
+  documents two conditions, an open asking for what the other does not share and an open not sharing what
+  the other holds, and fails both with `ERROR_SHARING_VIOLATION`; no documented call reports the other
+  open's access or sharing. So the error is a `SharingViolation`, with the kind `ResourceBusy`, that
+  carries what *this* open asked for (data access, rights, sharing, and the path or, since
+  [DI-D-70](#di-d-70) and [DI-D-71](#di-d-71), the identifier or the reopen it named the file by) and keeps the
+  kernel's own
+  error as its `source`, which satisfies both statements. It does not name a side.
+- Measured on local NTFS, Windows 11 build 26300: every pair of opens over the three accesses a share mode
+  judges (read, write, delete) and the eight share modes on each side, 576 pairs, is accepted or refused
+  as the page's two conditions say. An open that asks for no data right and no other right is not
+  refused beside an exclusive one.
+- `OpenedDisk` and `OpenedVolume` took std's default sharing and had no share mode of their own, because
+  they open through `std::fs::OpenOptions`; [DI-13.11](COMPLETED-CHECKLIST.md#di-1311) gave them one, below.
+- `ReOpenFile` takes a share mode too, so [DI-15.4](CHECKLIST.md) takes a `ShareMode` and raises the same
+  `SharingViolation`.
+
+**What building DI-13.11 settled** ([DI-13.11](COMPLETED-CHECKLIST.md#di-1311)). None of these was a ruling.
+
+- `VolumeOptions::share` and a new `DiskOptions::share` take the same `ShareMode`, default all three, and a
+  conflict is the same `SharingViolation` with no right beyond the data access. A disk had no options
+  type; `OpenedDisk::open(path, options)` replaces `open(path)`, which breaks its callers, and is the
+  assistant's choice over a second method beside the first, so that a volume and a disk are opened alike.
+- The volume's and the disk's open are one function, `raw_open::open`, so what a device open asks of the
+  kernel is one decision. The call is the same whatever the path names, so its tests open a file through
+  it: every pair of read, write and read-and-write opens with the eight share modes on each side matches
+  the documented rule, as a file's do.
+- What is not reached by the local run: that `OpenedVolume::open` and `OpenedDisk::open` pass their
+  options' share mode to that function. A raw open needs an administrator and a scratch virtual disk, so
+  the exclusive volume and disk tests are the ignored ones that run in CI, and an open that asks for no
+  data right is not judged by the share mode, so a no-data handle cannot show it either. Run elevated on
+  2026-10-16 ([DI-13.12](COMPLETED-CHECKLIST.md#di-1312)), both pass, and each wiring mutated to ignore the options
+  fails its test. The two sabotage entries still expect to survive, because the sweep runs no ignored test.
+  The first open of an exclusive volume was refused once in two runs as a sharing violation that was not
+  the test's, something else holding the volume just after it appeared; the volume tests open it again for
+  a bounded time, so that is the test's patience and not the library's.
+- **The lock is not independent of the share mode.** Measured elevated on 2026-10-16 on a 64 MiB scratch
+  volume: a volume locked with `VolumeOptions::lock` refuses every other open that asks for a data right,
+  read-write or read-only, with `ERROR_ACCESS_DENIED` and not a `SharingViolation`, whether the holder
+  shared nothing or everything; an unlocked volume answers as the share mode says, a sharing violation
+  when exclusive and an open when shared. An open that asks for no data right is admitted in all four.
+  So a caller that locks sees the lock's refusal and never the share mode's.
+
+**What building DI-14.2 settled** ([DI-14.2](COMPLETED-CHECKLIST.md#di-142)). None of these was a ruling.
+
+- `FileOptions::delete_on_close`, `open_no_recall` and `posix_semantics` are the three flags of the rows
+  above, each a bool that sets its own bit, passed to a cached and an unbuffered file alike. Nothing is
+  added or checked for them here; which combinations the documented contract calls invalid, and so are
+  refused ahead of the open, is [DI-14.4](CHECKLIST.md)'s.
+- **Delete-on-close is not refused for want of the right to delete.** **Corrected 2026-10-18 by
+  [DI-14.4.1](CHECKLIST.md)'s reading:** this said the `CreateFileW` page lists the right as needed; it does
+  not. The requirement is stated on `ZwCreateFile`'s page, a call this crate does not make (see "What the
+  reading pass of DI-14.4.1 found" below). Measured on Windows 11 build 26300, an open with the flag and no right to delete among
+  the rights succeeds and the file is deleted when the last handle closes. While the handle is open, a
+  later open that does not share deletion fails with a sharing violation, whatever it asks for, and one that
+  shares it is admitted, with the right to delete or without.
+- `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS` are measured only as far as an open with each
+  succeeds on a local file and the file is usable. What either does is not, since neither affects a target
+  and the measurement needs remote storage and a case-sensitive directory respectively.
+- `FILE_FLAG_OVERLAPPED` is not offered by this item: the run in [DI-14.7](COMPLETED-CHECKLIST.md#di-147)
+  measured the ring on such a handle, and whether to offer it was left to [DI-14.9](COMPLETED-CHECKLIST.md#di-149).
+
+**What building DI-14.3 settled** ([DI-14.3](COMPLETED-CHECKLIST.md#di-143)). None of these was a ruling.
+
+- `FileAttributes` is a set of `ARCHIVE`, `HIDDEN`, `OFFLINE`, `READONLY`, `SYSTEM` and `TEMPORARY`, built as
+  `ShareMode` is, with no constructor from a raw mask; `FileOptions::attributes` replaces the set. The item
+  listed *encrypted* among them; the table excludes `FILE_ATTRIBUTE_ENCRYPTED` (engineer 2026-10-15), and the
+  table is what was followed.
+- **The empty set and `FILE_ATTRIBUTE_NORMAL`** (the question the table left to this item): measured on
+  Windows 11 build 26300, a file created with no attributes and one created with `NORMAL` have the same
+  attributes, `ARCHIVE` among them. The empty set passes zero.
+- **A file created `READONLY` with the right to write**: the create succeeds, the handle that made it can
+  write, and a later open for writing is refused with `ERROR_ACCESS_DENIED`.
+- **An open of a file that exists leaves its attributes alone**, whatever attributes are asked for, with
+  `OpenExisting` or `OpenAlways`.
+- **The security descriptor is on the request, not in `FileOptions`.** A descriptor owns memory and cannot be
+  `Copy`, and the options are a `Copy` description passed to several opens, so a field there would have ended
+  that for every caller. `OpenRequest::with_security_descriptor` takes the `SecurityDescriptor` the request
+  crate builds from SDDL, which the request owns and frees. It is the assistant's choice over a field in the
+  options, and a change of place later is a change to one method.
+- **Inheritance is not an option.** The request passes `SECURITY_ATTRIBUTES` with `bInheritHandle` false when
+  it has a descriptor and none otherwise, which `CreateFileW` documents as a handle that cannot be inherited;
+  a test pins the first on the request. The opened handle's inheritability is read back through
+  `get_handle_information` of [win-handles-sys](../win-handles-sys/DESIGN-NOTES.md), which
+  [DI-14.8](COMPLETED-CHECKLIST.md#di-148) built for it: a created file's handle, with a descriptor and without, carries
+  neither flag. (When this was built the query was not available safely, and the read-back was queued.)
+- **The descriptor is read back by behaviour and by query.** A file created with a DACL that denies read to
+  everyone refuses a later open for reading, and one created with a DACL that allows it admits one; a
+  descriptor given with an open of a file that exists leaves it as it was, as the page says. The descriptor
+  itself is read back through `get_security_info` of
+  [win-authorization-sys](../win-authorization-sys/DESIGN-NOTES.md), built for it by
+  [DI-14.8](COMPLETED-CHECKLIST.md#di-148): a created file's DACL reads back as the one it was given, cached and
+  unbuffered. (When this was built the query was not available safely, and the read-back was queued.)
+- The security quality-of-service flags are excluded by the table, so none is offered.
+
+**What building DI-14.7 settled** ([DI-14.7](COMPLETED-CHECKLIST.md#di-147)). None of these was a ruling, and
+none decides whether `FileOptions` offers `FILE_FLAG_OVERLAPPED`: that was [DI-14.9](COMPLETED-CHECKLIST.md#di-149)'s.
+
+Measured on Windows 11 build 26300, local NTFS (the volume of the temporary directory), through
+`windows-ioring-sys` 0.7.1, by `win-durable-ioring`'s `tests/overlapped_evidence.rs`. Four handles, each
+opened through the request crate's `OpenFile` with the flag in the raw flags or without it: cached and
+unbuffered, overlapped and plain. The same sequence was driven through the ring on each: two writes (offsets 0
+and 4096), a flush, two reads back, a read at the end of the file, a read across it, a write through a handle
+opened for reading only, a read at offset 1, four reads in one batch, and a read through a registered file.
+The completion carries a result and a byte count, so those are what was compared; the status and information
+values of the item's text are not separately visible through the safe API.
+
+- **The ring accepts a handle opened with the flag.** It registers one, and every step queued, submitted and
+  completed on it.
+- **Every result is the same with the flag as without it, in each buffering mode.** The write is 4096
+  bytes, the flush 0, the reads 4096; the read at the end of the file fails with `ERROR_HANDLE_EOF`, the write
+  through the read-only handle with `ERROR_ACCESS_DENIED`; the read across the end returns the 4096 bytes that
+  exist. The one result that differs is between the buffering modes and not between the flag's settings: a read
+  at offset 1 returns 4096 bytes on a cached handle and fails with `ERROR_INVALID_PARAMETER` on an unbuffered
+  one, with the flag or without it.
+- **What differs is when a completion is there.** `bounded_pop.rs` in `windows-ioring-sys` records that a
+  handle opened without the flag completes inline, during the submit. In the first run every step on every
+  plain handle, and on the cached overlapped handle, was poppable as soon as the submit returned, and the
+  four reads were in each of 30 further runs. On the unbuffered overlapped handle the three data reads and
+  the registered read were not poppable then, in each of the 30; the writes, the flush, and the three
+  failing steps were, in the first run, which is the only one in which they were looked at.
+- **Order of completion.** A batch of four reads completed in queue order on every plain handle and on the
+  cached overlapped handle in each of 30 runs; on the unbuffered overlapped handle it completed out of order
+  in 10 of 30 (`[3, 1, 2, 0]` in 7, `[2, 0, 3, 1]` in 3).
+- **What the test asserts and what it does not.** It asserts every step's result on all four handles, that a
+  plain handle completes inline, and that a batch's completions are the four queued. It does not assert the
+  inline completion of an overlapped handle, which depends on the host, and so it cannot fail if the flag
+  stops being applied: the 30-run observation above is what shows it was.
+- **Not reached:** a device that is not a disk file, a remote file, and a volume that is not NTFS; each is a
+  different row of [DI-13.1](COMPLETED-CHECKLIST.md)'s table, and no overlapped handle was opened on any.
+
+**What building DI-14.5 settled** ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)). None of these was a ruling.
+
+- **Which documented handle queries were checked, and which was chosen.** Measured on Windows 11 build 26300
+  through the request crate, on a file and a directory of a local volume and on the same through the
+  administrative share `\\localhost\C$`:
+  `GetFinalPathNameByHandleW` (the request crate's `QueryFinalPath`) answers `\\?\C:\...` for the local
+  handles and `\\?\UNC\localhost\C$\...` for the share's; `GetFileInformationByHandleEx` with
+  `FileRemoteProtocolInfo` (reached through `QueryFileInformation` and a raw class) succeeds for the share's
+  handles, reporting SMB 3.1.1, and fails with `ERROR_INVALID_PARAMETER` for the local ones. Neither needs more
+  than the right to read attributes. **The final path is the one used**, because it is what the check already
+  read (`canonicalize` is the same call made on a path), so which paths count as remote is unchanged and the
+  refusal still carries the location; and because the other answers by failing, which is the same
+  for a file system that does not implement the class and for a local one. `FileRemoteProtocolInfo` is not
+  rejected as an option, only not needed: it is the documented route to *which protocol* a remote file is on,
+  should a later item want that.
+- **There is no window.** The check is a query of the handle the open returned, so a link swapped after the
+  open cannot change what was judged. It is made after the open, which the engineer ruled on 2026-10-16 is
+  acceptable; measured, an unbuffered `CreateNew` of a file on the share is refused and the file it created
+  is still there, as the item's text says.
+- **A reparse point is judged by what the handle is.** A local link to a file on the share, opened unbuffered:
+  followed, the handle is the share's file and is refused; opened as the link (`open_reparse_point`), the handle
+  is the link's own, on the local volume, and is accepted. Neither is a refusal made on the link's target by
+  looking at the path, which was the item's concern about the check ahead of the open. A handle opened on a link
+  is the link, and the ruling that an unbuffered file must be local is a statement about the device the
+  handle's I/O goes to. **Ruled by the engineer, 2026-10-18 ([DI-14.10](COMPLETED-CHECKLIST.md#di-1410)):** a
+  handle opened on a link to a share is accepted, and is not refused for where the link leads.
+- **A handle whose final path cannot be read is refused, as the crate's own narrowing.** As first built the
+  refusal was the final-path call's own error; [DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462) names it
+  `UnknownLocation`, with that error as its source. See "What DI-14.6.2 settled" below.
+- **What the unit tests reach and what they do not.** The location of a handle, the link cases on a local
+  volume and the unreadable final path run everywhere. The refusal itself, the created-before-refused file and
+  the link to a share need the administrative share and are ignored by default, as the earlier one was; they
+  were run with the ignored tests included, and pass.
+
+**What the reading pass of DI-14.4.1 found** ([DI-14.4.1](CHECKLIST.md)). Read 2026-10-18, under
+[the documented-contract rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract), from the
+sources the Learn pages are built from: `CreateFileW` (`ms.date` 08/16/2022), "Creating and Opening Files"
+(07/08/2025), "File Buffering" (05/31/2025), "File Access Rights Constants" (05/31/2018) and "File Attribute
+Constants" (09/23/2025). "Creating and Opening Files" was added to the item's three because the `CreateFileW`
+page refers to it for the valid combinations of share mode and access and for special cases. The question
+asked of every statement: is it a condition on a combination of the open's arguments, and does the page call
+it invalid.
+
+*Conditions on the arguments alone that a page calls invalid.* Every one is already unrepresentable in this
+crate's v1 surface, so none needs a check:
+
+| Condition | Where | Why it is already excluded |
+|---|---|---|
+| `FILE_ATTRIBUTE_NORMAL` "is valid only if used alone" | `CreateFileW`, attributes table; "File Attribute Constants" | `NORMAL` is not a member of `FileAttributes`; the empty set passes no attribute ([DI-14.3](COMPLETED-CHECKLIST.md#di-143)). |
+| `FILE_FLAG_OPEN_REPARSE_POINT` "cannot be used with the `CREATE_ALWAYS` flag" | `CreateFileW`, flags table | `CREATE_ALWAYS` is not a `Disposition` in v1. |
+| `TRUNCATE_EXISTING`: "The calling process must open the file with the `GENERIC_WRITE` bit set" | `CreateFileW`, `dwCreationDisposition` | `TRUNCATE_EXISTING` is not a `Disposition` in v1. Note for its return: the page names the `GENERIC_WRITE` bit, and this crate's data access asks for `FILE_WRITE_DATA`. |
+| The creation dispositions "cannot be combined" | `CreateFileW`, `dwCreationDisposition` | `Disposition` is an enum. |
+
+The two v1 exclusions are recorded against their return in [DI-6+.11](PARKED.md), which is when the
+first two rows of this kind become checks.
+
+*Conditions that depend on the target*, which no check ahead of the open can judge and which the kernel's
+error answers: a share mode or access that conflicts with an open handle (`ERROR_SHARING_VIOLATION`);
+delete-on-close against open handles that did not share deletion, and later opens that do not; a security
+descriptor or attributes given for a file that exists (ignored); a security descriptor on a file system
+without security; `FILE_FLAG_OPEN_REPARSE_POINT` on a path that is not a reparse point (ignored); a file
+pending deletion (`ERROR_ACCESS_DENIED`); and the sections on directories, physical disks and volumes,
+communications resources, consoles, mailslots and pipes, which state requirements on the arguments *when the
+path names such a device*. Through `OpenedFile` the path is opaque, so those are conditions on the target.
+They are not conditions on the target for `OpenedVolume` and `OpenedDisk`, whose path types name the device;
+see the last paragraph.
+
+*Statements that are not invalidity*, and so pass through: random access with sequential scan, "self-defeating";
+sequential scan "should not be used if read-behind ... will be used", which is advice about the I/O and not
+about the arguments; each hint "has no effect if the file system does not support cached I/O and
+`FILE_FLAG_NO_BUFFERING`", which reads two ways and depends on the file system; `FILE_FLAG_WRITE_THROUGH` and
+`FILE_FLAG_NO_BUFFERING` "are independent and may be combined"; no-buffering with overlapped, a statement
+about performance; `FILE_ATTRIBUTE_TEMPORARY`, of which the pages say what it does to caching and say nothing
+about an unbuffered file, supported ([DI-14.4.3](COMPLETED-CHECKLIST.md#di-1443)); and `FILE_APPEND_DATA` without `FILE_WRITE_DATA`, which
+the rights page says changes what a write does, not that it is invalid.
+
+*Two conditions this crate had attributed to the `CreateFileW` pages are not on them.* That delete-on-close
+needs the `DELETE` right, and that the append right is incompatible with no-buffering, are both stated on
+`ZwCreateFile`'s page in the driver documentation (`ms.date` 12/14/2022): "If this flag is set, the DELETE
+flag must be set in the *DesiredAccess* parameter", and `FILE_NO_INTERMEDIATE_BUFFERING` "is incompatible with
+the *DesiredAccess* parameter's FILE_APPEND_DATA flag". This crate opens through `CreateFileW`, and the
+[DOCUMENTED APIS ONLY rule](../../.github/copilot-instructions.md) keeps it from calling `ZwCreateFile`. Read as
+the call's own contract, the rule makes neither a contract refusal: what `CreateFileW` does with its flags
+on the way down is not documented on its pages, so the lower call's conditions describe the layer below and
+not the call. The measurements stay what they were, as anecdote: delete-on-close is taken without the right
+to delete, and `FILE_ALL_ACCESS` is refused unbuffered with `ERROR_INVALID_PARAMETER`. **Ruled by the
+engineer, 2026-10-18 ([DI-14.4.2](COMPLETED-CHECKLIST.md#di-1442)):** the lower layer's page "is not direct
+evidence", and is "good evidence to use for an experiment" whose findings are documented as such. Nothing is
+refused on its account, so `OpenedFile`'s open has no check ahead of it.
+
+*Outside `OpenedFile`:* the "Physical Disks and Volumes" section says that "When opening a volume or floppy
+disk, the *dwShareMode* parameter must have the `FILE_SHARE_WRITE` flag", and that the disposition must be
+`OPEN_EXISTING`. For `OpenedVolume` the path is a volume by its type, so this is a condition on its
+arguments, and `VolumeOptions::share` offers modes without `FILE_SHARE_WRITE`, including `ShareMode::NONE`,
+which [DI-13.12](COMPLETED-CHECKLIST.md#di-1312) measured succeeding elevated. The disposition is already
+`OPEN_EXISTING`, since the device open uses `std`'s with no create option. **Settled by the engineer's
+amendment of 2026-10-18 ([DI-14.11](COMPLETED-CHECKLIST.md#di-1411)):** "If we have evidence that the
+documentation is wrong ... the remedy is to not embody the documentation structurally." `DI-13.12`'s
+exclusive-volume test is that evidence, so the share option stays as it is, and `VolumeOptions::share`
+documents the page's requirement and the measurement beside it. The section states no share-mode requirement
+for a physical disk.
+
+**Measured for DI-14.6: what an open handle reports about its own kind** ([DI-14.6.1](COMPLETED-CHECKLIST.md#di-1461)).
+Windows 11 build 26300, one machine, local NTFS, 2026-10-18. Every handle came from the request crate's
+`OpenFile`, which is `CreateFileW` with nothing added. These are measurements and not the contract: only
+`GetFileType`'s return values are documented, so the rows are anecdote, and none of them is a refusal
+([the rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)). The pinned part is
+[device_handle_evidence.rs](../windows-namespace-request-sys/tests/device_handle_evidence.rs), which asserts
+`GetFileType`'s class and only whether `IOCTL_STORAGE_GET_DEVICE_NUMBER` succeeds, never which error a failure
+carries. Both directions were checked by sabotage: an ioctl that fails on a volume turns the volume and disk
+tests red, and one that always reports a number turns the file, directory, `NUL` and pipe tests red.
+
+| Handle | `GetFileType` | `IOCTL_STORAGE_GET_DEVICE_NUMBER` | `GetFileInformationByHandle` | `GetFinalPathNameByHandleW` | `FlushFileBuffers` |
+|---|---|---|---|---|---|
+| disk file | `DISK` | fails, 87 | succeeds | succeeds | succeeds |
+| directory (backup semantics) | `DISK` | fails, 87 | succeeds | succeeds | fails, 5 |
+| `\\.\NUL` | `CHAR` | fails, 1 | fails, 1 | fails, 87 | fails, 1 |
+| `CONOUT$` | `CHAR` | fails, 1 | fails, 1 | fails, 1 | fails, 6 |
+| `CONIN$` | `CHAR` | fails, 1 | fails, 1 | fails, 1 | succeeds |
+| volume `\\.\C:`, access 0 | `DISK` | succeeds | fails, 1 | fails, 1 | fails, 5 |
+| `\\.\PhysicalDriveN`, access 0 | `DISK` | succeeds | fails, 1 | fails, 1 | fails, 5 |
+| named pipe, server end | `PIPE` | fails, 1 | succeeds (attributes 0x80) | fails, 1 | succeeds |
+| named pipe, client end | `PIPE` | fails, 1 | succeeds (attributes 0x80) | fails, 1 | succeeds |
+
+- **`GetFileType` does not tell a file from a volume or a disk.** It answers `DISK` for all of them, so a
+  query of it alone cannot say whether a handle is a file.
+- **The device-number control separated them, on this machine.** It succeeded on a volume and on a physical disk
+  and failed on a file, a directory, `NUL`, a console and a pipe, so over these handles the two sets were told apart
+  by it; no page says which devices answer it, so this is an observation and not a rule about them
+  ([WV-D-12](../win-volume-sys/DESIGN-NOTES.md#wv-d-12)). It succeeded
+  with no access requested on both, unelevated; the volume's reply carries a non-zero partition number, and the
+  disk opened from that reply's device number reports the same device number. Opening the volume or the disk
+  for `GENERIC_READ` was refused with 5 in this unelevated session.
+- **`NUL`:** `CHAR`, and no file query succeeds on it. `FlushFileBuffers` fails with `ERROR_INVALID_FUNCTION`
+  and does not report success. A read returned end of file and a write succeeded, as [D-19](../windows-namespace-request-sys/DESIGN-NOTES.md#d-19)
+  recorded.
+- **A pipe's two ends are alike** on every query tried.
+- **A serial port was not measured, and no decision rests on it.** The three ports named on this machine are
+  Remote Desktop redirections of the client's ports: `QueryDosDevice` gives `COM3`, `COM4` and `COM22` the targets
+  `\Device\RdpDrPort\;COMn:2\tsclient\COMn`, so what an open waits on is the client's port at that moment. `COM2` is
+  an ACPI port in an error state with no DOS device. In three earlier runs `CreateFileW` on `COM3` had not returned
+  after 15, 25 and 45 seconds, and the process was killed each time; later it returned `ERROR_ACCESS_DENIED` after
+  about 80 ms, and `COM22` returned `ERROR_FILE_NOT_FOUND` at once. `COM4`, 2026-10-18, blocked in `CreateFileW`
+  for about 5.2 seconds in every run and then failed with 31. `CancelSynchronousIo` on that open, from a second
+  thread that held `THREAD_TERMINATE`, returned `TRUE` and did not shorten it: the call itself returned only when
+  the open did, about 4.2 seconds after it was made at one second, and after the whole open when made at once.
+  No port opened, so `GetFileType`, `FlushFileBuffers`, the device control and a cancel of a blocked serial read were
+  not measured. What is decided does not depend on them: a cached open of a handle that is not a disk file is
+  accepted and an unbuffered one with no final path is refused ([DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)), and
+  what this crate does about a blocking open is [DI-D-67](#di-d-67). A machine with a port that opens could measure
+  them.
+
+**What DI-14.6.2 settled** ([DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)). The engineer, 2026-10-18, "implement
+di-14.6.2", after the question of what refusing is worth had been discussed and not ruled; the positions below are
+the assistant's, taken on that instruction, and stand until amended.
+
+- **A cached open of a handle that is not a disk file is accepted, and nothing is added for it.** No
+  `CreateFileW` page makes it invalid ([the rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)),
+  where a name leads is the caller's ([DI-D-67](#di-d-67)), and a cached file claims only best effort, which a
+  device does not falsify. A pipe's or `NUL`'s `FlushFileBuffers` result is not a durability statement, and
+  the claim made does not rest on it.
+- **An unbuffered open of one is refused, and the refusal is the crate's own.** An unbuffered file claims
+  `WarrantyClass::SharedDevice`, that its writes reach a device shared with other writers, which `NUL`, a
+  pipe and a console cannot keep. Removing the refusal, which the discussion of 2026-10-18 had leaned
+  toward, would give an unbuffered `NUL` that claim, so it stays. What
+  changed is that it is no longer an accident: before, it followed from `GetFinalPathNameByHandleW` failing on
+  a handle with no final path, and was reported as that call's error, which says nothing of why the open was
+  refused. It is now `UnknownLocation`, kind `io::ErrorKind::Unsupported`, with the call's error as its source,
+  and its documentation says it is this crate's narrowing and not a condition `CreateFileW` documents. It sits
+  beside `RemoteDevice`, which is the same kind of refusal for a remote file.
+- **What the refusal says it knows.** That the final path could not be read, and so the handle is not known to
+  be a file on a local volume. It does not say what the handle is: the cause is any failure of that read, and
+  the [measurements](#di-d-64) show that `NUL`, a console, a pipe, a volume and a physical disk all fail it. `GetFileType` was not added to name the kind in the error; it separates `CHAR`, `PIPE`
+  and `DISK` and does not separate a file from a volume or disk, and an accessor that returned a class is a
+  separate decision, not made here.
+- **A volume or disk opened through `OpenedFile` unbuffered is refused for the same reason**, since neither has
+  a final path; they are opened as such by `OpenedVolume` and `OpenedDisk`, whose path types name the device.
+- **Tested** with a real unbuffered and a real cached open of `NUL`. Three sabotages: an unreadable location
+  accepted, the refusal reported as the call's error, and a cached open refused. The last is refused by a
+  `const` assertion at build, before any test runs, which is the stronger rung.
+- **Not decided here:** a serial port, which was not measured and which nothing rests on (above), and the open's
+  documentation of [DI-D-67](#di-d-67), which is [DI-14.6.4](COMPLETED-CHECKLIST.md#di-1464).
+
+**What DI-14.12 built was withdrawn: `HandleKindQuery` and `HandleKind` are removed.**
+**Withdrawn by [DI-D-73](#di-d-73).** [DI-14.12](COMPLETED-CHECKLIST.md#di-1412) was an observer over any handle that
+asked `GetFileType`, then `IOCTL_STORAGE_GET_DEVICE_NUMBER`, then `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`, and named the
+pattern of answers `DiskFile`, `Volume` or `PhysicalDisk`; the engineer approved the sketch on 2026-10-18 ("I like it,
+build it. We can tweak it if we don't like it"). What it answered with, observed on 2026-10-18 on one machine with
+one physical disk, stays as a measurement: the system volume answered the device-number control with type 7 and
+partition 4 and the extents control with one extent, and `\\.\PhysicalDrive0` answered the device-number control with
+type 7 and partition 0 and the extents control with `ERROR_INVALID_FUNCTION`.
+
+<a id="di-16-1"></a>
+**What DI-16.1 changed: the request crate is handed the handle already held** ([DI-16.1](COMPLETED-CHECKLIST.md#di-161)).
+The request crate's entries hold a `SharedHandle` ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)), so
+nothing here duplicates a handle it holds to ask a question of it.
+
+- **`HandleKindQuery::of` took `&SharedHandle`**, and the query was later removed ([DI-D-73](#di-d-73)).
+- **An opened file's final path is asked of the handle it holds.** `final_location` takes the `SharedHandle` and gives
+  the request a clone.
+- **`OpenedVolume` and `OpenedDisk` were checked and had nothing to change**: they hold a `SharedHandle` and never hand
+  one to the request crate.
+- **What is tested.** A duplicate in `final_location` is not observable, since the request is made and dropped inside
+  it and only the path comes back; its sabotage is a declared survivor. The kind query, whose handle a caller held and
+  so could compare with the share, was the one place a duplicate was observable, and is removed.
+
+**Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
+the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
+[disposition_measurements.rs](../win-durable-ioring/examples/disposition_measurements.rs); every disposition
+against ten access masks, the file present except for `CREATE_NEW`. Cached and unbuffered agree except where
+stated.
+
+| Access | `CREATE_NEW`, `CREATE_ALWAYS`, `OPEN_EXISTING`, `OPEN_ALWAYS` | `TRUNCATE_EXISTING` |
+|---|---|---|
+| `FILE_WRITE_DATA` | accepted; `CREATE_ALWAYS` empties the file | `ERROR_INVALID_PARAMETER` |
+| `FILE_READ_DATA \| FILE_WRITE_DATA` | as above | `ERROR_INVALID_PARAMETER` |
+| `FILE_WRITE_DATA` with `FILE_WRITE_ATTRIBUTES`, `FILE_WRITE_EA`, both, or `DELETE` | as above | `ERROR_INVALID_PARAMETER` |
+| `FILE_WRITE_DATA \| FILE_APPEND_DATA` | as above cached; every disposition `ERROR_INVALID_PARAMETER` unbuffered | `ERROR_INVALID_PARAMETER` |
+| `GENERIC_WRITE` | accepted; `CREATE_ALWAYS` empties the file | accepted; empties the file |
+| `FILE_READ_DATA` only | accepted; `CREATE_ALWAYS` empties the file | `ERROR_INVALID_PARAMETER` |
+| no access | accepted; `CREATE_ALWAYS` empties the file | `ERROR_INVALID_PARAMETER` |
+
+`TRUNCATE_EXISTING` is accepted with the literal `GENERIC_WRITE` and with no other mask tried, including
+`GENERIC_WRITE` less its append, synchronize and read-control bits. `CREATE_ALWAYS` emptied the file under
+every mask, a read-only one and none included. The engineer ruled on 2026-10-16 that v1 offers neither,
+which is the row above; the two questions the table raises, how an enum would offer `TRUNCATE_EXISTING`
+and whether a handle typed not to write may be opened to overwrite, are not answered and go with the
+revisit.
+
+**Scheduled work:** none of its own. Each row's work is the item it names:
+[DI-13.3](CHECKLIST.md) (rights), [DI-13.4](CHECKLIST.md) (share mode), [DI-13.7](COMPLETED-CHECKLIST.md#di-137)
+(the open, the disposition and the two-phase shape), [DI-14.1](CHECKLIST.md) to [DI-14.7](CHECKLIST.md)
+(flags, attributes, security, combinations, the remote check, devices, the overlapped evidence) and
+[DI-15.1](CHECKLIST.md) to [DI-15.4](CHECKLIST.md) (identity and reopening).
+
+## <a id="di-d-65"></a>DI-D-65: data access is a type parameter, and the rights set carries the rest
+
+**Amends [DI-D-64](#di-d-64) for the data rights.** The rows there for zero access, `FILE_READ_DATA`,
+`FILE_WRITE_DATA` and the generic rights carry the marker.
+
+**What is decided.** The engineer, 2026-10-16, after the form below was shown: "ok this seems usable,
+let's use it". The prompt was the engineer's observation that, with access a parameter of the open,
+demanding a data right of the type was odd, and that the pattern should reach every handle this crate
+opens and not only a file in the ring.
+
+**The types.** Four sealed markers name the data access a handle was opened with; two axes, read and
+write, give `NoData`, `ReadOnly`, `WriteOnly` and `ReadWrite`.
+
+```rust
+pub trait DataAccess: Sealed + Copy + Debug + Send + Sync + 'static {
+    const READ: bool;             // the markers live in durable-ioring (DI-D-66); the rights they ask
+    const WRITE: bool;            // of Win32 are derived from these in win-durable-ioring
+    type WithRead: DataAccess;    // NoData -> ReadOnly, WriteOnly -> ReadWrite, the rest unchanged
+    type WithWrite: DataAccess;
+}
+pub trait HasData: DataAccess { const ACCESS: Access; }  // ReadOnly, WriteOnly, ReadWrite
+pub trait CanRead: HasData {}     // ReadOnly, ReadWrite
+pub trait CanWrite: HasData {}    // WriteOnly, ReadWrite
+
+pub struct FileOptions<A: DataAccess = NoData>;                      // .read(), .write() move A
+pub struct OpenedFile<B: Buffering = Cached, A: DataAccess = ReadWrite>;
+pub struct OpenedDisk<B: Buffering = Unbuffered, A: DataAccess = ReadWrite>;
+pub struct OpenedVolume<B: Buffering = Unbuffered, A: DataAccess = ReadWrite>;
+// Win32FileTarget::new, from_disk and from_volume take A: HasData; the target stays one type.
+```
+
+`FileRights` keeps the rights that gate nothing this crate offers: attributes, extended attributes,
+`FILE_EXECUTE`, `DELETE`, the security rights and `SYNCHRONIZE`. `FILE_READ_DATA`, `FILE_WRITE_DATA`,
+the `GENERIC_*` constants and `FILE_ALL_ACCESS` leave it. No marker or set carries `FILE_APPEND_DATA`,
+so [DI-D-64](#di-d-64)'s rule that append-only access is unrepresentable holds.
+
+**Where the line between type and set is drawn, and why.** A right is a type if it gates something this
+crate's own API does with the handle: a file target is made only from a handle with a data right, and
+the ring's read, write and commit are what a target performs. A right that gates only a call the
+consumer makes on the lent handle stays in `FileRights` and is judged by the kernel. The measurement is
+in [access_rights_measurements.rs](../win-durable-ioring/examples/access_rights_measurements.rs), which
+prints a table for a cached and an unbuffered open of nine sets, using safe `std` calls on a duplicate
+of the handle. On a local file system: a read needed the read-data right; a write, a length change and
+a flush needed the write-data right; setting a time needed the write-attributes right; and the size
+query succeeded for every set tried, including those without the read-attributes right, where the
+`GetFileSizeEx` page says it may depend on the directory's permissions. From the documentation and not
+measured: `DELETE` gates rename and delete-on-close through `SetFileInformationByHandle`, and
+`SetFileValidData` needs `GENERIC_WRITE` and a privilege. If this crate later offers a method gated by
+one of those, that right becomes an axis, and the cost of one more axis is in
+[DI-13.8](COMPLETED-CHECKLIST.md#di-138).
+
+**What it fixes.**
+
+- The refusal of a handle with no data right, made when the request was built, is a compile error: a
+  `NoData` handle has no conversion to a file target.
+- A raw disk or volume could be opened only for reading and writing, since
+  [opened_disk.rs](../win-durable-ioring/src/windows_backend/opened_disk.rs) and
+  [opened_volume.rs](../win-durable-ioring/src/windows_backend/opened_volume.rs) passed both; either can
+  now be opened for reading only, and a geometry query can be made on a handle with no data right.
+- `ReOpenFile` ([DI-15.4](CHECKLIST.md)) changes the access of a handle, and the change is a change of
+  `A`.
+- `FILE_ALL_ACCESS` named the append bit, and an unbuffered open of it was measured to be refused with
+  `ERROR_INVALID_PARAMETER` ([DI-D-64](#di-d-64)); no marker carries the bit, so that open cannot be
+  asked for.
+
+**What the type does not reach, and what then reaches it** ([DI-D-66](#di-d-66)). The ring addresses a target by `IoTargetKey(pub u64)`, a number the
+consumer chooses, and `Win32FileTarget` is not generic, so a compile-time check ends where the target is
+built. A write submitted to a read-only target reached the kernel and failed with its error, which the
+test `a_write_through_a_read_only_handle_fails` then expected. [DI-D-66](#di-d-66) decided what replaced
+that: the target states its data access to the core, as it states its warranty and geometry, so the core
+refuses the write at the push and hands its buffer back, and the test changed with it.
+
+**What building it settled** ([DI-13.8](COMPLETED-CHECKLIST.md#di-138)). None of these was a ruling; each is
+the choice the code made, with the measurement.
+
+- `read()` and `write()` ask for `FILE_READ_DATA` and `FILE_WRITE_DATA` alone, and no generic right. Reading,
+  writing, extending, flushing and every test through the ring pass with them.
+- **`TRUNCATE_EXISTING` is refused with `ERROR_INVALID_PARAMETER` when the access holds
+  `FILE_WRITE_DATA` and not `GENERIC_WRITE`**, measured on Windows 11 build 26300, which is what the
+  `CreateFileW` page says of that disposition. A typed write access cannot ask for `GENERIC_WRITE`,
+  which is one of the two reasons `TRUNCATE_EXISTING` is not among the dispositions offered for v1
+  (see the `dwCreationDisposition` row above; [DI-6+.11](PARKED.md) revisits it).
+- A type parameter written in a path takes its default when it is left off, so
+  `OpenedFile::<Cached>::open(path, FileOptions::new().read())` names `ReadWrite` and does not compile.
+  A file opened with other options writes the parameter or leaves it to be inferred with `_`:
+  `OpenedFile::<Cached, _>::open(path, options)`. A disk and a volume have no options to infer it
+  from, so it is named at the call, `OpenedDisk::<Unbuffered, ReadOnly>::open(path, options)`.
+- `VolumeOptions::lock` is offered with any data access. The `FSCTL_LOCK_VOLUME` page names no right
+  the handle needs, and whether the kernel wants one was not measured.
+
+**Not verified.** What a raw disk and a raw volume do for each marker, which needs an administrator and
+runs only where the test run has one, in CI; and whether `ReOpenFile` can widen a handle's access, which
+is a test in [DI-15.4](COMPLETED-CHECKLIST.md#di-154): it was observed to, from read-only to read-write, where the
+file's security allows ([DI-D-71](#di-d-71)).
+
+**Scheduled work.** [DI-13.8](COMPLETED-CHECKLIST.md#di-138), and [DI-13.9](COMPLETED-CHECKLIST.md#di-139) and
+[DI-13.10](COMPLETED-CHECKLIST.md#di-1310) from [DI-D-66](#di-d-66). Amended by this decision: [DI-13.7](COMPLETED-CHECKLIST.md#di-137), [DI-15.2](CHECKLIST.md) and
+[DI-15.4](CHECKLIST.md).
+
+## <a id="di-d-66"></a>DI-D-66: a target states its data access to the core, and a key can carry it
+
+**Extends [DI-D-65](#di-d-65) to the ring.** The data access of a handle is a type where this crate opens
+it; here the same access reaches the core, which is where a submission is judged.
+
+**What is decided.** The engineer, 2026-10-16, on being shown that the type ends where the target is built:
+"it seems like IoTarget should have the same sort of type-based encoding of the access to the target that
+we just litigated in di-13.8", and then, offered the two layers below, "do both, schedule both".
+
+**Why the trait does not take an associated type.** A ring holds one `IoBackend::Target`, and addresses
+what it holds by `IoTargetKey(pub u64)`, a number the consumer picks. `Win32FileTarget` is one type for every
+file, volume and disk, and the buffering mode is already read into its fields when it is made and not carried
+as a parameter. An associated type on `IoTarget` would let a ring hold targets of one access only, so a
+ring with a read-write log file and a read-only snapshot could not be built. The access is therefore a
+type where the target is constructed and a stated fact after it, as the buffering mode is.
+
+**Layer 1 -- the target states it** ([DI-13.9](COMPLETED-CHECKLIST.md#di-139)).
+
+```rust
+// durable-ioring (portable): the markers and traits of DI-D-65 live here, so that MemoryTarget and
+// any other backend use them. What a marker asks of Win32 stays in win-durable-ioring.
+pub enum Access { ReadOnly, WriteOnly, ReadWrite }     // the stated fact; a target has data
+
+trait IoTarget { /* existing */ fn access(&self) -> Access; }   // required, no default
+struct IoTargetDescription { /* existing */ access: Access }    // read once, as the rest is
+RefusalCause::AccessDenied                                      // additive, the enum is non_exhaustive
+```
+
+`IoBackend::check` refuses a write to a target that cannot write and a read to one that cannot read. It
+already runs before a gated operation is held ([DI-D-54](#di-d-54)), so a gated write to a read-only
+target is refused at the consumer's push and not when its gate releases. The method has no default,
+because a default would state `ReadWrite` for a target that never said so.
+
+**Layer 2 -- a key carries it** ([DI-13.10](COMPLETED-CHECKLIST.md#di-1310)), additive.
+
+```rust
+pub struct Key<A: HasData>(IoTargetKey, PhantomData<fn() -> A>);  // the same number; the consumer's declaration
+trait TargetKey: Sealed { fn untyped(&self) -> IoTargetKey; fn declared(&self) -> Option<Access>; }
+trait WriteKey: TargetKey {}   // IoTargetKey, and Key<A> where A: CanWrite
+trait ReadKey: TargetKey {}    // IoTargetKey, and Key<A> where A: CanRead
+fn add_target<K: TargetKey>(&mut self, key: K, target)             // the registration check
+fn write_with<K: WriteKey>(&mut self, file: K, ..)                  // and write, read, read_with,
+                                                                    // and the four registered ones
+```
+
+`IoTargetKey` implements both traits, so a call with an untyped key compiles as it does now and is judged
+at runtime by layer 1. A `Key<ReadOnly>` does not implement `WriteKey`, so a write through it does not
+compile. Registration checks the key's declared access against the target's and refuses a mismatch;
+that check is at runtime because the target is erased, and it is the only runtime step a typed key adds.
+Entries, errors and events keep the untyped key.
+
+**What building it settled** ([DI-13.10](COMPLETED-CHECKLIST.md#di-1310)). The four submit methods, and the four
+registered-buffer ones beside them, are generic over `WriteKey` and `ReadKey` without harm to a caller
+that holds the ring through `DurableRing`: the trait was already generic-only ([DI-D-24](#di-d-24)), and
+every call that passed an `IoTargetKey` compiled unchanged. The two traits are supertraits of a sealed
+`TargetKey`, so no outside type can stand for a key that was never checked against what it claims.
+Registration is `add_target` and construction. `AddTargetError` gained a `cause` (`KeyInUse`, or
+`AccessNotCovered { declared, actual }`), and construction's `TargetSetup` gained `declared` and a `new`
+that reads it off the key, with `SetupRefusal::AccessNotCovered`; a construction that fails hands each file
+back with what its key declared. A key that declares less than its target states is accepted, as a narrower
+view, and the ring still judges an untyped push by the target.
+
+**What is the engineer's and what is the assistant's.**
+
+| Choice | Who |
+|---|---|
+| The target states its access to the core, as it states its warranty and geometry | engineer 2026-10-16 |
+| A typed key as well, built with the first layer and scheduled beside it | engineer 2026-10-16 |
+| No associated type on `IoTarget`; the access is stated, not carried as a type parameter | assistant; the reason is above |
+| `access()` is required, with no default | assistant |
+| The markers and traits move to `durable-ioring`, the Windows rights staying in the Windows crate | assistant |
+| The names `Access`, `AccessDenied` and `Key<A>` | assistant |
+| The four submit methods become generic over `WriteKey` and `ReadKey`; untyped keys keep working | assistant |
+| A commit to a read-only target needs no rule: a commit is issued only to a target with writes, and a read-only one has none | assistant |
+| `Key<NoData>` does not exist | assistant |
+| `WriteKey` and `ReadKey` are marker traits over a sealed `TargetKey` that carries the methods, not traits with a method each | assistant |
+| The registered-buffer methods take the same keys as the four submit methods | assistant |
+| `AddTargetError` gains a `cause`, and `TargetSetup` gains `declared`; both break a struct literal | assistant |
+| A key declaring less than its target states is accepted | assistant |
+
+A row that is the assistant's stands until amended; it is not a list awaiting confirmation.
+
+**What changes in what exists.** The test `a_write_through_a_read_only_handle_fails` changes: the write is
+refused at the push, with its buffer handed back, and no longer fails after the kernel. A required
+method on a published trait breaks every other implementor; the implementors in this workspace are
+`MemoryTarget`, `Win32FileTarget` and the test targets.
+
+**Scheduled work.** [DI-13.9](COMPLETED-CHECKLIST.md#di-139) and [DI-13.10](COMPLETED-CHECKLIST.md#di-1310).
+
+## <a id="di-d-67"></a>DI-D-67: what a name reaches is the caller's responsibility
+
+**What is decided.** The engineer, 2026-10-18: "The responsibility is only on the caller." An open of a
+name may reach something whose open does not return. This crate does not check the name for it, does not
+refuse it, and does not bound or cancel the open. Where a name leads, and whether its open can block, is
+the caller's to know.
+
+**The hazard.** Measured on one machine for [DI-14.6.1](COMPLETED-CHECKLIST.md#di-1461), in
+[DI-D-64](#di-d-64) under "Measured for DI-14.6": `CreateFileW` on `COM3` had not returned after 15, 25
+and 45 seconds, and a later run of the same open returned `ERROR_ACCESS_DENIED` at once. The open itself
+blocked, so no handle existed to judge. The machine's three named ports are Remote Desktop redirections
+of the client's ports (`QueryDosDevice` gives each a `\Device\RdpDrPort\` target), so what the open waits
+on is the client's port ([DI-D-64](#di-d-64), "Measured for DI-14.6").
+
+**Why no check of the name can be complete.** A name can be redirected to a device by three routes, and
+only part of one is under an open's control:
+
+- *A file-system reparse point.* `FILE_FLAG_OPEN_REPARSE_POINT` stops reparse at the final component
+  only; a junction or symbolic link in an intermediate directory is still followed. No documented Win32
+  flag was found that refuses reparse along the whole path; the lower layer's is out of reach under the
+  [DOCUMENTED APIS ONLY rule](../../.github/copilot-instructions.md).
+- *An object-manager link*: a drive letter, `subst`, `DefineDosDevice`, the `\??\` namespace. These are
+  resolved before a file system sees the name, so no reparse flag applies. `DefineDosDevice` in the
+  caller's own session needs no privilege.
+- *A device named directly*: `\\.\COM3`, or `COM3`. The caller wrote it.
+
+So restricting the hazard to opens that follow reparse points does not separate the names that carry
+it from those that do not. The engineer, 2026-10-18, on that: "The problem is that you don't know which
+names may carry the hazard."
+
+**Why a check of the handle does not answer it.** A check of the handle after the open can answer a documented
+question about it, as [DI-14.5](COMPLETED-CHECKLIST.md#di-145) does for a remote file. It cannot say in general what a
+name reached, which no documented call answers ([DI-D-73](#di-d-73)), and it cannot reach an open that has not
+returned.
+
+**Why no bounded open.** Read 2026-10-18: `CancelSynchronousIo` (`ms.date` 12/05/2018) and "Canceling
+Pending I/O Operations" (05/31/2018).
+
+- *Documented as a use, never as a guarantee.* The second page's motivating example is an open "blocked
+  because the call is to a very slow device", and its sample cancels a sequence that begins with
+  `CreateFileA`. It also says "There is no guarantee that underlying drivers correctly support
+  cancellation", and the function's page says that "other operations can continue toward completion
+  before they are actually canceled", and that a cancelled operation may complete normally.
+- *It targets a thread, not a call.* The page warns that "the wrong call in a series of calls could get
+  canceled", and of the race on a shared thread. The engineer, 2026-10-18: "it could end up cancelling
+  something other than the target API. There is no synchronization with the thread unless you build some
+  gating with every API that you think you may need to cancel."
+- *Measured on a redirected serial port, 2026-10-18:* an open that blocks about 5.2 seconds and then fails with 31
+  was not shortened by `CancelSynchronousIo` from a second thread, which returned `TRUE` and itself returned only
+  when the open did ([DI-D-64](#di-d-64), "Measured for DI-14.6"). One driver, and not a guarantee either way.
+- *The gating such an open would need:* a thread of its own making that one call and no other, a cancel
+  repeated until the thread reports done (a cancel issued before the call enters the kernel finds nothing),
+  and a thread lost for good when the driver does not cancel.
+- *The open is the case with no handle.* After the open, `CancelIoEx` names a handle and an `OVERLAPPED`.
+  The open has neither, which leaves only the thread. `IoRing` has no open operation, so the ring does not
+  change this.
+
+**Which opens take no name.** Recorded as fact, not as advice to a caller. An open by file identity
+([DI-15.2](CHECKLIST.md)) is relative to a volume handle and has no name to redirect, and an identity can
+be read from enumerating a directory without opening each entry. A path beginning `\\?\Volume{GUID}\`
+does not pass through drive letters or `subst`; the `Volume{GUID}` link is the mount manager's, and
+intermediate reparse points are still followed.
+
+**What this does not decide.** Whether an open that has returned a handle that is not a disk file is
+refused, or classified and returned as such, and what an `OpenedFile` on such a handle claims, stay
+[DI-14.6.2](CHECKLIST.md)'s: those concern what a durability claim on such a handle would mean, not the
+blocking open. **Settled by [DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)** ([DI-D-64](#di-d-64), "What DI-14.6.2
+settled"), which also names the unbuffered open of `NUL`'s refusal as this crate's own.
+A serial-port measurement was queued as `DI-14.6.3` and is not made: no decision rests on it, and what was
+observed of it is in [DI-D-64](#di-d-64).
+
+**Scheduled work.** [DI-14.6.4](CHECKLIST.md): the open's documentation states this responsibility, since
+a caller cannot carry one it is not told of.
+
+## <a id="di-d-68"></a>DI-D-68: a handle opened elsewhere is not accepted in this version, and a device's exclusivity can be attested
+
+**What is decided.** The engineer, 2026-10-18, closing `DI-10.3` ("do the attestation approach", on the assistant's
+recommendation, which the engineer had asked for):
+
+1. **Foreign handles are not accepted by a file target in this version.** This is the state
+   [DI-D-60](#di-d-60) left, now ruled and not merely parked. The blocker is not the lack of a consumer: an open
+   handle's no-buffering and write-through modes are reported only by an undocumented call, which this repository
+   does not make ([DOCUMENTED APIS ONLY](../../.github/copilot-instructions.md)), so a foreign handle's class could
+   only be a consumer's declaration, and no ruling has been made on the `unsafe` form of one. What a
+   handle from elsewhere would need is [DI-10.6](COMPLETED-CHECKLIST.md#di-106).
+
+   **Ruled 2026-10-19, closing `DI-10.6`:** the engineer, "I say it's not accepted at this time." A consumer's
+   declaration of a foreign handle's mode is not accepted in any form, safe or `unsafe`, capped or not, so the
+   residue below stays out. The assistant had laid out a safe declaration capped at `BestEffort`, under which
+   every misdeclaration it could find fails loudly; that is a record of the option, not a plan. Nothing is
+   scheduled: revisiting it is a new item, raised by the engineer.
+2. **A consumer who knows a device is theirs alone can attest it, and an attested target is `Complete`.** It is
+   the only way a Win32 target is `Complete`: [DI-D-60](#di-d-60), [DI-D-61](#di-d-61) and [DI-D-62](#di-d-62)
+   stand that a handle cannot show it, and are amended only in that the claim can be made by someone who can.
+   [DI-10.5](CHECKLIST.md) builds it.
+
+**Why "no" costs little: most of what a foreign handle is wanted for has a route that needs no attestation.**
+`windows-namespace-request-sys`'s `ReOpenFile` entry takes any handle and the caller chooses its access, sharing and
+flags, so the handle it returns has a mode this crate chose and recorded, which is [DI-D-60](#di-d-60)'s
+requirement. Its tests include adding no-buffering to a handle opened without it.
+[DI-15.4](CHECKLIST.md) reopens an owned `OpenedFile` and is amended to take any handle.
+
+**What `ReOpenFile` does not reach.** Measured 2026-10-18 on Windows 11 build 26300, unelevated, by a throwaway
+script over `CreateFileW` and `ReOpenFile`, not kept. The page is the authority and these are anecdote.
+
+| The foreign handle | A reopen of it |
+|---|---|
+| Opened with sharing of none | Fails, error 32, for read, for read with no-buffering, and for write |
+| Opened with read sharing | Reopens for read, with and without no-buffering; fails for write, error 32 |
+| Opened with write sharing | Failed for all three with error 161, which was not chased |
+| Opened with all sharing | Reopens for read, for read with no-buffering and for write |
+| To a file whose ACL then denied the caller read, held from before | Fails for read, for read with no-buffering and for write, error 5 |
+
+The last row is the broker case: access is checked against the caller afresh, so a handle granted for a file the
+caller could not open itself cannot be converted. Restrictive sharing is the same, and the page says the object
+must have been created by `CreateFile`, which leaves out pipes and devices; a volume's and a disk's handles, which
+`CreateFile` did create, were observed not to reopen either ([DI-D-71](#di-d-71)). That residue, and nothing else, is
+what [DI-10.6](COMPLETED-CHECKLIST.md#di-106) decided stays out.
+
+**What the attestation is.** It claims one thing, that nothing else writes the device, and that the flush domains the
+target reports are all of them; it does not change which domains are reported ([DI-D-61](#di-d-61): a declaration adds
+and never removes). It is a constructor for each kind of target, taking only a handle this crate opened **unbuffered**:
+`Win32FileTarget::new_attested_exclusive`, `from_volume_attested_exclusive` and `from_disk_attested_exclusive`. A cached handle
+cannot be attested, by its type: `BestEffort` is about the cache reporting success for data already lost, which what
+else writes the device does not change, so there is nothing a consumer could truthfully attest.
+
+**Why not `unsafe`: the assistant's position, which stands until the engineer amends it.** `DI-10.3` as first written
+argued for `unsafe` because a wrong attestation is silent and a durability layer's worst failure is silent. The class
+is information only: [DI-D-50](#di-d-50) P3, "dioring behaves identically for every class and does not label a
+`Durable` with it", and the core's only use of it is to describe the target. A wrong attestation therefore
+mislabels a report and changes nothing the layer does. In this workspace `unsafe` marks a memory-safety contract
+(`assume_overlapped`, `assume_waitable`), and the attestation is not one. The name carries the claim at every call
+site instead, and the documentation says what is claimed and that the layer behaves the same for every class. Changing
+the constructors to `unsafe fn` is a breaking change to what [DI-10.5](CHECKLIST.md) adds, and is not one before it
+is released.
+
+**Scheduled work.** [DI-10.5](CHECKLIST.md) (the attestation), [DI-10.6](COMPLETED-CHECKLIST.md#di-106) (the residue,
+decided 2026-10-19: not accepted), and [DI-15.4](CHECKLIST.md) amended to reopen from any handle.
+
+## <a id="di-d-69"></a>DI-D-69: a file's identity is the volume serial and the 128-bit identifier, read through the handle shared
+
+**What is decided.** The assistant, implementing [DI-15.1](COMPLETED-CHECKLIST.md#di-151):
+
+1. **`FileId` is this crate's type**, in `win-durable-ioring`'s `windows_backend`: a `u64` volume serial number and
+   a 16-byte identifier, with `Eq` and `Hash` over both. It is converted field by field from the request crate's
+   `FileIdInfo` and does not expose it, so what an identity is here is stated here and does not move when that crate
+   does ([Design Autonomy](../../.github/copilot-instructions.md)). The identifier is carried as its bytes and is not
+   read as an integer, which would impose a byte order the call does not state.
+2. **The form is the 128-bit one, because it is what `GetFileInformationByHandleEx`'s `FileIdInfo` class reports.**
+   The `FILE_ID_INFO` page: "The file identifier and the volume serial number uniquely identify a file on a single
+   computer." As an identifier for `OpenFileById` it is `ExtendedFileIdType`, which the `FILE_ID_DESCRIPTOR` page
+   ties to ReFS and which an NTFS file's bytes were observed to open as; that the open succeeds is
+   [DI-15.2](COMPLETED-CHECKLIST.md#di-152)'s to test, not this decision's to assume (it does, [DI-D-70](#di-d-70)). The 64-bit `FileIdType` and `ObjectIdType` are
+   the other two kinds [DI-D-64](#di-d-64)'s `lpFileId` row exposes; they are not forms of `FileId`.
+3. **It is read through the handle shared.** `FileId::of(&SharedHandle)` hands the request crate's `QueryFileIdInfo`
+   a clone of the `SharedHandle`, and `OpenedFile::file_id` calls it with the file's own, so no handle is duplicated
+   ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32) in the request crate's notes). It runs on the
+   calling thread; a caller who wants it elsewhere performs the request crate's entry where it chooses.
+4. **Any handle is asked, and any data access reads it.** `of` takes any `SharedHandle`, as the volume hint of
+   [DI-15.2](CHECKLIST.md) takes any handle, and `file_id` is on `OpenedFile<B, A>` for every `A`, `NoData` included:
+   the call needs no data right. A handle that is not on a file system is refused with the kernel's code, unaltered;
+   the page lists no codes, so none is promised.
+
+**Observed, on Windows 11 build 26300 on NTFS, by the tests.** The identity is the same through two opens, a cached
+and an unbuffered open, an open with no data access, a clone, a `SharedHandle` kept after its `OpenedFile` was
+dropped, a rename made while the file was open and a change of its contents, and a hard link; two files on one
+volume have one serial and different identifiers; a directory has an identity of its own; an event is refused with
+an OS code. These are anecdote, and the page is the authority.
+
+**Scheduled work.** [DI-15.2](CHECKLIST.md), amended in the same change to open by all three kinds of identifier,
+`FileId` among them.
+
+## <a id="di-d-70"></a>DI-D-70: an open by identifier, and the check a FileId needs
+
+**What is decided.** The assistant, implementing [DI-15.2](COMPLETED-CHECKLIST.md#di-152), within the engineer's
+rulings of 2026-10-15 and 2026-10-18 recorded in [DI-D-64](#di-d-64)'s `OpenFileById`, `hVolumeHint` and `lpFileId`
+rows:
+
+1. **`FileIdentifier` names the three kinds**: `Extended(FileId)` for `ExtendedFileIdType`, `FileId64(u64)` for
+   `FileIdType`, and `ObjectId([u8; 16])` for `ObjectIdType`. A `FileId` converts into one. The object ID is carried as
+   the bytes of the `GUID` as Windows lays one out, which is how `FSCTL_CREATE_OR_GET_OBJECT_ID` reports it and
+   `fsutil objectid` prints it, and is turned into the request crate's `u128` at the boundary: that value is the
+   `GUID` read as `GUID::from_u128` reads one, so the three little-endian fields are turned around. A test opens a
+   file by the object ID `fsutil` created for it, which is what shows the reading is right.
+2. **`ByIdOptions<A>` carries what the page lists and [DI-D-64](#di-d-64) exposes**: the data access `A`, the other
+   rights, the share mode, and the reparse-point, no-recall, overlapped, random-access and sequential-scan flags. No
+   disposition, attributes or security, which the page does not take; no delete-on-close or POSIX semantics, which it
+   does not list; no backup semantics or write-through, which are not in v1 for any open. The buffering flag is `B`'s.
+3. **Built and performed in two steps**, as an open by path is (`DI-13.7.4`): `OpenedFile::request_by_id` builds a
+   `ByIdRequest`, which is `Send` and can be performed more than once, and `open_by_id` runs the two together. The
+   hint is any `impl Into<SharedHandle>`, held shared.
+4. **An open by `Extended` reads the opened file's identity and refuses it if it is not the one asked for**, with
+   `IdentityMismatch` as an `InvalidInput` error, and the handle is closed. The call takes the volume from the hint
+   and never sees the `FileId`'s serial, so without the check a hint on another volume opens whatever has that
+   identifier there and returns it as the file asked for: a wrong answer, and a silent one. The cost is one
+   `FileIdInfo` query on each open by `FileId`. `FileId64` and `ObjectId` name no volume, so there is nothing to
+   compare and no check.
+5. **The checks on the opened handle are the path open's, made by the same function** (`OpenedFile::admit`), so the
+   two cannot drift: for `Unbuffered`, the remote check and `UnknownLocation`. No test reaches them by identifier,
+   since the page lists SMB as not supported and the call opens only a file on a file system; the sabotage manifest
+   declares that survivor.
+6. **`SharingViolation` names the file by `OpenedBy`**, a path or an identifier (and a reopen, since
+   [DI-D-71](#di-d-71)), in place of the `path` field it had.
+   It was not in a release, so its shape changed rather than a second error being added for the same condition.
+
+**Observed, on Windows 11 build 26300 on NTFS, unelevated, by the tests.** These are anecdote, and the pages are the
+authority.
+
+- The file's own handle, its directory, and the volume opened asking for no access are each a hint that works.
+- The 64-bit ID `GetFileInformationByHandle` reports, the object ID `fsutil objectid create` made, and an identity
+  from a directory listing (`FileIdExtdDirectoryInfo`, read through `windows-file-enumeration-sys`) each open the file.
+- An identifier that names nothing fails with error 87; an event as the hint, with error 6.
+- The handle is not inheritable; the page does not say.
+- **A directory opens by identifier without `FILE_FLAG_BACKUP_SEMANTICS`**, for every data access and in either
+  buffering mode, though the page says the flag is required to obtain a handle to a directory; an open of the same
+  directory by path without it fails with error 5. So an `OpenedFile`, and a target made from one, can be a
+  directory, which nothing before could make. Nothing refuses it, which the engineer ruled is right
+  ([DI-D-72](#di-d-72)).
+- **A file deleted by name while held open still opens by identifier.** The page says that a file "pending deletion as
+  a result of a previous call to `DeleteFile`" fails with `ERROR_ACCESS_DENIED`; what state `std::fs::remove_file`
+  left the file in was not examined. Nothing here depends on it.
+
+**Scheduled work.** [DI-15.5](COMPLETED-CHECKLIST.md#di-155), whether an open by identifier that reaches a directory
+is refused, which [DI-D-72](#di-d-72) answers.
+
+## <a id="di-d-71"></a>DI-D-71: a reopen, from any handle, into a file of the type asked for
+
+**What is decided.** The assistant, implementing [DI-15.4](COMPLETED-CHECKLIST.md#di-154), within the engineer's
+rulings recorded in [DI-D-64](#di-d-64)'s `ReOpenFile` and `hOriginalFile` rows and in [DI-D-68](#di-d-68):
+
+1. **`OpenedFile::<B, A>::reopen(original, options)`**, with `request_reopen` to build it and perform it elsewhere,
+   as the other two opens are. The original is any `impl Into<SharedHandle>`: an owned file passes
+   `file.handle().clone()`, and a handle opened elsewhere passes itself. It is held shared, not duplicated. The
+   result is a new `OpenedFile` of the type asked for; nothing of the original's type carries over, including a
+   sector size given with `with_sector_size`, since a handle from elsewhere has none to give.
+2. **`ReopenOptions<A>` carries what the page lists and [DI-D-64](#di-d-64) exposes for a reopen**: the data access,
+   the other rights, the share mode, and the reparse-point, delete-on-close, no-recall, POSIX, overlapped,
+   random-access and sequential-scan flags. No disposition or attributes, which the page does not take; no backup
+   semantics or write-through, not in v1; not the named-pipe security flags, since what is reopened here is a file.
+   It is a third options type beside `FileOptions` and `ByIdOptions` because each call takes a different set, and
+   a field a call would ignore is a setting that silently does nothing.
+3. **The checks are the path open's, by the same function** (`OpenedFile::admit`), and a reopen reaches them: an
+   unbuffered reopen of `NUL` is refused as `UnknownLocation`, and of a file on a share as `RemoteDevice`.
+4. **A sharing violation is a `SharingViolation` naming the file by `OpenedBy::Reopen`.** The original handle is the
+   caller's own and is not carried.
+
+**Observed, on Windows 11 build 26300 on NTFS, unelevated except where said, by the tests.** These are anecdote, and
+the page is the authority.
+
+- Every pair of an original opened by path and a reopen of it, over the three accesses a share mode judges and the
+  eight share modes on each side, was accepted or refused as the page's rule says, judged by the share-mode tests'
+  own statement of that rule. Every refusal was `ERROR_SHARING_VIOLATION`. The error 161 that
+  [DI-D-68](#di-d-68)'s throwaway script saw for an original shared for writing did not appear.
+- A reopen changes the buffering mode in either direction, narrows read-write to read-only beside the writer, and
+  widens read-only to read-write where the file's security allows, which answers [DI-D-65](#di-d-65)'s open
+  question. A handle opened by `std`, one opened with no data
+  access, and one from `OpenFileById` each reopen. Delete-on-close given to a reopen deletes the file when its last
+  handle closes. The handle is not inheritable.
+- A cached reopen of `NUL` succeeds. A volume's handle and a disk's were refused (codes 87 and 31) whatever either
+  side asked for, though the page's condition, created by `CreateFile`, holds for both. Elevated, with a data access,
+  was not measured. So an `OpenedVolume` or `OpenedDisk` reopened in place was not built: on what was observed, the
+  call does not do it.
+- On an account that reaches `\\localhost\C$`, a cached reopen of a file on the share succeeds and an unbuffered one
+  is refused as `RemoteDevice`; that test is ignored by default, as the open's own is.
+
+**Scheduled work.** None.
+
+## <a id="di-d-72"></a>DI-D-72: a directory reached by an open by identifier is allowed
+
+**What is decided.** The engineer, 2026-10-19, closing [DI-15.5](COMPLETED-CHECKLIST.md#di-155) after the
+measurements below: "I think these results are 'harmless'. We can document our findings but there is no harm in
+allowing it to happen." Nothing checks whether an `OpenedFile` reached by identifier is a directory, and none is
+refused for being one; the behaviour is documented on `OpenedFile::open_by_id` and here. The assistant, asked
+whether it disagreed, agreed on the ground of [CONTRACT.md](CONTRACT.md)'s first guarantee: a write that completed
+with a fault is covered by no durability report. Every write to a directory faults, so a directory target is a
+target whose writes all fail, which the core already handles for a file whose writes are refused, and a commit
+that succeeds on it vouches for nothing.
+
+**Measured on Windows 11 build 26300 on NTFS, unelevated.** Directly, by a throwaway script over documented calls
+on a directory with one child: opened by path with `FILE_FLAG_BACKUP_SEMANTICS`, or by identifier without it, the
+two behave the same. `ReadFile` fails with error 1 (`ERROR_INVALID_FUNCTION`); `WriteFile` fails with error 1, or
+87 for an unaligned write on an unbuffered handle, or 5 without the write right; `FlushFileBuffers` succeeds with
+the write right and fails with error 5 without it; `GetFileSizeEx` reports 0. Through the ring, by
+[a test](../win-durable-ioring/src/windows_backend/tests/directory.rs): a directory registers at construction and
+attaches later; every write and read completes with a fault carrying `HRESULT_FROM_WIN32(ERROR_INVALID_FUNCTION)`;
+every commit completes successfully; and the directory's contents are unchanged. Backup semantics changes nothing
+about I/O, only whether the handle can be had by path. These are anecdote; no page describes I/O on a directory
+handle.
+
+**What a consumer should know, and the documentation says.**
+
+- On a directory, `FILE_READ_DATA` and `FILE_WRITE_DATA` are the same bits as `FILE_LIST_DIRECTORY` and
+  `FILE_ADD_FILE`, so the handle an `OpenedFile<_, ReadWrite>` of a directory lends carries those rights.
+- What a flush of a directory makes durable is not stated by the `FlushFileBuffers` page, which speaks of files; a
+  commit that succeeds on a directory target is not a statement that the directory's entries are on stable media.
+
+**Scheduled work.** None.
+
+## <a id="di-d-73"></a>DI-D-73: there is no query for what kind of handle a handle is
+
+**What is decided.** The engineer, 2026-10-20, on the review of PR #155 and what [DI-17.2](COMPLETED-CHECKLIST.md#di-172)
+asked: "this query is a bug farm, we will never get it right because the question as stated is not answerable within
+the Windows API set as far as I know. Remove the API and if that is the only way to obtain that type, the type."
+`HandleKindQuery` and `HandleKind` are removed from `win-durable-ioring`, along with the types and the dependency that
+existed only for them. It had not been released, so nothing is withdrawn from a published version. Withdraws
+[DI-14.12](COMPLETED-CHECKLIST.md#di-1412)'s build.
+
+**Why the question has no answer.** The query turned the success or refusal of two controls into a taxonomy. Neither
+the Win32 nor the WDK page for `IOCTL_STORAGE_GET_DEVICE_NUMBER` says which devices answer it, and the page for
+`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` names only SMB 3.0, which does not support it, and the Cluster Shared Volume
+File System, which does ([WV-D-12](../win-volume-sys/DESIGN-NOTES.md#wv-d-12)). What a handle that refuses a control is,
+no page says either. Every route that was named ended in some part of the storage stack's own word: the `device_type`
+the control reports, which both a volume and a physical disk reported as 7; the disk and volume device interfaces
+matched by device number, which is an inference over a number; or the kind recorded at the open, which is not an
+answer for a handle this crate did not open, nor for a name whose reach is the question
+([DI-D-67](#di-d-67)). The part that is documented, `GetFileType`'s five values, is the request crate's
+`QueryFileType`, and each control's own result is `win-volume-sys`'s; a caller who wants either asks it directly, and
+what the query added was the taxonomy over them, which is the part nobody can stand behind.
+
+**What stays.** `QueryFileType` in the request crate, and `storage_device_number` and `volume_disk_extents` in
+`win-volume-sys`, each of which reports one documented call's result as the call gave it. `OpenedVolume` and
+`OpenedDisk` still record what they were opened as, which is a fact of their construction and not a classification.
+`DiskExtent` stays re-exported, as `OpenedVolume::disk_extents` returns it; `StorageDeviceNumber` and `FileType` are no
+longer re-exported, because `HandleKind` was the only way this crate gave one.
+
+**Measured, and kept as measurement.** The 2026-10-18 observations of what a handle answered, recorded under
+"Measured for DI-14.6" and above, stand as measurements and are no longer the ground of anything.
+
+**Scheduled work.** None. The sabotage entries for the module, nine in `win-durable-ioring`'s manifest, are removed with
+it.
+
+## <a id="di-d-74"></a>DI-D-74: the in-memory backend's targets and the backend itself fault on a script
+
+**What is decided.** [DI-D-50](#di-d-50) P13 made the in-memory backend public and deterministic, and the engineer
+approved it on 2026-10-09 ("In-memory is a good basis for unit testing and driving"). Its fault script is
+[DI-11.1](COMPLETED-CHECKLIST.md#di-111), built as below; the shape is the assistant's and stands as built until
+amended. A `FaultScript` is a list of steps, each a `When` and a `Fault`, given to a `MemoryBackend` with
+`with_script`. It answers the problem P13 names: a flush failure cannot be produced on a healthy machine, so
+a consumer's failure paths, and the core's, had nothing to run against but a target detached underneath them.
+
+**Where a step applies, and how it counts.** Each fault belongs to one point in the backend: a refusal to a push
+the backend would otherwise admit; a failure, a short count, a hold or a late completion to a submission the doorbell
+executes; a refused doorbell to a doorbell; a failed pop to a pop. A `When` names the operation (write, read or commit),
+the target, and which occurrence: the nth, or the nth and every one after, or every one. **Every step that matches a
+point counts it, whether or not an earlier step fired**, so a step's count does not depend on the steps before it;
+when several fire for one submission the earliest in the script is applied. The counts belong to the backend and not
+to the script, so one script drives many backends, each from the start. Nothing is random and nothing depends on
+timing: a run with a script is the same run every time.
+
+**What each fault does.**
+
+- `Refuse(cause)`: the push comes back unchanged with that cause, so a queue that is not full can be refused as full.
+  **A refusal the backend would have made is made, first, and is not counted**, so a script never hides a real
+  refusal and never has its count spent by one. `check` is not scripted: it answers what a target and an operation
+  admit, which a transient scripted refusal is not.
+- `Fail(fault)` and `FailAfterApplying(fault)`: a write or a commit either does not reach its target, which is a
+  flush that failed with every byte still undecided, or reaches it and is reported failed, which is the other
+  direction of the same lie. Both are provided because [DI-D-50](#di-d-50) P2 treats a failed commit as ending every
+  statement about the writes it covered, whether or not they reached the media, and a consumer's path is
+  not the same for the two.
+- `Short(count)`: a write or a read transfers at most that many bytes and completes successfully with the count.
+  **A short write breaks the obligation that a write completes in full or with a fault** (P2), which the conformance
+  oracle refuses; it is provided as a source of short counts, which a backend's short-write policy exists to handle
+  and which the in-memory backend has no policy for. The policy is not built here. A short read is an ordinary one.
+- `Hold` and `Late(n)`: the operation executes at the doorbell as it would, and its completion is withheld, until
+  the test calls `release` or `release_all`, or until `n` doorbells later. Holding and releasing in an order the test
+  chooses is how completions arrive late and out of order. **A held completion counts against the completion queue**,
+  so a completion always has room when it is released, as it does for one that is ready.
+- `RefuseDoorbell(cause)` and `FailPop(fault)`: the backend itself fails. A refused doorbell issues nothing and
+  leaves what was queued; a failed pop takes nothing and leaves what was ready. Neither names an operation or a
+  target, which a doorbell and a pop do not have.
+
+**A script a run could only ignore is refused where it is written.** A step that names `Short` for commits, a
+refused doorbell or a failed pop that names an operation or a target, and an occurrence counted from zero, panic in
+`FaultScript::on` and `When::nth` and `When::from`, since a run would otherwise do nothing and say nothing.
+
+**What the core is tested with.** The core's tests had made a commit fail by detaching the target from the backend. They
+now also drive it with a script ([scripted.rs](src/io_core/tests/scripted.rs)): a commit that
+fails, a write whose completion is held, completions out of order, a refusal with its cause. Verified by the tests in
+`memory/script/tests.rs`, by those, and by sabotage entries in [sabotage.json](sabotage.json), with a control. Older
+entries in the manifest were re-pointed at the lines the change moved, with the faults they inject unchanged.
+
+**Not scripted, and the reason.** `notification()` takes `&self`, and a script's counts need `&mut`, so scripting it
+means interior mutability in every backend for one rare fault; `attach` and `detach` have no failure type to
+script. Both are open to the engineer's ruling and nothing is scheduled by this note.
+
+**Scheduled work.** None. [DI-D-75](#di-d-75) is the merge-or-delete decision this made possible.
+
+## <a id="di-d-75"></a>DI-D-75: both paths for fault injection stay
+
+**What is decided.** The engineer, 2026-10-20, asked whether the Windows backend's fault seam should be kept now that
+the in-memory backend has a fault script ([DI-D-74](#di-d-74)): "I think it's a good idea to keep both paths for fault
+injection." So `fail_next_flush` on `Dioring` and `fail_next_commit` on `WindowsBackend`, behind `win-durable-ioring`'s
+`fault-injection` feature, stay beside the script, and neither is merged into the other or deleted. This closes
+[DI-11.2](COMPLETED-CHECKLIST.md#di-112), the merge-or-delete decision the repository's duplicate-then-decide rule
+required of them.
+
+**What the two are, as the assistant put them to the engineer.** They are two layers and not two copies. The script
+drives the portable core through `MemoryBackend`, so everything about how the core answers a failed flush is produced
+without a device. The Windows seam runs a failing flush through the Windows driver and the real ring on a real file: the
+commit still reaches the kernel and only the answer changes, so a Win32 code goes through `error_code_from_win32` and
+is read back by `win32_code_of`, which `MemoryBackend` never touches. `Dioring` is the only `DurableRing` this
+repository ships, and the in-memory backend cannot drive it, so the seam is also what lets `win-durable-ioring`'s
+README examples fail a flush. The seam is one mechanism: `fail_next_flush` forwards to `fail_next_commit`, which sits on
+`windows-ioring-sys`' own seam. Neither produces a failure of the kernel's own, which is `DI-4.1`'s open problem.
+
+**Then asked, and queued.** Whether the tests of `win-durable-ioring` that only check how the core answers a failure, and
+not what the Windows driver adds, should move to the portable crate and use a script. The assistant proposed it and the
+engineer, 2026-10-20, asked for it to be queued.
+
+**Scheduled work.** Done: [DI-18.1](COMPLETED-CHECKLIST.md#di-181) to [DI-18.3](COMPLETED-CHECKLIST.md#di-183): classify the tests that arm the seam, move the ones that check
+the core to the script, and delete them from `win-durable-ioring`. The seam and the README's examples stay.
+
+## <a id="di-d-76"></a>DI-D-76: the delay events' sinks: one provider in its own crate, a debugging crate beside it, and no manifest needed to record
+
+**Amended 2026-10-20: the provider and its crate are named `durable-ioring-events`, not `win-dioring` (item 6).**
+
+**What is decided.** The assistant put four open questions of [DI-12.1](CHECKLIST.md) to the engineer on 2026-10-20 (crate
+names, the provider's identity, installing the manifest, identity per event), and the engineer answered them in order:
+
+1. On the crate for `OutputDebugStringW`, proposed as `win-debug-sys`: "how about win-debugging-sys?" The crate is
+   `win-debugging-sys`.
+2. On the provider's identity: "win-dioring, I'd put it in its own crate." The provider was named `win-dioring` (see 6), and it
+   is a crate of its own and not part of `win-durable-ioring`.
+3. On installing the manifest: "correct you don't actually have to install the manifest to record events. record as
+   stated." So the provider emits its events whether or not its manifest is installed; the manifest is what decodes an
+   event's names and fields for a reader, and installing it is a step for whoever reads the trace, not for the
+   application that writes it. This corrects [DI-D-26](#di-d-26), which carried it as an administrative step an
+   application must take or document.
+4. On identity per event, proposed as the instance plus what the event is about (a lock wait names the lock; a flush
+   names the lineage, the epoch and the domain): "ok".
+5. On the item itself, too coarse for one commit and gated in parts: "do the restructuring". [DI-12.1](CHECKLIST.md)
+   is now `DI-12.1.1` to `DI-12.1.6`.
+6. On the provider's name, after the scope of `win-dioring` was asked about and it was found to read as broader than
+   the dioring family: "Change the name of the event source to durable-ioring-events, replacing dashes with underscores
+   as appropriate." The provider is named `durable-ioring-events`. The assistant took "event source" to be the provider
+   and its crate together, as 2 had them, so the crate is `durable-ioring-events` and its library is
+   `durable_ioring_events`. The provider's name keeps its dashes: it is a label in the manifest, and the underscores
+   are for Rust identifiers.
+
+**The assistant's reading of 2, a working position and not a decision.** `durable-ioring-events` is both the provider's name and
+the name of the new crate that holds the provider, its manifest and `EtwDiagnostics`, which [DI-D-51](#di-d-51) had in
+`win-durable-ioring`. That crate depends on `durable-ioring` for the sink trait and on a wrapper of the event-tracing
+functions, and `win-durable-ioring` depends on it for its default sink. The wrapper's crate name is `win-etw-sys`: the
+assistant proposed it and the engineer, 2026-10-20, answered "win-etw-sys is good". The provider's GUID is generated once when the crate is built and is
+recorded in that crate's notes, because changing it later breaks every session that enabled it.
+
+**What the placement rule says about the wrapper, so the step does not assume it.** The Learn snapshot
+([WIN32-LEARN-MAP-DATA.txt](../../WIN32-LEARN-MAP-DATA.txt)) files `OutputDebugString` under *Diagnostics > Debugging and
+Error Handling > Basic Debugging > Debugging Reference > Debugging Functions*. It files `evntprov.h`'s macros under
+*Windows Events > Event Tracing > Event Tracing Reference > Event Tracing Macros*, and does not list the provider functions
+(`EventRegister`, `EventWrite`, `EventWriteTransfer` and the rest) at all, so the step reads their pages and records
+where they are documented before it names a section.
+
+**Scheduled work.** [DI-12.1.1](CHECKLIST.md) to `DI-12.1.6`.
+
+## <a id="di-d-77"></a>DI-D-77: how the delay events are built and timed
+
+**Superseded in part by [DI-D-91](#di-d-91):** `StampClock::elapsed`, `SealWaited`, the lock watch's timer and the report after the guard is released are gone, and so is the driver's interrupt-time timing of waits; the epoch rendered through `Debug`, the naming of a flush part, the lock being taken by `try_lock` first, and the watched lock being the engine's slot stand ([DI-D-80](#di-d-80)).
+
+**What is decided.** The choices [DI-12.1.1](COMPLETED-CHECKLIST.md#di-1211) left to its implementation, made by the
+assistant under [DI-D-26](#di-d-26) and [DI-D-76](#di-d-76). None is an answer the engineer was asked for, and each is
+open to a ruling.
+
+- **The epoch is rendered through its `Debug` form.** A seal's events carry the epoch it is through as
+  `fmt::Arguments`, built from `EpochId`'s existing `Debug` bound, so the trait gained no bound and an event allocates
+  nothing. A sink that wants a structured epoch has only text; that is the cost of the bound being left alone.
+- **What a flush part is named by.** A file by its key. A provider's domain by the name the consumer gave it, shown as
+  text with invalid bytes replaced, and held by the event as the bytes.
+- **Flush and seal durations are measured by the instance's own `StampClock`**, which gained a required method,
+  `elapsed(earlier, later)`, because a reading cannot be subtracted without knowing its unit. This breaks every
+  implementor of the trait, which is why the change is a major one for `durable-ioring`. A reading is taken only for a
+  kind the sink `wants`, and what was stamped is dropped when its answer arrives, when its lineage retires, and with
+  the instance.
+- **One secondary event for a seal's wait.** `SealWaited` is reported once, when a seal that was waiting for the writes
+  at or below it is issued. Writes in flight and writes held for a gate block a seal alike, and the event does not
+  tell them apart. A seal that did not wait reports nothing.
+- **Lock waits are timed outside the engine.** The sink and the clock live inside the engine, which sits behind the lock
+  being timed, so the core cannot time its own wait. A `LockWatch` holds its own handles to the sink and to a timer,
+  and a lock taken through it is `try_lock`ed first: an immediate acquisition reads no clock and builds no event, and
+  only a wait the sink wants is timed. The report is made after the guard is released. A poisoned lock is taken as the
+  panic left it, as `lock` does ([DI-D-46](#di-d-46)).
+- **The Windows driver times its lock waits in interrupt time whatever clock the instance stamps with**
+  ([DI-D-37](#di-d-37)), because the watch is built from the driver's own clock and not from the instance's, which
+  the core owns.
+- **The lock watched is the engine's slot.** Every path that reaches the engine takes it: a consumer's call, a pump or
+  a pool drain, and the hub a lineage handle or a provider's answer goes through. The Windows hub's other mutex counts
+  unanswered provider completions and is held for an increment, and it is not watched. The engineer, 2026-10-20: "no,
+  since it's only held for an increment I don't think there is a need, but add comments that if there were more content
+  added with the mutex held, that might warrant it." The comment is on the field.
+
+**Scheduled work.** None beyond [DI-12.1.2](CHECKLIST.md) onward, which carry these events to the sinks.
+
+## <a id="di-d-78"></a>DI-D-78: the debugger sink writes the standard-error sink's line, escapes a NUL, and wants everything
+
+The choices [DI-12.1.3](COMPLETED-CHECKLIST.md#di-1213) left to its implementation, made by the assistant under
+[DI-D-51](#di-d-51) and open to a ruling.
+
+- **The line is the standard-error sink's.** `DebugOutputDiagnostics` writes `dioring:`, a space and the event's text,
+  as `StderrDiagnostics` does, and both take the prefix from one constant, `LINE_PREFIX`, so a reader of either sees the
+  same line. The constant is exported from the portable crate, and so is `FlushPart`, which `Diagnostic::FlushAnswered`
+  carries and which [DI-12.1.1](COMPLETED-CHECKLIST.md#di-1211) had left unnameable by a sink.
+- **A NUL in the text is written as `\0`.** The call's string ends at its first NUL, and `win-debugging-sys` refuses a string
+  that has one ([WD-D-2](../win-debugging-sys/DESIGN-NOTES.md#wd-d-2)). An event's text can carry one: a flush domain's
+  name is bytes the consumer chose, and an inconsistency's detail is any text. A sink has no way to report a failure
+  of its own, so it escapes the NUL and sends the line; nothing else in the text is changed, so a `\0` already there is
+  indistinguishable from an escaped NUL, which is the cost of the choice.
+- **It wants every kind, always.** A line is built for each event whether or not a debugger is attached, because the call
+  gives no way to tell and the page says it "does nothing" when there is none. Asking `IsDebuggerPresent` first would
+  decide for the consumer that a system debugger, or one attached later, is not wanted. A consumer who does not want the cost
+  chooses another sink, or leaves this one out of a fan-out.
+- **The emission is observed by a debugger, once.** The sink's test starts the test binary as a debugged process through
+  `win-debugging-sys`' `test-util` feature ([WD-D-3](../win-debugging-sys/DESIGN-NOTES.md#wd-d-3)), which is the one copy of
+  that harness: this crate forbids unsafe code ([DI-D-4](#di-d-4)), so it could not carry one.
+
+**Scheduled work.** None beyond [DI-12.1.4](CHECKLIST.md) onward.
+
+## <a id="di-d-79"></a>DI-D-79: the driver's default sink is `EtwDiagnostics`, built for each instance, and an instance that cannot register carries on
+
+The choices [DI-12.1.6](COMPLETED-CHECKLIST.md#di-1216) left to its implementation, made by the assistant under
+[DI-D-51](#di-d-51) T4 and open to a ruling.
+
+- **The default is `EtwDiagnostics::new()`, built when an instance is built with `Setup::diagnostics` as `None`.** Each such
+  instance holds a sink, and the sinks of a process share one registration of the provider, made by the first and given back
+  when the last is dropped ([DE-D-4](../durable-ioring-events/DESIGN-NOTES.md#de-d-4)). So building instances does not use up
+  a process's registrations, and an instance that ends gives its part back.
+- **An instance whose provider could not be registered still builds, and writes nothing.** `EtwDiagnostics::new` carries on
+  with no registration, as the page for `EventRegister` says production code should, so a diagnostic surface that failed to
+  start never fails the driver. A consumer who wants to know builds the sink with `try_new` and passes it.
+- **`EtwDiagnostics` is re-exported from `win-durable-ioring`**, so a consumer can name the default, or build one to pass, with
+  no direct dependency on the provider's crate.
+- **The cost of the default is a test, per kind of event.** With no session listening the sink wants no kind, so the core
+  builds no event and reads no clock ([DI-12.1.1](COMPLETED-CHECKLIST.md#di-1211)); that is what makes it a default.
+- **What shows it.** A process that builds an instance with no sink registers the provider and gives it back with the
+  instance, and one with a sink of its own does not (`tests/default_diagnostics.rs`); a sink given replaces the default and
+  receives the instance's events; and an instance with none writes its flush events to a session that is listening, which needs
+  privilege, so that test is ignored by default and CI runs it with `--include-ignored`. It was run elevated on 2026-10-20 and
+  passed five times in a row.
+
+**Scheduled work.** None.
+
+## <a id="di-d-80"></a>DI-D-80: durations come from paired begin and end events with correlation ids, never from a component's own timing
+
+**What is decided.** The engineer, 2026-10-21, on what the routing provider ([DI-12.2](CHECKLIST.md)) should report: "I
+don't think that the core router should implement any of this timing infrastructure, it should come in via the
+diagnostics and tracing. ETW has the ability to pair begin/end events and then the analysis tools will compute times from
+those events. We can depend on other diagnostic sinks to do similar if we can simply establish (a) correlation IDs and (b)
+reliable begin/end pairings." And on the ids: "our correlation ids are scoped to a process and so may be u64s generated from
+an atomic u64 using relaxed increments."
+
+- **The router measures nothing.** A duration is for the sink's tools to compute from a begin and an end, and not for a
+  component to compute and report, so the router adds no timing event and keeps no start time.
+- **A correlation id is a process-scoped `u64`**, minted from one atomic with relaxed increments.
+- **What it takes.** A correlation id on a begin and its end, and a pairing that holds on every path a begin can leave by.
+
+**What was found, in the assistant's reading of the shipped events.** [DI-12.1](COMPLETED-CHECKLIST.md#di-121)'s events have
+no id; a seal's flush is issued once and answered once for each part, so an answer has no begin of its own; and
+`win-etw-sys`' write uses `EventWrite`, which takes the current thread's activity id, which two events on different threads do
+not share, and a provider's answer may come from any thread. These are why the work is more than the id.
+
+**Ruled, 2026-10-21, by the engineer.**
+- **There are pairs for seals and for the weightier actions such as a flush, and a sink may decline any pair.** The seal's
+  pair is the one the engineer first named as trivially declined, and the engineer then made the point general: "sinks may
+  decline any pair, to be clear". "For the portable ring, I assume that flushes are modeled as asynchronous operations by the
+  provider (since they are with Linux iouring) so the begin/end pairing is important there."
+- **An end carries no `elapsed`:** "I say no, and this is something we can choose to enhance in the sinks rather than pushing
+  it into the router." A sink that wants a duration computes it itself.
+- **The pairs are a seal, a flush of a file or a domain, and a lock wait**, in answer to the assistant's three candidates:
+  "those seem like the required ones".
+
+- **A seal's pair runs from its being asked for to its becoming durable or failing.** The engineer, 2026-10-21, to the
+  assistant's two candidates: "asked-for to durable-or-failed". The flush pairs lie inside it, and the wait before the first
+  flush is the gap before its begin.
+- **A lock wait's end is written with the lock held, and a sink's synchronization must not interfere with dioring's.** The
+  engineer, 2026-10-21: "The lock wait end is written with the lock held. Any synchronization within the diagnostics
+  platform must not interfere with the synchronization in the durable-ioring." This reverses [DI-D-77](#di-d-77)'s report
+  after the guard is released, which is how the report avoided lengthening the hold it measured; the cost is that the sink's
+  time is inside the hold, which `DiagnosticSink`'s existing rule that a sink "returns promptly and never calls back into the
+  instance" already bounds. The rule that the sink's locks are leaves is the assistant's statement of the second sentence, and
+  is open to the engineer's correction.
+
+**Superseded by [DI-D-93](#di-d-93).** **A working position, not a decision.** The engineer, 2026-10-21, on the 128-bit activity id: "true, perhaps we use the
+process id as the upper 64 bits and the u64 as the lower?" It is held as a position until [DI-19.4](CHECKLIST.md) builds it,
+and a process id reused within one trace is a case the assistant has not settled.
+
+**Scheduled work.** [DI-M19](COMPLETED-CHECKLIST.md#di-m19----paired-begin-and-end-events-with-correlation-ids), completed. The router
+reports no timing, and nothing else: a domain it does not route is panicked on, the panic its only report
+([DI-D-83](#di-d-83)).
+
+## <a id="di-d-81"></a>DI-D-81: a provider registered with the router serves exactly the domains its own `domains()` returns
+
+**What is decided.** The engineer, 2026-10-21, agreeing to the assistant's lean: the routing provider
+([DI-12.2](CHECKLIST.md)) is given providers and no domains, and routes to each the domains it declares. A registration
+cannot narrow a provider to a subset of what it declares, and cannot name a domain the provider does not.
+
+**Why.** A flush domain is the consumer's exact bytes ([DI-D-21](#di-d-21)), minted by the layer that maps the consumer's
+storage onto domains (root [M39](../../CHECKLIST.md)). Whatever builds a provider must be handed those same bytes, so it
+knows what the provider serves when it builds it, and a provider built with its domains says so through `domains()`. A
+second list at registration would be a second statement of the same fact, free to disagree with the first. Narrowing a
+provider, or renaming domains for a provider whose identifiers differ from the consumer's, can be added later as another
+way to register, beside this one; neither has been asked for. The model of how a consumer would use this, from which the
+argument came, is in
+[the design session](../../design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#the-real-world-model).
+
+**Scheduled work.** [DI-12.2.1](CHECKLIST.md), which builds the router this way.
+
+## <a id="di-d-82"></a>DI-D-82: how the router is built, and what its refusal names
+
+The choices [DI-12.2.1](COMPLETED-CHECKLIST.md#di-1221) left to its implementation, made by the assistant under
+[DI-D-81](#di-d-81) and open to a ruling.
+
+- **A builder, consumed by `build`.** `RouterBuilder::register` takes a provider by value and reads nothing; `build` reads each
+  provider's `domains()` once, in registration order, and the router answers its own `domains()` from what it read. So a
+  provider's declaration is read once, as the trait says of the instance's read of the router's.
+- **Registrations are numbered from 0 in the order made**, and the refusal, `RoutedTwice`, names the domain and the two
+  registrations that claimed it. A provider that declares one domain twice is refused the same way, with both numbers its
+  own, rather than by a refusal of a second kind: the fault is the same, a domain the router would not know where to send.
+- **The first repeat in reading order is the one refused.** The build reads registrations in order and each one's domains in
+  the order it gave them, and stops at the first domain met a second time, so the providers after it are not asked for
+  their domains. A consumer with several repeats sees them one build at a time.
+- **The router's domains are the registrations in order, each in its own order.** That is the order the core interns them in,
+  and the order a consumer reading them back sees.
+- **`RoutedTwice` is dioring's own refusal**, of the rule [DI-2.12](COMPLETED-CHECKLIST.md#di-212) point 1 sets, and not a
+  prediction of the core's `DuplicateDomain`, which it makes unreachable for a router: the union it builds has no repeat.
+
+**Scheduled work.** None: [DI-12.2.2](COMPLETED-CHECKLIST.md#di-1222) implemented `DurabilityProvider` for the router, with
+its dispatch ([DI-D-83](#di-d-83)).
+
+## <a id="di-d-83"></a>DI-D-83: how the router dispatches, and how it fails a domain it does not route
+
+**Amended by the engineer, 2026-10-21: a domain the router does not route is panicked on, and the panic is its only report; the assistant's first choice, failing it with `Unrouted`, is withdrawn.**
+
+The choices [DI-12.2.2](COMPLETED-CHECKLIST.md#di-1222) left to its implementation, made by the assistant under
+[DI-D-81](#di-d-81) and open to a ruling.
+
+- **`domains()` is the trait's, not an inherent method.** The router's union, built in [DI-D-82](#di-d-82), is answered
+  through `DurabilityProvider::domains`, so a consumer that reads it names the trait, as it would for any provider.
+- **The request is split before any provider is called**, into one list of parts per registration, each in the request's
+  order; then each registration with a part is called once, in registration order. Nothing is buffered beyond the call:
+  each part's completion goes on as it came, so its answer reaches the instance directly, from whatever thread gives it.
+- **A panic is not caught.** It propagates out of `make_durable`, as the trait says, and the unwinding drops the parts not
+  yet handed on, whose completions then answer as abandoned; the provider that panicked drops its own the same way. So a
+  panic fails exactly the domains of the providers it stopped, and the ones already called answer as they would have.
+- **A domain no provider serves is panicked on, and the panic is the router's only report.** The engineer, 2026-10-21: "I
+  agree, these exogenous messages should panic and it's the only report." The instance sends a provider only the domains it
+  read from it at build, and the router's domains and its map of owners come from the same single read of each provider,
+  so such a domain needs a driver that builds requests wrongly, a caller outside an instance, or a provider that forwards a
+  router domains it does not serve: a caller breaking the protocol, which [DI-D-46](#di-d-46) panics on where it is found
+  and [DI-D-59](#di-d-59) keeps out of ordinary error reporting. The panic names the domain and comes before any provider is
+  called, so the whole request is dropped and every domain in it abandoned. The router reports to no diagnostic sink: it has
+  none, and no instance number to give one, which settles [DI-12.2.3](COMPLETED-CHECKLIST.md#di-1223). The assistant's
+  first choice, failing the domain with an `Unrouted` error inside an `io::Error`, made the breach look like an ordinary
+  provider failure and let it persist; it was withdrawn before release.
+
+**Scheduled work.** None.
+
+## <a id="di-d-84"></a>DI-D-84: the routing provider, as shipped
+
+**What is decided.** dioring ships `RoutingProvider`, the router [DI-2.12](COMPLETED-CHECKLIST.md#di-212) point 1 decided on
+(where it was numbered `DI-3+.8`; it was built as [DI-12.2](COMPLETED-CHECKLIST.md#di-122)). It is portable, lives in
+`durable-ioring`, and reaches a Windows consumer through `win-durable-ioring`'s re-export of that crate. Its rules are three
+decisions, each made as it was built: what a registered provider serves ([DI-D-81](#di-d-81)), how it is built and what its
+refusal names ([DI-D-82](#di-d-82)), and how it dispatches and what it does with a domain it does not route
+([DI-D-83](#di-d-83)). It measures nothing ([DI-D-80](#di-d-80)) and reports to no diagnostic sink.
+
+- **What composing providers costs is documented, not enforced.** A file whose domains belong to two providers is in both
+  calls, and is durable when both succeed, as the core decides for any file and any provider. Coupled domains -- two names
+  whose flushes one physical flush would cover -- are deduplicated by nothing when split across providers, so each provider
+  flushes for its own; the router is correct either way, and a consumer who wants one flush registers them with one provider.
+- **What shows it.** The router is tested alone against fake providers and a fake completion home in `durable-ioring`, and
+  through a real instance in `win-durable-ioring`: a seal touching two providers is one call to each with only its own
+  domain; a file spanning both is durable only when both succeed, and fails when either does; one failing fails only the
+  files in its domains; a domain neither serves is the default's; and a panic in the first abandons both its domains and the
+  second's, which is never called. Sabotage entries in each crate's manifest patch the router, and the driver's run only its
+  own suite, so each crate's tests are shown to catch them on their own.
+
+**Scheduled work.** None.
+
+## <a id="di-d-85"></a>DI-D-85: no merge-or-delete with the `epoch_log` sample; a sample log is built on this crate from common practice
+
+**Supersedes [DI-D-7](#di-d-7).**
+
+**What happened.** The engineer, 2026-10-21: the durable ring was what he meant to be developing as an example; "there was a
+miscommunication between me and well another instance of you and instead the epoch_log example was developed which was
+interesting. it took a while for me to realize the miscommunication because the terminology I was using ("epochs",
+"durability") seemed to be hitting but the fact that it was turning into a log instead of a ring just didn't dawn on me until
+basically it was done. so I preserved it because while a common log driven by epoch based durability notations is useful it's
+not what I wanted at the time". DI-D-7 recorded the sample as a path this crate duplicated, to be merged or deleted once the
+crate was proven; the sample is a log, which is a consumer of a durable ring rather than a copy of one, and only its
+hand-written durability overlaps this crate.
+
+**What is decided.**
+- **No merge-or-delete decision ties the sample to this crate.** `DI-12.3`, which queued one, is withdrawn. The engineer:
+  "I don't think you need to really refer back to epoch_log at all other than incidentally". The sample stays in
+  `windows-ioring-sys` as that crate's own; what becomes of it is that crate's question, and its known defect is queued there
+  regardless (`M29` in [windows-ioring-sys' CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md)). That the sample's fate is no
+  longer this crate's to decide is the assistant's reading of the ruling, open to correction.
+- **A sample log is built on this crate, from a survey of common practice in database and file-system logs** -- "Just
+  survey common practices for database/filesystem [...] logs and provide it as a sample" -- and not from the `epoch_log`
+  sample's design.
+- **Once it proves out it is a candidate to promote** to a library ("I agree once the sample proves out it's a good
+  candidate to promote"), which is parked behind the sample.
+- **Priority:** "I don't see it as being important to me personally in the immediate future." The work is queued, not
+  deferred.
+
+**Scheduled work.** [DI-M21](CHECKLIST.md#di-m21----a-sample-log-on-durable-ioring), and `DI-21+.1` in
+[PARKED.md](PARKED.md#di-m21----promoting-the-sample-log-parked-behind-di-m21).
+
+## <a id="di-d-86"></a>DI-D-86: how a correlation id is minted
+
+The choices [DI-19.1](COMPLETED-CHECKLIST.md#di-191) left to its implementation, made by the assistant under
+[DI-D-80](#di-d-80) and open to a ruling.
+
+- **One way to mint, which asks the sink.** `CorrelationId::for_pair(sink, kind)` mints only if the sink wants `kind`, and
+  returns `None` otherwise, having taken nothing from the counter. Asking is the rule's single home, so a begin cannot be
+  given an id its sink did not want, and the core cannot forget to ask.
+- **Public, and exported from the crate.** A sink reads an event's id, so it names the type; minting is public too, for a
+  driver that builds a pair of its own. An id minted by anyone comes from the same counter and is as unique as any other.
+- **The counter starts at 1**, so zero is never the first id; it wraps on overflow, as `fetch_add` does, and nothing checks
+  for that.
+- **Relaxed ordering**, as the engineer ruled: an id must differ from every other, which the counter's single order of
+  modification gives, and it orders nothing else.
+
+**Scheduled work.** [DI-19.2](CHECKLIST.md), which mints an id as it builds each begin.
+
+## <a id="di-d-87"></a>DI-D-87: the pairs' shapes, the ETW opcodes with them, and the core's duration code removed
+
+**What is decided.** The engineer, 2026-10-21, on the assistant's proposal for restructuring
+[DI-19.2](CHECKLIST.md):
+
+- **The ETW schema's Start and Stop opcodes come with the pairs** ("b"). Changing `Diagnostic` breaks
+  `durable-ioring-events` in the same commit, so its schema changes in `DI-19.2.4` once, with the opcodes, rather than
+  twice; `DI-19.4` keeps writing the activity id.
+- **The shapes** ("looks good!"). The kinds are `Seal`, `Flush`, `LockWait` and `Inconsistency`; `FlushIssued`,
+  `FlushAnswered` and `SealWaited` go, a seal's wait being the gap between its begin and its first flush's begin.
+  `SealBegan { instance, lineage, through, id }` and `SealEnded { ..., id, outcome }`, the outcome how the seal was answered
+  -- durable, failed, or blocked by an earlier failure -- or ended unanswered, by its lineage ending or its instance being
+  dropped. `FlushBegan { instance, lineage, through, part, id }` and `FlushEnded { ..., id, outcome }`, succeeded, failed or
+  abandoned. `LockWaitBegan { instance, lock, id }` and `LockWaitEnded { instance, lock, id }`. An end repeats its begin's
+  identity fields, which pairing does not need and a reader of one line does.
+- **The core's duration code is removed** ("remove the clock"): `StampClock::elapsed` and the lock watch's `LockTimer`,
+  which nothing uses once the ends carry no `elapsed`. The assistant reads the ruling as that code and not `StampClock`
+  itself, which still stamps writes and failures; that reading is open to correction.
+- **`PairingChecker` is public in `durable_ioring::oracle`** ("good"), beside the conformance oracle, so each crate's sink
+  tests bind to the one definition: every end follows a begin of the same id and kind, no id is begun twice, nothing follows
+  an end, and at the stream's end no begin is left open but those a test names.
+
+**Scheduled work.** [DI-19.2.1](CHECKLIST.md) to `DI-19.2.5`, and `DI-19.4`, narrowed.
+
+## <a id="di-d-88"></a>DI-D-88: which events pair is defined once, on `Diagnostic`, and the checker holds the rest
+
+The choices [DI-19.2.1](COMPLETED-CHECKLIST.md#di-1921) left to its implementation, made by the assistant under
+[DI-D-87](#di-d-87) and open to a ruling.
+
+- **`Diagnostic::pairing` is the one definition of which events are the ends of which pairs.** It returns the pair's kind,
+  its id, and whether the event is the begin or the end, or `None`. The checker reads it, and the ETW sink will read it to
+  choose a Start or a Stop opcode, so neither restates which variants pair; a variant added later is placed once.
+- **The checker also holds that an end repeats its begin's identity**: the instance, and the lineage and epoch, the part, or
+  the lock. DI-D-87 promises it, and the checker is the one place a stream can be held to it. It compares the identity as
+  text, so an epoch rendered by its own `Debug` is compared as the reader sees it.
+- **The finish is bidirectional**: every pair open must be named as left open, and every pair named must be open, so a test
+  cannot excuse a pair that never began or has ended.
+- **A violation is the first one met**, and the checker is not meant to go on past it; a test stops there.
+- **Ids a test chooses** come from a constructor that exists only under `cfg(test)`, so a test can say which pair it means;
+  everything else mints through `CorrelationId::for_pair` ([DI-D-86](#di-d-86)).
+
+**Scheduled work.** [DI-19.2.2](CHECKLIST.md) onward, which emit the pairs and bind each sink's tests to the checker.
+
+## <a id="di-d-89"></a>DI-D-89: where the core's seal and flush pairs begin and end
+
+The choices [DI-19.2.2](COMPLETED-CHECKLIST.md#di-1922) left to its implementation, made by the assistant under
+[DI-D-87](#di-d-87) and open to a ruling.
+
+- **A seal's pair begins when the seal is accepted as new**, in the same call, and not for a seal answered `AlreadySealed`,
+  which makes none. Its id is kept on the seal, and taken as the pair ends, so it ends once.
+- **It ends at the seal's first answer.** `Failed`, when one of its own flush's parts fails; `Blocked`, when an earlier
+  failure holds it; `Durable`, when the mark passes it unanswered. A seal answered `Failed` or `Blocked` that later becomes
+  durable, after a heal or an abandonment, ends nothing more: its pair said its answer already.
+- **A flush pair is one part**: the default's flush of one file, or the provider's part for one domain, from its issue to its
+  answer. A domain is reported by the consumer's name for it, which the core is now given with the domains the provider
+  serves; a served domain always has one.
+- **Ending a lineage ends its pairs**: each flush still out as abandoned, and each seal unanswered as ended unanswered. The
+  flush's answer, when it comes, reports nothing, as it did. **Retiring a lineage cannot leave a pair open**, since a seal with
+  flushes out holds uncovered writes and a lineage holding any is refused retirement.
+- **Closing or dropping the core ends every pair still open**, in its durability state's `Drop`: the seals unanswered and the
+  flushes abandoned. So a pair ends on every path, including a panic that unwinds through the instance.
+- **The old delay events are still emitted beside the pairs**, until [DI-19.2.4](CHECKLIST.md) moves the sinks and removes
+  them; stopping them here would leave the ETW sink writing no flush events in between. They were removed there
+  ([DI-D-91](#di-d-91)).
+
+**Scheduled work.** None beyond [DI-19.2.3](CHECKLIST.md) onward.
+
+## <a id="di-d-90"></a>DI-D-90: the lock-wait pair, and the rule that a sink's locks are a leaf beneath dioring's
+
+The choices [DI-19.2.3](COMPLETED-CHECKLIST.md#di-1923) left to its implementation, made by the assistant under
+[DI-D-80](#di-d-80) and [DI-D-87](#di-d-87) and open to a ruling.
+
+- **One question decides the wait.** When the immediate try fails, the watch asks for a pair id, which asks the sink once
+  whether it wants lock waits. With none, the lock is taken with no clock read and no event; with one, the begin is written,
+  the wait is timed, the end is written with the lock taken, and the old wait is reported after the guard is let go. The pair
+  and the old wait share a kind, so the one answer is right for both.
+- **The rule on `DiagnosticSink`** is the engineer's "any synchronization within the diagnostics platform must not interfere
+  with the synchronization in the durable-ioring", stated as the assistant reads it: a sink's lock is never taken in a way
+  that can wait on anything dioring's locks guard, and never held by a thread while it calls into an instance, including a
+  consumer holding a sink's lock around such a call. That reading is open to correction.
+- **The timer stays until the old wait goes**, in [DI-19.2.4](CHECKLIST.md), since it is what measures that wait. Both
+  went there ([DI-D-91](#di-d-91)), so the first bullet's timing and old wait describe the state between the two steps.
+
+**Scheduled work.** None beyond [DI-19.2.4](CHECKLIST.md) and `DI-19.2.5`.
+
+## <a id="di-d-91"></a>DI-D-91: the old delay events and the core's timing are gone, and the driver's lock-wait tests bind to the checker
+
+The choices [DI-19.2.4](COMPLETED-CHECKLIST.md#di-1924) left to its implementation, made by the assistant under
+[DI-D-87](#di-d-87) and open to a ruling.
+
+- **Removed**: `Diagnostic::FlushIssued`, `FlushAnswered`, `SealWaited` and the old `LockWait`, their kinds, the stamps the
+  durability state kept to time them, `StampClock::elapsed`, and the lock watch's `LockTimer`. The kinds are `Inconsistency`,
+  `Seal`, `Flush` and `LockWait`. The durability state's provider answer no longer takes the domain's name, which only the
+  old event used. This is a major change to `durable-ioring`.
+- **The lock watch is a sink and an instance number.** A wait is one `try_lock`; when it fails, one `for_pair` decides
+  whether the pair is written, and with it the begin is written before blocking and the end with the lock taken, as
+  [DI-D-90](#di-d-90) placed them. Nothing reads a clock.
+- **The driver's lock-wait tests bind to `PairingChecker`**: their sink passes every event to it, and records each edge with
+  the thread that wrote it. A test asserts that its own thread wrote a begin and then an end, and does not finish the whole
+  stream, because the pool's own thread may still be inside a wait of its own when the test's ends, which would make a finish
+  race. The checker still holds every event it is given, so an end that names another pair is caught there and nowhere else,
+  which a sabotage in the driver's manifest shows.
+- **The ETW provider's schema follows** ([DE-D-5](../durable-ioring-events/DESIGN-NOTES.md#de-d-5)).
+
+**Scheduled work.** None beyond [DI-19.2.5](CHECKLIST.md).
+
+## <a id="di-d-92"></a>DI-D-92: the pairing rule's one home is shown by changing it, and the driver's chosen-sink test binds to it
+
+The choices [DI-19.2.5](COMPLETED-CHECKLIST.md#di-1925) left to its implementation, made by the assistant under
+[DI-D-87](#di-d-87) and [DI-D-88](#di-d-88), and open to a ruling.
+
+- **What shows the rule has one home is a change to the definition, in each suite that binds to it.** The sabotage harness
+  patches one file per entry, so a defect and a weakened checker cannot be injected together; instead the definition is
+  changed -- `Diagnostic::pairing` made to call a seal's end a begin, and the checker made to refuse an end of its begin's
+  own kind -- and each crate's suite must fail because of it. The core's, the driver's and the provider's manifests carry
+  the first; the driver's carries the second, with a control. A suite that held its own copy of the rule would pass.
+- **The catch is attributed, not only counted.** A suite failing is not enough when other tests could fail for another
+  reason, so the driver's catch of the seal change was injected by hand and its panics read: every one was at the checker's
+  binding in the chosen-sink test. The provider's suite holds the rule through its table's edges, which a test holds equal
+  to `pairing` for an event of every variant ([DE-D-5](../durable-ioring-events/DESIGN-NOTES.md#de-d-5)).
+- **The driver's chosen-sink test passes every event to `PairingChecker` and finishes it** once the instance has ended, with
+  nothing left open, so the seal and flush pairs a real instance writes are held to the rule through the driver, as the lock
+  waits already were ([DI-D-91](#di-d-91)).
+- **What the sweep left alone is history**: the milestone's own preamble, a quoted question in
+  [DE-D-1](../durable-ioring-events/DESIGN-NOTES.md#de-d-1), the dated check in DE-D-3, the design sessions and the archives.
+  Decisions it found stating the old shape as current carry a status marker at their title instead of being rewritten:
+  [DI-D-26](#di-d-26), [DI-D-51](#di-d-51), [DI-D-77](#di-d-77), and the in-between bullets of [DI-D-88](#di-d-88) and
+  [DI-D-90](#di-d-90).
+
+**Scheduled work.** None; [DI-19.3](CHECKLIST.md) and `DI-19.4` follow.
+
+## <a id="di-d-93"></a>DI-D-93: a pair's ETW activity id is created by the platform, and a trace's pairing is verified by a program
+
+**The activity id** ("go ahead with your "c" option", the engineer, 2026-10-21). The working position of
+[DI-D-80](#di-d-80), the process id over the pair id, lets a process id reused within one trace give a later process's pair an
+earlier one's activity. The assistant offered three ways: keep it and document the collision; mix in something of each process
+instance, which narrows the collision without removing it; or have the ETW provider create each pair's activity id with
+`EventActivityIdControl`, which its page guarantees unique across every process of the system until it restarts, hold it from
+the begin to the end, and keep the pair id in the payload. The third was chosen. How the provider does it is
+[DE-D-6](../durable-ioring-events/DESIGN-NOTES.md#de-d-6), and the call is [WE-D-5](../win-etw-sys/DESIGN-NOTES.md#we-d-5). The
+portable core is unchanged: it has the `u64`, and the activity is the ETW sink's.
+
+**The verification** ("dump the events to xml or csv. Write code to load the file and do the pairing in Rust", the engineer,
+2026-10-21). `DI-19.4` asked that `tracerpt` show each begin and end paired with a duration, which `tracerpt` does not do: it
+dumps records. So the trace is dumped to CSV and read by the example `pair_trace` in `durable-ioring-events`, which pairs by
+activity, checks task and pair id, and computes each duration; its tests run over the recorded dump.
+
+**Scheduled work.** None; [DI-M19](COMPLETED-CHECKLIST.md#di-m19----paired-begin-and-end-events-with-correlation-ids) is
+complete.
+
+## <a id="di-d-94"></a>DI-D-94: what Windows documents about a directory entry's durability
+
+**DI-M20 withdrawn by [DI-D-95](#di-d-95); kept as the record of what the pages say, for a consumer that makes its own files durable.**
+
+**Findings, not a decision.** Read by the assistant for [DI-20.1](COMPLETED-CHECKLIST.md#di-201), 2026-10-21; what follows
+from them was to be [DI-20.2](COMPLETED-CHECKLIST.md#di-202)'s discussion with the engineer. Each page is named with the `ms.date` it carries. No
+`Nt*` or driver-kit page is a source. Silence is recorded as silence.
+
+### Whether flushing a new file makes its directory entry durable
+
+- **`FlushFileBuffers`** (2018-12-05): "writes all the buffered information for a specified file to the device or pipe".
+  It speaks of the file, of a communications device, of a pipe and of a volume. It says nothing of the directory that
+  names the file. **Silent.**
+- **`CreateFileW`** (2022-08-16), under `FILE_FLAG_NO_BUFFERING`: "the file metadata may still be cached (for example, when
+  creating an empty file). To ensure that the metadata is flushed to disk, use the FlushFileBuffers function." The page
+  counts a file's creation among the metadata a flush of that file covers. It does not say whether the entry in the parent
+  directory is part of "the file metadata".
+- **File Caching** (2018-05-31): "File system metadata is always cached. Therefore, to store any metadata changes to disk,
+  the file must either be flushed or be opened with FILE_FLAG_WRITE_THROUGH." Which file's flush stores a change to a
+  directory's entries is not said.
+- **`CreateFileW`**, under caching behavior: "A write-through request via FILE_FLAG_WRITE_THROUGH also causes NTFS to flush
+  any metadata changes, such as a time stamp update or a rename operation, that result from processing the request." The
+  sentence names NTFS only, and names a rename among the metadata changes a write-through request flushes.
+- **The ring's flush**, which the built-in provider issues: `BuildIoRingFlushFile` has no page among the ring API's pages
+  on Learn (the `ioringapi` index lists none), so neither does its `FILE_FLUSH_MODE`, whose modes name metadata. What
+  [windows-ioring-sys](../windows-ioring-sys/src) says of the modes comes from the header and from inference, and it says
+  so. **Silent** on Learn.
+
+### Whether a directory handle may be flushed, and what that commits
+
+- **`CreateFileW`**: `FILE_FLAG_BACKUP_SEMANTICS` -- "You must set this flag to obtain a handle to a directory. A directory
+  handle can be passed to some functions instead of a file handle."
+- **Directory Handles** (2018-05-31): "You can pass a directory handle to the following functions", listing `BackupRead`,
+  `BackupWrite`, `GetFileTime`, `ReadDirectoryChangesW` and `SetFileTime`. `FlushFileBuffers` is not among them. The page
+  does not say the list is complete.
+- **`FlushFileBuffers`**: the handle "must have the GENERIC_WRITE access right"; directories are not mentioned. **Silent**
+  on whether a directory handle may be flushed and on what such a flush commits.
+- **Measured, not documented** ([DI-D-72](#di-d-72), 2026-10-19): `FlushFileBuffers` on a directory handle succeeded with
+  the write right and failed with error 5 without it, and a commit through the ring on a directory target completed
+  successfully. Neither says what reached stable media.
+- **A volume**: "To flush all open files on a volume, call FlushFileBuffers with a handle to the volume. The caller must
+  have administrative privileges." The page says "open files". **Silent** on directories, and on files no longer open.
+
+### What a rename or a delete needs
+
+- **`MoveFileExW`** (2018-12-05), `MOVEFILE_WRITE_THROUGH`: "The function does not return until the file is actually moved
+  on the disk. Setting this value guarantees that a move performed as a copy and delete operation is flushed to disk before
+  the function returns. The flush occurs at the end of the copy operation." and "This value has no effect if
+  MOVEFILE_DELAY_UNTIL_REBOOT is set." The guarantee is stated for a move done as a copy and a delete; for a rename within a
+  volume the page has the first sentence and no guarantee.
+- **`SetFileInformationByHandle`** (2018-12-05) with `FileRenameInfo`, and **`FILE_RENAME_INFO`** (2018-12-05): nothing
+  about durability. `FILE_RENAME_INFO` names a `Flags` member used with `FileRenameInfoEx` and lists no flag values.
+  **Silent.**
+- **`ReplaceFileW`** (2018-12-05): `REPLACEFILE_WRITE_THROUGH` -- "This value is not supported." The page for the
+  alternatives to Transactional NTFS (2018-05-31) offers `ReplaceFile` for an update that is "completely applied or not
+  applied at all" and says nothing of durability.
+- **`DeleteFileW`** (2023-12-15): "The DeleteFile function marks a file for deletion on close." and "The use of POSIX delete
+  causes the file to be deleted while handles remain open." Nothing about durability. **Silent.**
+- **`FILE_DISPOSITION_INFO`** (2018-12-05): nothing about durability. `FILE_INFO_BY_HANDLE_CLASS` (2018-12-05) lists
+  `FileDispositionInfoEx` with no description, and `FILE_DISPOSITION_INFO_EX` has no page among the Win32 API pages, so its
+  flags are documented only in driver-kit material, which is not a source here. **Silent.**
+- **`CreateDirectoryW`** (2018-12-05) and **`RemoveDirectoryW`** (2023-12-15): nothing about durability. **Silent.**
+- **Transactional NTFS**: the operations have transacted forms (`MoveFileTransactedW`, `DeleteFileTransacted`,
+  `CreateFileTransacted`, among others). `MoveFileTransactedW`'s page (2018-12-05), the one read, opens with "Microsoft
+  strongly recommends developers utilize alternative means" and "TxF may not be available in future versions of Microsoft
+  Windows."
+
+### Questions the pages leave open, and the experiment that would bear on them
+
+Open: whether flushing a new file -- by `FlushFileBuffers` or by the ring's default flush -- makes its directory entry
+survive a power loss; whether flushing a directory handle does; whether a rename on a handle opened write-through, or by
+`MoveFileExW` with `MOVEFILE_WRITE_THROUGH` within a volume, does; and the same for a delete.
+
+The experiment: a virtual machine whose disk is a virtual hard disk file. The guest creates, renames or deletes an entry,
+applies one candidate -- none, a flush of the file, the ring's flush, a flush of the directory handle, a flush of the
+volume, a write-through handle, or `MOVEFILE_WRITE_THROUGH` -- and tells the host, which turns the machine off at once. On
+the next boot the guest records which entries exist. Many trials per candidate, on NTFS and on ReFS. Such a power-off
+discards the guest's memory but not writes the host has accepted, so it measures what the guest's file system committed,
+not what a device's volatile cache would lose. A loss under a candidate shows the candidate insufficient on that
+configuration; no loss shows only that none was seen. Its results are evidence and never a check: a refusal ahead of a call
+rests on the documented contract, never on what a run showed
+([DESIGN-NOTES.md](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)).
+
+**Scheduled work.** None; DI-M20 is withdrawn ([DI-D-95](#di-d-95)), and the experiment is not built.
+
+## <a id="di-d-95"></a>DI-D-95: a directory entry's durability is not the durable ioring's question, and DI-M20 is withdrawn
+
+The engineer, 2026-10-21, asked whether the durable ioring creates or deletes files: "no I didn't think it did either", and: "the 'directory' point I raised previously was mostly framing for what seems to feed in to m39.3".
+
+**Why.** The durable ioring never names a file. A file enters as an open handle and leaves by `remove_file`; the operations
+are reads and writes, made durable by sealing an epoch, which flushes what was written ([API.md](API.md) sections 8 and 15).
+It has no create, rename, delete or directory operation, and the Windows driver's `OpenedFile`, the one place a file is
+created, is a `CreateFileW` wrapper that runs before the file is given to the ring ([DI-D-60](#di-d-60)). So what a seal
+covers is what was written and flushed through the ring; whether a file's name survives is decided by calls the consumer made
+before, and is the consumer's, with [DI-D-94](#di-d-94) as the record of what Windows documents about it.
+
+**Where the question came from.** The design session's directory was the engineer's framing of how a database's storage is
+laid out: a layer outside the crate maps a directory to the flush domains a file created in it will have. That is root
+[M39.3](../../CHECKLIST.md), which predicts a directory's domains and confirms each file's by its handle. The assistant read a
+second question into it -- whether the new file's directory entry is durable -- from the practice on Linux of flushing the
+directory, and queued it as DI-M20 without asking whether the durable ioring had any part in making a name.
+
+**A direction not taken, recorded so it is not lost.** The durable ioring could take namespace operations -- create, rename,
+delete -- as operations tagged with an epoch, so that sealing an epoch would cover a file's existence with its writes. It was
+named in the discussion and not asked for; nothing is queued for it.
+
+**Scheduled work.** None.
+
+## <a id="di-d-96"></a>DI-D-96: a producer owes matched pairs, a sink assumes none, and a fan-out hands every end to every sink
+
+The engineer, 2026-10-22, on two findings of a review of the branch: a stateless fan-out and a tolerant sink, and the
+standard each side is held to. The details are the assistant's and open to a ruling.
+
+**Producers are held to the high standard.** The core and its drivers, which report the pairs, owe a begin for every end and
+an end for every begin: no end without a prior begin, and every begin eventually ended, by the core's own close, drop or end
+of a lineage if not otherwise. [DI-D-87](#di-d-87)'s `PairingChecker` is that standard written once, and the core's tests
+bind to it.
+
+**Sinks make no assumption that the standard was met where they stand.** What a sink wants can change while a pair is open (a
+trace session stops or starts), and a router or an event filter between a correct producer and a sink -- a fan-out today, a
+routing feature later -- can deliver an end whose begin the sink was never given, with nothing wrong in the producer. So a sink
+tolerates an end with no begin as it tolerates a begin with no end, decides for itself what to record of either, filters what
+it would over-log, and lets go whatever it held for a pair at the pair's end. `DiagnosticSink::report`'s documentation says so.
+`EtwDiagnostics` writes such an end in an activity of its own ([DE-D-6](../durable-ioring-events/DESIGN-NOTES.md#de-d-6)).
+
+**The fan-out is stateless and does not ask `wants` of an end.** It hands an event that is not a pair's end to the sinks that
+want its kind now, as before, and a pair's end to every sink it holds, in order. Before this, an end was asked of `wants`
+like any event, so a sink that had stopped wanting the kind between the begin and the end -- the ETW sink, when a session
+stopped -- was not given the end that lets it release its pair, and the process's activity map kept an entry for each such
+pair for the life of the process. The first attempt kept, per open pair, which sinks its begin was given to and sent the end to
+exactly those; it was withdrawn on the ruling above, since it made the router carry a guarantee that the sinks are not to rely
+on, and a state of its own to keep in step with the producers'.
+
+**Not decided here:** whether a sink that wants nothing should be given an end at all by a router that knows it was never given
+the begin. A sink filters either way, so nothing waits on it.
+
+**Scheduled work.** None; [DI-22.1](COMPLETED-CHECKLIST.md#di-221) is this.
+

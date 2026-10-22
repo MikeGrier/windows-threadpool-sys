@@ -24,6 +24,7 @@ use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::ids::{DioringIds, OpId};
 use crate::io_core::{CoreActions, DurableIoCore};
+use crate::lock_watch::WatchedGuard;
 use crate::provider::ProviderRequest;
 use crate::types::{
     DurabilityRequest, Epoch, IoFault, IoTargetKey, PushError, ReadOptions, SealError, WriteOptions,
@@ -252,7 +253,7 @@ pub fn lock<T>(engine: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// The engine, locked, while delivery runs: its slot is full until delivery stops.
-pub struct EngineGuard<'a, T>(MutexGuard<'a, Option<T>>);
+pub struct EngineGuard<'a, T>(WatchedGuard<'a, Option<T>>);
 
 /// The engine in a locked slot.
 ///
@@ -260,6 +261,17 @@ pub struct EngineGuard<'a, T>(MutexGuard<'a, Option<T>>);
 ///
 /// If the slot is empty: it is taken only as delivery stops, and nothing locks it after.
 pub fn present<T>(guard: MutexGuard<'_, Option<T>>) -> EngineGuard<'_, T> {
+    present_watched(WatchedGuard::unwatched(guard))
+}
+
+/// The engine in a slot locked through a [`LockWatch`](crate::lock_watch::LockWatch), whose wait,
+/// if the lock was contended, is reported when the lock is acquired, before the guard is returned,
+/// and not when the guard is dropped: the pair does not include the time the lock is held.
+///
+/// # Panics
+///
+/// As [`present`].
+pub fn present_watched<T>(guard: WatchedGuard<'_, Option<T>>) -> EngineGuard<'_, T> {
     assert!(
         guard.is_some(),
         "the engine is taken only as delivery stops"

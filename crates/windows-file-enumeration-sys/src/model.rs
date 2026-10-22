@@ -384,17 +384,13 @@ impl Model {
         );
 
         // The doorbell's whole contract in one line.
-        if let Ok(handle) = self.receiver.as_ref().map_or_else(
-            || Err(std::io::Error::other("no receiver")),
-            |receiver| {
-                receiver
-                    .doorbell()
-                    .map(|handle| handle.try_clone_to_owned())
-            },
-        ) {
-            let handle = handle.expect("the doorbell can be duplicated");
+        if let Some(handle) = self
+            .receiver
+            .as_ref()
+            .and_then(|receiver| receiver.doorbell().ok())
+        {
             assert_eq!(
-                is_signalled(&handle),
+                is_signalled(handle),
                 ring.is_pending(),
                 "{context}: the doorbell disagrees with what the receiver can observe"
             );
@@ -416,15 +412,12 @@ fn request() -> EnumerationRequest {
     EnumerationRequest::new(&Wtf16String::from(r"C:\Windows")).expect("a resolvable path")
 }
 
-/// Whether a waitable handle is currently signalled.
-fn is_signalled(handle: &std::os::windows::io::OwnedHandle) -> bool {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+/// Whether a waitable handle is currently signalled: a poll with no time to wait.
+fn is_signalled(handle: std::os::windows::io::BorrowedHandle<'_>) -> bool {
+    use win_sync_sys::{WaitOutcome, wait_for_single_object};
 
-    // SAFETY: the handle is a live event duplicated from the ring under test.
-    let result = unsafe { WaitForSingleObject(handle.as_raw_handle() as HANDLE, 0) };
-    result == WAIT_OBJECT_0
+    wait_for_single_object(handle, Some(std::time::Duration::ZERO)).expect("a wait on the doorbell")
+        == WaitOutcome::Signalled
 }
 
 #[cfg(test)]

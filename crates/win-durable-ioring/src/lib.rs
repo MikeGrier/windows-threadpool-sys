@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod debug_output;
 mod delivery;
 mod dioring;
 mod error_code;
@@ -18,6 +19,7 @@ pub mod readiness;
 mod scratch_volume;
 pub mod windows_backend;
 
+pub use debug_output::DebugOutputDiagnostics;
 pub use delivery::{DeliveryEvent, DeliveryHandle, DeliverySetupError, EntryDelivery};
 pub use dioring::{
     DeliveryMode, Dioring, FromClock, InterruptStamps, Setup, SetupError, SetupRefusal,
@@ -28,8 +30,11 @@ pub use readiness::{ReadinessFailure, check_readiness};
 
 // The portable crate's API, so a consumer needs no direct dependency on it to use this driver.
 pub use durable_ioring::*;
+// The default diagnostic sink, so a consumer can name it, or build one to share, without a direct dependency.
+pub use durable_ioring_events::EtwDiagnostics;
 // The types the driver's signatures name from the crates it is built on, so a consumer needs no
 // direct dependency on them to call it.
 pub use win_shared_os_owned_handle::SharedHandle;
 pub use win_sync_sys::Event;
 pub use win_time_sys::{InterruptTime, TimePoint};
+pub use wtf_string::Wtf16String;

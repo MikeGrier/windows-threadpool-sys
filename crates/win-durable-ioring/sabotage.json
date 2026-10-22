@@ -3,7 +3,7 @@
   "testArgs": ["-p", "win-durable-ioring", "--no-fail-fast"],
   "whyTestArgs": "--no-fail-fast, so the doctests run even when the unit tests have already failed. README.md's worked examples are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
   "description": "Sabotages for win-durable-ioring, the Windows driver (DI-8.2); the portable core's are in ../durable-ioring/sabotage.json. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction. What would cover these creation failures, here and below, is a fault seam in win-sync-sys and windows-threadpool-sys of the kind the ring crate has (its kernel-seam), which neither has: the failure is the process running out of handles or memory, which a test cannot cause without breaking its own harness. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a registration left in flight when the ring is sealed (only a raw push makes one, which is unsafe, which this crate forbids; a completion the ring held nothing for is not a case at all, since the ring is an owned one, the ring crate's D-91); a notification that cannot be duplicated, which also ends a pumped instance's construction (the delivery's handing the engine back is reached over the in-memory backend, in durable-ioring's pump/tests.rs); and an owned buffer the ring refuses, which needs one longer than a u32. The Windows notification's wait ending as abandoned (windows_backend/wait.rs) is absent: only a mutex is abandoned, and making one needs unsafe, which this crate forbids; what would cover it is a safe Mutex in win-sync-sys (its WS-1+.3). Its survives entry is named DI-7.3: blind spot. The notification's wait failing, and Dioring::pump reporting that error, are covered, by a duplicate of an event with no SYNCHRONIZE access, which win-sync-sys makes without unsafe. SignalledDelivery::new's failures (making or duplicating its event, and the ring crate's wake, as the pool's) are absent for the same reason as the pool's. Which pool a delivery's callback runs on is covered, for the pool's delivery and the signalled one's, by holding the named pool's only thread (held_pool.rs).",
+  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction. What would cover these creation failures, here and below, is a fault seam in win-sync-sys and windows-threadpool-sys of the kind the ring crate has (its kernel-seam), which neither has: the failure is the process running out of handles or memory, which a test cannot cause without breaking its own harness. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a registration left in flight when the ring is sealed (only a raw push makes one, which is unsafe, which this crate forbids; a completion the ring held nothing for is not a case at all, since the ring is an owned one, the ring crate's D-91); a notification that cannot be duplicated, which also ends a pumped instance's construction (the delivery's handing the engine back is reached over the in-memory backend, in durable-ioring's pump/tests.rs); and an owned buffer the ring refuses, which needs one longer than a u32. The Windows notification's wait ending as abandoned (windows_backend/wait.rs) is absent: only a mutex is abandoned, and making one needs unsafe, which this crate forbids; what would cover it is a safe Mutex in win-sync-sys (its WS-1+.3). Its survives entry is named DI-7.3: blind spot. The notification's wait failing, and Dioring::pump reporting that error, are covered, by a duplicate of an event with no SYNCHRONIZE access, which win-sync-sys makes without unsafe. SignalledDelivery::new's failures (making or duplicating its event, and the ring crate's wake, as the pool's) are absent for the same reason as the pool's. Which pool a delivery's callback runs on is covered, for the pool's delivery and the signalled one's, by holding the named pool's only thread (held_pool.rs). The data access of an OpenedDisk and an OpenedVolume, which their open passes to the kernel as the marker's rights (DI-13.8), is reached only by the raw_disk and raw_volume tests, which need an administrator and a scratch virtual disk and so run in CI and not here; no entry here sabotages it, since none could be caught locally. The constant that makes an unbuffered file refuse a remote device (LOCAL_DEVICE_ONLY, DI-10.1) is held by a const assertion in opened_file/tests.rs, so changing it fails the build and no entry can name it; the open's use of it is reached only by the test that opens a file over the administrative share, which is ignored by default and runs in CI. That OpenedVolume::open and OpenedDisk::open pass their options' share mode (DI-13.11) to raw_open::open is reached only by the exclusive-volume and exclusive-disk tests, which need an administrator and run in CI; the two survives entries name them, and an elevated run on 2026-10-16 showed each mutation fails its test, and raw_open itself is tried on a file.",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -74,8 +74,8 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "Two files under one key would make every report naming it ambiguous; the refusal hands the file back.",
-      "find": ["        if engine.core.target(key).is_some() || engine.backend.target(key).is_some() {\n"],
-      "replace": ["        if false {\n"]
+      "find": ["        let cause = if engine.core.target(key).is_some() || engine.backend.target(key).is_some() {\n"],
+      "replace": ["        let cause = if false {\n"]
     },
     {
       "name": "DI-3.2.2.2: the handover does not set the signal",
@@ -587,8 +587,8 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "What the backend hands back, the instance hands back: the buffers while the kernel was not given them.",
-      "find": ["                    files: setups(targets),", "                    buffers,", "                    provider,"],
-      "replace": ["                    files: setups(targets),", "                    buffers: None,", "                    provider,"]
+      "find": ["                    files: setups(targets, &declarations),", "                    buffers,", "                    provider,"],
+      "replace": ["                    files: setups(targets, &declarations),", "                    buffers: None,", "                    provider,"]
     },
     {
       "name": "DI-7.2: the files' registration waits the default bound",
@@ -793,15 +793,15 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The delivery chosen at construction is the one the instance has: a pool drains an instance nothing is meant to drain.",
-      "find": ["            DeliveryMode::Pumped => PumpedDelivery::new(engine).map(Delivery::Pumped),"],
-      "replace": ["            DeliveryMode::Pumped => PoolDelivery::new(engine, on_ready, None).map(Delivery::Pool),"]
+      "find": ["            DeliveryMode::Pumped => PumpedDelivery::new(engine)\n                .map(|pumped| pumped.with_lock_watch(watch.clone()))\n                .map(Delivery::Pumped),"],
+      "replace": ["            DeliveryMode::Pumped => PoolDelivery::new(engine, on_ready, None, watch.clone()).map(Delivery::Pool),"]
     },
     {
       "name": "DI-7.3: an instance set up with a pool is built for pumping",
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The other direction: an instance given a pool that nothing drains delivers nothing, to every consumer that waits for its readiness.",
-      "find": ["                PoolDelivery::new(engine, on_ready, environment).map(Delivery::Pool)"],
+      "find": ["                PoolDelivery::new(engine, on_ready, environment, watch.clone()).map(Delivery::Pool)"],
       "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
     },
     {
@@ -816,8 +816,8 @@
       "name": "DI-7.5: each call for the signal makes a new event",
       "file": "src/windows_backend/signalled.rs",
       "expect": "caught",
-      "why": "Every duplicate is a handle to the one event the pool sets; a fresh event is never set, and the consumer waits on it for ever.",
-      "find": ["        self.signal.try_clone()"],
+      "why": "Every clone shares the one event the pool sets; a fresh event is never set, and the consumer waits on it for ever.",
+      "find": ["        Ok(self.signal.clone())"],
       "replace": ["        Event::new(ResetMode::Auto, false)"]
     },
     {
@@ -833,7 +833,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The delivery chosen at construction is the one the instance has: a pumped instance has no pool wake, so nothing sets a signal for the consumer.",
-      "find": ["                SignalledDelivery::new(engine, environment).map(Delivery::Signalled)"],
+      "find": ["                SignalledDelivery::new(engine, environment, watch.clone()).map(Delivery::Signalled)"],
       "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
     },
     {
@@ -966,12 +966,45 @@
       "replace": ["            if matches!(prefix.kind(), Prefix::UNC(..))"]
     },
     {
-      "name": "DI-10.1: a new file's remote check is skipped by looking nowhere",
+      "name": "DI-14.5: the location of a handle is not the handle's final path",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "A path that does not exist yet is judged by the directory it would be created in; without that, creating an unbuffered file fails or goes unchecked.",
-      "find": ["        Err(error) if error.kind() == io::ErrorKind::NotFound => {"],
-      "replace": ["        Err(error) if error.kind() == io::ErrorKind::OutOfMemory => {"]
+      "why": "The remote check is made on what the opened handle is. A location that was a constant, or the path the caller gave, would judge every handle local.",
+      "find": ["    Ok(PathBuf::from(path.to_os_string()))"],
+      "replace": ["    Ok(PathBuf::from(r\"C:\\\"))"]
+    },
+    {
+      "name": "DI-14.5: a handle whose final path cannot be read loses the call's error",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A handle whose device is not known to be local is refused with the call's own code kept as the source of the refusal, not with an invented one that no caller can act on.",
+      "find": ["                io::Error::from_raw_os_error(open_request::raw_code(code.code()))"],
+      "replace": ["                io::Error::other(code)"]
+    },
+    {
+      "name": "DI-14.6.2: a handle with no final path is accepted unbuffered",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "An unbuffered file claims that its writes reach a local device. A handle whose location cannot be read, NUL for one, must not be given that claim.",
+      "find": ["            let location = final_location(&handle).map_err(|cause| {\n                io::Error::new(io::ErrorKind::Unsupported, UnknownLocation { cause })\n            })?;"],
+      "replace": ["            let location = final_location(&handle).unwrap_or_default();"]
+    },
+    {
+      "name": "DI-14.6.2: the refusal of a handle with no final path is the call's error and not this crate's own",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The refusal is this crate's narrowing, named as its own so a caller can tell it from a failure of the open; the call's code is kept as its source.",
+      "find": ["                io::Error::new(io::ErrorKind::Unsupported, UnknownLocation { cause })"],
+      "replace": ["                cause"]
+    },
+    {
+      "name": "DI-14.6.2: a cached open is refused for a handle with no final path",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: !Cached::LOCAL_DEVICE_ONLY",
+      "why": "Only the warranty of an unbuffered file needs a local file. A cached open claims best effort, and where a name leads is the caller's (DI-D-67). A const assertion on the flag refuses the build before the test that opens NUL cached would run.",
+      "find": ["    const LOCAL_DEVICE_ONLY: bool = false;"],
+      "replace": ["    const LOCAL_DEVICE_ONLY: bool = true;"]
     },
     {
       "name": "DI-10.1: a target takes its class from a declaration instead of its file",
@@ -1142,44 +1175,1054 @@
       "replace": ["        Ok(0) => Ok(0),\n"]
     },
     {
-      "name": "DI-13.2: a created-and-truncated file is not emptied",
+      "name": "DI-13.7.1: the path is handed to the request through a lossy conversion",
+      "file": "src/windows_backend/opened_file/open_request.rs",
+      "expect": "caught",
+      "why": "The path is the caller's, a Wtf16String, and reaches the request as given; a conversion through UTF-8 replaces a lone surrogate, so a file with one in its name no longer opens. Caught by the test that opens such a name.",
+      "find": ["    Ok(OpenFile::new(path)\n"],
+      "replace": ["    Ok(OpenFile::new(Wtf16String::from(path.to_os_string().to_string_lossy().as_ref()))\n"]
+    },
+    {
+      "name": "DI-13.7.1: control, the path is cloned on its way to the request",
+      "file": "src/windows_backend/opened_file/open_request.rs",
+      "expect": "survives",
+      "why": "A copy of the path is the same path, so this changes nothing the open can observe.",
+      "find": ["    Ok(OpenFile::new(path)\n"],
+      "replace": ["    Ok(OpenFile::new(path.clone())\n"]
+    },
+    {
+      "name": "DI-14.1: the random-access hint sets nothing",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "With CREATE_ALWAYS avoided, OPEN_ALWAYS plus an emptying call is the whole of create-and-truncate; without the call an existing file keeps its content.",
-      "find": ["            (true, true, false) => (OPEN_ALWAYS, true),\n"],
-      "replace": ["            (true, true, false) => (OPEN_ALWAYS, false),\n"]
+      "why": "The hint is the flag it names, so a request for it that reaches CreateFileW with no flag is a hint that was dropped without a word. Caught by the test of the flags the options produce.",
+      "find": ["            hints |= FILE_FLAG_RANDOM_ACCESS;\n"],
+      "replace": ["            hints |= FILE_FLAG_RANDOM_ACCESS & 0;\n"]
     },
     {
-      "name": "DI-13.2: a new file is created through a link that is already there",
+      "name": "DI-14.1: the sequential-scan hint is dropped when both are asked for",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "std added FILE_FLAG_OPEN_REPARSE_POINT for a new file, so CREATE_NEW does not follow a link; the open moved off std and keeps that.",
-      "find": ["        let reparse = if self.create_new {\n            FILE_FLAG_OPEN_REPARSE_POINT\n"],
-      "replace": ["        let reparse = if self.create_new {\n            0\n"]
+      "why": "Both together is the documentation's self-defeating pair and is passed on, not refused and not narrowed to one of them.",
+      "find": ["        if self.sequential_scan {\n"],
+      "replace": ["        if self.sequential_scan && !self.random_access {\n"]
     },
     {
-      "name": "DI-13.2: the emptying step is skipped",
-      "file": "src/windows_backend/opened_file/open_request.rs",
+      "name": "DI-14.1: a hint replaces the flags the buffering mode opens with",
+      "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "The emptying happens after the open, so it is tried on the call itself and not only on the parameters that ask for it.",
-      "find": ["    if !parameters.truncate_after {\n"],
-      "replace": ["    if true {\n"]
+      "why": "A hint is added to FILE_FLAG_NO_BUFFERING and to a new file's reparse flag. In place of them, an unbuffered file with a hint would be a cached one that still claims SharedDevice.",
+      "find": ["            flags: flags | reparse | named | hints | self.attributes.bits(),\n"],
+      "replace": ["            flags: if hints == 0 { flags | reparse | named | self.attributes.bits() } else { hints | reparse | named | self.attributes.bits() },\n"]
     },
     {
-      "name": "DI-13.2: a path longer than an ordinary one is handed over as it was",
-      "file": "src/windows_backend/opened_file/open_request.rs",
+      "name": "DI-14.1: a hint is refused on an unbuffered file",
+      "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "The request crate refuses a path past MAX_PATH by design, and std did not, so the verbatim form is what keeps a long path opening.",
-      "find": ["    Ok(verbatim(&absolute))\n"],
-      "replace": ["    Ok(path.to_path_buf())\n"]
+      "why": "The engineer ruled (DI-13.1 (f)) that a hint is passed to an unbuffered file and documented there, not refused. Caught by the tests that open every pair against the kernel and the ring.",
+      "find": ["        let (rights, share) = (options.rights, options.share);\n        let request = open_request::request(path, options.parameters(B::FLAGS))?;\n"],
+      "replace": ["        let (rights, share) = (options.rights, options.share);\n        if B::FLAGS != 0 && (options.random_access || options.sequential_scan) {\n            return Err(io::Error::new(io::ErrorKind::InvalidInput, \"a hint is not offered to an unbuffered file\"));\n        }\n        let request = open_request::request(path, options.parameters(B::FLAGS))?;\n"]
     },
     {
-      "name": "DI-13.2: a file is no longer shared for deletion",
+      "name": "DI-14.1 control: the hint flags start from a typed zero",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "survives",
+      "why": "A control: the same value with a stated type, which no test can tell apart from the original, so a harness that reports it caught is reporting something other than the tests.",
+      "find": ["        let mut hints = 0;\n"],
+      "replace": ["        let mut hints = 0u32;\n"]
+    },
+    {
+      "name": "DI-13.8: a right is the value of another right",
+      "file": "src/windows_backend/file_rights.rs",
+      "expect": "caught",
+      "why": "Each right is the constant it is named for, so a member holding a neighbour's value asks the kernel for something else under a name that says otherwise. Caught by the test that checks every right against the constant it is named for.",
+      "find": ["    WRITE_ATTRIBUTES = FILE_WRITE_ATTRIBUTES;\n"],
+      "replace": ["    WRITE_ATTRIBUTES = FILE_READ_ATTRIBUTES;\n"]
+    },
+    {
+      "name": "DI-13.8: containing a set only needs one of its rights",
+      "file": "src/windows_backend/file_rights.rs",
+      "expect": "caught",
+      "why": "A set contains another when it holds every right in it, so a test that asks for any of them would call a read-only set a read-write one.",
+      "find": ["        self.0 & other.0 == other.0\n"],
+      "replace": ["        self.0 & other.0 != 0 || other.0 == 0\n"]
+    },
+    {
+      "name": "DI-13.8: read-only access asks for the right to write",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A marker is the data rights it names and no more, so a read-only handle that asked for write would be granted one the type says it lacks. Caught by the tests that have the kernel judge each access.",
+      "find": ["    (if A::READ { FILE_READ_DATA } else { 0 }) | (if A::WRITE { FILE_WRITE_DATA } else { 0 })\n"],
+      "replace": ["    (if A::READ { FILE_READ_DATA | FILE_WRITE_DATA } else { 0 }) | (if A::WRITE { FILE_WRITE_DATA } else { 0 })\n"]
+    },
+    {
+      "name": "DI-13.8: write-only access asks for the right to read",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The same, the other way round: a write-only handle that asked for read would read when its type says it cannot.",
+      "find": ["    (if A::READ { FILE_READ_DATA } else { 0 }) | (if A::WRITE { FILE_WRITE_DATA } else { 0 })\n"],
+      "replace": ["    (if A::READ { FILE_READ_DATA } else { 0 }) | (if A::WRITE { FILE_READ_DATA | FILE_WRITE_DATA } else { 0 })\n"]
+    },
+    {
+      "name": "DI-13.8: the other rights are left out of the open",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "What an open asks for is the data access and the other rights joined, so an open that dropped the others would ask for less than the caller said. Caught by the test of what the options ask the kernel for and by the one that sets a time through a handle opened with WRITE_ATTRIBUTES.",
+      "find": ["            access: data_rights::<A>() | self.rights.bits(),\n"],
+      "replace": ["            access: data_rights::<A>(),\n"]
+    },
+    {
+      "name": "DI-13.8: changing the data access forgets the other rights",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "read() and write() move the type and carry everything else, so one that reset the other rights would lose what an earlier call asked for.",
+      "find": ["            rights: self.rights,\n            share: self.share,\n"],
+      "replace": ["            rights: FileRights::NONE,\n            share: self.share,\n"]
+    },
+    {
+      "name": "DI-13.7.3: a disposition is sent to the call as another one",
+      "file": "src/windows_backend/disposition.rs",
+      "expect": "caught",
+      "why": "Each variant is the value it is named for; one that asked for OPEN_EXISTING in OpenAlways's place would fail to create where it says it does. Caught by the mapping test and by the test that opens each against the kernel.",
+      "find": ["            Self::OpenAlways => OPEN_ALWAYS,\n"],
+      "replace": ["            Self::OpenAlways => OPEN_EXISTING,\n"]
+    },
+    {
+      "name": "DI-13.7.3: a new-file open is made to succeed on a file that is there",
+      "file": "src/windows_backend/disposition.rs",
+      "expect": "caught",
+      "why": "CreateNew is the disposition that fails when the file exists; as OPEN_ALWAYS it would open it. Caught by the kernel-facing test, not only by the mapping.",
+      "find": ["            Self::CreateNew => CREATE_NEW,\n"],
+      "replace": ["            Self::CreateNew => OPEN_ALWAYS,\n"]
+    },
+    {
+      "name": "DI-13.7.3: the options forget their disposition",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The options reach CreateFileW as OPEN_EXISTING whatever was asked, so the disposition has no effect.",
+      "find": ["            disposition: self.disposition.bits(),\n"],
+      "replace": ["            disposition: Disposition::OpenExisting.bits(),\n"]
+    },
+    {
+      "name": "DI-13.7.3: changing the data access forgets the disposition",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "read() and write() move the type and carry everything else, so one that reset the disposition would lose what an earlier call asked for.",
+      "find": ["            disposition: self.disposition,\n"],
+      "replace": ["            disposition: Disposition::OpenExisting,\n"]
+    },
+    {
+      "name": "DI-13.7.3: changing the data access forgets the reparse option",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The same for the option that opens a link itself.",
+      "find": ["            open_reparse_point: self.open_reparse_point,\n"],
+      "replace": ["            open_reparse_point: false,\n"]
+    },
+    {
+      "name": "DI-13.7.3: the reparse option sets no flag",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Without the flag a link is followed, so a new file is created through one that is already there. Caught by the test of the flags and by the test that makes the link.",
+      "find": ["        let reparse = if self.open_reparse_point {\n            FILE_FLAG_OPEN_REPARSE_POINT\n"],
+      "replace": ["        let reparse = if self.open_reparse_point {\n            0\n"]
+    },
+    {
+      "name": "DI-13.7.3: a new-file disposition sets the reparse flag by itself",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The flag is an option and no disposition implies it; std's open did, and this one reflects Win32.",
+      "find": ["        let reparse = if self.open_reparse_point {\n"],
+      "replace": ["        let reparse = if self.open_reparse_point || self.disposition == Disposition::CreateNew {\n"]
+    },
+    {
+      "name": "DI-13.7.4: a request forgets the share mode its sharing violation reports",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The request is built on one thread and performed on another, so what the violation says this open allowed must be carried in it and not read from the options again; a request that reset it would report an open that shared everything.",
+      "find": ["            rights,\n            share,\n            mode: PhantomData,\n"],
+      "replace": ["            rights,\n            share: ShareMode::ALL,\n            mode: PhantomData,\n"]
+    },
+    {
+      "name": "DI-13.7.4: a request forgets the rights its sharing violation reports",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The same for the rights asked for besides the data access.",
+      "find": ["            rights,\n            share,\n            mode: PhantomData,\n"],
+      "replace": ["            rights: FileRights::NONE,\n            share,\n            mode: PhantomData,\n"]
+    },
+    {
+      "name": "DI-13.7.4 control: open runs its build and its perform through a binding",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "survives",
+      "why": "A control: the same two steps with the request named between them, which no test can tell apart from open.",
+      "find": ["        Self::request(path, options)?.perform()\n"],
+      "replace": ["        let request = Self::request(path, options)?;\n        request.perform()\n"]
+    },
+    {
+      "name": "DI-13.7.3 control: the flags of an open joined in another order",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "survives",
+      "why": "A control: the same mask with its parts the other way round, which no test can tell apart.",
+      "find": ["            flags: flags | reparse | named | hints | self.attributes.bits(),\n"],
+      "replace": ["            flags: self.attributes.bits() | hints | named | reparse | flags,\n"]
+    },
+    {
+      "name": "DI-14.3: the attributes are left out of the call",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The options record the attributes and the call must carry them; a created file that is not hidden when it was asked to be is the visible result.",
+      "find": ["            flags: flags | reparse | named | hints | self.attributes.bits(),\n"],
+      "replace": ["            flags: flags | reparse | named | hints,\n"]
+    },
+    {
+      "name": "DI-14.3: changing the data access forgets the attributes",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "read() and write() move the type and carry everything else.",
+      "find": ["            attributes: self.attributes,\n"],
+      "replace": ["            attributes: FileAttributes::NONE,\n"]
+    },
+    {
+      "name": "DI-14.3: a created file's handle is asked to be inheritable",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Handles are never inheritable in v1 (the engineer's ruling, DI-13.1): an inheritable handle reaches child processes that can write through it. The request is where the choice is made. Caught twice over: by the test that pins the choice on the request, and, since DI-14.8.5, by the test that reads the opened handle's flags back through GetHandleInformation and sees the handle inheritable.",
+      "find": ["                .with_security(Some(SecurityAttributes::new(Some(descriptor), false))),\n"],
+      "replace": ["                .with_security(Some(SecurityAttributes::new(Some(descriptor), true))),\n"]
+    },
+    {
+      "name": "DI-14.3: the descriptor is not given to the call",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A descriptor that never reaches CreateFileW leaves the file with the parent's defaults and no error. Caught by the test that a deny-read descriptor refuses a later open, and, since DI-14.8.5, by the test that reads the created file's DACL back through GetSecurityInfo.",
+      "find": ["                .with_security(Some(SecurityAttributes::new(Some(descriptor), false))),\n"],
+      "replace": ["                .with_security(Some(SecurityAttributes::new(None, false))),\n"]
+    },
+    {
+      "name": "DI-14.3: an attribute is another attribute",
+      "file": "src/windows_backend/file_attributes.rs",
+      "expect": "caught",
+      "why": "Each member is the attribute it is named for; HIDDEN as SYSTEM would hide nothing and mark every file it touched as part of the operating system.",
+      "find": ["    HIDDEN = FILE_ATTRIBUTE_HIDDEN;\n"],
+      "replace": ["    HIDDEN = FILE_ATTRIBUTE_SYSTEM;\n"]
+    },
+    {
+      "name": "DI-14.2: delete-on-close sets another flag",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Each option is the flag it is named for; one that set another would delete nothing, or something else.",
+      "find": ["            named |= FILE_FLAG_DELETE_ON_CLOSE;\n"],
+      "replace": ["            named |= FILE_FLAG_POSIX_SEMANTICS;\n"]
+    },
+    {
+      "name": "DI-14.2: no-recall sets nothing",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "An option that reaches CreateFileW as no flag is a request that was dropped without a word.",
+      "find": ["            named |= FILE_FLAG_OPEN_NO_RECALL;\n"],
+      "replace": ["            named |= 0;\n"]
+    },
+    {
+      "name": "DI-14.2: POSIX semantics sets nothing",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The same for the third flag.",
+      "find": ["            named |= FILE_FLAG_POSIX_SEMANTICS;\n"],
+      "replace": ["            named |= 0;\n"]
+    },
+    {
+      "name": "DI-14.2: the three flags are left out of the call",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The options record the flags and the call must carry them; a delete-on-close file that is not deleted is the visible result.",
+      "find": ["            flags: flags | reparse | named | hints | self.attributes.bits(),\n"],
+      "replace": ["            flags: flags | reparse | hints | self.attributes.bits(),\n"]
+    },
+    {
+      "name": "DI-14.2: changing the data access forgets delete-on-close",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "read() and write() move the type and carry everything else.",
+      "find": ["            delete_on_close: self.delete_on_close,\n"],
+      "replace": ["            delete_on_close: false,\n"]
+    },
+    {
+      "name": "DI-14.2: changing the data access forgets no-recall",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The same for the second flag.",
+      "find": ["            open_no_recall: self.open_no_recall,\n"],
+      "replace": ["            open_no_recall: false,\n"]
+    },
+    {
+      "name": "DI-14.2: changing the data access forgets POSIX semantics",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The same for the third flag.",
+      "find": ["            posix_semantics: self.posix_semantics,\n"],
+      "replace": ["            posix_semantics: false,\n"]
+    },
+    {
+      "name": "DI-14.9: overlapped sets nothing",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "An option that reaches CreateFileW as no flag is a request dropped without a word; the handle would be a synchronous one.",
+      "find": ["            named |= FILE_FLAG_OVERLAPPED;\n"],
+      "replace": ["            named |= 0;\n"]
+    },
+    {
+      "name": "DI-14.9: overlapped is set whether asked for or not",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Every open would become an overlapped one, which changes when a ring operation's completion is there.",
+      "find": ["        if self.overlapped {\n"],
+      "replace": ["        if self.overlapped || true {\n"]
+    },
+    {
+      "name": "DI-14.9: changing the data access forgets overlapped",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "read() and write() move the type and carry everything else.",
+      "find": ["            overlapped: self.overlapped,\n"],
+      "replace": ["            overlapped: false,\n"]
+    },
+    {
+      "name": "DI-13.8 control: the same test of containment with its operands the other way round",
+      "file": "src/windows_backend/file_rights.rs",
+      "expect": "survives",
+      "why": "A control: the same predicate with its operands swapped, which no test can tell apart, so a harness that reports it caught is reporting something other than the tests.",
+      "find": ["        self.0 & other.0 == other.0\n"],
+      "replace": ["        other.0 & self.0 == other.0\n"]
+    },
+    {
+      "name": "DI-13.8 control: the two data rights of a marker joined in the other order",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "survives",
+      "why": "A control: the same mask with its two halves the other way round, which no test can tell apart.",
+      "find": ["    (if A::READ { FILE_READ_DATA } else { 0 }) | (if A::WRITE { FILE_WRITE_DATA } else { 0 })\n"],
+      "replace": ["    (if A::WRITE { FILE_WRITE_DATA } else { 0 }) | (if A::READ { FILE_READ_DATA } else { 0 })\n"]
+    },
+    {
+      "name": "DI-13.9: a file's target states more access than the file was opened with",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "A target states the access its handle was opened with, so one that always said read and write would be believed by the core and refused by the kernel. Caught by the test that reads the stated access off a target made from each kind of file.",
+      "find": ["            access: A::ACCESS,\n        }\n    }\n\n    /// The target `volume` makes"],
+      "replace": ["            access: Access::ReadWrite,\n        }\n    }\n\n    /// The target `volume` makes"]
+    },
+    {
+      "name": "DI-13.9: a volume's target states more access than the volume was opened with",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The same for a raw volume, whose open is judged by the kernel only where there is an administrator, so the stated access is pinned by the test that assembles one.",
+      "find": ["            access: A::ACCESS,\n        }\n    }\n\n    /// The target `disk` makes"],
+      "replace": ["            access: Access::ReadWrite,\n        }\n    }\n\n    /// The target `disk` makes"]
+    },
+    {
+      "name": "DI-13.9: a disk's target states more access than the disk was opened with",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The same for a whole disk.",
+      "find": ["            access: A::ACCESS,\n        }\n    }\n\n    /// The target `file` makes, with the consumer's attestation"],
+      "replace": ["            access: Access::ReadWrite,\n        }\n    }\n\n    /// The target `file` makes, with the consumer's attestation"]
+    },
+    {
+      "name": "DI-13.9: the backend lets a write through to a target that cannot write",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "A write is covered by a target that can write. Asking whether it can read instead lets a write to a read-only target reach the kernel, which is what the test of the refusal at the push shows.",
+      "find": ["            SubmissionOp::Write { .. } => access.can_write(),\n"],
+      "replace": ["            SubmissionOp::Write { .. } => access.can_read(),\n"]
+    },
+    {
+      "name": "DI-13.9: the backend lets a read through from a target that cannot read",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "The same for a read from a write-only target.",
+      "find": ["            SubmissionOp::Read { .. } => access.can_read(),\n"],
+      "replace": ["            SubmissionOp::Read { .. } => access.can_write(),\n"]
+    },
+    {
+      "name": "DI-13.9: the backend does not refuse what the access does not cover",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "An operation the access does not cover is refused as AccessDenied and never reaches the ring.",
+      "find": ["        if !covered {\n            return Err(RefusalCause::AccessDenied);\n"],
+      "replace": ["        if false && !covered {\n            return Err(RefusalCause::AccessDenied);\n"]
+    },
+    {
+      "name": "DI-13.9 control: the access asked of a write is stated as a binding first",
+      "file": "src/windows_backend.rs",
+      "expect": "survives",
+      "why": "A control: the same call made through a local, which no test can tell apart.",
+      "find": ["            SubmissionOp::Write { .. } => access.can_write(),\n"],
+      "replace": ["            SubmissionOp::Write { .. } => { let writes = access.can_write(); writes }\n"]
+    },
+    {
+      "name": "DI-13.10: registration does not judge a key's declaration",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "add_target refuses a key that declares more than its target states, and hands the target back with the cause. Admitting every key leaves a declaration nothing compares.",
+      "find": ["            declared.admitted_by(target.access()).err()\n"],
+      "replace": ["            None\n"]
+    },
+    {
+      "name": "DI-13.10: construction admits a key that declares more than its target states",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "Construction refuses a setup whose key declared what its target cannot do, and hands every file back.",
+      "find": ["        (!actual.covers(declared)).then_some(SetupRefusal::AccessNotCovered {\n"],
+      "replace": ["        (actual.covers(declared)).then_some(SetupRefusal::AccessNotCovered {\n"]
+    },
+    {
+      "name": "DI-13.10: a setup made with a typed key does not keep its declaration",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "TargetSetup::new reads the declaration off the key, so a setup that dropped it would never be judged.",
+      "find": ["            declared: key.declared(),\n"],
+      "replace": ["            declared: None,\n"]
+    },
+    {
+      "name": "DI-13.10: a failed construction hands a file back with another declaration",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "Files come back as they were given, which includes what their keys declared; a hand-back that dropped it would let a second attempt skip the check.",
+      "find": ["        .find_map(|&(given, access)| (given == key).then_some(access))\n"],
+      "replace": ["        .find_map(|&(given, _)| (given == key).then_some(Access::ReadWrite))\n"]
+    },
+    {
+      "name": "DI-13.10 control: the registered key's number is taken through a binding",
+      "file": "src/dioring.rs",
+      "expect": "survives",
+      "why": "A control: the same number taken through a local, which no test can tell apart.",
+      "find": ["        let key = declared.untyped();\n"],
+      "replace": ["        let key = { let number = declared.untyped(); number };\n"]
+    },
+    {
+      "name": "DI-13.4: every share mode is said to share less than it does",
+      "file": "src/windows_backend/share_mode.rs",
+      "expect": "caught",
+      "why": "ShareMode::ALL is what every file was opened with before the mode was an option, so one that left out a member would refuse a deleter that the default admitted.",
+      "find": ["    pub const ALL: Self = Self(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);"],
+      "replace": ["    pub const ALL: Self = Self(FILE_SHARE_READ | FILE_SHARE_WRITE);"]
+    },
+    {
+      "name": "DI-13.4: a member is the value of another",
+      "file": "src/windows_backend/share_mode.rs",
+      "expect": "caught",
+      "why": "Each member is the flag it is named for; a swapped one shares the wrong access.",
+      "find": ["    READ = FILE_SHARE_READ;"],
+      "replace": ["    READ = FILE_SHARE_WRITE;"]
+    },
+    {
+      "name": "DI-13.4: containing a set only needs one of its members",
+      "file": "src/windows_backend/share_mode.rs",
+      "expect": "caught",
+      "why": "A set contains another when every member of the other is in it.",
+      "find": ["        self.0 & other.0 == other.0"],
+      "replace": ["        self.0 & other.0 != 0"]
+    },
+    {
+      "name": "DI-13.4: a file is opened sharing nothing unless told otherwise",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The default is every member, as std opens a file; an exclusive default would refuse every second open.",
+      "find": ["            share: ShareMode::ALL,"],
+      "replace": ["            share: ShareMode::NONE,"]
+    },
+    {
+      "name": "DI-13.4: the options forget their share mode when the data access changes",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "read and write rebuild the options for a new access type, and a field not carried across is silently reset.",
+      "find": ["            share: self.share,"],
+      "replace": ["            share: ShareMode::ALL,"]
+    },
+    {
+      "name": "DI-13.4: the request is made with every member whatever was asked",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The share mode an open asks for is the one it is made with.",
+      "find": ["            share: self.share.bits(),"],
+      "replace": ["            share: ShareMode::ALL.bits(),"]
+    },
+    {
+      "name": "DI-13.4: the request is made sharing nothing whatever was asked",
       "file": "src/windows_backend/opened_file/open_request.rs",
       "expect": "caught",
-      "why": "std shared every file for reading, writing and deletion, and the share mode is the open's own to state now that std no longer does.",
-      "find": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)\n"],
-      "replace": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)\n"]
+      "why": "The open passes the parameters' share mode to the call and decides none itself.",
+      "find": ["        .with_share_mode(parameters.share)"],
+      "replace": ["        .with_share_mode(0)"]
+    },
+    {
+      "name": "DI-13.4: another error is taken for a sharing violation",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Only the kernel's sharing violation becomes a SharingViolation; any other failure is its own error as it was.",
+      "find": ["    if error.raw_os_error() != Some(ERROR_SHARING_VIOLATION.cast_signed()) {"],
+      "replace": ["    if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION.cast_signed()) {"]
+    },
+    {
+      "name": "DI-13.4: a sharing violation reports some other kind of error",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The error's kind is how a consumer who does not downcast tells a sharing conflict from the rest.",
+      "find": ["        io::ErrorKind::ResourceBusy,"],
+      "replace": ["        io::ErrorKind::Other,"]
+    },
+    {
+      "name": "DI-13.4: a sharing violation drops the kernel's error",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The kernel's error, which carries the Win32 code, is the violation's source.",
+      "find": ["        Some(&self.os_error)"],
+      "replace": ["        None"]
+    },
+    {
+      "name": "DI-13.4: a read-only open is reported as read and write",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A violation says what this open asked for, so the data access it names is the marker's.",
+      "find": ["        (true, false) => Some(Access::ReadOnly),"],
+      "replace": ["        (true, false) => Some(Access::ReadWrite),"]
+    },
+    {
+      "name": "DI-13.4 control: the share mode is passed to the call through a binding",
+      "file": "src/windows_backend/opened_file/open_request.rs",
+      "expect": "survives",
+      "why": "A control: the same mode passed through a local, which no test can tell apart.",
+      "find": ["        .with_share_mode(parameters.share)"],
+      "replace": ["        .with_share_mode({ let share = parameters.share; share })"]
+    },
+    {
+      "name": "DI-13.11: a device is opened asking for no data right",
+      "file": "src/windows_backend/raw_open.rs",
+      "expect": "caught",
+      "why": "The access a raw volume or disk is opened with is its marker's data rights; the open is the one place that decides it.",
+      "find": ["        access: data_rights::<A>(),"],
+      "replace": ["        access: 0,"]
+    },
+    {
+      "name": "DI-13.11: a device is opened without its buffering flags",
+      "file": "src/windows_backend/raw_open.rs",
+      "expect": "caught",
+      "why": "The buffering mode is what an unbuffered device's warranty rests on.",
+      "find": ["        flags: B::FLAGS,"],
+      "replace": ["        flags: 0,"]
+    },
+    {
+      "name": "DI-13.11: a device is opened with every member whatever was asked",
+      "file": "src/windows_backend/raw_open.rs",
+      "expect": "caught",
+      "why": "The share mode a device open asks for is the one it is made with.",
+      "find": ["        share: share.bits(),"],
+      "replace": ["        share: ShareMode::ALL.bits(),"]
+    },
+    {
+      "name": "DI-13.11: a device is opened sharing nothing whatever was asked",
+      "file": "src/windows_backend/raw_open.rs",
+      "expect": "caught",
+      "why": "The call is made with what the open asked for, which tries the same open on a file.",
+      "find": ["        .share_mode(asked.share)"],
+      "replace": ["        .share_mode(0)"]
+    },
+    {
+      "name": "DI-13.11: a device's sharing violation names no data access",
+      "file": "src/windows_backend/raw_open.rs",
+      "expect": "caught",
+      "why": "A violation says what this open asked for, as a file's does.",
+      "find": ["            refine_sharing(error, &given, data_access::<A>(), FileRights::NONE, share)\n"],
+      "replace": ["            refine_sharing(error, &given, None, FileRights::NONE, share)\n"]
+    },
+    {
+      "name": "DI-13.11: a volume is opened sharing nothing unless told otherwise",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "The default is every member, as std opens one.",
+      "find": ["            share: ShareMode::ALL,"],
+      "replace": ["            share: ShareMode::NONE,"]
+    },
+    {
+      "name": "DI-13.11: a volume ignores the share mode it is given",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "VolumeOptions::share replaces the mode.",
+      "find": ["        self.share = share;"],
+      "replace": ["        self.share = ShareMode::ALL;"]
+    },
+    {
+      "name": "DI-13.11: a disk is opened sharing nothing unless told otherwise",
+      "file": "src/windows_backend/opened_disk.rs",
+      "expect": "caught",
+      "why": "The default is every member, as std opens one.",
+      "find": ["            share: ShareMode::ALL,"],
+      "replace": ["            share: ShareMode::NONE,"]
+    },
+    {
+      "name": "DI-13.11: a disk ignores the share mode it is given",
+      "file": "src/windows_backend/opened_disk.rs",
+      "expect": "caught",
+      "why": "DiskOptions::share replaces the mode.",
+      "find": ["        self.share = share;"],
+      "replace": ["        self.share = ShareMode::ALL;"]
+    },
+    {
+      "name": "DI-13.11: a volume's open is made sharing every member whatever its options say",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "survives",
+      "why": "A blind spot, named: that OpenedVolume::open passes its options' share mode to the open is reached only by the exclusive-volume test in raw_volume, which needs an administrator and a scratch virtual disk and runs in CI, and the sweep runs no ignored test so it survives here. Applied by hand and run elevated on 2026-10-16, the mutation fails that test. The open itself is tried on a file by raw_open's tests.",
+      "find": ["        let file = raw_open::open::<B, A>(path.as_str(), options.share)?;"],
+      "replace": ["        let file = raw_open::open::<B, A>(path.as_str(), ShareMode::ALL)?;"]
+    },
+    {
+      "name": "DI-13.11: a disk's open is made sharing every member whatever its options say",
+      "file": "src/windows_backend/opened_disk.rs",
+      "expect": "survives",
+      "why": "A blind spot, named: that OpenedDisk::open passes its options' share mode to the open is reached only by the exclusive-disk test in raw_disk, which needs an administrator and a scratch virtual disk and runs in CI, and the sweep runs no ignored test so it survives here. Applied by hand and run elevated on 2026-10-16, the mutation fails that test.",
+      "find": ["        let file = raw_open::open::<B, A>(path.path(), options.share)?;"],
+      "replace": ["        let file = raw_open::open::<B, A>(path.path(), ShareMode::ALL)?;"]
+    },
+    {
+      "name": "DI-13.11 control: a device's flags are taken through a binding",
+      "file": "src/windows_backend/raw_open.rs",
+      "expect": "survives",
+      "why": "A control: the same flags taken through a local, which no test can tell apart.",
+      "find": ["        flags: B::FLAGS,"],
+      "replace": ["        flags: { let flags = B::FLAGS; flags },"]
+    },
+    {
+      "name": "DI-10.5: an attested file's target does not claim Complete",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The attestation is the whole point of the constructor, so one that leaves the class at SharedDevice does nothing.",
+      "find": ["        Self::new(file).attested_exclusive()\n"],
+      "replace": ["        Self::new(file)\n"]
+    },
+    {
+      "name": "DI-10.5: an attested volume's target does not claim Complete",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "As above, for a volume.",
+      "find": ["        Self::from_volume(volume).attested_exclusive()\n"],
+      "replace": ["        Self::from_volume(volume)\n"]
+    },
+    {
+      "name": "DI-10.5: an attested disk's target does not claim Complete",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "As above, for a disk.",
+      "find": ["        Self::from_disk(disk).attested_exclusive()\n"],
+      "replace": ["        Self::from_disk(disk)\n"]
+    },
+    {
+      "name": "DI-10.5: the attestation drops the flush domains",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "Complete is a claim that the domains reported are all of them, so an attestation that discarded the found ones would claim it over none.",
+      "find": ["        self.warranty = WarrantyClass::Complete;\n        self\n"],
+      "replace": ["        self.warranty = WarrantyClass::Complete;\n        self.domains.clear();\n        self\n"]
+    },
+    {
+      "name": "DI-10.5: a cached file can be attested",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "Caught by the compile_fail doctest on the constructor and by nothing else: only the type refuses a cached file, so widening it to any buffering is a change no unit test can see and the doctest then compiles when it must not.",
+      "find": ["    pub fn new_attested_exclusive<A: HasData>(file: OpenedFile<Unbuffered, A>) -> Self {\n"],
+      "replace": ["    pub fn new_attested_exclusive<B: Buffering, A: HasData>(file: OpenedFile<B, A>) -> Self {\n"]
+    },
+    {
+      "name": "DI-16.1: the final path is asked of a duplicate",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "survives",
+      "why": "Declared, and not a gap a test can close: the request is made and dropped inside final_location, which returns only the path, so a duplicate would exist only for the call and nothing outside can tell it from the share. The kind query that once held a share was the one place a duplicate was observable, and was removed (DI-D-73 in durable-ioring's notes).",
+      "find": ["    let path = QueryFinalPath::new(handle.clone())\n"],
+      "replace": ["    let path = QueryFinalPath::new(SharedHandle::from(std::os::windows::io::AsHandle::as_handle(handle).try_clone_to_owned()?))\n"]
+    },
+    {
+      "name": "DI-10.5 control: the attested claim is made through a binding",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "survives",
+      "why": "A control: the same target returned through a local, which no test can tell apart.",
+      "find": ["        self.warranty = WarrantyClass::Complete;\n        self\n"],
+      "replace": ["        self.warranty = WarrantyClass::Complete;\n        let this = self;\n        this\n"]
+    },
+    {
+      "name": "DI-15.1: the identifier is dropped from the identity",
+      "file": "src/windows_backend/file_id.rs",
+      "expect": "caught",
+      "why": "With the identifier zeroed, every file on a volume would report one identity, and an open by it would open the wrong file or none.",
+      "find": ["        Self::new(info.volume_serial_number(), info.file_id())"],
+      "replace": ["        Self::new(info.volume_serial_number(), [0; 16])"]
+    },
+    {
+      "name": "DI-15.1: the volume serial is dropped from the identity",
+      "file": "src/windows_backend/file_id.rs",
+      "expect": "caught",
+      "why": "The FILE_ID_INFO page says the identifier and the serial together identify a file on one computer; without the serial two volumes' files could compare equal. No two-volume test exists, so this is caught by the agreement with the request crate's read of the same handle.",
+      "find": ["        Self::new(info.volume_serial_number(), info.file_id())"],
+      "replace": ["        Self::new(0, info.file_id())"]
+    },
+    {
+      "name": "DI-15.1: a refusal loses the kernel's code",
+      "file": "src/windows_backend/file_id.rs",
+      "expect": "caught",
+      "why": "The error is documented as the code the call failed with, unaltered; a caller distinguishing a stale or foreign handle needs it.",
+      "find": ["            .map_err(|error| error.to_io_error())"],
+      "replace": ["            .map_err(|_| io::Error::from(io::ErrorKind::Other))"]
+    },
+    {
+      "name": "DI-15.1 control: the refusal's closure is renamed",
+      "file": "src/windows_backend/file_id.rs",
+      "expect": "survives",
+      "why": "A control: the same conversion through a differently named binding, which no test can tell apart.",
+      "find": ["            .map_err(|error| error.to_io_error())"],
+      "replace": ["            .map_err(|failure| failure.to_io_error())"]
+    },
+    {
+      "name": "DI-15.2: an open by FileId does not check the opened file's identity",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "The call takes the volume from the hint and not from the FileId, so without the check a hint on another volume opens another volume's file and reports it as the one asked for (DI-D-70).",
+      "find": ["            if opened != asked {"],
+      "replace": ["            if false && opened != asked {"]
+    },
+    {
+      "name": "DI-15.2: the identity check compares the identifier and not the volume",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "The identifier is the same on every volume that happens to have it; the volume serial is the half of the identity the call never sees, and the only half the check exists for.",
+      "find": ["            if opened != asked {"],
+      "replace": ["            if opened.id() != asked.id() {"]
+    },
+    {
+      "name": "DI-15.2: a sharing violation by identifier names the wrong identifier",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "The SharingViolation's OpenedBy is the caller's only way to say which open conflicted.",
+      "find": ["                || OpenedBy::Identifier(self.identifier),"],
+      "replace": ["                || OpenedBy::Identifier(FileIdentifier::FileId64(0)),"]
+    },
+    {
+      "name": "DI-15.2: the buffering mode's flags are not passed",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "An OpenedFile<Unbuffered> opened cached would claim SharedDevice for data the system cache holds.",
+      "find": ["            .with_flags_and_attributes(options.flags(B::FLAGS));"],
+      "replace": ["            .with_flags_and_attributes(options.flags(0));"]
+    },
+    {
+      "name": "DI-15.2: the share mode is not passed",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "An exclusive open by identifier would share everything.",
+      "find": ["            .with_share_mode(options.share.bits())"],
+      "replace": ["            .with_share_mode(ShareMode::ALL.bits())"]
+    },
+    {
+      "name": "DI-15.2: the data access is not asked for",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "An OpenedFile<_, ReadWrite> whose handle cannot read or write would fail every operation a target made of it is given.",
+      "find": ["        data_rights::<A>() | self.rights.bits()"],
+      "replace": ["        self.rights.bits()"]
+    },
+    {
+      "name": "DI-15.2: the overlapped option sets another flag",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "Each option must set its own flag and no other.",
+      "find": ["            flags |= FILE_FLAG_OVERLAPPED;"],
+      "replace": ["            flags |= FILE_FLAG_RANDOM_ACCESS;"]
+    },
+    {
+      "name": "DI-15.2: an object ID's first field is not turned around",
+      "file": "src/windows_backend/file_id.rs",
+      "expect": "caught",
+      "why": "The bytes are a GUID as Windows lays one out; read in the wrong order they name another object, or none.",
+      "find": ["    for field in [guid_layout::DATA1, guid_layout::DATA2, guid_layout::DATA3] {"],
+      "replace": ["    for field in [guid_layout::DATA2, guid_layout::DATA3] {"]
+    },
+    {
+      "name": "DI-15.2: the open by identifier skips the location checks",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "survives",
+      "why": "Declared, and not a gap a test can close: the remote and unknown-location checks are the path open's, made by the same function and caught there, and no test reaches them by identifier, since the OpenFileById page lists SMB as not supported and the call opens only a file on a file system, whose final path is readable.",
+      "find": ["        OpenedFile::admit(handle)\n"],
+      "replace": ["        Ok(OpenedFile {\n            handle,\n            geometry: B::geometry(),\n            mode: PhantomData,\n        })\n"]
+    },
+    {
+      "name": "DI-15.2 control: the open's error binding is renamed",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "survives",
+      "why": "A control: the same refinement through a differently named binding, which no test can tell apart.",
+      "find": ["        let handle = self.request.perform().map_err(|error| {\n            refine_sharing_by(\n                error.to_io_error(),"],
+      "replace": ["        let handle = self.request.perform().map_err(|failure| {\n            refine_sharing_by(\n                failure.to_io_error(),"]
+    },
+    {
+      "name": "DI-15.4: a reopen skips the checks on the reopened handle",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "A reopen from any handle can reach a device or a share, so an unbuffered reopen of NUL or of a file on a share would claim SharedDevice for a handle whose location is unknown or remote (DI-14.5, DI-14.6.2).",
+      "find": ["        OpenedFile::admit(SharedHandle::from(handle))\n"],
+      "replace": ["        Ok(OpenedFile {\n            handle: SharedHandle::from(handle),\n            geometry: B::geometry(),\n            mode: PhantomData,\n        })\n"]
+    },
+    {
+      "name": "DI-15.4: a reopen's buffering flags are not passed",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "Cached to unbuffered is the reason to reopen; an OpenedFile<Unbuffered> reopened cached would claim SharedDevice for data the system cache holds.",
+      "find": ["            .with_flags_and_attributes(options.flags(B::FLAGS));"],
+      "replace": ["            .with_flags_and_attributes(options.flags(0));"]
+    },
+    {
+      "name": "DI-15.4: a reopen's share mode is not passed",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "The documented rule judges the reopen's sharing against the original; a reopen that shared everything regardless would accept what the caller asked to refuse.",
+      "find": ["            .with_share_mode(options.share.bits())"],
+      "replace": ["            .with_share_mode(ShareMode::ALL.bits())"]
+    },
+    {
+      "name": "DI-15.4: a reopen does not ask for its data access",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "A read-only scrubber that cannot read, or a widened handle that cannot write, would fail every operation a target made of it is given.",
+      "find": ["        data_rights::<A>() | self.rights.bits()"],
+      "replace": ["        self.rights.bits()"]
+    },
+    {
+      "name": "DI-15.4: delete-on-close sets another flag",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "Each option must set its own flag and no other; a reopen meant to delete on close would leave the file behind.",
+      "find": ["            flags |= FILE_FLAG_DELETE_ON_CLOSE;"],
+      "replace": ["            flags |= FILE_FLAG_POSIX_SEMANTICS;"]
+    },
+    {
+      "name": "DI-15.4: POSIX semantics sets nothing",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "An option the caller set that reaches no call is a silent no.",
+      "find": ["            flags |= FILE_FLAG_POSIX_SEMANTICS;"],
+      "replace": ["            flags |= 0;"]
+    },
+    {
+      "name": "DI-15.4: changing the data access forgets delete-on-close",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "read() and write() move the options to another type; a flag set before them must survive the move.",
+      "find": ["            delete_on_close: self.delete_on_close,"],
+      "replace": ["            delete_on_close: false,"]
+    },
+    {
+      "name": "DI-15.4: a reopen's sharing violation names an open by path",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "OpenedBy is the caller's only way to say which open conflicted, and a reopen has no path.",
+      "find": ["                || OpenedBy::Reopen,"],
+      "replace": ["                || OpenedBy::Path(std::path::PathBuf::new()),"]
+    },
+    {
+      "name": "DI-15.4 control: the reopen's error binding is renamed",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "survives",
+      "why": "A control: the same refinement through a differently named binding, which no test can tell apart.",
+      "find": ["        let handle = self.request.perform().map_err(|error| {\n            refine_sharing_by(\n                error.to_io_error(),"],
+      "replace": ["        let handle = self.request.perform().map_err(|failure| {\n            refine_sharing_by(\n                failure.to_io_error(),"]
+    },
+    {
+      "name": "DI-12.1.1: a pool delivery's consumer calls lock the engine unwatched",
+      "file": "src/windows_backend/pool.rs",
+      "expect": "caught",
+      "why": "The engine's lock is watched on every path that takes it, so a wait for it on a consumer's call is reported.",
+      "find": ["        present_watched(self.watch.lock(&self.engine, ENGINE_LOCK))"],
+      "replace": ["        present(lock(&self.engine))"]
+    },
+    {
+      "name": "DI-12.1.1: the hub locks the engine unwatched",
+      "file": "src/dioring/hub.rs",
+      "expect": "caught",
+      "why": "A lineage handle's release, and a provider's answer, take the engine's lock through the hub, and a wait there is as much a delay as a consumer's.",
+      "find": ["        let deliver = self\n            .watch\n            .lock(&self.engine, ENGINE_LOCK)\n            .as_mut()\n            .is_some_and(act);"],
+      "replace": ["        let deliver = lock(&self.engine).as_mut().is_some_and(act);"]
+    },
+    {
+      "name": "DI-12.1.1: a pumped delivery is given no lock watch",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A pumped instance's consumer calls and its pump take the engine's lock through the delivery, which reports only if it was given the watch.",
+      "find": ["                .map(|pumped| pumped.with_lock_watch(watch.clone()))"],
+      "replace": ["                .map(|pumped| pumped)"]
+    },
+    {
+      "name": "DI-12.1.3: the debugger sink wants nothing",
+      "file": "src/debug_output.rs",
+      "expect": "caught",
+      "why": "The sink states that it wants every kind; a consumer who chose it would otherwise see nothing and have no error to say so.",
+      "find": ["        true\n"],
+      "replace": ["        false\n"]
+    },
+    {
+      "name": "DI-12.1.3: a NUL in an event's text is not written as backslash zero",
+      "file": "src/debug_output.rs",
+      "expect": "caught",
+      "why": "The call's string ends at a NUL, and the crate refuses a string that has one, so a line with a NUL must not reach it: the sink escapes the NUL and sends the line.",
+      "find": ["    format!(\"{LINE_PREFIX}{event}\").replace('\\0', \"\\\\0\")\n"],
+      "replace": ["    format!(\"{LINE_PREFIX}{event}\")\n"]
+    },
+    {
+      "name": "DI-12.1.3: a line is written without the dioring prefix",
+      "file": "src/debug_output.rs",
+      "expect": "caught",
+      "why": "A line is the prefix and the event's text, as the standard-error sink's is.",
+      "find": ["    format!(\"{LINE_PREFIX}{event}\").replace('\\0', \"\\\\0\")\n"],
+      "replace": ["    format!(\"{event}\").replace('\\0', \"\\\\0\")\n"]
+    },
+    {
+      "name": "DI-12.1.3: the line is not sent",
+      "file": "src/debug_output.rs",
+      "expect": "caught",
+      "why": "Only a debugger can tell that the call was made, which is why the test of it starts one.",
+      "find": ["        let sent = output_debug_str(&line(event));\n"],
+      "replace": ["        let sent = output_debug_str(&line(event)[..0]);\n"]
+    },
+    {
+      "name": "DI-12.1.3 control: the debugger sink wants every kind by negation",
+      "file": "src/debug_output.rs",
+      "expect": "survives",
+      "why": "A control: the same answer by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        true\n"],
+      "replace": ["        !false\n"]
+    },
+    {
+      "name": "DI-12.1.6: the default sink is none",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A consumer who chooses nothing is to get the events (DI-D-51 T4); a default that writes nowhere is the driver before the provider existed.",
+      "find": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::new()));\n"],
+      "replace": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(durable_ioring::NoDiagnostics));\n"]
+    },
+    {
+      "name": "DI-12.1.6: a chosen sink is replaced by the default",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "Any sink can be given when the driver is built, and the default is only for an instance that gave none.",
+      "find": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::new()));\n"],
+      "replace": ["        let _ = diagnostics;\n        let diagnostics: Arc<dyn DiagnosticSink> = Arc::new(EtwDiagnostics::new());\n"]
+    },
+    {
+      "name": "DI-12.1.6 control: the default sink is built by its Default",
+      "file": "src/dioring.rs",
+      "expect": "survives",
+      "why": "A control: the same sink by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::new()));\n"],
+      "replace": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::default()));\n"]
+    },
+    {
+      "name": "DI-12.2.4: the router sends every part to its first provider",
+      "file": "../durable-ioring/src/router.rs",
+      "expect": "caught",
+      "why": "Through a real instance, each routed provider is asked only for its own domains (DI-D-81): a part sent to another is flushed by something that never said it could, and the instance's tests here see it without the router's own.",
+      "find": ["            parts[registration].push(part);"],
+      "replace": ["            parts[0].push(part);"]
+    },
+    {
+      "name": "DI-12.2.4: the router calls its providers in reverse registration order",
+      "file": "../durable-ioring/src/router.rs",
+      "expect": "caught",
+      "why": "Through a real instance, a panicking provider stops the ones registered after it, whose domains are abandoned without being called (DI-D-83); calling in reverse hands the later ones their parts first.",
+      "find": ["        for (route, domains) in self.routes.iter_mut().zip(parts) {"],
+      "replace": ["        for (route, domains) in self.routes.iter_mut().rev().zip(parts.into_iter().rev()) {"]
+    },
+    {
+      "name": "DI-12.2.4 control: the router's per-provider parts are made by counting",
+      "file": "../durable-ioring/src/router.rs",
+      "expect": "survives",
+      "why": "A control: the same empty parts made by counting the routes instead of walking them, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["            self.routes.iter().map(|_| Vec::new()).collect();"],
+      "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect();"]
+    },
+    {
+      "name": "DI-19.2.4: a lock wait's end names a pair of its own, as the driver's tests see it",
+      "file": "../durable-ioring/src/lock_watch.rs",
+      "expect": "caught",
+      "why": "The driver's lock-wait tests bind to PairingChecker (DI-D-87), the one definition of the pairing rule; an end whose id is not its begin's is visible to the checker alone, so this is caught only if the binding is real.",
+      "find": [
+        "                self.sink.report(&Diagnostic::LockWaitEnded {",
+        "                    instance: self.instance,",
+        "                    lock: name,",
+        "                    id,"
+      ],
+      "replace": [
+        "                self.sink.report(&Diagnostic::LockWaitEnded {",
+        "                    instance: self.instance,",
+        "                    lock: name,",
+        "                    id: CorrelationId::for_pair(&*self.sink, DiagnosticKind::LockWait).unwrap_or(id),"
+      ]
+    },
+    {
+      "name": "DI-19.2.4: a lock wait's end is not reported, as the driver's tests see it",
+      "file": "../durable-ioring/src/lock_watch.rs",
+      "expect": "caught",
+      "why": "Each driver test that waits for the engine's lock expects its thread's begin and its end.",
+      "find": [
+        "                self.sink.report(&Diagnostic::LockWaitEnded {"
+      ],
+      "replace": [
+        "                let _ = &(Diagnostic::LockWaitEnded {"
+      ]
+    },
+    {
+      "name": "DI-19.2.4 control: the taken guard is declared with its type spelled, as the driver's tests see it",
+      "file": "../durable-ioring/src/lock_watch.rs",
+      "expect": "survives",
+      "why": "A control: the same binding with its type written out, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": [
+        "                let taken = mutex.lock().unwrap_or_else(PoisonError::into_inner);"
+      ],
+      "replace": [
+        "                let taken: MutexGuard<'_, T> = mutex.lock().unwrap_or_else(PoisonError::into_inner);"
+      ]
+    },
+    {
+      "name": "DI-19.2.5: the one definition calls a seal's end a begin, as the driver's tests see it",
+      "file": "../durable-ioring/src/diagnostics.rs",
+      "expect": "caught",
+      "why": "DI-19.2.5: Diagnostic::pairing is the one definition of which events pair (DI-D-88). Changing it must fail this suite through the code that binds to it; a suite that held a copy of the rule would pass. The driver's chosen-sink test passes every event to PairingChecker, which takes the edge from pairing.",
+      "find": [
+        "            | Self::LockWaitBegan { id, .. } => (*id, Edge::Begin),",
+        "            Self::SealEnded { id, .. }",
+        "            | Self::FlushEnded { id, .. }"
+      ],
+      "replace": [
+        "            | Self::LockWaitBegan { id, .. }",
+        "            | Self::SealEnded { id, .. } => (*id, Edge::Begin),",
+        "            Self::FlushEnded { id, .. }"
+      ]
+    },
+    {
+      "name": "DI-19.2.5: the checker refuses an end of its begin's own kind, as the driver's tests see it",
+      "file": "../durable-ioring/src/oracle/pairing.rs",
+      "expect": "caught",
+      "why": "DI-19.2.5: the rule that an end is of its begin's kind lives in PairingChecker alone. Inverting it there must fail the driver's tests, which hold their streams to it and do not restate it.",
+      "find": [
+        "                if begun.kind != pairing.kind {"
+      ],
+      "replace": [
+        "                if begun.kind == pairing.kind {"
+      ]
+    },
+    {
+      "name": "DI-19.2.5 control: the checker gathers its open pairs by cloning, as the driver's tests see it",
+      "file": "../durable-ioring/src/oracle/pairing.rs",
+      "expect": "survives",
+      "why": "A control: the same ids gathered by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": [
+        "        let mut open: Vec<CorrelationId> = self.open.keys().copied().collect();"
+      ],
+      "replace": [
+        "        let mut open: Vec<CorrelationId> = self.open.keys().cloned().collect();"
+      ]
     }
   ]
 }

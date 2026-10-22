@@ -13,18 +13,23 @@
 //! either -- see `queue_contention`'s module docs for what the regimes can and
 //! cannot separate.
 
+use windows_platform_probes::probe_args::usage;
 use windows_platform_probes::queue_contention::{
-    DRAINED_CAPACITY, Observation, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, column_width,
-    format_nanos, format_ratio_bounded, format_scaling_bounded, measure, ratio_column_width,
-    render_table, shapes,
+    DRAINED_CAPACITY, Observation, Sampling, column_width, format_nanos, format_ratio_bounded,
+    format_scaling_bounded, measure, ratio_column_width, raw_row, render_table, shapes,
 };
-use windows_platform_probes::report::emit_report;
+use windows_platform_probes::report::{emit_report, refuse_arguments};
 
 fn main() {
+    // Read before anything is measured, so a command line the probe cannot honour
+    // is refused rather than half-run. See `M4.2`.
+    let sampling = Sampling::from_args(std::env::args().skip(1)).unwrap_or_else(|error| {
+        refuse_arguments(&error, &usage("probe-queue-contention", &Sampling::FLAGS))
+    });
     // The probe's whole output policy, and it is one line: hand the renderer to
     // the sink. Nothing here or below names a stream -- that is chosen once, in
     // `report`, so retargeting a probe is not a rewrite.
-    emit_report(render);
+    emit_report(|out| render(out, &sampling));
 }
 
 #[cfg(test)]
@@ -40,7 +45,7 @@ mod tests;
 /// two tables hard-coded a column width for formatters whose output has no
 /// fixed maximum, and the drained footer printed a seven-run result beneath a
 /// table produced by one invocation. See `M4.7`.
-fn render(out: &mut dyn std::fmt::Write) {
+fn render(out: &mut dyn std::fmt::Write, sampling: &Sampling) {
     // The banner is the one line that is not a function of the observation --
     // it is a fresh topology read -- so it is written here and
     // `render_observation` stays a pure function of what was measured. That
@@ -55,7 +60,30 @@ fn render(out: &mut dyn std::fmt::Write) {
         "{}",
         windows_placement_probe::fingerprint::banner_line()
     );
-    render_observation(out, &measure());
+    // The build that produced the figures, beside the banner and for the same
+    // reason: a capture's runs are comparable only when one build produced them,
+    // and the capture scripts refuse a set whose runs name different builds
+    // (`M4.8`). Written here rather than in `render_observation` because it is a
+    // fact about this binary, not about what was measured.
+    let _ = writeln!(
+        out,
+        "build: {}",
+        windows_platform_probes::build_identity::this_build()
+    );
+    let observation = measure(sampling);
+    render_observation(out, &observation);
+    // The raw data, last, as every probe's normal run emits it (`M8.2`). The
+    // build comes from the same `this_build()` as the report's `build:` line,
+    // so the two cannot disagree.
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(
+            &observation,
+            &windows_platform_probes::build_identity::this_build().to_string()
+        )
+        .render()
+    );
 }
 
 /// Everything the report says about an observation.
@@ -80,9 +108,12 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
     // interpretable with them -- see D-observations-not-verdicts. The build
     // profile is one of them too: a captured report has to be able to show it
     // was produced by a build that can measure, not merely stay silent when it
-    // was. The dispersion belongs here as well, and now is: each row carries the
-    // range across its repetitions and the resulting spread. What M4.2 still
-    // covers is making the sampling parameters settable rather than fixed.
+    // was. The dispersion belongs here as well, and is: each row carries the
+    // range across its repetitions and the resulting spread. The sampling is
+    // settable (M4.2), so it is read from the observation -- what produced these
+    // figures -- and a run that did not use the defaults says so. The order is
+    // printed too (M4.4): the figures published before it were taken
+    // sequentially, and the default is now interleaved.
     let _ = writeln!(
         out,
         "profile: {}",
@@ -92,11 +123,29 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
             "release"
         }
     );
+    let sampling = &observation.sampling;
+    let counts: Vec<String> = sampling
+        .producer_counts
+        .iter()
+        .map(ToString::to_string)
+        .collect();
     let _ = writeln!(
         out,
         "sampling: {} pushes per producer, median of {} repetitions, one untimed \
-         warmup pass\n",
-        PUSHES_PER_PRODUCER, REPETITIONS
+         warmup pass, {}, producer counts {}",
+        sampling.pushes_per_producer,
+        sampling.repetitions,
+        sampling.order.described(),
+        counts.join(", "),
+    );
+    let _ = writeln!(
+        out,
+        "{}\n",
+        if sampling.is_default() {
+            "  (the defaults)"
+        } else {
+            "  (NOT the defaults: set on the command line, so these figures are not the default run's)"
+        }
     );
     // A debug build does not merely lose precision here: the un-inlined overhead
     // swamps the cache-coherence effects that ARE the finding, and the two MPSC
@@ -144,7 +193,9 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
     // reason: `format_scaling_bounded` renders a point plus a measured interval,
     // whose width follows the data and has no fixed maximum. See
     // `ratio_column_width`.
-    let scaling_rows: Vec<(usize, [String; 4])> = PRODUCER_COUNTS
+    let scaling_rows: Vec<(usize, [String; 4])> = observation
+        .sampling
+        .producer_counts
         .iter()
         .map(|&producers| {
             let cell = |shape: &str| {
@@ -232,7 +283,9 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
     // whose width follows the measured span. The header labels join the
     // derivation rather than being assumed to fit, so the column is correct by
     // construction instead of by the floor happening to exceed them.
-    let drained_rows: Vec<(usize, String, String, String, String, String)> = PRODUCER_COUNTS
+    let drained_rows: Vec<(usize, String, String, String, String, String)> = observation
+        .sampling
+        .producer_counts
         .iter()
         .map(|&producers| {
             let plain = observation.find(&observation.drained, shapes::SLOTWISE_MPSC, producers);
@@ -355,16 +408,24 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
     // present while carrying the did-not-run sentinel, which `render_table`
     // marks `--` and this sentence would otherwise still count. See
     // `Observation::count_measured`.
-    let layouts_measured = observation.count_measured(
-        &observation.isolated,
-        &[
-            shapes::CLAIM_NARROW,
-            shapes::CLAIM_DEEP,
-            shapes::CLAIM_PERPETUAL,
-            shapes::CLAIM_WIDE,
-        ],
-        PRODUCER_COUNTS[0],
-    );
+    // At the first producer count measured; an observation that measured none
+    // counts none, rather than indexing past an empty list.
+    let layouts_measured = observation
+        .sampling
+        .producer_counts
+        .first()
+        .map_or(0, |&producers| {
+            observation.count_measured(
+                &observation.isolated,
+                &[
+                    shapes::CLAIM_NARROW,
+                    shapes::CLAIM_DEEP,
+                    shapes::CLAIM_PERPETUAL,
+                    shapes::CLAIM_WIDE,
+                ],
+                producers,
+            )
+        });
     let _ = writeln!(
         out,
         "     {layouts_measured} apportionments of reserving_mpsc's claim word, measured on"
@@ -440,7 +501,9 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
         // width is a minimum, so sizing the header first and discovering a wider
         // cell later does not truncate that cell -- it silently pushes the two
         // columns after it out of line. See `ratio_column_width`.
-        let rows: Vec<(usize, [String; 4], [String; 3])> = PRODUCER_COUNTS
+        let rows: Vec<(usize, [String; 4], [String; 3])> = observation
+            .sampling
+            .producer_counts
             .iter()
             .map(|&producers| {
                 let narrow = observation.find(regime, shapes::CLAIM_NARROW, producers);

@@ -38,7 +38,7 @@
 //! already closed.
 
 use std::io;
-use std::os::windows::io::{BorrowedHandle, OwnedHandle};
+use std::os::windows::io::BorrowedHandle;
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -47,6 +47,7 @@ use std::time::Duration;
 
 use windows_impersonation_token_sys::ImpersonationToken;
 use windows_threadpool_sys::callback_env::CallbackEnviron;
+use windows_threadpool_sys::wait::WaitableHandle;
 use windows_threadpool_sys::work::ThreadpoolWork;
 
 use crate::admission::{self, EnumerationHandle};
@@ -797,14 +798,20 @@ impl Receiver {
         self.shared.completions.doorbell()
     }
 
-    /// A duplicate of [`doorbell`](Self::doorbell) that the caller owns, as
-    /// arming a `ThreadpoolWait` requires.
+    /// The doorbell as a wait target for a `ThreadpoolWait`, sharing the ring's
+    /// handle rather than duplicating it.
+    ///
+    /// The target holds the one handle the ring holds, so it signals exactly as
+    /// [`doorbell`](Self::doorbell) does and the handle closes when the last
+    /// holder drops. A client cannot set or reset it through the target without
+    /// `unsafe`: that stays the ring's, which keeps the doorbell signalled
+    /// exactly while there is something to take.
     ///
     /// # Errors
     ///
-    /// Returns the error from `CreateEventW` or `DuplicateHandle`.
-    pub fn doorbell_owned(&self) -> io::Result<OwnedHandle> {
-        self.shared.completions.doorbell_owned()
+    /// Returns the error from `CreateEventW` on the first call.
+    pub fn doorbell_waitable(&self) -> io::Result<WaitableHandle> {
+        self.shared.completions.doorbell_waitable()
     }
 
     /// Whether the stream has ended.

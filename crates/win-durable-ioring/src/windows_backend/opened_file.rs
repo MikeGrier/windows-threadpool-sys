@@ -12,24 +12,56 @@
 //! The buffering mode is a type: [`OpenedFile<Cached>`] or [`OpenedFile<Unbuffered>`]. What a mode
 //! implies is stated once, on [`Buffering`]; a consumer that needs the stronger warranty asks for
 //! `OpenedFile<Unbuffered>` in its own signature, and a cached file cannot be passed.
+//!
+//! The open reflects `CreateFileW` and not `std::fs::OpenOptions` (DI-D-64): the path is a
+//! `Wtf16String` handed over as given, the [`Disposition`] is Win32's own, and no option implies
+//! another (a new file does not set the reparse flag by itself). It is a build,
+//! [`OpenedFile::request`], and a perform, [`OpenRequest::perform`], with
+//! [`OpenedFile::open`] the two run together.
 
 use std::fmt;
-use std::fs;
 use std::io;
 use std::marker::PhantomData;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use std::path::{Component, Path, PathBuf, Prefix};
 
+use win_authorization_sys::{SecurityAttributes, SecurityDescriptor};
 use win_shared_os_owned_handle::SharedHandle;
-use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+use windows_namespace_request_sys::open::OpenFile;
+use windows_namespace_request_sys::{FinalPathError, QueryFinalPath};
+use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
+    FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_NO_RECALL, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_FLAG_OVERLAPPED, FILE_FLAG_POSIX_SEMANTICS, FILE_FLAG_RANDOM_ACCESS,
+    FILE_FLAG_SEQUENTIAL_SCAN, FILE_READ_DATA, FILE_WRITE_DATA,
+};
+use wtf_string::{Wtf16Str, Wtf16String};
+
+use durable_ioring::{
+    Access, Capabilities, DataAccess, Geometry, GeometryError, NoData, ReadWrite, WarrantyClass,
 };
 
-use durable_ioring::{Capabilities, Geometry, GeometryError, WarrantyClass};
+use super::disposition::Disposition;
+use super::file_attributes::FileAttributes;
+use super::file_id::FileIdentifier;
+use super::file_rights::FileRights;
+use super::share_mode::ShareMode;
 
+mod by_id;
 mod open_request;
+mod reopen;
 
+pub use by_id::{ByIdOptions, ByIdRequest, IdentityMismatch};
+pub use reopen::{ReopenOptions, ReopenRequest};
+
+#[cfg(test)]
+mod creation_tests;
+#[cfg(test)]
+mod flag_tests;
+#[cfg(test)]
+mod request_tests;
+#[cfg(test)]
+mod share_tests;
 #[cfg(test)]
 mod tests;
 
@@ -125,106 +157,275 @@ impl Buffering for Unbuffered {
     }
 }
 
-/// What to open: access and creation, as `std::fs::OpenOptions` names them. Only these, because
-/// the open mode is what an [`OpenedFile`] vouches for, and a caller's own flags could change it.
-/// A file is shared for reading, writing and deletion, as std opens one.
-#[derive(Clone, Copy, Debug, Default)]
+/// What to open: the data access, the other rights, what other opens may do meanwhile, what the open
+/// does about a file that is there or not, whether a link is opened or followed, and the cache hints.
+/// Only these, because the open mode is what an [`OpenedFile`] vouches for, and a caller's own flags
+/// could change it. A file is shared for reading, writing and deletion, as std opens one, until
+/// [`share`](Self::share) says otherwise.
+///
+/// The data access is the type parameter `A`: it starts as [`NoData`], and [`read`](Self::read) and
+/// [`write`](Self::write) move it, so the handle an open makes carries the access it was asked
+/// for.
+///
+/// ```
+/// use win_durable_ioring::windows_backend::{FileOptions, FileRights, ReadWrite};
+///
+/// let options: FileOptions<ReadWrite> = FileOptions::new()
+///     .read()
+///     .write()
+///     .rights(FileRights::WRITE_ATTRIBUTES);
+/// ```
+#[derive(Clone, Copy, Debug)]
 #[must_use]
-pub struct FileOptions {
-    read: bool,
-    write: bool,
-    create: bool,
-    create_new: bool,
-    truncate: bool,
+pub struct FileOptions<A: DataAccess = NoData> {
+    access: PhantomData<A>,
+    rights: FileRights,
+    share: ShareMode,
+    disposition: Disposition,
+    open_reparse_point: bool,
+    attributes: FileAttributes,
+    delete_on_close: bool,
+    open_no_recall: bool,
+    posix_semantics: bool,
+    overlapped: bool,
+    random_access: bool,
+    sequential_scan: bool,
 }
 
-impl FileOptions {
-    /// Nothing requested: set at least read or write before opening.
+impl Default for FileOptions<NoData> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FileOptions<NoData> {
+    /// Nothing requested: no data access and no other right. Ask to [`read`](Self::read) and
+    /// [`write`](Self::write) before opening a file that is to become a target.
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Open for reading.
-    pub fn read(mut self, read: bool) -> Self {
-        self.read = read;
-        self
-    }
-
-    /// Open for writing.
-    pub fn write(mut self, write: bool) -> Self {
-        self.write = write;
-        self
-    }
-
-    /// Create the file if it does not exist.
-    pub fn create(mut self, create: bool) -> Self {
-        self.create = create;
-        self
-    }
-
-    /// Create the file, and fail if it exists.
-    pub fn create_new(mut self, create_new: bool) -> Self {
-        self.create_new = create_new;
-        self
-    }
-
-    /// Truncate the file to nothing on opening.
-    pub fn truncate(mut self, truncate: bool) -> Self {
-        self.truncate = truncate;
-        self
-    }
-
-    /// What this asks of `CreateFileW`, with `flags` added to the flags it implies, or the same
-    /// refusal `std::fs::OpenOptions` gave for a combination that cannot mean anything: no
-    /// access, or creating or truncating without write access.
-    fn parameters(self, flags: u32) -> io::Result<open_request::Parameters> {
-        let access = match (self.read, self.write) {
-            (true, false) => GENERIC_READ,
-            (false, true) => GENERIC_WRITE,
-            (true, true) => GENERIC_READ | GENERIC_WRITE,
-            (false, false) => {
-                return Err(invalid_input(if self.creates_or_truncates() {
-                    "creating or truncating a file requires write access"
-                } else {
-                    "must specify at least one of read or write access"
-                }));
-            }
-        };
-        if !self.write && self.creates_or_truncates() {
-            return Err(invalid_input(
-                "creating or truncating a file requires write access",
-            ));
+        Self {
+            access: PhantomData,
+            rights: FileRights::NONE,
+            share: ShareMode::ALL,
+            disposition: Disposition::OpenExisting,
+            open_reparse_point: false,
+            attributes: FileAttributes::NONE,
+            delete_on_close: false,
+            open_no_recall: false,
+            posix_semantics: false,
+            overlapped: false,
+            random_access: false,
+            sequential_scan: false,
         }
-        // `CREATE_ALWAYS` is not used: a created-and-truncated file is opened with `OPEN_ALWAYS`
-        // and emptied once open, as std does.
-        let (disposition, truncate_after) = match (self.create, self.truncate, self.create_new) {
-            (false, false, false) => (OPEN_EXISTING, false),
-            (true, false, false) => (OPEN_ALWAYS, false),
-            (false, true, false) => (TRUNCATE_EXISTING, false),
-            (true, true, false) => (OPEN_ALWAYS, true),
-            (_, _, true) => (CREATE_NEW, false),
-        };
-        // A new file is never created through a link that is already there.
-        let reparse = if self.create_new {
+    }
+}
+
+impl<A: DataAccess> FileOptions<A> {
+    /// Ask for the right to read the data (`FILE_READ_DATA`). The options carry the access this adds
+    /// to what they already had: [`NoData`] becomes [`ReadOnly`](super::ReadOnly) and
+    /// [`WriteOnly`](super::WriteOnly) becomes [`ReadWrite`].
+    pub fn read(self) -> FileOptions<A::WithRead> {
+        self.with_access()
+    }
+
+    /// Ask for the right to write the data (`FILE_WRITE_DATA`), as [`read`](Self::read) asks to read.
+    pub fn write(self) -> FileOptions<A::WithWrite> {
+        self.with_access()
+    }
+
+    /// The rights to open with besides the data access (`dwDesiredAccess`): the attribute, delete and
+    /// security rights, which gate calls made on the handle this crate lends and not anything it
+    /// does itself. What the file's security allows is the kernel's to say, and its refusal reaches
+    /// the caller as its own error.
+    ///
+    /// Calling this again replaces the rights; join them with `|` to ask for several.
+    pub fn rights(mut self, rights: FileRights) -> Self {
+        self.rights = rights;
+        self
+    }
+
+    /// What other opens of the file may request while this handle is open (`dwShareMode`). The
+    /// default is [`ShareMode::ALL`]; [`ShareMode::NONE`] is an exclusive open, which a database that
+    /// owns its file wants.
+    ///
+    /// An open the sharing of either side does not allow fails with a [`SharingViolation`], whichever
+    /// of the two opens came first. Calling this again replaces the mode.
+    pub fn share(mut self, share: ShareMode) -> Self {
+        self.share = share;
+        self
+    }
+
+    fn with_access<A2: DataAccess>(self) -> FileOptions<A2> {
+        FileOptions {
+            access: PhantomData,
+            rights: self.rights,
+            share: self.share,
+            disposition: self.disposition,
+            open_reparse_point: self.open_reparse_point,
+            attributes: self.attributes,
+            delete_on_close: self.delete_on_close,
+            open_no_recall: self.open_no_recall,
+            posix_semantics: self.posix_semantics,
+            overlapped: self.overlapped,
+            random_access: self.random_access,
+            sequential_scan: self.sequential_scan,
+        }
+    }
+
+    /// What the open does about a file that is there and one that is not (`dwCreationDisposition`).
+    /// The default is [`Disposition::OpenExisting`]. Calling this again replaces the disposition.
+    ///
+    /// No disposition changes the contents of a file that exists, so none is refused for want of the
+    /// right to write. A caller that wants an existing file emptied does it through the handle this
+    /// crate lends, with `File::set_len(0)`, which needs the write right and is not atomic with the
+    /// open.
+    pub fn disposition(mut self, disposition: Disposition) -> Self {
+        self.disposition = disposition;
+        self
+    }
+
+    /// Open a link itself and not what it points to (`FILE_FLAG_OPEN_REPARSE_POINT`). Without it a
+    /// link is followed, including by [`Disposition::CreateNew`], which then creates the file the
+    /// link names. With it a link that is already there is what exists, so `CreateNew` fails and
+    /// `OpenAlways` opens the link. It has no effect on a path that is not a reparse point.
+    pub fn open_reparse_point(mut self, open_reparse_point: bool) -> Self {
+        self.open_reparse_point = open_reparse_point;
+        self
+    }
+
+    /// The attributes a file the open creates is given (`FILE_ATTRIBUTE_*` in `dwFlagsAndAttributes`).
+    /// The default is none, which is not `FILE_ATTRIBUTE_NORMAL`: the empty set passes no attribute at
+    /// all, and a created file has the attributes the file system gives it, `ARCHIVE` among them
+    /// (measured: the same as an open that passes `NORMAL`). Calling this again replaces the set.
+    ///
+    /// They are for a file that is created, and what an open of a file that exists does with them is
+    /// Win32's: the `CreateFileW` page says they are generally combined with the file's own or
+    /// ignored, and nothing here changes an existing file's attributes (measured: the open leaves them
+    /// as they were).
+    pub fn attributes(mut self, attributes: FileAttributes) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
+    /// Delete the file when its last handle is closed (`FILE_FLAG_DELETE_ON_CLOSE`). A durability
+    /// report is then about data that does not outlive the handles, which is the caller's choice to
+    /// make.
+    ///
+    /// The file goes when the last handle to it, however that was opened, is closed. Measured on
+    /// Windows 11 build 26300: the open succeeds without the right to delete among the
+    /// [`rights`](Self::rights) (the `CreateFileW` pages do not say it is needed; `ZwCreateFile`'s
+    /// does, for its own flag, and that is not the call made here), and while the
+    /// handle is open a later open has to share deletion ([`ShareMode::DELETE`]) or it fails with a
+    /// [`SharingViolation`]. Nothing is added or checked here; which combinations are refused ahead
+    /// of the open is `DI-14.4`'s.
+    pub fn delete_on_close(mut self, delete_on_close: bool) -> Self {
+        self.delete_on_close = delete_on_close;
+        self
+    }
+
+    /// Ask that the file's data not be brought back from remote storage to be read
+    /// (`FILE_FLAG_OPEN_NO_RECALL`). The `CreateFileW` page says the flag is for remote storage
+    /// systems; it is passed on and nothing about a target depends on it. What it does to a file on
+    /// a local disk was not measured.
+    pub fn open_no_recall(mut self, open_no_recall: bool) -> Self {
+        self.open_no_recall = open_no_recall;
+        self
+    }
+
+    /// Access the file by POSIX rules (`FILE_FLAG_POSIX_SEMANTICS`). The `CreateFileW` page says
+    /// that this includes allowing names that differ only in case, and that a file made with the flag
+    /// may not be reachable by applications written for MS-DOS or 16-bit Windows. It is passed on and
+    /// nothing about a target depends on it.
+    pub fn posix_semantics(mut self, posix_semantics: bool) -> Self {
+        self.posix_semantics = posix_semantics;
+        self
+    }
+
+    /// Open the file for overlapped I/O (`FILE_FLAG_OVERLAPPED`). Every operation this crate's targets
+    /// make is addressed by offset, so the file pointer the system then stops keeping is not one they
+    /// read. Measured on Windows 11 build 26300 (the run is in `DI-D-64`), the ring takes such a
+    /// handle and reports the same result for each operation as for one opened without the flag, in
+    /// each buffering mode. What differs is when a completion is there: a handle opened without the
+    /// flag completes during the submit, and an unbuffered one opened with it was not complete then
+    /// for its reads, which then completed in an order that was not always the order queued.
+    ///
+    /// The handle this crate lends is the same one, so I/O a caller makes on it directly without an
+    /// offset, with a `std::fs::File` for one, is I/O on an overlapped handle, where the
+    /// `CreateFileW` page says the file pointer is not maintained and operations are not serialised.
+    pub fn overlapped(mut self, overlapped: bool) -> Self {
+        self.overlapped = overlapped;
+        self
+    }
+
+    /// Hint that the file will be accessed at random (`FILE_FLAG_RANDOM_ACCESS`), which the system
+    /// may use to tune its caching.
+    ///
+    /// It is passed to an unbuffered file as well as a cached one, and is never refused. The
+    /// `CreateFileW` documentation says the flag "has no effect if the file system does not support
+    /// cached I/O and `FILE_FLAG_NO_BUFFERING`", which can be read two ways, so what it does to an
+    /// unbuffered file is the kernel's to say. Measured on Windows 11 build 26300: every combination
+    /// of the two hints, cached and unbuffered, opens and carries a sector-aligned write and read,
+    /// and an unbuffered one also runs through the ring. Whether a hint changes the system's caching
+    /// was not measured, and nothing about the warranty class, the alignment or write-through
+    /// depends on it. Asking for this and [`sequential_scan`](Self::sequential_scan) together is
+    /// the documentation's "self-defeating", and is passed on all the same.
+    pub fn random_access(mut self, random_access: bool) -> Self {
+        self.random_access = random_access;
+        self
+    }
+
+    /// Hint that the file will be read sequentially from beginning to end
+    /// (`FILE_FLAG_SEQUENTIAL_SCAN`), which the system may use to tune its caching. The
+    /// documentation says it should not be used if reverse scans will be.
+    ///
+    /// Passed through and documented as [`random_access`](Self::random_access) is.
+    pub fn sequential_scan(mut self, sequential_scan: bool) -> Self {
+        self.sequential_scan = sequential_scan;
+        self
+    }
+
+    /// What this asks of `CreateFileW`, with `flags` added to the flags it implies. Every
+    /// combination of the options is a request, so nothing here is refused.
+    fn parameters(self, flags: u32) -> open_request::Parameters {
+        let reparse = if self.open_reparse_point {
             FILE_FLAG_OPEN_REPARSE_POINT
         } else {
             0
         };
-        Ok(open_request::Parameters {
-            access,
-            disposition,
-            flags: flags | reparse,
-            truncate_after,
-        })
-    }
-
-    fn creates_or_truncates(self) -> bool {
-        self.create || self.create_new || self.truncate
+        let mut named = 0;
+        if self.delete_on_close {
+            named |= FILE_FLAG_DELETE_ON_CLOSE;
+        }
+        if self.open_no_recall {
+            named |= FILE_FLAG_OPEN_NO_RECALL;
+        }
+        if self.posix_semantics {
+            named |= FILE_FLAG_POSIX_SEMANTICS;
+        }
+        if self.overlapped {
+            named |= FILE_FLAG_OVERLAPPED;
+        }
+        let mut hints = 0;
+        if self.random_access {
+            hints |= FILE_FLAG_RANDOM_ACCESS;
+        }
+        if self.sequential_scan {
+            hints |= FILE_FLAG_SEQUENTIAL_SCAN;
+        }
+        open_request::Parameters {
+            access: data_rights::<A>() | self.rights.bits(),
+            disposition: self.disposition.bits(),
+            flags: flags | reparse | named | hints | self.attributes.bits(),
+            share: self.share.bits(),
+        }
     }
 }
 
-fn invalid_input(message: &'static str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message)
+/// What `A` asks `CreateFileW` for: `FILE_READ_DATA` as it reads and `FILE_WRITE_DATA` as it writes,
+/// and no other right. The append bit is never among them, so a handle that appends and cannot write
+/// at an offset cannot be asked for. The markers are the core's (DI-D-66); what they ask of Win32 is
+/// stated here.
+pub(super) const fn data_rights<A: DataAccess>() -> u32 {
+    (if A::READ { FILE_READ_DATA } else { 0 }) | (if A::WRITE { FILE_WRITE_DATA } else { 0 })
 }
 
 /// An unbuffered file was asked for on a device of another machine, which cannot keep the claim
@@ -247,55 +448,246 @@ impl fmt::Display for RemoteDevice {
 
 impl std::error::Error for RemoteDevice {}
 
-/// A file this crate opened, in buffering mode `B`: a [`SharedHandle`] and what is known of it
-/// because of how it was opened. Cloning shares the one handle.
+/// An unbuffered file was asked for on a handle whose location could not be read: it has no final
+/// path (`NUL` has none), so it is not known to be a file on a local volume, which is what the
+/// warranty of an unbuffered file rests on.
+///
+/// This is this crate's own narrowing, not a condition `CreateFileW` documents: the open itself
+/// succeeded, and the handle is closed. A cached open of the same name is not refused. The call's
+/// own error is the [`source`](std::error::Error::source), kept as the call reported it, and is not
+/// a statement of what the handle is.
+#[derive(Debug)]
+pub struct UnknownLocation {
+    /// What reading the handle's final path reported.
+    pub cause: io::Error,
+}
+
+impl fmt::Display for UnknownLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the handle's final path could not be read, so it is not known to be a file on a local volume, which an unbuffered file needs: {}",
+            self.cause
+        )
+    }
+}
+
+impl std::error::Error for UnknownLocation {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.cause)
+    }
+}
+
+/// An open failed because of how the file is already open: either this open asked for an access that
+/// an open already holding the file does not share, or it did not share an access that open asked for.
+/// `CreateFileW` fails both ways with `ERROR_SHARING_VIOLATION` and says nothing of which, and no
+/// documented call reports the other open's access or sharing, so this carries what *this* open asked
+/// for and nothing about the other.
+///
+/// It is the cause of an [`io::ErrorKind::ResourceBusy`] error from [`OpenedFile::open`], reached with
+/// [`io::Error::get_ref`] and a downcast, and of the same error from [`OpenedFile::open_by_id`]. The
+/// kernel's own error, which carries the Win32 code, is its [`source`](std::error::Error::source).
+#[derive(Debug)]
+pub struct SharingViolation {
+    /// What the open named the file by.
+    pub by: OpenedBy,
+    /// The data access the open asked for, or `None` for one that asked for no data right.
+    pub data: Option<Access>,
+    /// The rights the open asked for besides the data access.
+    pub rights: FileRights,
+    /// What this open allowed other opens to request.
+    pub share: ShareMode,
+    os_error: io::Error,
+}
+
+impl fmt::Display for SharingViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} is open in a way that conflicts with this open (data access {}, {:?}, sharing {:?}): \
+             the other open does not share what this one asked for, or this one does not share what \
+             the other holds",
+            self.by,
+            self.data
+                .map_or_else(|| "none".to_owned(), |data| data.to_string()),
+            self.rights,
+            self.share,
+        )
+    }
+}
+
+impl std::error::Error for SharingViolation {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.os_error)
+    }
+}
+
+/// What an open named the file by: the path it was given, the identifier it opened on the hint's
+/// volume, or, for a reopen, the handle it was given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenedBy {
+    /// A path, as it was given.
+    Path(PathBuf),
+    /// An identifier, by [`OpenedFile::open_by_id`].
+    Identifier(FileIdentifier),
+    /// What the original handle of a reopen names, by [`OpenedFile::reopen`]. The handle is the
+    /// caller's own, so it is not carried.
+    Reopen,
+}
+
+impl fmt::Display for OpenedBy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Path(path) => write!(f, "{}", path.display()),
+            Self::Identifier(identifier) => write!(f, "the file identified by {identifier:?}"),
+            Self::Reopen => write!(f, "the file the reopened handle names"),
+        }
+    }
+}
+
+/// The data access `A` asks for, as a value, or `None` for one that asks for no data right.
+pub(super) fn data_access<A: DataAccess>() -> Option<Access> {
+    match (A::READ, A::WRITE) {
+        (false, false) => None,
+        (true, false) => Some(Access::ReadOnly),
+        (false, true) => Some(Access::WriteOnly),
+        (true, true) => Some(Access::ReadWrite),
+    }
+}
+
+/// `error`, or the [`SharingViolation`] it is if the kernel said so.
+pub(super) fn refine_sharing(
+    error: io::Error,
+    path: &Wtf16Str,
+    data: Option<Access>,
+    rights: FileRights,
+    share: ShareMode,
+) -> io::Error {
+    refine_sharing_by(
+        error,
+        || OpenedBy::Path(PathBuf::from(path.to_os_string())),
+        data,
+        rights,
+        share,
+    )
+}
+
+/// `error`, or the [`SharingViolation`] it is if the kernel said so, naming the file as `by` does.
+fn refine_sharing_by(
+    error: io::Error,
+    by: impl FnOnce() -> OpenedBy,
+    data: Option<Access>,
+    rights: FileRights,
+    share: ShareMode,
+) -> io::Error {
+    if error.raw_os_error() != Some(ERROR_SHARING_VIOLATION.cast_signed()) {
+        return error;
+    }
+    io::Error::new(
+        io::ErrorKind::ResourceBusy,
+        SharingViolation {
+            by: by(),
+            data,
+            rights,
+            share,
+            os_error: error,
+        },
+    )
+}
+
+/// A file this crate opened, in buffering mode `B` and with data access `A`: a [`SharedHandle`] and
+/// what is known of it because of how it was opened. Cloning shares the one handle.
 ///
 /// It is what a [`Win32FileTarget`](super::Win32FileTarget) is made from, and the only thing it
-/// can be made from; the module documentation says why.
+/// can be made from; the module documentation says why. A target needs a data right, so a file
+/// opened with [`NoData`] cannot be made into one.
 ///
 /// A consumer that needs the stronger warranty says so in its signature, and a cached file cannot
 /// be passed:
 ///
 /// ```compile_fail,E0308
+/// use win_durable_ioring::Wtf16String;
 /// use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, Unbuffered};
 ///
 /// fn needs_an_unbuffered_file(_: OpenedFile<Unbuffered>) {}
 ///
-/// let cached = OpenedFile::<Cached>::open("a-file", FileOptions::new().read(true)).unwrap();
+/// let options = FileOptions::new().read().write();
+/// let name = Wtf16String::from_os_str("a-file".as_ref());
+/// let cached = OpenedFile::<Cached>::open(name, options).unwrap();
 /// needs_an_unbuffered_file(cached);
 /// ```
+///
+/// Nor can one opened for reading only be given where reading and writing are asked for:
+///
+/// ```compile_fail,E0308
+/// use win_durable_ioring::Wtf16String;
+/// use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, ReadWrite};
+///
+/// fn needs_both(_: OpenedFile<Cached, ReadWrite>) {}
+///
+/// let name = Wtf16String::from_os_str("a-file".as_ref());
+/// let read_only = OpenedFile::<Cached, _>::open(name, FileOptions::new().read()).unwrap();
+/// needs_both(read_only);
+/// ```
+///
+/// The data access is a type parameter after the buffering mode, and a parameter written in a path
+/// takes its default, [`ReadWrite`], when it is left off, so a file opened with other options names it
+/// or leaves it to be inferred with `_`: `OpenedFile::<Cached, _>::open(path, options)`.
 #[derive(Clone, Debug)]
-pub struct OpenedFile<B: Buffering = Cached> {
+pub struct OpenedFile<B: Buffering = Cached, A: DataAccess = ReadWrite> {
     handle: SharedHandle,
     geometry: Geometry,
-    buffering: PhantomData<B>,
+    mode: PhantomData<(B, A)>,
 }
 
-impl<B: Buffering> OpenedFile<B> {
-    /// Open `path` as `options` says, in buffering mode `B`.
+impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
+    /// Open `path` as `options` says, in buffering mode `B`: [`request`](Self::request) and then
+    /// [`perform`](OpenRequest::perform), one after the other on this thread. The handle has the data
+    /// access the options were given, which is its type `A`.
+    ///
+    /// **This blocks for as long as `CreateFileW` does**, which on a network path or an opportunistic
+    /// lock break can be a long time. A caller that cannot block builds the request here and performs
+    /// it on a thread it chooses.
+    ///
+    /// **Where the name leads is the caller's to know.** A name can be redirected to a device by a
+    /// reparse point in an intermediate directory, which `FILE_FLAG_OPEN_REPARSE_POINT` does not stop
+    /// (it applies to the final component), or by an object-manager link such as a drive letter, which
+    /// is resolved before a file system sees the name, so no reparse flag applies to it. An open of
+    /// a serial port's name was observed not to return. This crate does not inspect the name, refuse it,
+    /// bound the open or cancel it: the open is `CreateFileW`'s, and `CancelSynchronousIo` is documented
+    /// as a use and not as a guarantee, and targets a thread and not a call. The design notes' `DI-D-67`
+    /// has the sources and the measurement.
     ///
     /// # Errors
     ///
-    /// Whatever the open reports, and [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`] error)
-    /// when `B` can claim its warranty only on a local device and `path` is on a remote one. That
-    /// is decided from the path's final location, which resolves links and mapped drives, before
-    /// anything is created; the file can still be replaced by a link in the time between.
-    pub fn open(path: impl AsRef<Path>, options: FileOptions) -> io::Result<Self> {
-        let path = path.as_ref();
-        if B::LOCAL_DEVICE_ONLY {
-            let location = final_location(path)?;
-            if names_a_remote_device(&location) {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    RemoteDevice { location },
-                ));
-            }
-        }
-        let handle = open_request::open(path, options.parameters(B::FLAGS)?)?;
-        Ok(Self {
-            handle: SharedHandle::from(handle),
-            geometry: B::geometry(),
-            buffering: PhantomData,
+    /// Those of [`request`](Self::request) and of [`perform`](OpenRequest::perform).
+    pub fn open(path: Wtf16String, options: FileOptions<A>) -> io::Result<Self> {
+        Self::request(path, options)?.perform()
+    }
+
+    /// The request to open `path` as `options` says, in buffering mode `B`, built here and made
+    /// wherever the caller chooses with [`perform`](OpenRequest::perform). Nothing is opened, and
+    /// nothing blocks.
+    ///
+    /// The path is handed to Win32 as it was given: this crate does not lengthen it, shorten it or
+    /// refuse it, so a path longer than `MAX_PATH` without a verbatim prefix, and an empty one, are
+    /// what `CreateFileW` makes of them. A relative path is fixed to the current directory as it is
+    /// when this is called, so the request names the same file wherever and whenever it is performed.
+    /// Convert a `Path` with [`Wtf16String::from_os_str`], which loses nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::InvalidInput`] if `path` has an interior NUL, and the error of
+    /// `GetCurrentDirectoryW` if the current directory had to be read and could not be, both before
+    /// anything is touched.
+    pub fn request(path: Wtf16String, options: FileOptions<A>) -> io::Result<OpenRequest<B, A>> {
+        let (rights, share) = (options.rights, options.share);
+        let request = open_request::request(path, options.parameters(B::FLAGS))?;
+        Ok(OpenRequest {
+            request,
+            rights,
+            share,
+            mode: PhantomData,
         })
     }
 
@@ -312,7 +704,104 @@ impl<B: Buffering> OpenedFile<B> {
     }
 }
 
-impl OpenedFile<Unbuffered> {
+/// The request to open one file, built by [`OpenedFile::request`] and made by
+/// [`perform`](Self::perform): the path, fixed to the current directory if it was relative, and the
+/// options, typed by the buffering mode and the data access of the [`OpenedFile`] it opens.
+///
+/// It is `Send`, so it can be built on the thread that has the path and the current directory and
+/// performed on one that can afford to block, and it can be performed more than once, each time
+/// opening the file again.
+#[derive(Debug)]
+#[must_use = "a request that is not performed opens nothing"]
+pub struct OpenRequest<B: Buffering = Cached, A: DataAccess = ReadWrite> {
+    request: OpenFile,
+    rights: FileRights,
+    share: ShareMode,
+    mode: PhantomData<fn() -> (B, A)>,
+}
+
+impl<B: Buffering, A: DataAccess> OpenRequest<B, A> {
+    /// Give the file this open creates the security descriptor, built from SDDL with
+    /// [`SecurityDescriptor::from_sddl`]. The request owns it and frees it, and a caller never holds
+    /// a pointer to it. Calling this again replaces the descriptor.
+    ///
+    /// It is the request's and not a [`FileOptions`] field because a descriptor owns memory and
+    /// cannot be copied, and the options are a plain `Copy` description that is passed to several
+    /// opens. Handles are never inheritable: the attributes this passes to `CreateFileW` say so
+    /// (`bInheritHandle` is false), and a request given no descriptor passes none, which the
+    /// `CreateFileW` page documents as a handle that cannot be inherited.
+    ///
+    /// The `CreateFileW` page says the descriptor is for a file that is created and is ignored when
+    /// the file exists (measured: an open of an existing file with a descriptor that denies reading
+    /// leaves the file as it was). This crate does not apply the descriptor itself; a created
+    /// file's descriptor reads back as the one given, through `win-authorization-sys`'s
+    /// `get_security_info`, for a file opened with [`FileRights::READ_CONTROL`].
+    pub fn with_security_descriptor(self, descriptor: SecurityDescriptor) -> Self {
+        Self {
+            request: self
+                .request
+                .with_security(Some(SecurityAttributes::new(Some(descriptor), false))),
+            ..self
+        }
+    }
+
+    /// Open the file, on the calling thread. **This blocks for as long as `CreateFileW` does**, and
+    /// where the name leads is the caller's to know, as [`OpenedFile::open`] says.
+    ///
+    /// # Errors
+    ///
+    /// [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`] error) when `B` can claim its warranty
+    /// only on a local device and the opened handle is on a remote one. That is decided from the
+    /// handle's final path, which `GetFinalPathNameByHandleW` resolves through links and mapped
+    /// drives, so there is no window between the check and the open in which a link can be
+    /// swapped. It is made after the open, so a file created before the refusal stays created and
+    /// the open has already reached the network. [`UnknownLocation`] (also
+    /// [`io::ErrorKind::Unsupported`]) when the handle's final path cannot be read, since it is then
+    /// not known to be a file on a local volume; the call's own error is its source. That is this
+    /// crate's narrowing and not a condition of `CreateFileW`, and only an unbuffered open is subject
+    /// to it: a cached open of a device is not refused, and what a name leads to is the caller's
+    /// responsibility (DI-D-67). Otherwise whatever the open reports, among them [`SharingViolation`] (as an
+    /// [`io::ErrorKind::ResourceBusy`] error) when the file is open in a way that conflicts with
+    /// this open's access or sharing.
+    pub fn perform(&self) -> io::Result<OpenedFile<B, A>> {
+        let handle = open_request::perform(&self.request).map_err(|error| {
+            refine_sharing(
+                error,
+                self.request.path(),
+                data_access::<A>(),
+                self.rights,
+                self.share,
+            )
+        })?;
+        OpenedFile::admit(SharedHandle::from(handle))
+    }
+}
+
+impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
+    /// The checks every open makes on the handle it opened, whether by path or by identifier, and
+    /// the file it is if they pass (DI-14.5): when `B` claims its warranty only on a local device, the
+    /// handle's final path must be readable and must not name a device of another machine.
+    fn admit(handle: SharedHandle) -> io::Result<Self> {
+        if B::LOCAL_DEVICE_ONLY {
+            let location = final_location(&handle).map_err(|cause| {
+                io::Error::new(io::ErrorKind::Unsupported, UnknownLocation { cause })
+            })?;
+            if names_a_remote_device(&location) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    RemoteDevice { location },
+                ));
+            }
+        }
+        Ok(OpenedFile {
+            handle,
+            geometry: B::geometry(),
+            mode: PhantomData,
+        })
+    }
+}
+
+impl<A: DataAccess> OpenedFile<Unbuffered, A> {
     /// State the device's sector size, for a device whose sectors are smaller than
     /// [`Unbuffered::DEFAULT_SECTOR_SIZE`]. A size that is too small for the device is refused by
     /// the device on the first transfer that needs more, as an error on that operation's
@@ -327,30 +816,33 @@ impl OpenedFile<Unbuffered> {
     }
 }
 
-impl<B: Buffering> AsHandle for OpenedFile<B> {
+impl<B: Buffering, A: DataAccess> AsHandle for OpenedFile<B, A> {
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
     }
 }
 
-impl<B: Buffering> AsRawHandle for OpenedFile<B> {
+impl<B: Buffering, A: DataAccess> AsRawHandle for OpenedFile<B, A> {
     fn as_raw_handle(&self) -> RawHandle {
         self.handle.as_raw_handle()
     }
 }
 
-/// Where `path` finally lands: itself if it exists, else the directory it would be created in.
-fn final_location(path: &Path) -> io::Result<PathBuf> {
-    match fs::canonicalize(path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let parent = path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or(Path::new("."));
-            fs::canonicalize(parent)
-        }
-        other => other,
-    }
+/// Where an opened handle is: its final path, in `GetFinalPathNameByHandleW`'s default form, which
+/// follows links and mapped drives to the object the handle names. A handle opened on a link itself
+/// (`FILE_FLAG_OPEN_REPARSE_POINT`) names the link, on its own volume.
+///
+/// The request is given the handle shared, not a duplicate of it (DI-16.1).
+fn final_location(handle: &SharedHandle) -> io::Result<PathBuf> {
+    let path = QueryFinalPath::new(handle.clone())
+        .perform()
+        .map_err(|error| match error {
+            FinalPathError::Win32(code) => {
+                io::Error::from_raw_os_error(open_request::raw_code(code.code()))
+            }
+            other => io::Error::other(other),
+        })?;
+    Ok(PathBuf::from(path.to_os_string()))
 }
 
 /// Whether a resolved path names a device of another machine: a UNC share, in either of its

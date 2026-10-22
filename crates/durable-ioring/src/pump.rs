@@ -19,7 +19,8 @@ use std::time::Duration;
 use crate::backend::IoBackend;
 use crate::clock::StampClock;
 use crate::contract::EpochId;
-use crate::engine::{Engine, EngineGuard, Slot, lock, present};
+use crate::engine::{Engine, EngineGuard, Slot, lock, present_watched};
+use crate::lock_watch::{ENGINE_LOCK, LockWatch, WatchedGuard};
 use crate::types::IoFault;
 
 #[cfg(test)]
@@ -66,6 +67,8 @@ where
     /// Waited on with no lock held; the engine's slot is not touched until the wait is over.
     notification: Bk::Notification,
     engine: Slot<E, Bk, C, K>,
+    /// Times the waits for `engine`'s lock, if the driver asked.
+    watch: Option<LockWatch>,
 }
 
 impl<E, Bk, C, K> PumpedDelivery<E, Bk, C, K>
@@ -93,7 +96,17 @@ where
         Self {
             notification,
             engine: Arc::new(Mutex::new(Some(engine))),
+            watch: None,
         }
+    }
+
+    /// Report the waits for the engine's lock this delivery makes through `watch` (DI-D-26). A
+    /// path of the driver's own that reaches the slot through [`shared`](Self::shared) is not
+    /// reported unless it takes the lock through the same watch.
+    #[must_use]
+    pub fn with_lock_watch(mut self, watch: LockWatch) -> Self {
+        self.watch = Some(watch);
+        self
     }
 
     /// Drain the backend to empty; if that delivered entries, return. Otherwise wait up to
@@ -109,14 +122,14 @@ where
     /// completions an earlier drain took, or by the setup signal the ring crate raises once
     /// ([D-20](../../windows-ioring-sys/DESIGN-NOTES.md#d-20)).
     pub fn pump(&mut self, timeout: Option<Duration>) -> Pumped {
-        if lock(&self.engine).as_mut().is_some_and(Engine::drain) {
+        if self.locked().as_mut().is_some_and(Engine::drain) {
             return Pumped {
                 ready: true,
                 waited: Ok(false),
             };
         }
         let waited = self.notification.wait(timeout);
-        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);
+        let ready = self.locked().as_mut().is_some_and(Engine::drain);
         Pumped { ready, waited }
     }
 }
@@ -129,7 +142,14 @@ where
 {
     /// The engine, locked: what a consumer call acts through.
     pub fn engine(&self) -> EngineGuard<'_, Engine<E, Bk, C, K>> {
-        present(lock(&self.engine))
+        present_watched(self.locked())
+    }
+
+    fn locked(&self) -> WatchedGuard<'_, Option<Engine<E, Bk, C, K>>> {
+        match &self.watch {
+            Some(watch) => watch.lock(&self.engine, ENGINE_LOCK),
+            None => WatchedGuard::unwatched(lock(&self.engine)),
+        }
     }
 
     /// The engine's slot, for a path of the driver's own that reaches it on another thread.

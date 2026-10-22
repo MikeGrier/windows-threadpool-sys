@@ -4,8 +4,12 @@
 use super::*;
 use crate::error::{EnumerationError, Win32Error};
 use crate::testing::named_file;
-use std::os::windows::io::AsHandle;
+use std::os::windows::io::{AsHandle, AsRawHandle};
+use std::sync::Mutex;
+use std::sync::mpsc;
+use win_sync_sys::{WaitOutcome, wait_for_single_object};
 use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+use windows_threadpool_sys::wait::ThreadpoolWait;
 
 fn ring(capacity: usize) -> Arc<CompletionRing> {
     Arc::new(CompletionRing::new(capacity))
@@ -289,21 +293,83 @@ fn a_terminal_delivery_signals_the_doorbell() {
 }
 
 #[test]
-fn an_owned_doorbell_refers_to_the_same_event() {
+fn a_waitable_doorbell_is_the_rings_own_handle_and_sees_what_the_ring_signals() {
+    // The same raw handle: shared, where `doorbell_owned` made a second one.
     let ring = ring(2);
-    let owned = ring.doorbell_owned().expect("a duplicate");
+    let waitable = ring.doorbell_waitable().expect("a shared event");
+    let own = ring.doorbell().expect("an event");
+    assert_eq!(waitable.handle().as_raw_handle(), own.as_raw_handle());
+
+    assert!(!is_signalled(waitable.handle()));
     ring.try_send_entry(entry(1, "a")).expect("room");
-    assert!(is_signalled(owned.as_handle()));
+    assert!(is_signalled(waitable.handle()));
+    ring.try_take().expect("a record");
+    assert!(!is_signalled(waitable.handle()));
+}
+
+#[test]
+fn a_waitable_doorbell_gives_its_handle_back_only_to_its_last_holder() {
+    // A duplicate would be the wait's alone and come back at once; a share is the ring's as well.
+    let ring = ring(2);
+    let waitable = ring.doorbell_waitable().expect("a shared event");
+
+    let waitable = waitable
+        .into_handle()
+        .expect_err("the ring still holds the handle");
+    drop(ring);
+    waitable
+        .into_handle()
+        .expect("the wait is the last holder once the ring has gone");
+}
+
+#[test]
+fn a_waitable_doorbell_keeps_the_event_open_after_the_ring_is_gone() {
+    let ring = ring(2);
+    let waitable = ring.doorbell_waitable().expect("a shared event");
+    ring.try_send_entry(entry(1, "a")).expect("room");
+    drop(ring);
+    assert!(is_signalled(waitable.handle()));
+}
+
+#[test]
+fn a_thread_pool_wait_on_the_doorbell_runs_when_the_ring_has_something_to_observe() {
+    // The whole path a client takes: a wait built from the shared target, armed, woken by an
+    // entry, and woken again by the next once the receiver has drained.
+    let ring = ring(4);
+    let (woken, wakes) = mpsc::channel();
+    let woken = Mutex::new(woken);
+    let wait = ThreadpoolWait::new(
+        ring.doorbell_waitable().expect("a shared event"),
+        move |_| {
+            if let Ok(woken) = woken.lock() {
+                let _ = woken.send(());
+            }
+        },
+        None,
+    )
+    .expect("a wait");
+    let bound = Duration::from_secs(5);
+
+    wait.arm(None);
+    assert!(wakes.recv_timeout(Duration::from_millis(50)).is_err());
+    ring.try_send_entry(entry(1, "a")).expect("room");
+    wakes.recv_timeout(bound).expect("woken by the first entry");
+
+    ring.try_take().expect("a record");
+    wait.arm(None);
+    assert!(wakes.recv_timeout(Duration::from_millis(50)).is_err());
+    ring.try_send_entry(entry(1, "b")).expect("room");
+    wakes
+        .recv_timeout(bound)
+        .expect("woken by the second entry");
 }
 
 /// Whether a waitable handle is currently signalled.
-fn is_signalled(handle: BorrowedHandle<'_>) -> bool {
-    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
-
-    // SAFETY: the handle is a live event owned by the ring under test.
-    let result = unsafe { WaitForSingleObject(handle.as_raw_handle() as HANDLE, 0) };
-    result == WAIT_OBJECT_0
+///
+/// A poll with no time to wait, which takes nothing from a manual-reset event.
+fn is_signalled(handle: impl AsHandle) -> bool {
+    wait_for_single_object(handle, Some(Duration::ZERO)).expect("a wait on the doorbell")
+        == WaitOutcome::Signalled
 }
 
 #[test]

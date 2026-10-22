@@ -62,11 +62,12 @@ impl<K> DerefMut for One<K> {
 
 impl<K: StampClocked> One<K> {
     fn with_clock(clock: K) -> Self {
-        Self(Durability::new(
-            InstanceId::next(),
-            clock,
-            Arc::new(NoDiagnostics),
-        ))
+        Self::reporting(clock, Arc::new(NoDiagnostics))
+    }
+
+    /// A core reporting to `sink`.
+    fn reporting(clock: K, sink: Arc<dyn crate::diagnostics::DiagnosticSink>) -> Self {
+        Self(Durability::new(InstanceId::next(), clock, sink))
     }
 
     fn sealed_through(&self) -> Option<u64> {
@@ -669,7 +670,10 @@ fn a_write_a_provider_must_answer_for_leaves_its_seal_pending() {
         default: false,
         provider: true,
     };
-    lineage.serve(Arc::from([DomainId(1)]));
+    lineage.serve(
+        Arc::from([DomainId(1)]),
+        vec![crate::types::FlushDomain::new(b"d1".as_slice())],
+    );
     let write = ops.push_in(&mut lineage, 1, A, only, &[1]);
     lineage.completed(write, FULL);
     assert!(
@@ -687,7 +691,10 @@ fn a_file_both_answer_for_is_flushed_and_still_waits_for_the_provider() {
         default: true,
         provider: true,
     };
-    lineage.serve(Arc::from([DomainId(1)]));
+    lineage.serve(
+        Arc::from([DomainId(1)]),
+        vec![crate::types::FlushDomain::new(b"d1".as_slice())],
+    );
     let write = ops.push_in(&mut lineage, 1, A, both, &[1, 2]);
     lineage.completed(write, FULL);
     assert_eq!(submitted(lineage.seal(1)).flushes, [flush(1, A)]);

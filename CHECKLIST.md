@@ -86,25 +86,9 @@ be settled rather than discovered later.
   bits stay forced. Note `SEM_NOALIGNMENTFAULTEXCEPT`'s behaviour is architecture-dependent, so this needs
   measurement on both ARM64 and x64 rather than reasoning.
 
-- [ ] **M21.3** -- Replace `windows-file-enumeration-sys`'s inline `open_directory` with the general
-  facility's catalogue operation. The direction is settled, not open: that open is the committed first
-  consumer, and the inline path exists only until the general one is proven. The replacement must preserve
-  everything the shipped open already gets right, each of which is a constraint on the catalogue rather
-  than an implementation detail: arbitrary access, share mode and flags (it opens with
-  `FILE_LIST_DIRECTORY`, not `GENERIC_READ`, and requires `FILE_FLAG_BACKUP_SEMANTICS` to obtain a
-  directory handle at all); an **unassociated** handle, since `GetFileInformationByHandleEx` is
-  synchronous; the raw Win32 code unaltered, because `ERROR_FILE_NOT_FOUND` means three different things
-  across the open and the first and later queries and only the consumer can disambiguate; and
-  `GetLastError` captured *before* the context is restored, which the shipped code does deliberately.
-  Its D-15 Globazog acceptance gate must still pass afterwards.
+- [x] **M21.3** -- The enumeration crate's inline `open_directory` is the request crate's `OpenFile`, keeping the access, share mode, flags and unassociated handle it needed. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#m213)
 
-- [ ] **M21.4** -- Add the `FileBasicInfo` query as its own catalogue entry, and have the enumeration
-  crate sequence it after the open rather than performing it inline. It is a blocking namespace call, so
-  leaving it inline would keep a blocking call on the consumer's worker and only half-solve the problem
-  this facility exists for. One entry per Win32 call: this is **not** a compound open-and-classify
-  operation, and the sequencing is logical and client-side -- the crate submits the open, observes its
-  completion, then submits the query. A compound entry is reserved for a measured performance argument
-  and would be a fusion of these two entries rather than a capability they lack. Depends on M21.3.
+- [x] **M21.4** -- The `FileBasicInfo` query is its own catalogue entry, `QueryFileBasicInfo`, and the enumeration crate sequences it after the open. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#m214)
 
 ## M34 -- Tooling
 
@@ -273,6 +257,8 @@ changes.
 - [x] **M34.16** -- Sweep everything nightly, and keep every post-merge sweep from cancelling another. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3416)
 
 - [x] **M34.17** -- Teach the scoped sabotage run as the default local check. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3417)
+
+- [x] **M34.18** -- Lint every `COMPLETED-CHECKLIST.md` mechanically, locally and in CI. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3418)
 
 ## M37 -- Discharge the failable-call standard across the workspace
 
@@ -503,6 +489,38 @@ as one domain -- so it does not belong in a `-sys` crate. It is built on the per
   documentation rather than papered over: a Storage Spaces virtual disk hides its pool members,
   which two spaces in one pool may share; a RAID controller's cache is not visible as a separate
   domain. The engineer's own VHDX layer composes its domains the same way, from its backing file.
+
+- [ ] **M39.3** -- **Predict a directory's domains, and confirm each file's by its handle.** A consumer presents storage
+  roots as directories and creates files in them by name, so the helper maps a directory once to the domains a file created
+  in it will have: the directory's volume, mount points included, by the traversal of `M39.2` from the directory's handle.
+  The directory's path is resolved again at each create, so a junction swapped between the two sends the file elsewhere;
+  an open relative to the directory's handle would close that, and is parked as
+  [DI-15.3](crates/durable-ioring/PARKED.md) for want of a documented call. So after each open the helper reads the new
+  file's volume from its own handle (`GetFileInformationByHandleEx` with `FileIdInfo`, whose volume serial number is the
+  documented field) and compares it with the prediction, reporting a mismatch before the file is declared to dioring. From
+  [the design session](design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#the-real-world-model);
+  the engineer, 2026-10-21: "The volume id refinement is a good catch for that race condition."
+
+## M42 -- Apply the documented-contract rule to the refusals that already exist
+
+The rule is in [DESIGN-NOTES.md](DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) (the engineer,
+2026-10-18): a refusal ahead of a platform call rests on the documented contract and carries its citation,
+a component's own narrowing is named as its own, and a measurement is never a check. These items apply it to
+code written before it was stated. `win-durable-ioring`'s open is not here; it is
+[DI-14.4](crates/durable-ioring/CHECKLIST.md).
+
+- [ ] **M42.1** -- **Census every refusal made ahead of a platform call, across the workspace.** Every place a
+  component returns an error, panics or asserts on its arguments before the call they are for. The census is
+  produced by a search recorded with it, not from recollection, and lists each site with its crate.
+
+- [ ] **M42.2** -- **Classify each one against the rule:** a documented condition on the arguments alone (with
+  the citation, re-read), the component's own narrowing, or neither -- a check resting on a measurement or on
+  a target condition judged ahead of the call. The classification is recorded beside the census.
+
+- [ ] **M42.3** -- **Bring each site of the third kind to the engineer**, with what it rests on and what
+  removing it would let through, before anything is changed. Then carry out what is ruled, one crate per
+  commit, and give each contract refusal its citation and each narrowing its own error kind where it lacks
+  them.
 
 ## M-inf -- Parked
 

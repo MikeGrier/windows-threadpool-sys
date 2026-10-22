@@ -14,8 +14,9 @@ use durable_ioring::driver::InstanceId;
 use durable_ioring::{
     AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
     EpochState, FailureInfo, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo,
-    OpCompletion, OpKind, Outcome, ReadOptions, RemoveTargetError, Resolution, ResolveError,
-    RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
+    OpCompletion, OpKind, Outcome, ReadKey, ReadOptions, RemoveTargetError, Resolution,
+    ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag, TargetKey,
+    UnknownLineage, WriteKey, WriteOptions,
 };
 use durable_ioring::{DurableRing, EntryOf, PushResult};
 use durable_ioring::{FailureId, FailureToken, Lineage, LineageHandle, OpId};
@@ -104,14 +105,14 @@ impl DurableRing for Fake {
 
     fn readiness(&mut self) -> io::Result<Event> {
         if self.readiness_fails {
-            return Err(io::Error::other("the fake refuses to duplicate its signal"));
+            return Err(io::Error::other("the fake refuses to give its signal"));
         }
-        self.signal.try_clone()
+        Ok(self.signal.clone())
     }
 
-    fn add_target(
+    fn add_target<K: TargetKey>(
         &mut self,
-        _key: IoTargetKey,
+        _key: K,
         _target: MemoryTarget,
     ) -> Result<(), AddTargetError<MemoryTarget>> {
         Ok(())
@@ -147,9 +148,9 @@ impl DurableRing for Fake {
         })
     }
 
-    fn write_with(
+    fn write_with<K: WriteKey>(
         &mut self,
-        _file: IoTargetKey,
+        _file: K,
         _offset: u64,
         _buffer: Vec<u8>,
         _tag: Tag<'_, V>,
@@ -159,9 +160,9 @@ impl DurableRing for Fake {
         unimplemented!("tests complete the fake's operations with complete_one")
     }
 
-    fn read_with(
+    fn read_with<K: ReadKey>(
         &mut self,
-        _file: IoTargetKey,
+        _file: K,
         _offset: u64,
         _buffer: Vec<u8>,
         _context: u32,

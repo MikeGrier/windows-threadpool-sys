@@ -58,14 +58,7 @@ fn assert_rejected_without_a_native_call(error: &io::Error) {
 /// A connected server pipe end carrying no data, so a read on it stays pending
 /// until it is cancelled. The client end must be kept alive by the caller.
 fn pending_pipe(tag: &str) -> (UnassociatedEndpoint, std::fs::File) {
-    use std::os::windows::io::{FromRawHandle, OwnedHandle};
-    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
-    use windows_sys::Win32::System::Pipes::CreateNamedPipeW;
-
-    /// `PIPE_ACCESS_DUPLEX`. Changing this value is a breaking change.
-    const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
-    /// `PIPE_TYPE_BYTE`. Changing this value is a breaking change.
-    const PIPE_TYPE_BYTE: u32 = 0x0000_0000;
+    use win_pipes_sys::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
 
     // Built from an escaped separator rather than a literal UNC prefix, so the
     // name survives any tooling that mangles adjacent backslashes.
@@ -74,30 +67,18 @@ fn pending_pipe(tag: &str) -> (UnassociatedEndpoint, std::fs::File) {
         "{sep}{sep}.{sep}pipe{sep}windows-overlapped-io-sys-identity-{tag}-{}",
         std::process::id()
     );
-    let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-
-    // SAFETY: creates a fresh overlapped named pipe from a valid wide name.
-    let handle = unsafe {
-        CreateNamedPipeW(
-            wide.as_ptr(),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-            PIPE_TYPE_BYTE,
-            1,
-            4096,
-            4096,
-            0,
-            ptr::null(),
-        )
+    let options = NamedPipeOptions {
+        open_mode: PipeOpenMode::ACCESS_DUPLEX | PipeOpenMode::OVERLAPPED,
+        pipe_mode: PipeMode::TYPE_BYTE,
+        max_instances: 1,
+        out_buffer_size: 4096,
+        in_buffer_size: 4096,
+        default_timeout_ms: 0,
     };
-    assert!(
-        !handle.is_null() && handle as isize != -1,
-        "CreateNamedPipeW failed: {}",
-        io::Error::last_os_error()
-    );
+    let handle = create_named_pipe(&name, &options, None).expect("create the overlapped pipe");
 
-    // SAFETY: fresh, exclusively owned, and opened with FILE_FLAG_OVERLAPPED.
-    let endpoint =
-        unsafe { UnassociatedEndpoint::assume_overlapped(OwnedHandle::from_raw_handle(handle)) };
+    // SAFETY: fresh, exclusively owned, and created with `PipeOpenMode::OVERLAPPED`.
+    let endpoint = unsafe { UnassociatedEndpoint::assume_overlapped(handle) };
     let client = std::fs::OpenOptions::new()
         .read(true)
         .write(true)

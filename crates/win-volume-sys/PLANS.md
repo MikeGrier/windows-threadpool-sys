@@ -1,5 +1,8 @@
 # Plans: win-volume-sys
 
+Completed checklists are recorded in [COMPLETED-PLANS.md](COMPLETED-PLANS.md), and the items they
+contained are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
+
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | Memory-safe Rust over the Win32 calls for physical disks, partitions, raw partition access and volumes: the volume controls durable-ioring's raw volume backing is built on (done), and WV-M2, which takes in the storage-locality entries built in the namespace crate. Partition and disk management are parked. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [PARKED.md](PARKED.md) | parked | `WV-inf.1` to `WV-inf.3`: the volume's length, enumerating the machine's volumes, and the rest of the storage stack, none gated and each graduating when taken up. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |

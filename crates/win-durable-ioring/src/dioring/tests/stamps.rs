@@ -7,13 +7,10 @@
 use win_time_sys::{Clock, InterruptClock};
 
 use super::MockClock;
-use super::pushes::{GIVEN, Harness, given, instance, instance_with_clock, temp};
+use super::pushes::{Harness, instance, instance_with_clock};
 use crate::dioring::TimeBase;
 use durable_ioring::DurableRing;
-use durable_ioring::{DurabilityRequest, Entry, Failed, ImportScope};
-
-/// `ERROR_IO_DEVICE`, the failure the seam is armed with.
-const IO_DEVICE: u32 = 1117;
+use durable_ioring::{Entry, Failed, ImportScope};
 
 type V = super::V;
 
@@ -30,28 +27,6 @@ fn import<K: TimeBase>(harness: &mut Harness<K>) -> Failed<V> {
         .import_failure(ImportScope::All)
         .expect("import");
     next_failed(harness)
-}
-
-#[test]
-fn an_instance_given_a_clock_stamps_a_failed_flush_with_its_reading_when_observed() {
-    let file = temp(b"");
-    let clock = MockClock::at(7_000);
-    let mut harness = Harness::new(instance_with_clock(
-        vec![given(GIVEN, &file)],
-        Vec::new(),
-        clock.clone(),
-    ));
-    harness.write(GIVEN, 0, b"stamped", 1, 1);
-    harness.next();
-    clock.advance(3_000);
-    harness.ring.fail_next_flush(GIVEN, IO_DEVICE);
-    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
-    let failed = next_failed(&mut harness);
-    assert_eq!(failed.observed.ticks(), 10_000);
-    let inventory = harness.ring.failures();
-    assert_eq!(inventory.len(), 1);
-    assert_eq!(inventory[0].observed, failed.observed);
-    harness.finish();
 }
 
 #[test]

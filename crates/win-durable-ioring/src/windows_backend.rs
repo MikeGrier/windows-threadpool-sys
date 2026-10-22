@@ -31,7 +31,7 @@ use std::os::windows::io::OwnedHandle;
 use std::sync::Arc;
 use std::time::Duration;
 
-use win_sync_sys::{Access, duplicate_handle_with_access};
+use win_handles_sys::{Access, duplicate_handle_with_access};
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, OperationId, Owned,
     PushOptions, PushRefused, RegisteredBuffers, RegisteredFile, RegisteredSpan, RingCondition,
@@ -47,22 +47,46 @@ use durable_ioring::backend::{
 };
 use durable_ioring::{IoFault, IoTargetKey, WriteCaching};
 
+mod disposition;
+mod file_attributes;
+mod file_id;
+mod file_rights;
 mod file_target;
 mod opened_disk;
 mod opened_file;
 mod opened_volume;
 pub(crate) mod pool;
+mod raw_open;
+mod share_mode;
 pub(crate) mod signalled;
 mod wait;
 
 pub use wait::CompletionEvent;
 
+// The markers are the core's (DI-D-66); this module states what each asks of Win32.
+pub use disposition::Disposition;
+pub use durable_ioring::{
+    CanRead, CanWrite, DataAccess, HasData, NoData, ReadOnly, ReadWrite, WriteOnly,
+};
+pub use file_attributes::FileAttributes;
+pub use file_id::{FileId, FileIdentifier};
+pub use file_rights::FileRights;
 pub use file_target::Win32FileTarget;
-pub use opened_disk::{DiskPath, OpenedDisk};
-pub use opened_file::{Buffering, Cached, FileOptions, OpenedFile, RemoteDevice, Unbuffered};
+pub use opened_disk::{DiskOptions, DiskPath, OpenedDisk};
+pub use opened_file::{
+    Buffering, ByIdOptions, ByIdRequest, Cached, FileOptions, IdentityMismatch, OpenRequest,
+    OpenedBy, OpenedFile, RemoteDevice, ReopenOptions, ReopenRequest, SharingViolation, Unbuffered,
+    UnknownLocation,
+};
 pub use opened_volume::{
     OpenedVolume, VolumeOptions, VolumePath, VolumePathError, disk_flush_domain,
 };
+pub use share_mode::ShareMode;
+// The type `OpenedVolume::disk_extents` returns, so a caller who matches on one names it from here.
+pub use win_volume_sys::DiskExtent;
+// The descriptor a created file is given, owned and freed by the type that built it, so a caller
+// never holds a raw pointer (DI-14.3).
+pub use win_authorization_sys::{SecurityCaptureError, SecurityDescriptor};
 
 #[cfg(test)]
 mod tests;
@@ -482,7 +506,8 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
         })
     }
 
-    /// Why `op` on `target` cannot be pushed, before the ring is asked: an unknown target, an owned
+    /// Why `op` on `target` cannot be pushed, before the ring is asked: an unknown target, an
+    /// operation its access does not cover (DI-D-66), an owned
     /// read on a backend without owned reads (DI-D-17), a registered region without a registration,
     /// or an operation its target's geometry does not admit. A registered region is checked for offset and length only; its buffer's address is
     /// the registration's, and whether it lies within the registration is the ring's own check at
@@ -491,6 +516,16 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
         let Some(slot) = self.targets.get(&target) else {
             return Err(RefusalCause::UnknownTarget);
         };
+        // What the target can do with its data, before the shape of the operation is looked at.
+        let access = slot.target.access();
+        let covered = match op {
+            SubmissionOp::Write { .. } => access.can_write(),
+            SubmissionOp::Read { .. } => access.can_read(),
+            SubmissionOp::Commit => true,
+        };
+        if !covered {
+            return Err(RefusalCause::AccessDenied);
+        }
         if self.owned_read.is_none()
             && matches!(
                 op,

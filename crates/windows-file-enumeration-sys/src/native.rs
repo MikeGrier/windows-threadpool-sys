@@ -1,9 +1,17 @@
 // Copyright (c) 2026 Mike Grier
-//! The documented Win32 calls this crate is built on.
-//!
-//! Three of them: open the directory, ask it which volume it lives on, and read
-//! a batch of records out of it. Everything else in the crate is bookkeeping
+//! The directory's calls: open it, ask it which volume it lives on, and read a
+//! batch of records out of it. Everything else in the crate is bookkeeping
 //! around these.
+//!
+//! # Every call is an entry of the request crate
+//!
+//! This crate makes none of these calls itself. The open is
+//! `windows-namespace-request-sys`' `OpenFile`, built from the request's
+//! `AnchoredPath`; the directory check is its `QueryFileBasicInfo`; the volume
+//! serial is its `QueryFileIdInfo`; and a refill is its `QueryFileInformation`,
+//! performed into this crate's own buffer. The directory is held as a
+//! `SharedHandle` and every query is built from a clone of it, so no handle is
+//! duplicated: each entry holds the very handle it was given.
 //!
 //! # Opening under someone else's identity
 //!
@@ -28,23 +36,24 @@
 //! guesswork the caller should have to do, so the phase is tracked here and the
 //! outcome is typed.
 
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-
+use io_buffers::AlignedBuf;
+use win_shared_os_owned_handle::SharedHandle;
 use windows_impersonation_token_sys::ImpersonationToken;
+use windows_namespace_request_sys::query::PerformIntoError;
+use windows_namespace_request_sys::{
+    AnchoredPath, FileInformationClass, OpenFile, QueryFileBasicInfo, QueryFileIdInfo,
+    QueryFileInformation,
+};
 use windows_sys::Win32::Foundation::{
     ERROR_BAD_LENGTH, ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER,
     ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA, ERROR_NO_MORE_FILES,
-    ERROR_NOT_SUPPORTED, HANDLE, INVALID_HANDLE_VALUE,
+    ERROR_NOT_SUPPORTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileBasicInfo,
-    FileIdExtdDirectoryInfo, FileIdExtdDirectoryRestartInfo, FileIdInfo,
-    GetFileInformationByHandleEx, OPEN_EXISTING,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING,
 };
-use wtf_string::Wtf16Str;
 
-use crate::buffer::NativeBuffer;
 use crate::error::{EnumerationError, Win32Error};
 use crate::request::{MINIMUM_BUFFER_CAPACITY, RECORD_ALIGNMENT};
 
@@ -60,7 +69,13 @@ const FILE_LIST_DIRECTORY: u32 = 0x0000_0001;
 /// `FILE_FLAG_BACKUP_SEMANTICS` is what makes `CreateFileW` return a *directory*
 /// handle at all; without it the call fails on any directory. Sharing is left
 /// wide open because enumerating a directory must not stop anyone else from
-/// using it.
+/// using it. Those are the only flags, so the handle is not overlapped and is
+/// never associated with a completion port: `GetFileInformationByHandleEx` has
+/// no overlapped form, and this handle is queried synchronously on a worker.
+///
+/// The open's code is the request crate's: it reads the thread's last error in
+/// the statement after the call, so it is taken before the guard restores the
+/// thread token and nothing in between can overwrite it.
 ///
 /// # Errors
 ///
@@ -68,44 +83,15 @@ const FILE_LIST_DIRECTORY: u32 = 0x0000_0001;
 /// be applied -- in which case nothing was opened under the wrong identity --
 /// and [`EnumerationError::DirectoryOpen`] with the raw code otherwise.
 pub(crate) fn open_directory(
-    path: &Wtf16Str,
+    path: &AnchoredPath,
     token: &ImpersonationToken,
-) -> Result<OwnedHandle, EnumerationError> {
-    // Terminated for `CreateFileW`; the request already rejected interior NULs,
-    // so this names exactly the path the caller asked for.
-    let path = wtf_string::Wtf16String::from_units(path.as_units());
+) -> Result<SharedHandle, EnumerationError> {
+    let open = open_request(path);
 
     let opened = token
-        .with_impersonation(|| {
-            // SAFETY: `path` is a NUL-terminated wide string that outlives the
-            // call, and every other argument is a plain value.
-            let handle = unsafe {
-                CreateFileW(
-                    path.as_terminated_ptr(),
-                    FILE_LIST_DIRECTORY,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                    core::ptr::null(),
-                    OPEN_EXISTING,
-                    FILE_FLAG_BACKUP_SEMANTICS,
-                    core::ptr::null_mut(),
-                )
-            };
-            if handle == INVALID_HANDLE_VALUE {
-                // Read before the guard restores the thread token, so nothing
-                // in between can overwrite the thread's last error.
-                Err(Win32Error::last())
-            } else {
-                Ok(handle)
-            }
-        })
+        .with_impersonation(|| open.perform())
         .map_err(EnumerationError::Impersonation)?;
-
-    let handle = match opened {
-        // SAFETY: `CreateFileW` succeeded, so this is a live handle this call
-        // exclusively owns.
-        Ok(handle) => unsafe { OwnedHandle::from_raw_handle(handle as _) },
-        Err(code) => return Err(EnumerationError::DirectoryOpen(code)),
-    };
+    let handle = SharedHandle::from(opened.map_err(EnumerationError::DirectoryOpen)?);
 
     // `FILE_LIST_DIRECTORY` is the same bit as `FILE_READ_DATA`, so this open
     // succeeds on an ordinary *file* too. Establishing directory-ness here,
@@ -121,29 +107,22 @@ pub(crate) fn open_directory(
     Ok(handle)
 }
 
+/// The open, as the request crate's entry: listing access, every share, an existing directory, and
+/// backup semantics, with nothing else.
+fn open_request(path: &AnchoredPath) -> OpenFile {
+    OpenFile::from_anchored(path.clone())
+        .with_desired_access(FILE_LIST_DIRECTORY)
+        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .with_creation_disposition(OPEN_EXISTING)
+        .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS)
+}
+
 /// Whether an opened handle refers to a directory.
-fn is_directory(handle: &OwnedHandle) -> Result<bool, EnumerationError> {
-    let mut info = FILE_BASIC_INFO {
-        CreationTime: 0,
-        LastAccessTime: 0,
-        LastWriteTime: 0,
-        ChangeTime: 0,
-        FileAttributes: 0,
-    };
-    // SAFETY: `handle` is live, and the buffer matches the requested class in
-    // both type and size.
-    let ok = unsafe {
-        GetFileInformationByHandleEx(
-            handle.as_raw_handle() as HANDLE,
-            FileBasicInfo,
-            (&raw mut info).cast(),
-            size_of::<FILE_BASIC_INFO>() as u32,
-        )
-    };
-    if ok == 0 {
-        return Err(EnumerationError::DirectoryOpen(Win32Error::last()));
-    }
-    Ok(info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0)
+fn is_directory(handle: &SharedHandle) -> Result<bool, EnumerationError> {
+    let info = QueryFileBasicInfo::new(handle.clone())
+        .perform()
+        .map_err(EnumerationError::DirectoryOpen)?;
+    Ok(info.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0)
 }
 
 /// Ask which volume a directory lives on.
@@ -156,27 +135,10 @@ fn is_directory(handle: &OwnedHandle) -> Result<bool, EnumerationError> {
 ///
 /// Returns the raw code. A redirector may list a directory happily and still
 /// refuse this class, which is why `BestEffort` exists.
-pub(crate) fn volume_serial(directory: &OwnedHandle) -> Result<u64, Win32Error> {
-    let mut info = FILE_ID_INFO {
-        VolumeSerialNumber: 0,
-        FileId: windows_sys::Win32::Storage::FileSystem::FILE_ID_128 {
-            Identifier: [0; 16],
-        },
-    };
-    // SAFETY: `directory` is a live handle, and the buffer matches the class
-    // being requested in both type and size.
-    let ok = unsafe {
-        GetFileInformationByHandleEx(
-            directory.as_raw_handle() as HANDLE,
-            FileIdInfo,
-            (&raw mut info).cast(),
-            size_of::<FILE_ID_INFO>() as u32,
-        )
-    };
-    if ok == 0 {
-        return Err(Win32Error::last());
-    }
-    Ok(info.VolumeSerialNumber)
+pub(crate) fn volume_serial(directory: &SharedHandle) -> Result<u64, Win32Error> {
+    QueryFileIdInfo::new(directory.clone())
+        .perform()
+        .map(|info| info.volume_serial_number())
 }
 
 /// Which directory-information query a refill is.
@@ -202,87 +164,99 @@ pub(crate) enum RefillOutcome {
     Failed(EnumerationError),
 }
 
+/// The query a refill performs: the restart class for the first, the continuing class for every
+/// later one, on a clone of the directory's handle.
+fn refill_query(directory: &SharedHandle, which: Refill) -> QueryFileInformation {
+    let class = match which {
+        Refill::First => FileInformationClass::ID_EXTD_DIRECTORY_RESTART,
+        Refill::Next => FileInformationClass::ID_EXTD_DIRECTORY,
+    };
+    QueryFileInformation::new(directory.clone(), class)
+}
+
 /// Read one batch of directory records into the buffer.
+///
+/// The query is the request crate's `QueryFileInformation`, built from a clone
+/// of the directory's handle and performed into the buffer this crate owns, so
+/// nothing is allocated and no handle is made per refill.
 ///
 /// # Panics
 ///
 /// Never in a release build; a failure is reported as [`RefillOutcome::Failed`]
 /// so a caller cannot forget to classify it. In a debug build, panics if this
-/// crate's own preconditions for that classification do not hold: a live
-/// crate-opened handle, a valid information class, a non-null 8-byte-aligned
-/// buffer base, and an effective capacity that is at least
+/// crate's own preconditions for that classification do not hold: a non-null
+/// 8-byte-aligned buffer base, and a length that is at least
 /// [`MINIMUM_BUFFER_CAPACITY`], an 8-byte multiple, and `u32`-representable.
 /// Every path that reaches this function already establishes all of these
 /// before calling it; a violation would be a bug in this crate, not a
 /// filesystem incapability, which is exactly what
 /// [`classify_refill_failure`] must never confuse the two for.
 pub(crate) fn refill(
-    directory: &OwnedHandle,
-    buffer: &mut NativeBuffer,
+    directory: &SharedHandle,
+    buffer: &mut AlignedBuf,
     which: Refill,
 ) -> RefillOutcome {
-    let class = match which {
-        Refill::First => FileIdExtdDirectoryRestartInfo,
-        Refill::Next => FileIdExtdDirectoryInfo,
-    };
-    let capacity = buffer.capacity();
+    let capacity = buffer.len();
 
     // Asserted here, once, immediately before the call whose
     // `ERROR_INVALID_FUNCTION` / `ERROR_NOT_SUPPORTED` / `ERROR_INVALID_PARAMETER`
     // failure `classify_refill_failure` reads as "this filesystem cannot do
     // extended directory information". Every one of these is already true by
     // construction on every path that reaches this function; asserting them is
-    // what stops a future regression in handle, class, or buffer handling from
-    // being silently misreported as a filesystem incapability instead of
-    // caught as this crate's own bug.
-    let handle = directory.as_raw_handle() as HANDLE;
+    // what stops a future regression in buffer handling from being silently
+    // misreported as a filesystem incapability instead of caught as this
+    // crate's own bug.
     debug_assert!(
-        !handle.is_null() && handle != INVALID_HANDLE_VALUE,
-        "the directory handle must be a live handle this crate opened"
+        !buffer.as_ptr().is_null(),
+        "the buffer base must not be null"
     );
-    debug_assert!(
-        class == FileIdExtdDirectoryRestartInfo || class == FileIdExtdDirectoryInfo,
-        "the information class must be one this crate's refill actually requests"
-    );
-    let base = buffer.as_mut_ptr();
-    debug_assert!(!base.is_null(), "the buffer base must not be null");
     debug_assert_eq!(
-        (base as usize) % RECORD_ALIGNMENT,
+        buffer.as_ptr().addr() % RECORD_ALIGNMENT,
         0,
         "the buffer base must be 8-byte aligned"
     );
     debug_assert!(
-        capacity as usize >= MINIMUM_BUFFER_CAPACITY,
+        capacity >= MINIMUM_BUFFER_CAPACITY,
         "the effective capacity must be at least the minimum buffer capacity"
     );
     debug_assert_eq!(
-        capacity as usize % RECORD_ALIGNMENT,
+        capacity % RECORD_ALIGNMENT,
         0,
         "the effective capacity must be an 8-byte multiple"
     );
+    debug_assert!(
+        u32::try_from(capacity).is_ok(),
+        "the effective capacity must fit the call's DWORD"
+    );
 
-    // SAFETY: `directory` is a live directory handle; the buffer is a live,
-    // 8-byte-aligned allocation of exactly `capacity` bytes, which is what the
-    // directory-information classes write into.
-    let ok = unsafe { GetFileInformationByHandleEx(handle, class, base, capacity) };
-    if ok != 0 {
-        return RefillOutcome::Batch;
-    }
-    let code = Win32Error::last();
-    match classify_refill_failure(code, which, capacity as usize) {
-        Some(error) => RefillOutcome::Failed(error),
-        None => RefillOutcome::Exhausted,
+    match refill_query(directory, which).perform_into(buffer) {
+        Ok(()) => RefillOutcome::Batch,
+        Err(PerformIntoError::Win32(code)) => {
+            match classify_refill_failure(code, which, capacity) {
+                Some(error) => RefillOutcome::Failed(error),
+                None => RefillOutcome::Exhausted,
+            }
+        }
+        // The request crate refuses a buffer ahead of the call only for classes whose structure
+        // page requires an alignment, and neither extended-directory class is one; this buffer is
+        // 8-aligned besides. So this is unreachable, and reporting a failure beats a panic in a
+        // thread-pool callback. Code zero says Windows produced none, as `engine::advance` does
+        // for the other state it cannot reach.
+        Err(_) => {
+            debug_assert!(false, "perform_into refused a buffer this crate aligned");
+            RefillOutcome::Failed(EnumerationError::DirectoryQuery(Win32Error::from_code(0)))
+        }
     }
 }
 
 /// Decide what a failed refill means, or `None` when it means clean exhaustion.
 ///
-/// The preconditions the unsupported-class mapping depends on -- a live handle
-/// this crate opened, a valid class, an 8-byte-aligned non-null base, and a
-/// clamped, aligned, `u32`-representable capacity -- are asserted in
-/// [`refill`], the caller, immediately before the call whose failure this
-/// classifies, which is what makes it safe to read those codes as "the
-/// filesystem cannot do this" rather than "this crate asked wrongly".
+/// The preconditions the unsupported-class mapping depends on -- an
+/// 8-byte-aligned non-null base, and a clamped, aligned, `u32`-representable
+/// capacity -- are asserted in [`refill`], the caller, immediately before the
+/// call whose failure this classifies, which is what makes it safe to read those
+/// codes as "the filesystem cannot do this" rather than "this crate asked
+/// wrongly". The class is one of the two the request crate names, built there.
 fn classify_refill_failure(
     code: Win32Error,
     which: Refill,
