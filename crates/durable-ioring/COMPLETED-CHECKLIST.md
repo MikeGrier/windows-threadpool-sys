@@ -4094,3 +4094,21 @@ lock-wait tests pass every event to `PairingChecker`, and a sabotage in the driv
 pair is caught there. Seven sabotages of the removed timing were deleted, the rest re-pointed, and the new claims swept with
 their controls. The choices are [DI-D-91](DESIGN-NOTES.md#di-d-91) and
 [DE-D-5](../durable-ioring-events/DESIGN-NOTES.md#de-d-5).
+
+## Moved 2026-10-21 19:59:39 -04:00 -- DI-19.2.5 and DI-19.2: the sweep, the sabotage and the record; the pairs complete
+
+### <a id="di-1925"></a>DI-19.2.5 -- The sweep for the delay events' old shape, sabotage showing the checker is the one place the pairing rule lives, and the record. *(completed 2026-10-21 19:59:39 -04:00)*
+
+The sweep covered the three crates' code, rustdoc, READMEs, manifests' reasons and design notes, and the rest of the
+repository for the old names. Stale comments were corrected in the core's durability state and the driver's setup, its test
+modules and its manifest's dependency comment, and an orphaned comment left by `DI-19.2.4` was removed. `DI-D-26`, `DI-D-51`
+and `DI-D-77` carry status markers, the in-between bullets of `DI-D-88` and `DI-D-90` say they were overtaken, and DE-D-1's
+scope names the pairs. Nothing outside the three crates named the old events. The driver's chosen-sink test now finishes a
+`PairingChecker`. Sabotage changes the definition in each suite and is caught there, attributed by hand in the driver's. The
+choices are [DI-D-92](DESIGN-NOTES.md#di-d-92).
+
+### <a id="di-192"></a>DI-19.2 -- Begin and end events in the core, with the ETW provider and every sink following and the old delay events gone, and `PairingChecker` the one place the pairing rule lives. *(completed 2026-10-21 19:59:39 -04:00)*
+
+Done in five steps, each archived above: [DI-19.2.1](#di-1921), [DI-19.2.2](#di-1922), [DI-19.2.3](#di-1923),
+[DI-19.2.4](#di-1924) and [DI-19.2.5](#di-1925). The shapes and the engineer's rulings are
+[DI-D-87](DESIGN-NOTES.md#di-d-87); the choices of the steps are `DI-D-88` to `DI-D-92`.

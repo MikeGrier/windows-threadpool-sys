@@ -2219,6 +2219,22 @@
       "why": "A failed domain whose end says it succeeded hides the failure the pair exists to show.",
       "find": ["            Err(_) => FlushOutcome::Failed,"],
       "replace": ["            Err(_) => FlushOutcome::Succeeded,"]
+    },
+    {
+      "name": "DI-19.2.5: the one definition calls a seal's end a begin",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "DI-19.2.5: Diagnostic::pairing is the one definition of which events pair (DI-D-88). Changing it must fail this suite through the code that binds to it; a suite that held a copy of the rule would pass.",
+      "find": [
+        "            | Self::LockWaitBegan { id, .. } => (*id, Edge::Begin),",
+        "            Self::SealEnded { id, .. }",
+        "            | Self::FlushEnded { id, .. }"
+      ],
+      "replace": [
+        "            | Self::LockWaitBegan { id, .. }",
+        "            | Self::SealEnded { id, .. } => (*id, Edge::Begin),",
+        "            Self::FlushEnded { id, .. }"
+      ]
     }
   ]
 }

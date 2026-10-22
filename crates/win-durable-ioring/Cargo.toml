@@ -56,7 +56,7 @@ win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 # make the call itself.
 win-debugging-sys = { version = "0.0.1", path = "../win-debugging-sys" }
 
-# The default diagnostic sink (DI-12.1.6): the ETW provider for dioring's delay events, which an instance built with no sink
+# The default diagnostic sink (DI-12.1.6): the ETW provider for dioring's begin and end events, which an instance built with no sink
 # of its own writes to. A crate of its own, so that this one needs no unsafe code to register a provider.
 durable-ioring-events = { version = "0.0.1", path = "../durable-ioring-events" }
 

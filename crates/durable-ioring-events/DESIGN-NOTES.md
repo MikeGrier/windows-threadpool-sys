@@ -13,8 +13,10 @@ dashes because it is a label in the manifest.
 `PROVIDER_ID`. A session enables the provider by it, so changing it breaks every session that did, and a test pins it. It is
 recorded here and in the code and nowhere is it derived.
 
-**The scope is the dioring family.** The provider carries the delay events of [DI-D-26](../durable-ioring/DESIGN-NOTES.md#di-d-26)
-that `durable-ioring` and `win-durable-ioring` report, and the inconsistency report, and nothing from another crate. The
+**The scope is the dioring family.** The provider carries the begin and end events of [DI-D-80](../durable-ioring/DESIGN-NOTES.md#di-d-80)
+that `durable-ioring` and `win-durable-ioring` report, which replaced the delay events of
+[DI-D-26](../durable-ioring/DESIGN-NOTES.md#di-d-26) ([DE-D-5](#de-d-5)), and the inconsistency report, and nothing from
+another crate. The
 provider is registered once for a process and shared by every sink that is alive, which is the assistant's working position
 from the question of its scope and is built as that: it is not a ruling.
 

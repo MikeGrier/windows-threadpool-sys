@@ -541,8 +541,8 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     /// The domains the consumer's provider serves, sorted; empty without one.
     served: Arc<[DomainId]>,
     clock: K,
-    /// Where an inconsistency is reported before the panic (DI-D-51), and the delay events
-    /// (DI-D-26).
+    /// Where an inconsistency is reported before the panic (DI-D-51), and the seal and flush pairs
+    /// (DI-D-80).
     diagnostics: Arc<dyn DiagnosticSink>,
     /// Each part of a seal's flush whose pair is open, kept only while the sink wants the pair, and
     /// removed as the pair ends (DI-D-87).

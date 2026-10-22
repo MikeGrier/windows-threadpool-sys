@@ -145,8 +145,8 @@ pub struct Setup<'env, 'pool, E: EpochId + 'static, R> {
     /// The consumer's durability provider, if any. `None` leaves every domain to the built-in
     /// default.
     pub provider: Option<Box<dyn DurabilityProvider<WindowsIds<E>>>>,
-    /// Where the instance's diagnostics go (DI-D-51). `None` is the driver's default, [`EtwDiagnostics`]: the instance's delay
-    /// events go to the ETW provider `durable-ioring-events`, for a session that is listening, and cost a test of whether one
+    /// Where the instance's diagnostics go (DI-D-51). `None` is the driver's default, [`EtwDiagnostics`]: the instance's begin and
+    /// end events go to the ETW provider `durable-ioring-events`, for a session that is listening, and cost a test of whether one
     /// is when none is. Any sink can be given in its place, [`NoDiagnostics`](durable_ioring::NoDiagnostics) among them.
     /// Building an instance with the default registers the provider for the process, if no instance has.
     pub diagnostics: Option<Arc<dyn DiagnosticSink>>,

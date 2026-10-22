@@ -114,6 +114,22 @@
       "why": "The manifest is rendered from the table, and an opcode it names wrong disagrees with the descriptor the sink writes.",
       "find": ["        opcode::STOP => \"win:Stop\",\n"],
       "replace": ["        opcode::STOP => \"win:Start\",\n"]
+    },
+    {
+      "name": "DI-19.2.5: the one definition calls a seal's end a begin, as the provider's tests see it",
+      "file": "../durable-ioring/src/diagnostics.rs",
+      "expect": "caught",
+      "why": "DI-19.2.5: Diagnostic::pairing is the one definition of which events pair (DI-D-88). Changing it must fail this suite through the code that binds to it; a suite that held a copy of the rule would pass. The provider's table restates each event's edge for its opcode, and a test holds every row equal to what pairing says of an event of it.",
+      "find": [
+        "            | Self::LockWaitBegan { id, .. } => (*id, Edge::Begin),",
+        "            Self::SealEnded { id, .. }",
+        "            | Self::FlushEnded { id, .. }"
+      ],
+      "replace": [
+        "            | Self::LockWaitBegan { id, .. }",
+        "            | Self::SealEnded { id, .. } => (*id, Edge::Begin),",
+        "            Self::FlushEnded { id, .. }"
+      ]
     }
   ]
 }

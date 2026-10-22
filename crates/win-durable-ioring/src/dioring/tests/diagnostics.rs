@@ -6,6 +6,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use durable_ioring::oracle::PairingChecker;
 use durable_ioring::{Diagnostic, DiagnosticKind, DiagnosticSink};
 use durable_ioring_events::{EtwDiagnostics, PROVIDER_ID, id};
 use win_etw_sys::{Session, level};
@@ -14,9 +15,18 @@ use super::pushes::{GIVEN, Harness, Ring, given, instance, temp};
 use super::setup;
 use crate::dioring::Setup;
 
-/// A sink that keeps each event as text, and wants every kind.
+/// A sink that keeps each event as text, wants every kind, and holds the stream to the pairing rule
+/// (DI-D-87), which it takes from the core's checker and does not restate.
 #[derive(Default)]
-struct Recording(Mutex<Vec<String>>);
+struct Recording(Mutex<Vec<String>>, Mutex<PairingChecker>);
+
+impl Recording {
+    /// Every pair the instance began has ended.
+    fn finished(&self) {
+        let checker = std::mem::take(&mut *self.1.lock().expect("the checker"));
+        checker.finish(&[]).expect("every pair ended");
+    }
+}
 
 impl DiagnosticSink for Recording {
     fn wants(&self, _: DiagnosticKind) -> bool {
@@ -24,6 +34,11 @@ impl DiagnosticSink for Recording {
     }
 
     fn report(&self, event: &Diagnostic<'_>) {
+        self.1
+            .lock()
+            .expect("the checker")
+            .observe(event)
+            .expect("the pairing rule");
         self.0.lock().expect("the record").push(event.to_string());
     }
 }
@@ -52,6 +67,7 @@ fn a_chosen_sink_receives_the_instances_events_in_place_of_the_default() {
     let mut harness = Harness::new(ring);
     write_and_seal(&mut harness);
     harness.finish();
+    sink.finished();
 
     let lines = sink.0.lock().expect("the record").clone();
     // Pair ids are minted per process, so each event is found by its shape around one.

@@ -37,35 +37,7 @@ would allow.
 
 - [x] **DI-19.1** -- `CorrelationId`, a process-scoped `u64` from one relaxed atomic counter, minted only by `CorrelationId::for_pair`, which asks the sink first. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-191)
 
-- [ ] **DI-19.2** -- **Begin and end events in the core, and one oracle for their pairing.** Restructured on 2026-10-21 into
-  `DI-19.2.1` to `DI-19.2.5`, with the engineer's rulings recorded in [DI-D-87](DESIGN-NOTES.md#di-d-87): the event shapes
-  below, the ETW schema's opcodes moved here from `DI-19.4` because changing `Diagnostic` breaks the provider's crate in the
-  same commit, and the core's duration code removed. It is done when they all are. As written before the restructure:
-  three pairs, each one kind of event, so a sink wants a pair or declines it and cannot want a begin and not its end -- a
-  seal, from its being asked for to its becoming durable or failing; each flush of a file or a domain, from its issue to its
-  answer; and a lock wait, whose begin is written when the immediate try fails and whose end is written as the lock is
-  acquired, with the lock held. An end is reported if and only if its begin was, whatever the sink wants by then, and on
-  every path a begin can leave by; any it cannot be reported on is documented. The pairing rule is defined once, as a
-  checker in `durable-ioring` that every sink's tests use and do not restate. The text of every event carries its id.
-
-  The shapes (DI-D-87): the kinds are `Seal`, `Flush`, `LockWait` and `Inconsistency`, and `FlushIssued`, `FlushAnswered`
-  and `SealWaited` go, a seal's wait being the gap between its begin and its first flush's. `SealBegan { instance, lineage,
-  through, id }` and `SealEnded { ..., id, outcome }`, the outcome how the seal was answered -- durable, failed, blocked by
-  an earlier failure -- or ended unanswered, by its lineage ending or its instance being dropped. `FlushBegan { instance,
-  lineage, through, part, id }` and `FlushEnded { ..., id, outcome }`, succeeded, failed or abandoned. `LockWaitBegan {
-  instance, lock, id }` and `LockWaitEnded { instance, lock, id }`. An end repeats its begin's identity fields.
-
-- [x] **DI-19.2.1** -- The seal, flush and lock-wait pair variants and kinds are in `Diagnostic` beside the old ones, `Diagnostic::pairing` says which end of which pair an event is, and `PairingChecker` holds the pairing rule. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1921)
-
-- [x] **DI-19.2.2** -- The core emits the seal and flush pairs, beside the old delay events until `DI-19.2.4`, each ending on every path its begin can leave by. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1922)
-
-- [x] **DI-19.2.3** -- A lock wait is a pair, begun when the immediate try fails and ended as the lock is taken with it held, and `DiagnosticSink` states the leaf-lock rule the shipped sinks keep. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1923)
-
-- [x] **DI-19.2.4** -- The sinks and the ETW provider's schema follow the pairs, with Start and Stop opcodes and a task for each kind, the driver's lock-wait tests bind to the checker, and the old delay events and the core's timing are gone. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1924)
-
-- [ ] **DI-19.2.5** -- **The sweep, the sabotage and the record.** A sweep for the delay events' old shape, of `DI-D-26`,
-  `DI-D-51`, `DI-D-77`, the README and the crates' docs, is recorded with it; sabotage shows the checker is the one place
-  the pairing rule lives; and the decisions the steps made are recorded.
+- [x] **DI-19.2** -- Begin and end events in the core, with the ETW provider and every sink following and the old delay events gone, and `PairingChecker` the one place the pairing rule lives. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-192)
 
 - [ ] **DI-19.3** -- **`win-etw-sys` writes an event with an explicit activity id.** `EventWriteTransfer` with an activity
   id, and a related one, taken from the caller and not from the thread, so a begin and an end written on different threads

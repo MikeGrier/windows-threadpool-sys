@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-//! The delay events through the driver (DI-12.1.1, DI-D-26): a wait for the engine's lock made by a
+//! The lock-wait pairs through the driver (DI-12.1.1, DI-D-80): a wait for the engine's lock made by a
 //! path of the instance's that is not the consumer's own -- the hub a lineage handle releases
 //! through -- is reported to the instance's sink, as the consumer's own calls' are
 //! (`windows_backend/pool/tests.rs`).

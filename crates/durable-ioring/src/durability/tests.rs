@@ -41,7 +41,6 @@ mod gates;
 mod providers;
 // What holds a file, for `remove_target`: DI-3.2.7.
 mod files;
-// The delay events: DI-12.1.1.
 
 /// The core, answering for its default lineage: the one every test here exercises unless it mints
 /// another. Every other method is the core's own, through `Deref`.

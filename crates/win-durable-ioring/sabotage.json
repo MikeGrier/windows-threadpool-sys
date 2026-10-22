@@ -2183,6 +2183,46 @@
       "replace": [
         "                let taken: MutexGuard<'_, T> = mutex.lock().unwrap_or_else(PoisonError::into_inner);"
       ]
+    },
+    {
+      "name": "DI-19.2.5: the one definition calls a seal's end a begin, as the driver's tests see it",
+      "file": "../durable-ioring/src/diagnostics.rs",
+      "expect": "caught",
+      "why": "DI-19.2.5: Diagnostic::pairing is the one definition of which events pair (DI-D-88). Changing it must fail this suite through the code that binds to it; a suite that held a copy of the rule would pass. The driver's chosen-sink test passes every event to PairingChecker, which takes the edge from pairing.",
+      "find": [
+        "            | Self::LockWaitBegan { id, .. } => (*id, Edge::Begin),",
+        "            Self::SealEnded { id, .. }",
+        "            | Self::FlushEnded { id, .. }"
+      ],
+      "replace": [
+        "            | Self::LockWaitBegan { id, .. }",
+        "            | Self::SealEnded { id, .. } => (*id, Edge::Begin),",
+        "            Self::FlushEnded { id, .. }"
+      ]
+    },
+    {
+      "name": "DI-19.2.5: the checker refuses an end of its begin's own kind, as the driver's tests see it",
+      "file": "../durable-ioring/src/oracle/pairing.rs",
+      "expect": "caught",
+      "why": "DI-19.2.5: the rule that an end is of its begin's kind lives in PairingChecker alone. Inverting it there must fail the driver's tests, which hold their streams to it and do not restate it.",
+      "find": [
+        "                if begun.kind != pairing.kind {"
+      ],
+      "replace": [
+        "                if begun.kind == pairing.kind {"
+      ]
+    },
+    {
+      "name": "DI-19.2.5 control: the checker gathers its open pairs by cloning, as the driver's tests see it",
+      "file": "../durable-ioring/src/oracle/pairing.rs",
+      "expect": "survives",
+      "why": "A control: the same ids gathered by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": [
+        "        let mut open: Vec<CorrelationId> = self.open.keys().copied().collect();"
+      ],
+      "replace": [
+        "        let mut open: Vec<CorrelationId> = self.open.keys().cloned().collect();"
+      ]
     }
   ]
 }

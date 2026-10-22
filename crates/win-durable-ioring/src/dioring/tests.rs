@@ -49,7 +49,7 @@ mod raw_volume;
 mod unbuffered;
 // A typed key at registration and at construction: DI-13.10.
 mod keys;
-// The delay events through the driver: DI-12.1.1.
+// The lock-wait pairs through the driver: DI-12.1.1, DI-19.2.4.
 mod delays;
 // The default diagnostic sink, and a chosen one in its place: DI-12.1.6.
 mod diagnostics;
