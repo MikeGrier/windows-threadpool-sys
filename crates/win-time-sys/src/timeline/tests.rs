@@ -239,6 +239,60 @@ fn an_overflowing_distance_panics() {
 }
 
 #[test]
+fn no_checked_method_panics_at_any_extreme_on_any_period() {
+    fn sweep<L: Timeline>() {
+        let points = [0, 1, u64::MAX / 2, u64::MAX / 2 + 1, u64::MAX - 1, u64::MAX]
+            .map(TimePoint::<L>::from_ticks);
+        let distances =
+            [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX - 1, i64::MAX].map(Ticks::<L>::new);
+        for &point in &points {
+            for &other in &points {
+                let _ = point.checked_since(other);
+            }
+            for &distance in &distances {
+                let _ = point.checked_add(distance);
+                let _ = point.checked_sub(distance);
+            }
+        }
+        for &distance in &distances {
+            let _ = distance.to_duration();
+            let _ = distance.abs_duration();
+            let _ = distance.checked_neg();
+            for &other in &distances {
+                let _ = distance.checked_add(other);
+                let _ = distance.checked_sub(other);
+            }
+        }
+        for duration in [
+            Duration::ZERO,
+            Duration::new(0, 1),
+            Duration::new(1, 999_999_999),
+            Duration::new(u64::MAX, 999_999_999),
+            Duration::MAX,
+        ] {
+            let _ = Ticks::<L>::from_duration(duration);
+        }
+    }
+    struct Extreme(core::marker::PhantomData<()>);
+    impl Timeline for Extreme {
+        fn ticks_per_second() -> NonZeroU64 {
+            NonZeroU64::MAX
+        }
+    }
+    struct Slowest(core::marker::PhantomData<()>);
+    impl Timeline for Slowest {
+        fn ticks_per_second() -> NonZeroU64 {
+            NonZeroU64::MIN
+        }
+    }
+    sweep::<Hundreds>();
+    sweep::<Thirds>();
+    sweep::<Fast>();
+    sweep::<Extreme>();
+    sweep::<Slowest>();
+}
+
+#[test]
 fn debug_names_the_timeline() {
     let shown = format!("{:?} {:?}", P::from_ticks(3), T::new(-2));
     assert!(

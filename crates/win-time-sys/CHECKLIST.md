@@ -10,10 +10,7 @@ The assistant chose these while implementing `WT-M1`, and the crate and its cons
 already; what is open is the review. A rejected point is reworked in its item, with its decision
 row amended.
 
-- [ ] **WT-3.1** -- **The engineer confirms or amends [WT-D-7](DESIGN-NOTES.md#wt-d-7)**, from
-  `WT-1.2`: `Clock::now` taking `&self`; a point a `u64` tick count and a distance an `i64` one;
-  `ticks_per_second` returning `NonZeroU64`; conversions to and from `Duration` truncating towards
-  zero; and panicking operators beside `checked_` methods.
+- [x] **WT-3.1** -- The engineer confirmed [WT-D-7](DESIGN-NOTES.md#wt-d-7) in full, with the addition that no `checked_` method ever panics. -> [completed 2026-10-22](COMPLETED-CHECKLIST.md#wt-31)
 
 - [ ] **WT-3.2** -- **The engineer confirms or amends [WT-D-8](DESIGN-NOTES.md#wt-d-8)**, from
   `WT-1.6`: the cost probe shipped as this crate's `clock_costs` example rather than in

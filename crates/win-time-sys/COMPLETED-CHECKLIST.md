@@ -306,3 +306,21 @@ The milestone's stubs as they stood when it left [CHECKLIST.md](CHECKLIST.md):
 - [x] **WT-2.1** -- `windows-threadpool-sys` reads interrupt time through `InterruptClock`, so the workspace has one reader of its one time base. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#wt-21)
 - [x] **WT-2.2.1** -- `Steady`, the marker trait for a clock whose readings never decrease, made by the interrupt and performance clocks and not by the system clocks. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#wt-221)
 - [x] **WT-2.2.2** -- durable-ioring stamps failures with a `Steady` interrupt-time clock, `InterruptClock` by default, given through a type parameter on its core and on `Dioring`. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#wt-222)
+
+## Moved 2026-10-22 18:06:00 -04:00 -- WT-3.1: the engineer confirms WT-D-7
+
+### <a id="wt-31"></a>WT-3.1 -- The engineer confirmed [WT-D-7](DESIGN-NOTES.md#wt-d-7) in full, with the addition that no `checked_` method ever panics. *(completed 2026-10-22 18:06:00 -04:00)*
+
+The engineer, 2026-10-22: "confirm all, the checked should not panic". The five points confirmed are
+`Clock::now` taking `&self`; a point a `u64` tick count and a distance an `i64` one;
+`ticks_per_second` returning `NonZeroU64`; conversions to and from `Duration` truncating towards zero;
+and panicking operators beside `checked_` methods. Two things were put to the engineer beforehand and
+are recorded in the decision's row rather than here: that `Timeline::ticks_per_second` has no `self`,
+so a timeline's unit is a property of its type and a clock's state is not; and that truncation in
+`from_duration` can leave a timeout built from a `Duration` less than a tick short.
+
+"The checked should not panic" was already true of every `checked_` method, by inspection and at the
+extremes of the existing tests. It is now stated in the decision and in the documentation of
+[`TimePoint`](src/timeline.rs), and held by a test that runs every `checked_` method, `to_duration`,
+`abs_duration` and `from_duration` over the extremes of five periods, including the largest and
+smallest a `NonZeroU64` allows. Making the one `checked_since` return path panic fails it.
