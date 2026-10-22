@@ -50,11 +50,16 @@ test('release phase precedes fresh proposal loading and errors are not swallowed
     return { createReleases: async () => { events.push('release'); return [undefined, { path: 'crate', tagName: 'tag' }]; },
       createPullRequests: async () => { events.push('pr'); return [undefined, { number: 1 }]; } };
   };
-  const result = await releaseAndPropose({}, load);
-  assert.deepEqual(events, ['load', 'release', 'load', 'pr']);
+  const result = await releaseAndPropose({}, load, async () => { events.push('verify'); });
+  assert.deepEqual(events, ['load', 'release', 'load', 'pr', 'verify']);
   assert.equal(result.releases.length, 1);
   assert.equal(result.prs.length, 1);
   await assert.rejects(releaseAndPropose({}, async () => { throw new Error('API failed'); }), /API failed/);
+});
+
+test('a release run whose tags are missing fails after both phases, and the failure is not swallowed', async () => {
+  const load = async () => ({ createReleases: async () => [], createPullRequests: async () => [] });
+  await assert.rejects(releaseAndPropose({}, load, async () => { throw new Error('missing tag x-v1'); }), /missing tag x-v1/);
 });
 
 test('real Rust strategy updates binary-only manifests without changing distribution or tag names', async () => {

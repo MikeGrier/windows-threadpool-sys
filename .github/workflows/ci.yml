@@ -35,6 +35,18 @@ jobs:
       - run: npm ci --prefix .github/release
       - run: npm test --prefix .github/release
 
+  # release-please reads the merged release pull request body as HTML, so markup in
+  # a changelog note drops components from that release (DEVELOPMENT.md, Release process).
+  commit-text:
+    name: commit text release-please can carry
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - run: node .github/release/check-commit-text.cjs "origin/${{ github.base_ref }}..HEAD"
+
   encoding:
     name: encoding sanity check
     runs-on: windows-latest

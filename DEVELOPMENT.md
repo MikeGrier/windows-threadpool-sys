@@ -69,6 +69,21 @@ dependent crate released first then fails `cargo publish` against the registry
 copy of that dependency. The run's log line `Splitting N commits by path` shows
 the window in use; compare it with `git rev-list --count <last release commit>..origin/main`.
 
+`release-please` also reads the body of the merged release pull request as HTML to
+decide which components to release, and it copies a `BREAKING CHANGE:` footer
+into that body unescaped (a subject is escaped, except inside backticks). A
+generic such as `Key<A>` opens an element that is never closed; two of them
+swallow the sections after them, those components get no release or tag, and the
+run still succeeds. Write such a type without angle brackets (`Key[A]`) in a
+subject or footer. The `commit text` job in [ci.yml](.github/workflows/ci.yml)
+rejects a pull request carrying one ([check-commit-text.cjs](.github/release/check-commit-text.cjs)),
+and the release run fails after creating releases when any package in
+[release-please-config.json](release-please-config.json) has a version in
+[.release-please-manifest.json](.release-please-manifest.json) with no tag
+([check-release-tags.cjs](.github/release/check-release-tags.cjs)). A failed
+run is repaired by creating the missing release and tag at the release pull
+request's merge commit, which drives that crate's publish workflow.
+
 The probes are binary-only releases, never crates.io packages. Their routes are
 declared in [.github/release/binary-packages.json](.github/release/binary-packages.json):
 
