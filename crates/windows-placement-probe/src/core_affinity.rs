@@ -323,6 +323,25 @@ pub enum Placement {
 }
 
 impl Placement {
+    /// A stable identifier for a record.
+    ///
+    /// Separate from [`label`](Self::label) for the reason
+    /// [`Strategy::name`] is: the label is prose for a table and may be
+    /// reworded, and this is a token a stored record is keyed on.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::SameCoreSiblings => "same_core_siblings",
+            Self::SameCacheSameClass => "same_cache_same_class",
+            Self::SameCacheCrossClass => "same_cache_cross_class",
+            Self::CrossCacheSameClass => "cross_cache_same_class",
+            Self::CrossCacheCrossClass => "cross_cache_cross_class",
+            Self::CrossNumaNode => "cross_numa_node",
+            Self::UnknownCacheSameClass => "unknown_cache_same_class",
+            Self::UnknownCacheCrossClass => "unknown_cache_cross_class",
+        }
+    }
+
     /// A short label for a table.
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -361,6 +380,20 @@ pub struct Measurement {
     pub strategy: Strategy,
     /// Median nanoseconds per item.
     pub nanos_per_item: f64,
+    /// Wall-clock nanoseconds of the median pass, which `nanos_per_item` is
+    /// divided from.
+    ///
+    /// **The raw figures are carried beside the derived ones** so a record of
+    /// what was observed does not have to reverse a division to get them back.
+    /// The batch depths below divide by `max(1, refreshes)`, which no reversal
+    /// can undo for a count of zero.
+    pub elapsed_nanos: f64,
+    /// How many times the median pass's consumer read the producer's shared
+    /// position.
+    pub consumer_refreshes: u64,
+    /// How many times the median pass's producer read the consumer's shared
+    /// position.
+    pub producer_refreshes: u64,
     /// How many items each consumer-side shared read was amortised over.
     ///
     /// **This is the number the hypothesis is about.** Near 1 means the two
@@ -717,6 +750,9 @@ pub fn measure() -> std::io::Result<Observation> {
                 placement,
                 strategy,
                 nanos_per_item: median.nanos / ITEMS as f64,
+                elapsed_nanos: median.nanos,
+                consumer_refreshes: median.consumer_refreshes,
+                producer_refreshes: median.producer_refreshes,
                 consumer_batch: ITEMS as f64 / median.consumer_refreshes.max(1) as f64,
                 producer_batch: ITEMS as f64 / median.producer_refreshes.max(1) as f64,
                 // Placement rows do not choose a node: they vary where the
@@ -750,6 +786,9 @@ pub fn measure() -> std::io::Result<Observation> {
                 placement: classify(producer, consumer),
                 strategy,
                 nanos_per_item: median.nanos / ITEMS as f64,
+                elapsed_nanos: median.nanos,
+                consumer_refreshes: median.consumer_refreshes,
+                producer_refreshes: median.producer_refreshes,
                 consumer_batch: ITEMS as f64 / median.consumer_refreshes.max(1) as f64,
                 producer_batch: ITEMS as f64 / median.producer_refreshes.max(1) as f64,
                 // Placement rows do not choose a node: they vary where the
@@ -786,6 +825,9 @@ pub fn measure() -> std::io::Result<Observation> {
                     placement: classify(producer, consumer),
                     strategy,
                     nanos_per_item: median.nanos / ITEMS as f64,
+                    elapsed_nanos: median.nanos,
+                    consumer_refreshes: median.consumer_refreshes,
+                    producer_refreshes: median.producer_refreshes,
                     consumer_batch: ITEMS as f64 / median.consumer_refreshes.max(1) as f64,
                     producer_batch: ITEMS as f64 / median.producer_refreshes.max(1) as f64,
                     // What the run *achieved*, and separately what it asked
