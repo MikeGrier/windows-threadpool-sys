@@ -30,7 +30,7 @@ function missingTags(config, versions, existing, recorded) {
 
 async function listTagNames(github) {
   const { owner, repo } = github.repository;
-  const tags = await github.octokit.paginate(github.octokit.repos.listTags, { owner, repo, per_page: 100 });
+  const tags = await github.octokit.paginate(github.octokit.rest.repos.listTags, { owner, repo, per_page: 100 });
   return new Set(tags.map(tag => tag.name));
 }
 

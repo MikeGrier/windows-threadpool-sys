@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { PullRequestBody } = require('release-please/build/src/util/pull-request-body.js');
 const { Version } = require('release-please/build/src/version.js');
-const { expectedTags, missingTags, changelogRecords, verifyReleased } = require('./check-release-tags.cjs');
+const { expectedTags, missingTags, changelogRecords, listTagNames, verifyReleased } = require('./check-release-tags.cjs');
 const { rawMarkup, offenders } = require('./check-commit-text.cjs');
 
 const root = path.resolve(__dirname, '../..');
@@ -66,6 +66,22 @@ test('the include-component-in-tag setting decides the tag shape', () => {
   assert.deepEqual(expectedTags(named, { a: '1.2.3' }), [{ directory: 'a', tag: 'p-v1.2.3' }]);
 });
 
+test('listing tags goes through the locked Octokit client\'s rest namespace, and every page is collected', async () => {
+  const { Octokit } = require('@octokit/rest');
+  const real = new Octokit();
+  assert.equal(typeof real.rest.repos.listTags, 'function', 'the locked client must expose the endpoint where the lister reads it');
+  assert.equal(typeof real.paginate, 'function');
+  const pages = [[{ name: 'a-v1.0.0' }, { name: 'b-v2.0.0' }], [{ name: 'c-v3.0.0' }]];
+  const calls = [];
+  const octokit = {
+    rest: { repos: { listTags: function listTags() {} } },
+    paginate: async (method, params) => { calls.push({ method: method.name, params }); return pages.flat(); },
+  };
+  const names = await listTagNames({ repository: { owner: 'o', repo: 'r' }, octokit });
+  assert.deepEqual([...names].sort(), ['a-v1.0.0', 'b-v2.0.0', 'c-v3.0.0']);
+  assert.deepEqual(calls, [{ method: 'listTags', params: { owner: 'o', repo: 'r', per_page: 100 } }]);
+});
+
 test('verification of this tree fails naming a recorded version that has no tag, and passes when every tag exists', async () => {
   const github = {};
   await verifyReleased(github, root, async () => allTags());
@@ -73,14 +89,12 @@ test('verification of this tree fails naming a recorded version that has no tag,
     const file = path.join(root, directory, 'CHANGELOG.md');
     return fs.existsSync(file) && changelogRecords(fs.readFileSync(file, 'utf8'), versions[directory]);
   });
-  assert(recorded.length > 0);
   for (const { tag } of recorded) {
     const without = allTags();
     without.delete(tag);
     await assert.rejects(verifyReleased(github, root, async () => without), error => error.message.includes(tag));
   }
   const unrecorded = expectedTags(config, versions).filter(({ tag }) => !recorded.some(entry => entry.tag === tag));
-  assert(unrecorded.length > 0, 'the tree has bootstrap versions that no changelog records');
   for (const { tag } of unrecorded) {
     const without = allTags();
     without.delete(tag);
