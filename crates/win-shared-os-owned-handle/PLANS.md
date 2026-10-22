@@ -1,5 +1,7 @@
 # Plans: win-shared-os-owned-handle
 
+Completed checklists are recorded in [COMPLETED-PLANS.md](COMPLETED-PLANS.md), and the items they
+contained are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
+
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | Adoption by the crates that wrap `Arc<OwnedHandle>` themselves; publication is done. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
