@@ -82,6 +82,30 @@
       "why": "A control: the same value by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        Self::U32(value as u32)\n"],
       "replace": ["        Self::U32(if value { 1 } else { 0 })\n"]
+    },
+    {
+      "name": "WE-D-5: the thread's activity id is read in place of a new one",
+      "file": "src/activity.rs",
+      "expect": "caught",
+      "why": "The code that creates an id and the one that reads the thread's take the same arguments; read in its place, every pair would share the thread's id, which is zero, no activity at all.",
+      "find": [
+        "    let code = unsafe { EventActivityIdControl(EVENT_ACTIVITY_CTRL_CREATE_ID, &raw mut id) };"
+      ],
+      "replace": [
+        "    let code = unsafe { EventActivityIdControl(windows_sys::Win32::System::Diagnostics::Etw::EVENT_ACTIVITY_CTRL_GET_ID, &raw mut id) };"
+      ]
+    },
+    {
+      "name": "WE-D-5 control: the id is zeroed by another spelling before the call",
+      "file": "src/activity.rs",
+      "expect": "survives",
+      "why": "A control: the same value by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": [
+        "        data4: [0; 8],"
+      ],
+      "replace": [
+        "        data4: [0_u8; 8],"
+      ]
     }
   ]
 }

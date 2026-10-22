@@ -34,7 +34,7 @@ reports what the call reports, and refuses ahead of the call only what the call'
 
 ## <a id="we-d-2"></a>WE-D-2: a registration owns the handle, an event's data is typed fields, and the call's failures and the crate's refusals are kept apart
 
-**Amended by [WE-D-4](#we-d-4): `EventWriteTransfer` is wrapped, as `Registration::write_transfer`, and the call's failure no longer names `EventWrite` in its text.**
+**Amended by [WE-D-4](#we-d-4): `EventWriteTransfer` is wrapped, as `Registration::write_transfer`, and the call's failure no longer names `EventWrite` in its text.** **Amended by [WE-D-5](#we-d-5): `EventActivityIdControl` is wrapped for creating an id, as `create_activity_id`.**
 
 Read 2026-10-20 from the pages for `EventRegister`, `EventUnregister`, `EventEnabled`, `EventProviderEnabled` and
 `EventWrite` (each `ms.date` 2018-12-05, `updated_at` 2024-02-22), and for `EVENT_DESCRIPTOR` and `EVENT_DATA_DESCRIPTOR`.
@@ -182,3 +182,24 @@ baseline ran them all green: each of its five sabotages was caught by the sessio
 survived. That is evidence and not contract.
 
 **Scheduled work.** None beyond [DI-19.4](../durable-ioring/CHECKLIST.md), its first caller.
+
+## <a id="we-d-5"></a>WE-D-5: `create_activity_id` creates an activity id with `EventActivityIdControl`, and wraps none of its other codes
+
+Made for [DI-19.4](../durable-ioring/COMPLETED-CHECKLIST.md#di-194), on the engineer's choice of the platform's ids for the
+provider's pairs ([DI-D-93](../durable-ioring/DESIGN-NOTES.md#di-d-93)).
+
+**Read 2026-10-21** from the call's page (`ms.date` 2018-12-05). `EVENT_ACTIVITY_CTRL_CREATE_ID` "Sets the ActivityId parameter
+to the value of a newly-generated locally-unique activity ID", and the remarks say the call "generates locally-unique IDs that
+are guaranteed to be unique across all processes on the local system until the system reboots", and that "All events with an
+activity ID of zero (i.e. GUID_NULL) are assumed to not be a part of any activity". The page names only success as a return.
+
+**What it is.** `create_activity_id()` makes the call with that code and returns the id, or the call's failure with its code.
+It takes no argument, since the code only writes the parameter, and it leaves the calling thread's activity id as it was. The
+codes that get, set or swap the thread's id are not wrapped: a writer that names each event's activity on the write, as
+`write_transfer` does, has no use for them, and no design here asks for them.
+
+**The tests.** Unelevated: an id is created, is not zero, and no id is created twice in a row, among a thousand, or across
+eight threads. A session test shows that creating an id leaves the thread's id as a plain write records it. Uniqueness across
+processes and until a restart is the page's guarantee and is not something a test here can show.
+
+**Scheduled work.** None.

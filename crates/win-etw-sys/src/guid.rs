@@ -47,7 +47,6 @@ impl Guid {
     }
 
     /// The GUID a call gave.
-    #[cfg(feature = "test-util")]
     pub(crate) const fn from_raw(raw: GUID) -> Self {
         Self(raw)
     }

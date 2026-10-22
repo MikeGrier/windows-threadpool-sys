@@ -20,7 +20,8 @@
 
 use win_error_codes::Win32Error;
 use win_etw_sys::{
-    EventDescriptor, Field, Guid, Recorded, Registration, Session, WriteError, level,
+    EventDescriptor, Field, Guid, Recorded, Registration, Session, WriteError, create_activity_id,
+    level,
 };
 
 /// A provider no other test of this binary uses: tests run in parallel, and a session records every event of a provider it
@@ -537,4 +538,28 @@ fn threads_writing_activities_of_their_own_each_record_theirs() {
             Guid::from_u128(0x0a11_0000_0000_4000_8000_0000_0000_0100 + u128::from(event.data[0]));
         assert_eq!(event.activity, expected, "{event:?}");
     }
+}
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn creating_an_activity_id_leaves_the_threads_own_as_a_plain_write_records_it() {
+    let id = provider(35);
+    let mut session = session();
+    session.enable(id, level::VERBOSE, 0xff).expect("enabled");
+    let registration = Registration::register(id).expect("registered");
+    registration.write(&INFO_EVENT, &[]).expect("before");
+    let created = create_activity_id().expect("created");
+    registration.write(&INFO_EVENT, &[]).expect("after");
+    registration
+        .write_transfer(&INFO_EVENT, Some(&created), None, &[])
+        .expect("in the created activity");
+    drop(registration);
+    let events = session.stop().expect("stopped and read");
+    assert_eq!(events.len(), 3, "{events:?}");
+    assert_eq!(
+        events[0].activity, events[1].activity,
+        "the thread's, unchanged"
+    );
+    assert_ne!(events[1].activity, created);
+    assert_eq!(events[2].activity, created);
 }

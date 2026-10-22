@@ -15,6 +15,8 @@ Tracing*, in *Windows Events*. Thin over Win32, adding no policy.
 - `Registration::write_transfer` is `EventWriteTransfer`: the same, with an activity id and a related activity id the
   caller gives, each optional, so events written on different threads can be one activity. An activity of `None` is the
   writing thread's, as `write` takes it. See [WE-D-4](DESIGN-NOTES.md#we-d-4).
+- `create_activity_id` is `EventActivityIdControl` creating an id, which the page guarantees no process of the system is
+  given again until it restarts, for a writer that names its own activities. See [WE-D-5](DESIGN-NOTES.md#we-d-5).
 - The call's failure is a `WriteError::Call` with the code. A list of fields that cannot be given to the call, because
   a count or a size does not fit a `ULONG`, is refused as `WriteError::TooManyBlocks` or `BlockTooLong` and the call is not
   made: those are this crate's refusals and not the call's. See [WE-D-2](DESIGN-NOTES.md#we-d-2).
