@@ -1,7 +1,7 @@
 {
   "package": "win-etw-sys",
   "description": "Sabotages for win-etw-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "What only a trace session can show is not swept here: whether an event is enabled while a session listens, that the level and keyword filters hold, and that the descriptor and data reach the session as written are tests/session.rs, which are ignored without elevation (WE-D-3), so a sweep on a machine that cannot start a session would report a sabotage of those as surviving for a reason that is not a hole. They are swept on a machine that can. A handle that is unregistered twice is not injected: the call would be made on a handle that is gone, and the sweep would be measuring a crash and not a test.",
+  "notCoveredHere": "What only a trace session can show is not swept here: whether an event is enabled while a session listens, that the level and keyword filters hold, and that the descriptor and data reach the session as written are tests/session.rs, which are ignored without elevation (WE-D-3), so a sweep on a machine that cannot start a session would report a sabotage of those as surviving for a reason that is not a hole. They, and the activity ids an event is written with (WE-D-4), are sabotage-session.json, swept on a machine that can. A handle that is unregistered twice is not injected: the call would be made on a handle that is gone, and the sweep would be measuring a crash and not a test.",
   "sabotages": [
     {
       "name": "WE-D-2: a GUID's second group is read back one bit off",

@@ -34,6 +34,8 @@ reports what the call reports, and refuses ahead of the call only what the call'
 
 ## <a id="we-d-2"></a>WE-D-2: a registration owns the handle, an event's data is typed fields, and the call's failures and the crate's refusals are kept apart
 
+**Amended by [WE-D-4](#we-d-4): `EventWriteTransfer` is wrapped, as `Registration::write_transfer`, and the call's failure no longer names `EventWrite` in its text.**
+
 Read 2026-10-20 from the pages for `EventRegister`, `EventUnregister`, `EventEnabled`, `EventProviderEnabled` and
 `EventWrite` (each `ms.date` 2018-12-05, `updated_at` 2024-02-22), and for `EVENT_DESCRIPTOR` and `EVENT_DATA_DESCRIPTOR`.
 
@@ -108,8 +110,8 @@ code around them.
 **What it is.** `Session::start` starts a session that logs to a file in the temporary directory, under a name no other
 session of the process has (`StartTraceW`); `enable` enables a provider in it for a level and a keyword
 (`EnableTraceEx2`); `stop` stops it (`ControlTraceW`), reads the file back with the event-record callback (`OpenTraceW`,
-`ProcessTrace`, `CloseTrace`) and returns the events of the providers enabled, with each one's provider, descriptor, data and
-process id. A session that is dropped without being stopped is stopped, and its file removed, because a session is
+`ProcessTrace`, `CloseTrace`) and returns the events of the providers enabled, with each one's provider, descriptor, data,
+process id, activity id and related activity id ([WE-D-4](#we-d-4)). A session that is dropped without being stopped is stopped, and its file removed, because a session is
 system-wide and outlives the process that started it.
 
 **It needs privilege, so its tests are ignored by default.** Starting a session needs an elevated process or a user in the
@@ -139,3 +141,44 @@ was enabled from the first call.
 process elevated by a prompt the engineer approved, and CI runs them on the runner, which is an administrator.
 
 **Scheduled work.** None.
+
+## <a id="we-d-4"></a>WE-D-4: `write_transfer` writes an event with the activity ids its caller gives, and a session reads them back
+
+Made by the assistant for [DI-19.3](../durable-ioring/CHECKLIST.md), and open to a ruling.
+
+**Read 2026-10-21** from the page for `EventWriteTransfer` (`ms.date` 2018-12-05, `updated_at` 2024-02-22), and for
+`EVENT_HEADER_EXTENDED_DATA_ITEM`. `EventWrite`'s page says it "is equivalent to EventWriteEx with 0 for Filter, 0 for Flags,
+NULL for ActivityId, and NULL for RelatedActivityId", and `EventWriteTransfer`'s that it "is equivalent to EventWriteEx with 0
+for Filter and 0 for Flags".
+
+**What it is.** `Registration::write_transfer(descriptor, activity, related, fields)` is the call, with each id an
+`Option<&Guid>` as the page makes each optional: an activity given is the event's whatever thread writes it, and `None`
+is "the current thread's activity ID"; a related id given is recorded, and `None` records none. So a begin and its end written
+on two threads carry one activity, which is what [DI-19.4](../durable-ioring/CHECKLIST.md) needs, and the call's every
+combination stays open to a caller. The fields, and the crate's two refusals of them, are `write`'s, by the one builder.
+`write` keeps its own call; the pages make the two equivalent with no ids, and nothing was gained by moving it.
+
+**Nothing about the ids is refused.** The page calls no value of either invalid. That "The related activity ID is usually set
+on the activity's START event" is advice, and is documented and not enforced.
+
+**The call's failure says "the write call failed"**, and the refusal of too many blocks says "the write call's count", since
+either call can be the one. This changes `Display` text a caller may have matched; the variants are unchanged.
+
+**A session reads both ids.** `Recorded` gains `activity`, the record header's `ActivityId`, and `related_activity`, from the
+extended data item of type `EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID`, whose `DataPtr` the page says "points to an
+EVENT_EXTENDED_ITEM_RELATED_ACTIVITYID structure that contains the related activity identifier if you called
+EventWriteTransfer". The item is read only if its `DataSize` covers the structure, and unaligned, since the page promises no
+alignment. `Recorded` is now `#[non_exhaustive]`, so a later field does not break a caller again; adding fields to a struct
+with public fields was breaking already, so the two go in one change.
+
+**The tests.** Unelevated, a transfer with each combination of ids, every kind of field, no fields, and one activity from
+several threads succeed with no session. The session tests, ignored without privilege as [WE-D-3](#we-d-3)'s are, hold that a
+begin written on one thread and its end on another carry the activity given and only the begin the related id; that an
+activity given leaves the thread's own as it was for the next write; that no activity is the thread's, as `write` takes it;
+that a related id is recorded with no activity given; and that four threads with activities of their own each record theirs.
+What only a session can catch is swept by `sabotage-session.json`, whose `testArgs` run those tests with
+`--include-ignored`, from an elevated process or CI's runner. Run elevated on 2026-10-21, the session tests all pass, and the sweep's
+baseline ran them all green: each of its five sabotages was caught by the session tests that name an id, and its control
+survived. That is evidence and not contract.
+
+**Scheduled work.** None beyond [DI-19.4](../durable-ioring/CHECKLIST.md), its first caller.

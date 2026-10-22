@@ -166,7 +166,7 @@ fn too_many_blocks_reads_as_a_sentence_with_no_source() {
     let error = WriteError::TooManyBlocks { count: 7 };
     assert_eq!(
         error.to_string(),
-        "the fields are 7 blocks, more than EventWrite's count, a ULONG, can hold"
+        "the fields are 7 blocks, more than the write call's count, a ULONG, can hold"
     );
     assert!(std::error::Error::source(&error).is_none());
 }
@@ -174,7 +174,89 @@ fn too_many_blocks_reads_as_a_sentence_with_no_source() {
 #[test]
 fn a_calls_failure_is_its_code_and_is_the_errors_source() {
     let error = WriteError::Call(Win32Error::from_code(87));
-    assert!(error.to_string().starts_with("EventWrite failed: "));
+    assert!(error.to_string().starts_with("the write call failed: "));
     let source = std::error::Error::source(&error).expect("the call's code");
     assert_eq!(source.to_string(), Win32Error::from_code(87).to_string());
+}
+
+/// An activity id and a related one, as a caller would give them.
+const ACTIVITY: Guid = Guid::from_u128(0x0a11_0000_0000_4000_8000_0000_0000_0001);
+const RELATED: Guid = Guid::from_u128(0x0a11_0000_0000_4000_8000_0000_0000_0002);
+
+#[test]
+fn with_no_session_a_transfer_does_nothing_and_succeeds_whichever_ids_are_given() {
+    let registration = Registration::register(provider(20)).expect("registered");
+    for (activity, related) in [
+        (None, None),
+        (Some(&ACTIVITY), None),
+        (None, Some(&RELATED)),
+        (Some(&ACTIVITY), Some(&RELATED)),
+    ] {
+        assert_eq!(
+            registration.write_transfer(&event(), activity, related, &[Field::U32(7)]),
+            Ok(()),
+            "{activity:?} {related:?}"
+        );
+    }
+}
+
+#[test]
+fn a_transfer_takes_every_kind_of_field() {
+    let registration = Registration::register(provider(21)).expect("registered");
+    let text: Vec<u16> = "seal".encode_utf16().collect();
+    let fields = [
+        Field::U8(1),
+        Field::U32(2),
+        Field::U64(3),
+        Field::boolean(true),
+        Field::Utf16Terminated(&text),
+        Field::Bytes(&[1, 2, 3]),
+    ];
+    assert_eq!(
+        registration.write_transfer(&event(), Some(&ACTIVITY), None, &fields),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_transfer_with_no_fields_succeeds() {
+    let registration = Registration::register(provider(22)).expect("registered");
+    assert_eq!(
+        registration.write_transfer(&event(), Some(&ACTIVITY), Some(&RELATED), &[]),
+        Ok(())
+    );
+}
+
+#[test]
+fn one_activity_is_written_from_several_threads_through_one_registration() {
+    let registration = Registration::register(provider(23)).expect("registered");
+    thread::scope(|scope| {
+        for n in 0..4_u32 {
+            let registration = &registration;
+            scope.spawn(move || {
+                for i in 0..25_u32 {
+                    registration
+                        .write_transfer(
+                            &event(),
+                            Some(&ACTIVITY),
+                            None,
+                            &[Field::U32(n), Field::U32(i)],
+                        )
+                        .expect("written");
+                }
+            });
+        }
+    });
+}
+
+#[test]
+fn an_id_borrowed_for_the_call_alone_is_enough() {
+    let registration = Registration::register(provider(24)).expect("registered");
+    for n in 0..16_u128 {
+        let activity = Guid::from_u128(n + 1);
+        assert_eq!(
+            registration.write_transfer(&event(), Some(&activity), None, &[]),
+            Ok(())
+        );
+    }
 }

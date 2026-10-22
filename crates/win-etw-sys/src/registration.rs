@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Mike Grier
-//! `EventRegister`, `EventUnregister`, `EventEnabled`, `EventProviderEnabled` and `EventWrite`: a provider's
-//! registration, and what is done through it.
+//! `EventRegister`, `EventUnregister`, `EventEnabled`, `EventProviderEnabled`, `EventWrite` and `EventWriteTransfer`: a
+//! provider's registration, and what is done through it.
 //!
 //! Read 2026-10-20 from each call's page (all `ms.date` 2018-12-05, `updated_at` 2024-02-22). The registration is
 //! "a process-scope operation (the handle is valid only within the process)", it must be undone "before your
@@ -9,11 +9,14 @@
 //! handle and gives it back when dropped.
 
 use std::fmt;
+use std::ptr::null;
 
 use win_error_codes::Win32Error;
 use windows_sys::Win32::System::Diagnostics::Etw::{
     EventEnabled, EventProviderEnabled, EventRegister, EventUnregister, EventWrite,
+    EventWriteTransfer,
 };
+use windows_sys::core::GUID;
 
 use crate::descriptor::EventDescriptor;
 use crate::field::{Field, build};
@@ -119,6 +122,43 @@ impl Registration {
             .into_result()
             .map_err(WriteError::Call)
     }
+
+    /// Writes an event whose data is `fields` in order, by `EventWriteTransfer`, with the activity id and the related
+    /// activity id the caller gives (WE-D-4).
+    ///
+    /// Read 2026-10-21 from the call's page (`ms.date` 2018-12-05, `updated_at` 2024-02-22). Both ids are optional there:
+    /// "If this is non-NULL, **EventWriteTransfer** will use the specified value for the event's activity ID. If this is
+    /// NULL, **EventWriteTransfer** will use the current thread's activity ID", and for the related id, "If this is NULL,
+    /// the event will not have a related activity ID. The related activity ID is usually set on the activity's START
+    /// event". So `activity` names the event's activity whatever thread writes it, which lets a begin and its end written
+    /// on two threads share one, and `None` is the thread's, as [`write`](Self::write) takes it. The page calls no value
+    /// of either invalid, so none is refused here; "usually" on a START event is advice and is not enforced.
+    ///
+    /// # Errors
+    ///
+    /// As [`write`](Self::write): the crate's refusals of fields that cannot be given to the call, without calling it,
+    /// or [`WriteError::Call`], the call's failure, whose codes the page lists as `write`'s are listed, with
+    /// `ERROR_MORE_DATA` when "The session buffer size is too small for the event" and `STATUS_LOG_FILE_FULL` for a
+    /// real-time playback file that is full.
+    pub fn write_transfer(
+        &self,
+        descriptor: &EventDescriptor,
+        activity: Option<&Guid>,
+        related: Option<&Guid>,
+        fields: &[Field<'_>],
+    ) -> Result<(), WriteError> {
+        let built = build(fields)?;
+        let (count, blocks) = built.as_call();
+        let raw = descriptor.raw();
+        let activity: *const GUID = activity.map_or(null(), |id| id.raw());
+        let related: *const GUID = related.map_or(null(), |id| id.raw());
+        // SAFETY: as `write`'s, and each id is null or points at a GUID the caller's borrow keeps alive for the call.
+        let code =
+            unsafe { EventWriteTransfer(self.handle, &raw, activity, related, count, blocks) };
+        Win32Error::from_code(code)
+            .into_result()
+            .map_err(WriteError::Call)
+    }
 }
 
 impl Drop for Registration {
@@ -155,7 +195,7 @@ pub enum WriteError {
         /// The block's length in bytes.
         len: usize,
     },
-    /// The call failed and gave this code.
+    /// The call, `EventWrite` or `EventWriteTransfer`, failed and gave this code.
     Call(Win32Error),
 }
 
@@ -164,13 +204,13 @@ impl fmt::Display for WriteError {
         match self {
             Self::TooManyBlocks { count } => write!(
                 f,
-                "the fields are {count} blocks, more than EventWrite's count, a ULONG, can hold"
+                "the fields are {count} blocks, more than the write call's count, a ULONG, can hold"
             ),
             Self::BlockTooLong { field, len } => write!(
                 f,
                 "field {field} is {len} bytes, more than an EVENT_DATA_DESCRIPTOR's size, a ULONG, can hold"
             ),
-            Self::Call(error) => write!(f, "EventWrite failed: {error}"),
+            Self::Call(error) => write!(f, "the write call failed: {error}"),
         }
     }
 }

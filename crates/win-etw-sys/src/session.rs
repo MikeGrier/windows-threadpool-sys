@@ -22,9 +22,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use windows_sys::Win32::System::Diagnostics::Etw::{
     CONTROLTRACE_HANDLE, CloseTrace, ControlTraceW, EVENT_CONTROL_CODE_ENABLE_PROVIDER,
-    EVENT_RECORD, EVENT_TRACE_CONTROL_STOP, EVENT_TRACE_FILE_MODE_SEQUENTIAL, EVENT_TRACE_LOGFILEW,
-    EVENT_TRACE_PROPERTIES, EnableTraceEx2, OpenTraceW, PROCESS_TRACE_MODE_EVENT_RECORD,
-    PROCESSTRACE_HANDLE, ProcessTrace, StartTraceW, WNODE_FLAG_TRACED_GUID,
+    EVENT_EXTENDED_ITEM_RELATED_ACTIVITYID, EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID,
+    EVENT_HEADER_EXTENDED_DATA_ITEM, EVENT_RECORD, EVENT_TRACE_CONTROL_STOP,
+    EVENT_TRACE_FILE_MODE_SEQUENTIAL, EVENT_TRACE_LOGFILEW, EVENT_TRACE_PROPERTIES, EnableTraceEx2,
+    OpenTraceW, PROCESS_TRACE_MODE_EVENT_RECORD, PROCESSTRACE_HANDLE, ProcessTrace, StartTraceW,
+    WNODE_FLAG_TRACED_GUID,
 };
 
 use crate::{EventDescriptor, Guid};
@@ -36,7 +38,10 @@ const INVALID_PROCESSTRACE: u64 = u64::MAX;
 const BUFFER_KB: u32 = 64;
 
 /// One event that a session recorded.
+///
+/// Read only: a field may be added, which is why it cannot be built outside the crate.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Recorded {
     /// The provider's id.
     pub provider: Guid,
@@ -46,6 +51,12 @@ pub struct Recorded {
     pub data: Vec<u8>,
     /// The id of the process that wrote it.
     pub process_id: u32,
+    /// The event's activity id: the one the writer gave `EventWriteTransfer`, or the writing thread's.
+    pub activity: Guid,
+    /// The event's related activity id, if the writer gave one: the record's extended data item of type
+    /// `EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID`, which "contains the related activity identifier if you called
+    /// EventWriteTransfer to write the event".
+    pub related_activity: Option<Guid>,
 }
 
 /// A running session logging to a file. It is stopped, and its file removed, when this is dropped.
@@ -242,12 +253,13 @@ struct Collected {
 /// gave `OpenTraceW` and which is not otherwise in use.
 unsafe extern "system" fn on_event(record: *mut EVENT_RECORD) {
     // SAFETY: the caller's.
-    let (header, user, length, collected) = unsafe {
+    let (header, user, length, extended, collected) = unsafe {
         let record = &*record;
         (
             record.EventHeader,
             record.UserData.cast::<u8>(),
             usize::from(record.UserDataLength),
+            extended_items(record),
             &mut *record.UserContext.cast::<Collected>(),
         )
     };
@@ -275,7 +287,42 @@ unsafe extern "system" fn on_event(record: *mut EVENT_RECORD) {
         },
         data,
         process_id: header.ProcessId,
+        activity: Guid::from_raw(header.ActivityId),
+        // SAFETY: the items are the record's, valid for the callback.
+        related_activity: unsafe { related_activity(extended) },
     });
+}
+
+/// The record's extended data items.
+///
+/// # Safety
+///
+/// `record` is a record `ProcessTrace` handed to its callback, and the slice is used only while the callback runs.
+unsafe fn extended_items(record: &EVENT_RECORD) -> &[EVENT_HEADER_EXTENDED_DATA_ITEM] {
+    let count = usize::from(record.ExtendedDataCount);
+    if count == 0 || record.ExtendedData.is_null() {
+        return &[];
+    }
+    // SAFETY: the record's `ExtendedData` is `ExtendedDataCount` items, valid for the callback.
+    unsafe { std::slice::from_raw_parts(record.ExtendedData, count) }
+}
+
+/// The related activity id among a record's extended data items, if it has one.
+///
+/// # Safety
+///
+/// The items are a record's, and each `DataPtr` is valid for the `DataSize` bytes it gives while the callback runs.
+unsafe fn related_activity(items: &[EVENT_HEADER_EXTENDED_DATA_ITEM]) -> Option<Guid> {
+    let item = items.iter().find(|item| {
+        u32::from(item.ExtType) == EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID
+            && usize::from(item.DataSize) >= size_of::<EVENT_EXTENDED_ITEM_RELATED_ACTIVITYID>()
+    })?;
+    // SAFETY: the page says `DataPtr` points to an `EVENT_EXTENDED_ITEM_RELATED_ACTIVITYID` for this type, and its size
+    // was checked; the read is unaligned because the page promises no alignment.
+    let value = unsafe {
+        std::ptr::read_unaligned(item.DataPtr as *const EVENT_EXTENDED_ITEM_RELATED_ACTIVITYID)
+    };
+    Some(Guid::from_raw(value.RelatedActivityId))
 }
 
 /// Reads the events of `wanted` providers out of a session's log file.

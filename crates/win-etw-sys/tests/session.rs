@@ -370,3 +370,171 @@ fn a_hundred_and_twenty_eight_blocks_are_one_event_of_that_many_bytes() {
         (0..128).collect::<Vec<u8>>()
     );
 }
+
+/// A pair's two events, as a provider that pairs them writes them: a start and a stop, opcodes 1 and 2.
+const START_EVENT: EventDescriptor = EventDescriptor {
+    opcode: 1,
+    ..INFO_EVENT
+};
+const STOP_EVENT: EventDescriptor = EventDescriptor {
+    opcode: 2,
+    id: 11,
+    ..INFO_EVENT
+};
+
+const ACTIVITY: Guid = Guid::from_u128(0x0a11_0000_0000_4000_8000_0000_0000_0001);
+const RELATED: Guid = Guid::from_u128(0x0a11_0000_0000_4000_8000_0000_0000_0002);
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn a_begin_and_its_end_written_on_two_threads_carry_the_activity_the_caller_gave() {
+    let id = provider(30);
+    let mut session = session();
+    session.enable(id, level::VERBOSE, 0xff).expect("enabled");
+    let registration = Registration::register(id).expect("registered");
+    let (began, ended) = std::thread::scope(|scope| {
+        let began = scope
+            .spawn(|| {
+                registration
+                    .write_transfer(
+                        &START_EVENT,
+                        Some(&ACTIVITY),
+                        Some(&RELATED),
+                        &[Field::U8(1)],
+                    )
+                    .expect("the begin");
+                std::thread::current().id()
+            })
+            .join()
+            .expect("the first thread");
+        let ended = scope
+            .spawn(|| {
+                registration
+                    .write_transfer(&STOP_EVENT, Some(&ACTIVITY), None, &[Field::U8(2)])
+                    .expect("the end");
+                std::thread::current().id()
+            })
+            .join()
+            .expect("the second thread");
+        (began, ended)
+    });
+    assert_ne!(began, ended, "two threads");
+    drop(registration);
+    let events = session.stop().expect("stopped and read");
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(
+        events
+            .iter()
+            .map(|e| (
+                e.descriptor.opcode,
+                e.activity,
+                e.related_activity,
+                e.data[0]
+            ))
+            .collect::<Vec<_>>(),
+        [(1, ACTIVITY, Some(RELATED), 1), (2, ACTIVITY, None, 2)]
+    );
+}
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn an_activity_given_is_recorded_and_the_writing_threads_own_is_left_as_it_was() {
+    let id = provider(31);
+    let mut session = session();
+    session.enable(id, level::VERBOSE, 0xff).expect("enabled");
+    let registration = Registration::register(id).expect("registered");
+    registration
+        .write(&INFO_EVENT, &[Field::U8(1)])
+        .expect("before");
+    registration
+        .write_transfer(&INFO_EVENT, Some(&ACTIVITY), None, &[Field::U8(2)])
+        .expect("given");
+    registration
+        .write(&INFO_EVENT, &[Field::U8(3)])
+        .expect("after");
+    drop(registration);
+    let events = session.stop().expect("stopped and read");
+    assert_eq!(events.len(), 3, "{events:?}");
+    let thread_own = events[0].activity;
+    assert_ne!(thread_own, ACTIVITY);
+    assert_eq!(
+        events.iter().map(|e| e.activity).collect::<Vec<_>>(),
+        [thread_own, ACTIVITY, thread_own]
+    );
+    assert!(
+        events.iter().all(|e| e.related_activity.is_none()),
+        "{events:?}"
+    );
+}
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn no_activity_given_is_the_threads_as_a_plain_write_takes_it() {
+    let id = provider(32);
+    let mut session = session();
+    session.enable(id, level::VERBOSE, 0xff).expect("enabled");
+    let registration = Registration::register(id).expect("registered");
+    registration.write(&INFO_EVENT, &[]).expect("plain");
+    registration
+        .write_transfer(&INFO_EVENT, None, None, &[])
+        .expect("transfer");
+    drop(registration);
+    let events = session.stop().expect("stopped and read");
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events[0].activity, events[1].activity);
+    assert_eq!(events[1].related_activity, None);
+}
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn a_related_activity_is_recorded_without_an_activity_given() {
+    let id = provider(33);
+    let mut session = session();
+    session.enable(id, level::VERBOSE, 0xff).expect("enabled");
+    let registration = Registration::register(id).expect("registered");
+    registration.write(&INFO_EVENT, &[]).expect("plain");
+    registration
+        .write_transfer(&INFO_EVENT, None, Some(&RELATED), &[])
+        .expect("transfer");
+    drop(registration);
+    let events = session.stop().expect("stopped and read");
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events[1].activity, events[0].activity, "the thread's");
+    assert_eq!(events[1].related_activity, Some(RELATED));
+}
+
+#[test]
+#[ignore = "starts a trace session, which needs an elevated process or the Performance Log Users group: run with --include-ignored, as CI does"]
+fn threads_writing_activities_of_their_own_each_record_theirs() {
+    let id = provider(34);
+    let mut session = session();
+    session.enable(id, level::VERBOSE, 0xff).expect("enabled");
+    let registration = Registration::register(id).expect("registered");
+    std::thread::scope(|scope| {
+        for t in 0..4_u8 {
+            let registration = &registration;
+            scope.spawn(move || {
+                let activity =
+                    Guid::from_u128(0x0a11_0000_0000_4000_8000_0000_0000_0100 + u128::from(t));
+                for i in 0..25_u8 {
+                    registration
+                        .write_transfer(
+                            &INFO_EVENT,
+                            Some(&activity),
+                            None,
+                            &[Field::U8(t), Field::U8(i)],
+                        )
+                        .expect("written");
+                }
+            });
+        }
+    });
+    drop(registration);
+    let events = session.stop().expect("stopped and read");
+    assert_eq!(events.len(), 100, "every event");
+    for event in &events {
+        let expected =
+            Guid::from_u128(0x0a11_0000_0000_4000_8000_0000_0000_0100 + u128::from(event.data[0]));
+        assert_eq!(event.activity, expected, "{event:?}");
+    }
+}
