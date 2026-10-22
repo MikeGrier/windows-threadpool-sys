@@ -194,6 +194,7 @@ dependencies = [
 name = "win-job-launcher"
 version = "0.0.0"
 dependencies = [
+ "win-handles-sys",
  "windows-sys",
 ]
 

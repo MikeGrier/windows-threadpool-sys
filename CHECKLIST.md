@@ -533,7 +533,7 @@ code written before it was stated. `win-durable-ioring`'s open is not here; it i
 
 - [ ] **M44.3** -- `windows-waitable-queues`: its doorbell's `duplicate` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
 
-- [ ] **M44.4** -- `win-job-launcher`: `duplicate_inheritable` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
+- [x] **M44.4** -- `win-job-launcher`: `duplicate_inheritable` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
 
 ## M-inf -- Parked
 
