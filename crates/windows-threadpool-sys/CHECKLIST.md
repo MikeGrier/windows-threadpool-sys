@@ -1306,16 +1306,6 @@ finding is of a different and worse kind: a rule nothing tests.
   justification needs replacing with the real reason rather than deleting, since the flag is still
   required.
 
-## M-T14+ -- Follow-ups to the `Event` conversion
-
-- [ ] **M-T14+.1** -- **A thread-pool wait target from `win_sync_sys::WaitOnlyEvent`.** From
-  [WS-1+.5](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-1+5): a wait-only handle is still known to be
-  an event and carries `SYNCHRONIZE`, which is all a pool wait needs, so a `From` conversion
-  alongside `Event`'s is safe for the reason [WS-D-5](../win-sync-sys/DESIGN-NOTES.md#ws-d-5) gives.
-  Decide whether it is a `From` impl or a second constructor, with the pool's `Event` conversion as
-  the model, and test it as that conversion is. It lets a consumer hand a thread-pool wait the
-  handle it was given without giving the pool the power to signal it.
-
 ## M-T15 -- A wait that shares its handle
 
 - [x] **M-T15.1** -- A wait target may be a shared handle, through `assume_waitable_shared`, and `into_handle` gives it back only to its last holder. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m-t151)
@@ -1323,16 +1313,14 @@ finding is of a different and worse kind: a rule nothing tests.
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/win-sync-sys` -> `WS-M2` -> `WS-2.2`. See
   > [COMPLETED-CHECKLIST.md](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-22).
 
-## M-inf -- Diagnostic work with no gating deliverable
+## M-T16 -- Follow-ups to the `Event` conversion
 
-- [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is
-  about 80x the natural 12us gap; nothing establishes what the minimum is. A sweep -- 0, 10us,
-  50us, 100us, 500us, 1ms, interleaved at 20000 each -- would say whether the window is
-  microseconds or milliseconds, which is itself evidence about what the close races.
+Graduated 2026-10-21 from `M-T14+`, whose gate, [M-T14](COMPLETED-CHECKLIST.md#m-t141), is complete.
 
-  **Moved here 2026-10-01, when its gate resolved the "never ships" way.** This item was gated on
-  `M26.14.3` and said so itself: if the draining teardown were adopted, the sleep never ships and
-  the sweep is only of diagnostic interest. It was adopted, so that is where this now sits -- not
-  cancelled, because the question it asks is about the *kernel* window the close races, which the
-  drain avoids rather than explains, and that remains the one thing about this stall nobody has
-  been able to see directly.
+- [ ] **M-T16.1** (was `M-T14+.1`) -- **A thread-pool wait target from `win_sync_sys::WaitOnlyEvent`.** From
+  [WS-1+.5](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-1+5): a wait-only handle is still known to be
+  an event and carries `SYNCHRONIZE`, which is all a pool wait needs, so a `From` conversion
+  alongside `Event`'s is safe for the reason [WS-D-5](../win-sync-sys/DESIGN-NOTES.md#ws-d-5) gives.
+  Decide whether it is a `From` impl or a second constructor, with the pool's `Event` conversion as
+  the model, and test it as that conversion is. It lets a consumer hand a thread-pool wait the
+  handle it was given without giving the pool the power to signal it.
