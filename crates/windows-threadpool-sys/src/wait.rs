@@ -194,7 +194,9 @@ impl WaitableHandle {
     /// The event is a `win-sync-sys` [`Event`], so this crate creates none of
     /// its own. To be able to set the event once the wait holds it, create the
     /// [`Event`] directly, keep a clone, and convert the other with
-    /// `From<Event>`: the two share one handle.
+    /// `From<Event>`: the two share one handle. A wait made by this function
+    /// keeps the only [`Event`], so [`into_handle`](Self::into_handle) returns
+    /// its handle.
     ///
     /// # Errors
     ///
@@ -332,6 +334,12 @@ impl WaitableHandle {
 /// The target is shared: the wait holds the event's handle with every clone of
 /// the [`Event`] the caller keeps, and the handle closes when the last of them
 /// drops.
+///
+/// A wait built this way is a shared target, so
+/// [`WaitableHandle::into_handle`] gives the handle back only when no clone of
+/// the [`Event`] remains, and returns the wrapper unchanged while one does. A
+/// caller that keeps a clone to signal the event therefore does not get the
+/// handle back from `into_handle`; it reaches the event through its clone.
 impl From<Event> for WaitableHandle {
     fn from(event: Event) -> Self {
         Self {
