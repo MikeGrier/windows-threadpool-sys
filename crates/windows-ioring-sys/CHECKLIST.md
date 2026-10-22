@@ -95,33 +95,6 @@ because the sample is wrong whatever becomes of that crate
   [strategy.rs](examples/epoch_log/strategy.rs)'s `settle`, and check
   [contract.rs](examples/epoch_log/contract.rs) for a statement that relies on it.
 
-## M31 -- `EventDelivery`'s callback contract is specified, not incidental
-
-Opened 2026-10-05 from the durable-ioring design session
-([DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md),
-"DI-2.3: completion routing"). durable-ioring's design ([DI-D-18](../durable-ioring/DESIGN-NOTES.md#di-d-18))
-needs two properties of the
-`on_completion` callback. When this milestone opened they held only as implementation: the
-comments on the private `drain` and on the callback body said so, but `EventDelivery::new`'s
-rustdoc did not, so relying on them would have bound a consumer to incidental behaviour. The engineer's framing: using
-it "without permission" is not better than getting it properly supported.
-
-This does **not** make the ring a synchronization provider. That is out of this crate's scope, and
-no consumer may share the ring's lock. It states two properties of this crate's own callback that
-any callback API owes its users.
-
-- [x] **M31.1** -- `on_completion`'s re-entrancy and concurrency are stated on `EventDelivery::new` and pinned by a test and a sabotage. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#m311)
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.2.1` (dioring's plain I/O and the delivery its front ends share), which relies on this item's contract. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
-
-- [x] **M31.2** -- **Withdrawn 2026-10-06: "every `Completion` is real" is already contract.**
-  `try_pop`'s rustdoc hands a payload back by that call alone, and [D-79](DESIGN-NOTES.md#d-79)
-  makes a completion for anything not in flight a panicking defect; the restatement added nothing
-  a consumer could rely on, and its `compile_fail` doctest would have pinned an implementation
-  detail.
-
-- [x] **M31.3** -- `SharedFile` is removed; a safe push's file is `win-shared-os-owned-handle`'s `SharedHandle`. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#m313)
-
 ## M32 -- Write-through needs an unbuffered handle
 
 Opened 2026-10-07 from durable-ioring's `DI-3.2.2.1`, whose test of its caching option found this.
@@ -157,38 +130,3 @@ needs the thread pool only to be told when to drain.
   obligation report differs.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5` -> `DI-3.10.3.5.6.1` (pool delivery over the threadless backend, built on this wake). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
-
-## M34 -- A registration's span check, asked without pushing
-
-Opened 2026-10-11 from durable-ioring's `DI-3.10.3.5.6.2.1`, whose core accepts a gated operation
-now and pushes it once its gate is durable, and so must refuse at acceptance a span the push would
-refuse.
-
-- [x] **M34.1** -- `RegisteredBuffers::check_span`: the span check every push makes, asked without pushing. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#m341)
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6.2` -> `DI-3.10.3.5.6.2.1` (the Windows backend's `check` asks the registration). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
-
-## M40 -- A batch left queued, for a caller that owns the doorbell
-
-Opened 2026-10-13 from durable-ioring's `DI-7+.2`.
-
-- [x] **M40.1** -- `Batch::leave_queued`: close a batch without submitting what it queued. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#m401)
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-7+.2` (the engine rings the doorbell; the Windows backend's push only queues). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
-
-## M41 -- A ring typed by whether it can hold nothing for an operation
-
-Opened 2026-10-14 from durable-ioring's `DI-7+.3`.
-
-- [x] **M41.1** -- `IoRing<T, X, K>` with `K` `Open` or `Owned`, and `IoRing::into_owned`: a ring that cannot have an operation in flight it holds nothing for. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m411)
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-7+.3` (the Windows backend's ring is sealed, and its unreachable branch is gone). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
-## M31+ -- ETW for the ring's own lock (withdrawn)
-
-Opened and withdrawn 2026-10-06 in the durable-ioring design session.
-
-- [x] **M31+.1** -- **Withdrawn 2026-10-06: the ring crate publishes no ETW provider of its own.**
-  It would have timed contended acquisitions of `EventDelivery`'s mutex. The engineer: "the etw
-  events we publish give a surface for diagnosis of issues; clients don't want to search around
-  across providers to try to correlate issues." durable-ioring publishes the one surface, and sees
-  this lock's contention as a slow call into the ring, timed at its boundary.
