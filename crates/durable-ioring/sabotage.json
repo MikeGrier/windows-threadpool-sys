@@ -1017,9 +1017,9 @@
       "name": "DI-3.10.3.3: a fan-out gives each event to every sink",
       "file": "src/diagnostics.rs",
       "expect": "caught",
-      "why": "A fan-out hands an event only to the sinks that want its kind, so a sink's answer to wants means the same behind a fan-out as alone.",
-      "find": ["        for sink in self.sinks.iter().filter(|sink| sink.wants(kind)) {\n"],
-      "replace": ["        for sink in self.sinks.iter().filter(|_| kind == kind) {\n"]
+      "why": "A fan-out hands an event that is not a pair's end only to the sinks that want its kind, so a sink's answer to wants means the same behind a fan-out as alone.",
+      "find": ["            if is_end || sink.wants(kind) {\n"],
+      "replace": ["            if is_end || kind == kind {\n"]
     },
     {
       "name": "DI-3.10.3.3: a fan-out wants an event only when every sink does",
@@ -2235,6 +2235,30 @@
         "            | Self::SealEnded { id, .. } => (*id, Edge::Begin),",
         "            Self::FlushEnded { id, .. }"
       ]
+    },
+    {
+      "name": "DI-22.1: a pair's end is asked of wants",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "A sink that stopped wanting a kind while a pair was open is not given the end, so a sink that holds something for the pair from its begin never lets it go: the ETW sink's activity map grew by a pair for each session stop. DI-D-96.",
+      "find": ["            if is_end || sink.wants(kind) {\n"],
+      "replace": ["            if sink.wants(kind) {\n"]
+    },
+    {
+      "name": "DI-22.1: a begin is taken for an end",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "The edge decides which events skip the question. Reading a begin as an end gives every sink every begin, wanted or not, and asks the end.",
+      "find": ["            .is_some_and(|pairing| pairing.edge == Edge::End);\n"],
+      "replace": ["            .is_some_and(|pairing| pairing.edge == Edge::Begin);\n"]
+    },
+    {
+      "name": "DI-22.1 control: the end is read by another spelling",
+      "file": "src/diagnostics.rs",
+      "expect": "survives",
+      "why": "A control: `map_or(false, ..)` is `is_some_and(..)`, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["            .is_some_and(|pairing| pairing.edge == Edge::End);\n"],
+      "replace": ["            .map_or(false, |pairing| pairing.edge == Edge::End);\n"]
     }
   ]
 }

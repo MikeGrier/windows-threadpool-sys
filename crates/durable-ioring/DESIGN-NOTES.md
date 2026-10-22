@@ -1802,3 +1802,34 @@ delete -- as operations tagged with an epoch, so that sealing an epoch would cov
 named in the discussion and not asked for; nothing is queued for it.
 
 **Scheduled work.** None.
+
+## <a id="di-d-96"></a>DI-D-96: a producer owes matched pairs, a sink assumes none, and a fan-out hands every end to every sink
+
+The engineer, 2026-10-22, on two findings of a review of the branch: a stateless fan-out and a tolerant sink, and the
+standard each side is held to. The details are the assistant's and open to a ruling.
+
+**Producers are held to the high standard.** The core and its drivers, which report the pairs, owe a begin for every end and
+an end for every begin: no end without a prior begin, and every begin eventually ended, by the core's own close, drop or end
+of a lineage if not otherwise. [DI-D-87](#di-d-87)'s `PairingChecker` is that standard written once, and the core's tests
+bind to it.
+
+**Sinks make no assumption that the standard was met where they stand.** What a sink wants can change while a pair is open (a
+trace session stops or starts), and a router or an event filter between a correct producer and a sink -- a fan-out today, a
+routing feature later -- can deliver an end whose begin the sink was never given, with nothing wrong in the producer. So a sink
+tolerates an end with no begin as it tolerates a begin with no end, decides for itself what to record of either, filters what
+it would over-log, and lets go whatever it held for a pair at the pair's end. `DiagnosticSink::report`'s documentation says so.
+`EtwDiagnostics` writes such an end in an activity of its own ([DE-D-6](../durable-ioring-events/DESIGN-NOTES.md#de-d-6)).
+
+**The fan-out is stateless and does not ask `wants` of an end.** It hands an event that is not a pair's end to the sinks that
+want its kind now, as before, and a pair's end to every sink it holds, in order. Before this, an end was asked of `wants`
+like any event, so a sink that had stopped wanting the kind between the begin and the end -- the ETW sink, when a session
+stopped -- was not given the end that lets it release its pair, and the process's activity map kept an entry for each such
+pair for the life of the process. The first attempt kept, per open pair, which sinks its begin was given to and sent the end to
+exactly those; it was withdrawn on the ruling above, since it made the router carry a guarantee that the sinks are not to rely
+on, and a state of its own to keep in step with the producers'.
+
+**Not decided here:** whether a sink that wants nothing should be given an end at all by a router that knows it was never given
+the begin. A sink filters either way, so nothing waits on it.
+
+**Scheduled work.** None; [DI-22.1](COMPLETED-CHECKLIST.md#di-221) is this.
+

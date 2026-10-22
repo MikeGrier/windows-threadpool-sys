@@ -320,7 +320,14 @@ pub trait DiagnosticSink: Send + Sync {
     /// `false` costs the core a branch and nothing more.
     fn wants(&self, kind: DiagnosticKind) -> bool;
 
-    /// Report `event`, which is of a kind [`wants`](Self::wants) answered `true` for.
+    /// Report `event`, which is of a kind [`wants`](Self::wants) answered `true` for, **except a pair's end**.
+    ///
+    /// A pair's end is reported whatever a sink wants, because a sink may hold something for the pair from its begin and the
+    /// end is what lets it go. **A sink makes no assumption that its begins and ends match (DI-D-96):** what it wants can change
+    /// while a pair is open, and a router or a filter between the core and a sink can deliver an end whose begin the sink was
+    /// never given, from a client that did nothing wrong. So a sink tolerates an end with no begin, as it tolerates a begin that
+    /// is never ended, and what it records of one is its own decision; it filters what it would over-log, and releases what it
+    /// held for a pair at the pair's end.
     fn report(&self, event: &Diagnostic<'_>);
 }
 
@@ -354,7 +361,13 @@ impl DiagnosticSink for StderrDiagnostics {
     }
 }
 
-/// A sink that hands each event to every sink it holds that wants its kind, in order.
+/// A sink that hands each event to every sink it holds that wants its kind, in order, and a pair's end to every sink it
+/// holds.
+///
+/// **A pair's end is not asked of `wants`.** Whether a sink wants a kind can change between a pair's begin and its end, as a
+/// trace session stops or starts, and a sink that holds something for a pair from its begin has to be given the end that lets
+/// it go. So an end goes to every sink, in order, and each decides what to do with it, including that it never saw the begin
+/// (DI-D-96). The fan-out holds no state of its own about which pairs are open.
 #[derive(Clone, Default)]
 pub struct FanOutDiagnostics {
     sinks: Vec<Arc<dyn DiagnosticSink>>,
@@ -383,8 +396,13 @@ impl DiagnosticSink for FanOutDiagnostics {
 
     fn report(&self, event: &Diagnostic<'_>) {
         let kind = event.kind();
-        for sink in self.sinks.iter().filter(|sink| sink.wants(kind)) {
-            sink.report(event);
+        let is_end = event
+            .pairing()
+            .is_some_and(|pairing| pairing.edge == Edge::End);
+        for sink in &self.sinks {
+            if is_end || sink.wants(kind) {
+                sink.report(event);
+            }
         }
     }
 }
