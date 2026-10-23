@@ -13,6 +13,7 @@
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
+use crate::alloc_tags::{tag, tagged};
 use crate::correlation::CorrelationId;
 use crate::diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink};
 
@@ -46,18 +47,22 @@ impl LockWatch {
                         mutex.lock().unwrap_or_else(PoisonError::into_inner),
                     );
                 };
-                self.sink.report(&Diagnostic::LockWaitBegan {
-                    instance: self.instance,
-                    lock: name,
-                    id,
+                tagged(tag::LOCK_WATCH_LOCK_BEGAN, || {
+                    self.sink.report(&Diagnostic::LockWaitBegan {
+                        instance: self.instance,
+                        lock: name,
+                        id,
+                    });
                 });
                 let taken = mutex.lock().unwrap_or_else(PoisonError::into_inner);
                 // Written with the lock held, as the engineer ruled (DI-D-80): the sink's own
                 // synchronization is a leaf beneath it, which `DiagnosticSink` requires.
-                self.sink.report(&Diagnostic::LockWaitEnded {
-                    instance: self.instance,
-                    lock: name,
-                    id,
+                tagged(tag::LOCK_WATCH_LOCK_ENDED, || {
+                    self.sink.report(&Diagnostic::LockWaitEnded {
+                        instance: self.instance,
+                        lock: name,
+                        id,
+                    });
                 });
                 taken
             }

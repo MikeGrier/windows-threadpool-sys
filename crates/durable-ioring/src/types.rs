@@ -8,6 +8,7 @@ use std::io;
 use std::sync::Arc;
 
 use crate::access::Access;
+use crate::alloc_tags::{tag, tagged};
 use crate::backend::RefusalCause;
 use crate::contract::Identities;
 use crate::error_code::ErrorCode;
@@ -145,7 +146,7 @@ pub struct SuspectSet<V: Identities>(Arc<[SuspectWrite<V>]>);
 impl<V: Identities> SuspectSet<V> {
     /// Freeze `writes`, in push order.
     pub(crate) fn new(writes: Vec<SuspectWrite<V>>) -> Self {
-        Self(writes.into())
+        Self(tagged(tag::TYPES_SUSPECT_SET_NEW, || writes.into()))
     }
 
     /// The set's writes. The one borrow the API returns, into frozen shared data that nothing
@@ -191,7 +192,7 @@ pub struct FlushDomain(Arc<[u8]>);
 impl FlushDomain {
     /// The domain named by `bytes`.
     pub fn new(bytes: impl Into<Arc<[u8]>>) -> Self {
-        Self(bytes.into())
+        Self(tagged(tag::TYPES_FLUSH_DOMAIN_NEW, || bytes.into()))
     }
 
     /// The bytes that name the domain.

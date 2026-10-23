@@ -19,6 +19,7 @@ use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use crate::alloc_tags::{tag, tagged};
 use crate::backend::{IoBackend, Refused, Submission, SubmissionData};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
@@ -85,7 +86,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// It ends: a refusal either is kept, making nothing due, or ends one submission for good.
     pub fn act(&mut self, actions: CoreActions<V<E, K>, Bk::Buffer>) -> bool {
         let mut deliver = false;
-        let mut pending = VecDeque::from([actions]);
+        let mut pending = tagged(tag::ENGINE_ACT_PENDING, || VecDeque::from([actions]));
         while let Some(CoreActions {
             submit,
             requests,
@@ -93,10 +94,11 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
         }) = pending.pop_front()
         {
             deliver |= ready;
-            self.requests.extend(requests);
+            tagged(tag::ENGINE_ACT_REQUESTS, || self.requests.extend(requests));
             for submission in submit {
                 if let Err(refused) = self.push(submission) {
-                    pending.push_back(self.core.refused(refused));
+                    let more = self.core.refused(refused);
+                    tagged(tag::ENGINE_ACT_REFUSED, || pending.push_back(more));
                 }
             }
         }
@@ -106,9 +108,14 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// Push `submission`, and, if the backend's queue was full, once more after the doorbell has
     /// made room.
     fn push(&mut self, submission: Submission<Bk::Buffer>) -> Result<(), Refused<Bk::Buffer>> {
-        match self.backend.push(submission) {
-            Err(refused) if refused.cause.needs_submit() && self.backend.submit().is_ok() => {
-                self.backend.push(refused.submission)
+        match tagged(tag::ENGINE_PUSH_BACKEND, || self.backend.push(submission)) {
+            Err(refused)
+                if refused.cause.needs_submit()
+                    && tagged(tag::ENGINE_PUSH_SUBMIT, || self.backend.submit()).is_ok() =>
+            {
+                tagged(tag::ENGINE_PUSH_BACKEND_AGAIN, || {
+                    self.backend.push(refused.submission)
+                })
             }
             pushed => pushed,
         }
@@ -117,7 +124,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// Ring the backend's doorbell, issuing what was pushed. Whether it failed: what was pushed
     /// stays queued, and nothing else will issue it if nothing is in flight.
     fn ring(&mut self) -> bool {
-        self.backend.submit().is_err()
+        tagged(tag::ENGINE_RING_SUBMIT, || self.backend.submit()).is_err()
     }
 
     /// Drain the backend to empty, feeding each completion to the core and acting on what it makes
@@ -135,7 +142,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
             deliver |= self.ring();
             let mut popped = false;
             loop {
-                match self.backend.pop() {
+                match tagged(tag::ENGINE_DRAIN_POP, || self.backend.pop()) {
                     Ok(Some(completion)) => {
                         self.fault = None;
                         popped = true;

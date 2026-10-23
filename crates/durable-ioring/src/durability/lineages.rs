@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use super::{DEFAULT_LINEAGE, Due, Durability, Event, Key, LineageState, Stage, Standing, V};
+use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::types::{LineageBusy, LineageInfo};
@@ -20,8 +21,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     pub(crate) fn mint(&mut self, description: Option<String>) -> Key {
         let key = self.next_lineage;
         self.next_lineage += 1;
-        self.lineages
-            .insert(key, LineageState::new(description.map(Arc::from)));
+        let description = tagged(tag::LINEAGES_MINT_DESCRIPTION, || {
+            description.map(Arc::from)
+        });
+        tagged(tag::LINEAGES_MINT_STATE, || {
+            self.lineages.insert(key, LineageState::new(description))
+        });
         key
     }
 
@@ -32,17 +37,19 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
 
     /// The live lineages, in minting order.
     pub(crate) fn lineages(&self) -> Vec<LineageInfo<V<E, I>>> {
-        self.lineages
-            .iter()
-            .filter(|(_, state)| !state.ended)
-            .map(|(&key, state)| LineageInfo {
-                lineage: self.name(key),
-                description: state.description.clone(),
-                is_default: key == DEFAULT_LINEAGE,
-                durable_through: state.durable_through,
-                sealed_through: state.sealed_through,
-            })
-            .collect()
+        tagged(tag::LINEAGES_LINEAGES, || {
+            self.lineages
+                .iter()
+                .filter(|(_, state)| !state.ended)
+                .map(|(&key, state)| LineageInfo {
+                    lineage: self.name(key),
+                    description: state.description.clone(),
+                    is_default: key == DEFAULT_LINEAGE,
+                    durable_through: state.durable_through,
+                    sealed_through: state.sealed_through,
+                })
+                .collect()
+        })
     }
 
     /// End `lineage` (DI-D-30): abandon every epoch of it not yet durable, and stop answering for
@@ -89,9 +96,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 pending.remove(&lineage);
             }
         }
-        due.events.push(Event::LineageEnded {
-            lineage,
-            abandoned_through,
+        tagged(tag::LINEAGES_END_EVENT, || {
+            due.events.push(Event::LineageEnded {
+                lineage,
+                abandoned_through,
+            });
         });
         self.end_held(lineage, &mut due);
         self.retire_if_drained(lineage);
@@ -115,12 +124,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             .values()
             .filter(|write| write.lineage == lineage && write.stage != Stage::InFlight)
             .count();
-        let failures: Vec<_> = self
-            .failures
-            .iter()
-            .filter(|failure| failure.holds(lineage).is_some())
-            .map(|failure| failure.id)
-            .collect();
+        let failures: Vec<_> = tagged(tag::LINEAGES_RETIRE_FAILURES, || {
+            self.failures
+                .iter()
+                .filter(|failure| failure.holds(lineage).is_some())
+                .map(|failure| failure.id)
+                .collect()
+        });
         let held_for_gate = self.held_for_gate(lineage);
         if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || !failures.is_empty() {
             return Err(LineageBusy {

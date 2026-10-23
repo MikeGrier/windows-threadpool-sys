@@ -10,6 +10,7 @@
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::alloc_tags::{tag, tagged};
 use crate::diagnostics::{DiagnosticKind, DiagnosticSink};
 
 #[cfg(test)]
@@ -61,6 +62,6 @@ fn mint_for(
     sink: &dyn DiagnosticSink,
     kind: DiagnosticKind,
 ) -> Option<CorrelationId> {
-    sink.wants(kind)
+    tagged(tag::CORRELATION_MINT_FOR_WANTS, || sink.wants(kind))
         .then(|| CorrelationId(counter.fetch_add(1, Ordering::Relaxed)))
 }

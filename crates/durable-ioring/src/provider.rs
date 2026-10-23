@@ -5,6 +5,7 @@ use std::fmt::{self, Debug};
 use std::io;
 use std::sync::{Arc, Weak};
 
+use crate::alloc_tags::{tag, tagged};
 use crate::contract::Identities;
 use crate::ids::Lineage;
 use crate::types::{FailureCause, FlushDomain, IoTargetKey};
@@ -168,7 +169,7 @@ impl DomainOutcome {
             DomainOutcome::Succeeded => Ok(()),
             DomainOutcome::Failed(error) => Err(FailureCause::Provider {
                 domain: domain.clone(),
-                error: Arc::new(error),
+                error: tagged(tag::PROVIDER_INTO_RESULT_ERROR, || Arc::new(error)),
             }),
             DomainOutcome::Abandoned => Err(FailureCause::ProviderAbandoned {
                 domain: domain.clone(),

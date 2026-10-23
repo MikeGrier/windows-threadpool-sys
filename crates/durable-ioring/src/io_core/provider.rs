@@ -11,6 +11,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::{Actions, DurableIoCore, V};
+use crate::alloc_tags::{tag, tagged};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::diagnostics::DiagnosticSink;
@@ -51,14 +52,20 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         }
         let mut core = Self::new(clock, diagnostics);
         let served = intern_all(&mut core.domains, domains.iter().cloned());
-        let mut named: Vec<_> = domains
-            .into_iter()
-            .map(|domain| (core.domains[&domain], domain))
-            .collect();
+        let mut named: Vec<_> = tagged(tag::IO_CORE_WITH_PROVIDER_NAMED, || {
+            domains
+                .into_iter()
+                .map(|domain| (core.domains[&domain], domain))
+                .collect()
+        });
         named.sort_unstable_by_key(|(id, _)| *id);
-        core.served_names = named.into_iter().map(|(_, domain)| domain).collect();
-        core.durability
-            .serve(Arc::clone(&served), core.served_names.clone());
+        core.served_names = tagged(tag::IO_CORE_WITH_PROVIDER_SERVED_NAMES, || {
+            named.into_iter().map(|(_, domain)| domain).collect()
+        });
+        let names = tagged(tag::IO_CORE_WITH_PROVIDER_NAMES, || {
+            core.served_names.clone()
+        });
+        core.durability.serve(Arc::clone(&served), names);
         core.served = served;
         Ok(core)
     }
@@ -97,24 +104,27 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
 
     /// A request in the core's terms, as the provider is handed it.
     pub(super) fn request(&self, call: ProviderCall) -> ProviderRequest<V<E, K>> {
-        let domains = call
-            .domains
-            .into_iter()
-            .map(|part| {
-                let at = self
-                    .served
-                    .binary_search(&part.domain)
-                    .expect("a request names only domains the provider serves");
-                ProviderPart {
-                    domain: self.served_names[at].clone(),
-                    targets: part
-                        .files
-                        .into_iter()
-                        .map(|(key, writes)| IoTargetWrites { key, writes })
-                        .collect(),
-                }
-            })
-            .collect();
+        let domains = tagged(tag::IO_CORE_REQUEST_DOMAINS, || {
+            call.domains
+                .into_iter()
+                .map(|part| {
+                    let at = self
+                        .served
+                        .binary_search(&part.domain)
+                        .expect("a request names only domains the provider serves");
+                    let targets = tagged(tag::IO_CORE_REQUEST_TARGETS, || {
+                        part.files
+                            .into_iter()
+                            .map(|(key, writes)| IoTargetWrites { key, writes })
+                            .collect()
+                    });
+                    ProviderPart {
+                        domain: self.served_names[at].clone(),
+                        targets,
+                    }
+                })
+                .collect()
+        });
         ProviderRequest {
             lineage: self.name(call.lineage),
             seal: call.seal,

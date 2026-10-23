@@ -60,6 +60,7 @@ use std::ops::Bound;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::correlation::CorrelationId;
@@ -575,12 +576,14 @@ fn end_seal<E: fmt::Debug>(
     outcome: SealOutcome,
 ) {
     if let Some(id) = pair {
-        sink.report(&Diagnostic::SealEnded {
-            instance,
-            lineage,
-            through: format_args!("{through:?}"),
-            id,
-            outcome,
+        tagged(tag::DURABILITY_END_SEAL_REPORT, || {
+            sink.report(&Diagnostic::SealEnded {
+                instance,
+                lineage,
+                through: format_args!("{through:?}"),
+                id,
+                outcome,
+            });
         });
     }
 }
@@ -594,13 +597,15 @@ fn end_flush<E: fmt::Debug>(
     part: FlushPart<'_>,
     outcome: FlushOutcome,
 ) {
-    sink.report(&Diagnostic::FlushEnded {
-        instance,
-        lineage,
-        through: format_args!("{:?}", pair.through),
-        part,
-        id: pair.id,
-        outcome,
+    tagged(tag::DURABILITY_END_FLUSH_REPORT, || {
+        sink.report(&Diagnostic::FlushEnded {
+            instance,
+            lineage,
+            through: format_args!("{:?}", pair.through),
+            part,
+            id: pair.id,
+            outcome,
+        });
     });
 }
 
@@ -619,7 +624,9 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         diagnostics: Arc<dyn DiagnosticSink>,
     ) -> Self {
         let mut lineages = BTreeMap::new();
-        lineages.insert(DEFAULT_LINEAGE, LineageState::new(None));
+        tagged(tag::DURABILITY_NEW_DEFAULT_LINEAGE, || {
+            lineages.insert(DEFAULT_LINEAGE, LineageState::new(None))
+        });
         Self {
             instance,
             lineages,
@@ -628,7 +635,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             failures: Vec::new(),
             next_failure: 0,
             held: BTreeMap::new(),
-            served: Arc::from([]),
+            served: tagged(tag::DURABILITY_NEW_SERVED, || Arc::from([])),
             clock,
             diagnostics,
             flush_pairs: HashMap::new(),
@@ -659,11 +666,15 @@ pub fn inconsistent(
     what: &'static str,
     detail: fmt::Arguments<'_>,
 ) {
-    if diagnostics.wants(DiagnosticKind::Inconsistency) {
-        diagnostics.report(&Diagnostic::Inconsistency {
-            instance: instance.number(),
-            what,
-            detail,
+    if tagged(tag::DURABILITY_INCONSISTENT_WANTS, || {
+        diagnostics.wants(DiagnosticKind::Inconsistency)
+    }) {
+        tagged(tag::DURABILITY_INCONSISTENT_REPORT, || {
+            diagnostics.report(&Diagnostic::Inconsistency {
+                instance: instance.number(),
+                what,
+                detail,
+            });
         });
     }
     if !std::thread::panicking() {
@@ -771,21 +782,25 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             was_held || state.sealed_through.is_none_or(|sealed| epoch > sealed),
             "a write at or below the seal"
         );
-        *state.in_flight_by_epoch.entry(epoch).or_insert(0) += 1;
+        tagged(tag::DURABILITY_PUSHED_IN_FLIGHT_BY_EPOCH, || {
+            *state.in_flight_by_epoch.entry(epoch).or_insert(0) += 1;
+        });
         state.pushed_through = state.pushed_through.max(Some(epoch));
-        self.writes.insert(
-            op.seq,
-            Write {
-                op,
-                lineage,
-                epoch,
-                file,
-                target,
-                routing,
-                domains,
-                stage: Stage::InFlight,
-            },
-        );
+        tagged(tag::DURABILITY_PUSHED_WRITE, || {
+            self.writes.insert(
+                op.seq,
+                Write {
+                    op,
+                    lineage,
+                    epoch,
+                    file,
+                    target,
+                    routing,
+                    domains,
+                    stage: Stage::InFlight,
+                },
+            )
+        });
     }
 
     /// A write completed. One that failed is reported on its own completion and is neither named
@@ -866,19 +881,23 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         state.next_seal += 1;
         let pair = CorrelationId::for_pair(&*self.diagnostics, DiagnosticKind::Seal);
         if let Some(id) = pair {
-            self.diagnostics.report(&Diagnostic::SealBegan {
-                instance: self.instance.number(),
-                lineage,
-                through: format_args!("{through:?}"),
-                id,
+            tagged(tag::DURABILITY_SEAL_REPORT, || {
+                self.diagnostics.report(&Diagnostic::SealBegan {
+                    instance: self.instance.number(),
+                    lineage,
+                    through: format_args!("{through:?}"),
+                    id,
+                });
             });
         }
-        state.seals.push_back(Seal {
-            seq,
-            through,
-            stage: SealStage::Waiting,
-            answered: false,
-            pair,
+        tagged(tag::DURABILITY_SEAL_RECORD, || {
+            state.seals.push_back(Seal {
+                seq,
+                through,
+                stage: SealStage::Waiting,
+                answered: false,
+                pair,
+            });
         });
         Sealing::Submitted(self.advance(Due::default()))
     }
@@ -973,31 +992,37 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     let failure = self.failures.remove(index);
                     for (lineage, epochs) in &failure.epochs {
                         if let Some(state) = self.lineages.get_mut(lineage) {
-                            state.abandoned.extend(epochs.iter().copied());
+                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {
+                                state.abandoned.extend(epochs.iter().copied());
+                            });
                         }
                     }
-                    due.events.push(Event::Abandoned {
-                        failure: failure.id,
-                        suspect: failure.suspect,
-                        markings: failure.markings,
+                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {
+                        due.events.push(Event::Abandoned {
+                            failure: failure.id,
+                            suspect: failure.suspect,
+                            markings: failure.markings,
+                        });
                     });
                     self.abandon_held(&failure.epochs, &mut due);
                 }
                 Resolution::Heal => {
                     let lineages = &self.lineages;
-                    let pending = self.failures[index]
-                        .epochs
-                        .keys()
-                        .filter_map(|key| {
-                            lineages.get(key).filter(|state| !state.ended).map(|state| {
-                                let release = Release {
-                                    after: state.next_seal,
-                                    through: state.pushed_through,
-                                };
-                                (*key, release)
+                    let pending = tagged(tag::DURABILITY_RESOLVE_HEAL_PENDING, || {
+                        self.failures[index]
+                            .epochs
+                            .keys()
+                            .filter_map(|key| {
+                                lineages.get(key).filter(|state| !state.ended).map(|state| {
+                                    let release = Release {
+                                        after: state.next_seal,
+                                        through: state.pushed_through,
+                                    };
+                                    (*key, release)
+                                })
                             })
-                        })
-                        .collect();
+                            .collect()
+                    });
                     self.failures[index].standing = Standing::Healing { pending };
                 }
             }
@@ -1021,20 +1046,28 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
 
     /// The unresolved failures, in observation order.
     pub(crate) fn failures(&self) -> Vec<FailureInfo<V<E, I>>> {
-        self.failures
-            .iter()
-            .map(|failure| FailureInfo {
+        let mut infos = tagged(tag::DURABILITY_FAILURES_INFOS, || {
+            Vec::with_capacity(self.failures.len())
+        });
+        for failure in &self.failures {
+            let cause = tagged(tag::DURABILITY_FAILURES_CAUSE, || failure.cause.clone());
+            let markings = tagged(tag::DURABILITY_FAILURES_MARKINGS, || {
+                failure.markings.clone()
+            });
+            let info = FailureInfo {
                 id: failure.id,
-                cause: failure.cause.clone(),
+                cause,
                 suspect: failure.suspect.clone(),
                 observed: failure.observed,
-                markings: failure.markings.clone(),
+                markings,
                 token_live: match &failure.standing {
                     Standing::Open(live) => live.load(Ordering::Acquire),
                     Standing::Healing { .. } => true,
                 },
-            })
-            .collect()
+            };
+            tagged(tag::DURABILITY_FAILURES_INFO, || infos.push(info));
+        }
+        infos
     }
 
     /// Record a failure: its suspect set is every held write of a live lineage -- of `only`, if
@@ -1049,30 +1082,35 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     ) -> FailureId {
         let instance = self.instance;
         let lineages = &self.lineages;
-        let suspect: Vec<SuspectWrite<V<E, I>>> = self
-            .writes
-            .values()
-            .filter(|write| only.is_none_or(|lineage| write.lineage == lineage))
-            .filter(|write| lineages.get(&write.lineage).is_some_and(|s| !s.ended))
-            .filter(|write| reach.reaches(&write.domains))
-            .map(|write| SuspectWrite {
-                op: write.op,
-                target: write.file,
-                epoch: Epoch::new(
-                    Lineage {
-                        instance,
-                        seq: write.lineage,
-                    },
-                    write.epoch,
-                ),
-            })
-            .collect();
+        let suspect: Vec<SuspectWrite<V<E, I>>> = tagged(tag::DURABILITY_OBSERVE_SUSPECT, || {
+            self.writes
+                .values()
+                .filter(|write| only.is_none_or(|lineage| write.lineage == lineage))
+                .filter(|write| lineages.get(&write.lineage).is_some_and(|s| !s.ended))
+                .filter(|write| reach.reaches(&write.domains))
+                .map(|write| SuspectWrite {
+                    op: write.op,
+                    target: write.file,
+                    epoch: Epoch::new(
+                        Lineage {
+                            instance,
+                            seq: write.lineage,
+                        },
+                        write.epoch,
+                    ),
+                })
+                .collect()
+        });
         let mut epochs: BTreeMap<Key, BTreeSet<E>> = BTreeMap::new();
         for write in &suspect {
-            epochs
-                .entry(write.epoch.lineage.seq)
-                .or_default()
-                .insert(write.epoch.id);
+            let epochs = &mut epochs;
+            let of_lineage = tagged(tag::DURABILITY_OBSERVE_EPOCHS_LINEAGE, move || {
+                let epochs = epochs;
+                epochs.entry(write.epoch.lineage.seq).or_default()
+            });
+            tagged(tag::DURABILITY_OBSERVE_EPOCHS_EPOCH, || {
+                of_lineage.insert(write.epoch.id)
+            });
         }
         let id = FailureId {
             instance,
@@ -1081,23 +1119,29 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         self.next_failure += 1;
         let (token, live) = FailureToken::mint(id);
         let suspect = SuspectSet::new(suspect);
-        let observed = self.clock.now();
-        self.failures.push(Failure {
+        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());
+        let recorded_cause = tagged(tag::DURABILITY_OBSERVE_CAUSE, || cause.clone());
+        let failure = Failure {
             id,
-            cause: cause.clone(),
+            cause: recorded_cause,
             suspect: suspect.clone(),
             observed,
             markings: Vec::new(),
             epochs,
             standing: Standing::Open(live),
+        };
+        tagged(tag::DURABILITY_OBSERVE_FAILURE, || {
+            self.failures.push(failure)
         });
-        due.events.push(Event::Failed(Failed {
-            id,
-            token,
-            cause,
-            suspect,
-            observed,
-        }));
+        tagged(tag::DURABILITY_OBSERVE_EVENT, || {
+            due.events.push(Event::Failed(Failed {
+                id,
+                token,
+                cause,
+                suspect,
+                observed,
+            }));
+        });
         id
     }
 
@@ -1116,13 +1160,19 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             }
             let marking = Marking {
                 write,
-                observed: *observed.get_or_insert_with(|| self.clock.now()),
+                observed: *observed
+                    .get_or_insert_with(|| tagged(tag::DURABILITY_MARK_CLOCK, || self.clock.now())),
                 kind: kind.clone(),
             };
-            failure.markings.push(marking.clone());
-            due.events.push(Event::Marked {
-                failure: failure.id,
-                marking,
+            let recorded = marking.clone();
+            tagged(tag::DURABILITY_MARK_MARKING, || {
+                failure.markings.push(recorded)
+            });
+            tagged(tag::DURABILITY_MARK_EVENT, || {
+                due.events.push(Event::Marked {
+                    failure: failure.id,
+                    marking,
+                });
             });
         }
     }
@@ -1135,10 +1185,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             if matches!(&self.failures[at].standing, Standing::Healing { pending } if pending.is_empty())
             {
                 let failure = self.failures.remove(at);
-                due.events.push(Event::Healed {
-                    failure: failure.id,
-                    suspect: failure.suspect,
-                    markings: failure.markings,
+                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {
+                    due.events.push(Event::Healed {
+                        failure: failure.id,
+                        suspect: failure.suspect,
+                        markings: failure.markings,
+                    });
                 });
             } else {
                 at += 1;
@@ -1171,12 +1223,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// seal whose flushes have all answered. Then report the heals that took effect, advance each
     /// lineage's high-water mark, and answer the seals a failure holds.
     fn advance(&mut self, mut due: Due<E, T, I>) -> Due<E, T, I> {
-        let live: Vec<Key> = self
-            .lineages
-            .iter()
-            .filter(|(_, state)| !state.ended)
-            .map(|(key, _)| *key)
-            .collect();
+        let live: Vec<Key> = tagged(tag::DURABILITY_ADVANCE_LIVE, || {
+            self.lineages
+                .iter()
+                .filter(|(_, state)| !state.ended)
+                .map(|(key, _)| *key)
+                .collect()
+        });
         for &lineage in &live {
             self.start_seals(lineage, &mut due);
             self.finish_seals(lineage);
@@ -1213,7 +1266,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             // passes them, no later failure can reach back to them (guarantee 3).
             self.writes
                 .retain(|_, write| write.lineage != lineage || write.epoch > through);
-            due.events.push(Event::Durable { lineage, through });
+            tagged(tag::DURABILITY_ADVANCE_MARK_DURABLE, || {
+                due.events.push(Event::Durable { lineage, through });
+            });
             self.release_through(lineage, through, due);
         }
         let count = self.lineages.get(&lineage).map_or(0, |s| s.seals.len());
@@ -1235,10 +1290,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     pair,
                     SealOutcome::Blocked,
                 );
-                due.events.push(Event::Blocked {
-                    lineage,
-                    through,
-                    by,
+                tagged(tag::DURABILITY_ADVANCE_MARK_BLOCKED, || {
+                    due.events.push(Event::Blocked {
+                        lineage,
+                        through,
+                        by,
+                    });
                 });
             }
         }
@@ -1285,29 +1342,36 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     );
                 }
                 if write.routing.default && !files.iter().any(|f| f.file == write.file) {
-                    files.push(SealFile {
-                        file: write.file,
-                        domains: Arc::clone(&write.domains),
-                        answered: false,
-                        ok: false,
+                    tagged(tag::DURABILITY_START_SEALS_FILE, || {
+                        files.push(SealFile {
+                            file: write.file,
+                            domains: Arc::clone(&write.domains),
+                            answered: false,
+                            ok: false,
+                        });
                     });
-                    due.flushes.push(Flush {
-                        lineage,
-                        through,
-                        file: write.file,
-                        target: write.target.clone(),
+                    let target = write.target.clone();
+                    tagged(tag::DURABILITY_START_SEALS_FLUSH, || {
+                        due.flushes.push(Flush {
+                            lineage,
+                            through,
+                            file: write.file,
+                            target,
+                        });
                     });
                 }
             }
             parts.sort_unstable_by_key(|part| part.domain);
-            let domains = parts
-                .iter()
-                .map(|part| SealDomain {
-                    domain: part.domain,
-                    answered: false,
-                    ok: false,
-                })
-                .collect();
+            let domains = tagged(tag::DURABILITY_START_SEALS_DOMAINS, || {
+                parts
+                    .iter()
+                    .map(|part| SealDomain {
+                        domain: part.domain,
+                        answered: false,
+                        ok: false,
+                    })
+                    .collect()
+            });
             let issued = files
                 .iter()
                 .map(|file| Part::File(file.file))
@@ -1320,21 +1384,27 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 let Some(shown) = flush_part(part, &self.served_names) else {
                     continue;
                 };
-                self.diagnostics.report(&Diagnostic::FlushBegan {
-                    instance: self.instance.number(),
-                    lineage,
-                    through: format_args!("{through:?}"),
-                    part: shown,
-                    id,
+                tagged(tag::DURABILITY_START_SEALS_REPORT, || {
+                    self.diagnostics.report(&Diagnostic::FlushBegan {
+                        instance: self.instance.number(),
+                        lineage,
+                        through: format_args!("{through:?}"),
+                        part: shown,
+                        id,
+                    });
                 });
-                self.flush_pairs
-                    .insert((lineage, seq, part), FlushPair { id, through });
+                tagged(tag::DURABILITY_START_SEALS_FLUSH_PAIR, || {
+                    self.flush_pairs
+                        .insert((lineage, seq, part), FlushPair { id, through })
+                });
             }
             if !parts.is_empty() {
-                due.calls.push(ProviderCall {
-                    lineage,
-                    seal: seq,
-                    domains: parts,
+                tagged(tag::DURABILITY_START_SEALS_CALL, || {
+                    due.calls.push(ProviderCall {
+                        lineage,
+                        seal: seq,
+                        domains: parts,
+                    });
                 });
             }
             state.seals[index].stage = SealStage::Flushing {
@@ -1439,10 +1509,12 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// flushes' abandoned. For a lineage that ends, and for the instance's state as it is dropped.
     pub(super) fn end_pairs(&mut self, only: Option<Key>) {
         let instance = self.instance.number();
-        let mut flushes: Vec<((Key, u64, Part), FlushPair<E>)> = self
-            .flush_pairs
-            .extract_if(|(key, ..), _| only.is_none_or(|only| *key == only))
-            .collect();
+        let mut flushes: Vec<((Key, u64, Part), FlushPair<E>)> =
+            tagged(tag::DURABILITY_END_PAIRS_FLUSHES, || {
+                self.flush_pairs
+                    .extract_if(|(key, ..), _| only.is_none_or(|only| *key == only))
+                    .collect()
+            });
         flushes.sort_unstable_by_key(|((key, seq, _), pair)| (*key, *seq, pair.id));
         for ((lineage, _, part), pair) in &flushes {
             if let Some(shown) = flush_part(*part, &self.served_names) {

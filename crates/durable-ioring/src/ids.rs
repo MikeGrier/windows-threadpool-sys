@@ -8,6 +8,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Weak};
 
+use crate::alloc_tags::{tag, tagged};
 use crate::clock::Instant;
 use crate::contract::{EpochId, Identities};
 use crate::types::Tag;
@@ -93,10 +94,12 @@ pub struct LineageHandle(Arc<Held>);
 impl LineageHandle {
     /// A handle to `lineage`, whose last release ends it through `home`.
     pub fn mint(lineage: Lineage, home: Weak<dyn Home>) -> Self {
-        Self(Arc::new(Held {
-            lineage,
-            home,
-            armed: true,
+        Self(tagged(tag::IDS_LINEAGE_HANDLE_MINT, || {
+            Arc::new(Held {
+                lineage,
+                home,
+                armed: true,
+            })
         }))
     }
 
@@ -190,7 +193,9 @@ pub struct FailureToken {
 impl FailureToken {
     /// A live token for `id`, and the flag its drop clears.
     pub(crate) fn mint(id: FailureId) -> (Self, Arc<AtomicBool>) {
-        let live = Arc::new(AtomicBool::new(true));
+        let live = tagged(tag::IDS_FAILURE_TOKEN_MINT, || {
+            Arc::new(AtomicBool::new(true))
+        });
         (
             Self {
                 id,

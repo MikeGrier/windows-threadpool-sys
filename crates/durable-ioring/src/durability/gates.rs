@@ -27,6 +27,7 @@ use std::collections::BTreeSet;
 use std::ops::Bound;
 
 use super::{Accepted, Due, Durability, Event, Gate, HeldOp, Key, Standing, State};
+use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::ids::OpId;
@@ -72,7 +73,7 @@ fn raise<E: EpochId>(bounds: &mut Vec<(Key, E)>, lineage: Key, extent: E) -> Opt
         Some((_, bound)) if *bound >= extent => None,
         Some((_, bound)) => Some(Bound::Excluded(std::mem::replace(bound, extent))),
         None => {
-            bounds.push((lineage, extent));
+            tagged(tag::GATES_RAISE_BOUND, || bounds.push((lineage, extent)));
             Some(Bound::Unbounded)
         }
     }
@@ -96,7 +97,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// above `write`'s epoch. A gate on the write's own lineage at or above its epoch is the
     /// one-step case.
     pub(crate) fn write_cycle(&self, write: Gate<E>, gate: Gate<E>) -> Option<Vec<Gate<E>>> {
-        self.needs(vec![gate], write, None)
+        let seeds = tagged(tag::GATES_WRITE_CYCLE_SEEDS, || vec![gate]);
+        self.needs(seeds, write, None)
             .then(|| self.trace(write, gate, None))
     }
 
@@ -117,16 +119,18 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             lineage,
             epoch: lowest,
         };
-        if !self.needs(
-            covered.clone().map(|(_, gate)| *gate).collect(),
-            lowest,
-            extra,
-        ) {
+        let seeds = tagged(tag::GATES_SEAL_CYCLE_SEEDS, || {
+            covered.clone().map(|(_, gate)| *gate).collect()
+        });
+        if !self.needs(seeds, lowest, extra) {
             return None;
         }
         covered
             .map(|(&(epoch, _), &gate)| (Gate { lineage, epoch }, gate))
-            .find(|&(write, gate)| self.needs(vec![gate], write, extra))
+            .find(|&(write, gate)| {
+                let seeds = tagged(tag::GATES_SEAL_CYCLE_SEED, || vec![gate]);
+                self.needs(seeds, write, extra)
+            })
             .map(|(write, gate)| self.trace(write, gate, extra))
     }
 
@@ -192,7 +196,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 continue;
             };
             let gated = &self.lineages[&gate.lineage].gated;
-            work.extend(gated.range(span(lower, extent)).map(|(_, gate)| *gate));
+            tagged(tag::GATES_NEEDS_WORK, || {
+                work.extend(gated.range(span(lower, extent)).map(|(_, gate)| *gate));
+            });
         }
         false
     }
@@ -202,11 +208,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// reaching needs `start` again. The same search, breadth first, with a parent per step, so the
     /// cycle named is a shortest one.
     fn trace(&self, start: Gate<E>, gate: Gate<E>, extra: Option<Gate<E>>) -> Vec<Gate<E>> {
-        let mut steps = vec![Step {
-            write: start,
-            gate,
-            parent: None,
-        }];
+        let mut steps = tagged(tag::GATES_TRACE_STEPS, || {
+            vec![Step {
+                write: start,
+                gate,
+                parent: None,
+            }]
+        });
         let mut bounds = Vec::new();
         let mut next = 0;
         while next < steps.len() {
@@ -220,8 +228,10 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 let mut cycle = Vec::new();
                 let mut at = Some(index);
                 while let Some(step) = at {
-                    cycle.push(steps[step].gate);
-                    cycle.push(steps[step].write);
+                    tagged(tag::GATES_TRACE_CYCLE_GATE, || cycle.push(steps[step].gate));
+                    tagged(tag::GATES_TRACE_CYCLE_WRITE, || {
+                        cycle.push(steps[step].write)
+                    });
                     at = steps[step].parent;
                 }
                 cycle.reverse();
@@ -232,18 +242,20 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             };
             let gated = &self.lineages[&gate.lineage].gated;
             for (&(epoch, _), &next_gate) in gated.range(span(lower, extent)) {
-                steps.push(Step {
-                    write: Gate {
-                        lineage: gate.lineage,
-                        epoch,
-                    },
-                    gate: next_gate,
-                    parent: Some(index),
+                tagged(tag::GATES_TRACE_STEP, || {
+                    steps.push(Step {
+                        write: Gate {
+                            lineage: gate.lineage,
+                            epoch,
+                        },
+                        gate: next_gate,
+                        parent: Some(index),
+                    });
                 });
             }
         }
         // `needs` found the cycle, and this is the same search.
-        vec![start, gate]
+        tagged(tag::GATES_TRACE_UNFOUND, || vec![start, gate])
     }
 
     /// Hold operation `op` until `gate` is durable: a write, with what it will be recorded as once
@@ -262,21 +274,29 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         }
         if let Some(write) = &write {
             let state = self.lineages.get_mut(&write.lineage).expect("live");
-            state.gated.insert((write.epoch, op.seq), gate);
-            *state.held_by_epoch.entry(write.epoch).or_insert(0) += 1;
+            tagged(tag::GATES_HOLD_GATED, || {
+                state.gated.insert((write.epoch, op.seq), gate)
+            });
+            tagged(tag::GATES_HOLD_HELD_BY_EPOCH, || {
+                *state.held_by_epoch.entry(write.epoch).or_insert(0) += 1;
+            });
             state.pushed_through = state.pushed_through.max(Some(write.epoch));
         }
         let state = self.lineages.get_mut(&gate.lineage).expect("live");
-        state.waiting.insert((gate.epoch, op.seq));
-        self.held.insert(
-            op.seq,
-            HeldOp {
-                op,
-                write,
-                gate,
-                ready: false,
-            },
-        );
+        tagged(tag::GATES_HOLD_WAITING, || {
+            state.waiting.insert((gate.epoch, op.seq))
+        });
+        tagged(tag::GATES_HOLD_HELD, || {
+            self.held.insert(
+                op.seq,
+                HeldOp {
+                    op,
+                    write,
+                    gate,
+                    ready: false,
+                },
+            )
+        });
     }
 
     /// A released operation was pushed to the ring: a write is recorded as in flight from now.
@@ -292,7 +312,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             }
             Some(held) => {
                 let gate = held.gate;
-                self.held.insert(op.seq, held);
+                tagged(tag::GATES_ISSUED_KEPT, || self.held.insert(op.seq, held));
                 self.inconsistent(
                     "an operation was issued before its gate was durable",
                     format_args!("operation {op:?}, gated on {gate:?}"),
@@ -319,11 +339,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         {
             return;
         }
-        let rest = state.waiting.split_off(&(through, u64::MAX));
-        let mut released: Vec<u64> = std::mem::replace(&mut state.waiting, rest)
-            .into_iter()
-            .map(|(_, seq)| seq)
-            .collect();
+        let rest = tagged(tag::GATES_RELEASE_THROUGH_REST, || {
+            state.waiting.split_off(&(through, u64::MAX))
+        });
+        let ready = std::mem::replace(&mut state.waiting, rest);
+        let mut released: Vec<u64> = tagged(tag::GATES_RELEASE_THROUGH_RELEASED, || {
+            ready.into_iter().map(|(_, seq)| seq).collect()
+        });
         released.sort_unstable();
         for seq in released {
             let Some(held) = self.held.get_mut(&seq) else {
@@ -335,7 +357,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             {
                 state.gated.remove(&(write.epoch, seq));
             }
-            due.released.push(held.op);
+            tagged(tag::GATES_RELEASE_THROUGH_DUE, || {
+                due.released.push(held.op)
+            });
         }
     }
 
@@ -409,11 +433,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         if self.held.is_empty() {
             return;
         }
-        let stopped: Vec<(u64, Gate<E>)> = self
-            .held
-            .iter()
-            .filter_map(|(&seq, held)| stopped(held).map(|abandoned| (seq, abandoned)))
-            .collect();
+        let stopped: Vec<(u64, Gate<E>)> = tagged(tag::GATES_STOP_HELD_STOPPED, || {
+            self.held
+                .iter()
+                .filter_map(|(&seq, held)| stopped(held).map(|abandoned| (seq, abandoned)))
+                .collect()
+        });
         for (seq, abandoned) in stopped {
             let Some(held) = self.held.remove(&seq) else {
                 continue;
@@ -429,9 +454,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             {
                 state.waiting.remove(&(held.gate.epoch, seq));
             }
-            due.events.push(Event::NeverIssued {
-                op: held.op,
-                abandoned,
+            tagged(tag::GATES_STOP_HELD_EVENT, || {
+                due.events.push(Event::NeverIssued {
+                    op: held.op,
+                    abandoned,
+                });
             });
         }
     }

@@ -1,10 +1,15 @@
 // Copyright (c) 2026 Mike Grier
-//! How many allocations the core makes in each phase of its work ([DI-23.1], [DI-D-97]).
+//! How many allocations the core makes in each phase of its work, and which call made each
+//! ([DI-23.1], [DI-23.2], [DI-D-97], [DI-D-104]).
 //!
 //! The goal is a core that allocates everything it needs at construction and nothing after. This
 //! measures how far it is from that: a counting global allocator, and a scenario over the in-memory
 //! backend split into phases, each counting only the allocations made inside calls into the core.
 //! The test's own buffers, the backend's work and the test's bookkeeping are not counted.
+//!
+//! Every allocation is counted under the tag the core set for the call that made it. Three rules
+//! hold in every phase: no counted allocation is untagged, no tag is seen from two places in the
+//! source, and the tags add up to the phase's total.
 //!
 //! The expected tables are today's counts, not a target. A change that moves a count fails here and
 //! prints the new table, so a count going down is seen as clearly as one going up. Each item of
@@ -15,15 +20,19 @@
 //! calls made to it.
 //!
 //! [DI-23.1]: ../CHECKLIST.md
+//! [DI-23.2]: ../CHECKLIST.md
 //! [DI-D-97]: ../DESIGN-NOTES.md
+//! [DI-D-104]: ../DESIGN-NOTES.md
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::num::NonZeroU32;
+use std::panic::Location;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use durable_ioring::alloc_tags::{self, Site, Tag};
 use durable_ioring::backend::{IoBackend, SubmissionData};
 use durable_ioring::memory::{
     Fault, FaultScript, MemoryBackend, MemoryTarget, ScriptOp, When, scripted_fault,
@@ -36,21 +45,95 @@ use durable_ioring::{
 thread_local! {
     /// Whether this thread is inside a call into the core.
     static COUNTING: Cell<bool> = const { Cell::new(false) };
-    /// The allocations counted on this thread since the phase began.
-    static COUNTED: Cell<u64> = const { Cell::new(0) };
+    /// What this thread has counted since the phase began.
+    static COUNTS: RefCell<Counts> = const { RefCell::new(Counts::EMPTY) };
+}
+
+/// The most distinct tags one phase can count. Fixed, so counting never allocates.
+const SLOTS: usize = 256;
+
+/// One tag's count in a phase, and where it was seen.
+#[derive(Clone, Copy)]
+struct Slot {
+    tag: Option<Tag>,
+    location: Option<&'static Location<'static>>,
+    count: u64,
+    /// A second place the same tag was seen, which breaks the rule that a tag names one call.
+    conflict: Option<&'static Location<'static>>,
+}
+
+impl Slot {
+    const EMPTY: Self = Self {
+        tag: None,
+        location: None,
+        count: 0,
+        conflict: None,
+    };
+}
+
+/// What a thread counted in a phase, held in fixed storage so counting never allocates.
+struct Counts {
+    total: u64,
+    untagged: u64,
+    /// Set if more distinct tags were seen than there are slots.
+    overflowed: bool,
+    slots: [Slot; SLOTS],
+}
+
+impl Counts {
+    const EMPTY: Self = Self {
+        total: 0,
+        untagged: 0,
+        overflowed: false,
+        slots: [Slot::EMPTY; SLOTS],
+    };
+
+    fn note(&mut self, site: Option<Site>) {
+        self.total += 1;
+        let Some(site) = site else {
+            self.untagged += 1;
+            return;
+        };
+        let slot = self
+            .slots
+            .iter_mut()
+            .find(|slot| slot.tag.is_none_or(|tag| tag == site.tag));
+        let Some(slot) = slot else {
+            self.overflowed = true;
+            return;
+        };
+        match slot.location {
+            None => {
+                slot.tag = Some(site.tag);
+                slot.location = Some(site.location);
+            }
+            Some(seen) if !same_place(seen, site.location) => slot.conflict = Some(site.location),
+            Some(_) => {}
+        }
+        slot.count += 1;
+    }
+}
+
+fn same_place(a: &Location<'_>, b: &Location<'_>) -> bool {
+    a.file() == b.file() && a.line() == b.line() && a.column() == b.column()
 }
 
 /// The system allocator, counting each allocation, zeroed allocation and reallocation made while
-/// this thread is counting. Freeing is not counted: the question is whether the core asks for
-/// memory, not whether it gives it back.
+/// this thread is counting, under the tag the core set for the call that made it. Freeing is not
+/// counted: the question is whether the core asks for memory, not whether it gives it back.
 struct Counting;
 
 fn note() {
-    // `try_with`, not `with`: an allocator must not panic. These thread locals have no destructor,
-    // so this is only defensive.
+    // `try_with` and `try_borrow_mut`, not `with` and `borrow_mut`: an allocator must not panic.
+    // These thread locals have no destructor and nothing here allocates, so this is only defensive.
     let _ = COUNTING.try_with(|counting| {
         if counting.get() {
-            let _ = COUNTED.try_with(|counted| counted.set(counted.get() + 1));
+            let site = alloc_tags::current();
+            let _ = COUNTS.try_with(|counts| {
+                if let Ok(mut counts) = counts.try_borrow_mut() {
+                    counts.note(site);
+                }
+            });
         }
     });
 }
@@ -94,11 +177,40 @@ fn counted<R>(call: impl FnOnce() -> R) -> R {
     result
 }
 
-/// End the current phase: what it counted, and a fresh count for the next.
-fn take() -> u64 {
-    COUNTED.with(|counted| counted.replace(0))
+/// What one phase counted.
+struct Measured {
+    phase: &'static str,
+    total: u64,
+    untagged: u64,
+    overflowed: bool,
+    /// Each tag's count, in the order the tags were first seen.
+    tags: Vec<(&'static str, u64)>,
+    /// Each tag seen from two places, and the two places.
+    conflicts: Vec<String>,
 }
 
+/// End the current phase, `phase`: what it counted, and fresh counts for the next. Called outside
+/// any counted call, so what it allocates is not counted.
+fn take(phase: &'static str) -> Measured {
+    let counts = COUNTS.with(|counts| counts.replace(Counts::EMPTY));
+    let used = counts.slots.iter().filter(|slot| slot.tag.is_some());
+    Measured {
+        phase,
+        total: counts.total,
+        untagged: counts.untagged,
+        overflowed: counts.overflowed,
+        tags: used
+            .clone()
+            .map(|slot| (slot.tag.expect("used").name(), slot.count))
+            .collect(),
+        conflicts: used
+            .filter_map(|slot| {
+                let (first, second) = (slot.location?, slot.conflict?);
+                Some(format!("{} at {first} and at {second}", slot.tag?.name()))
+            })
+            .collect(),
+    }
+}
 /// A clock that counts its readings, with no allocation behind it.
 #[derive(Default)]
 struct Ticks(AtomicU64);
@@ -135,7 +247,7 @@ fn alternate(n: u64) -> IoTargetKey {
 struct Rig {
     core: Core,
     backend: MemoryBackend,
-    phases: Vec<(&'static str, u64)>,
+    phases: Vec<Measured>,
 }
 
 impl Rig {
@@ -160,8 +272,7 @@ impl Rig {
 
     /// End the current phase, recording what it counted.
     fn phase(&mut self, name: &'static str) {
-        let count = take();
-        self.phases.push((name, count));
+        self.phases.push(take(name));
     }
 
     /// Push what the core asks for, handing refusals back to it.
@@ -245,7 +356,7 @@ impl Rig {
 
 /// The clean paths: writes and reads, gated writes, a seal that covers writes and one that covers
 /// none, a lineage minted and ended, a target added and removed, the queries, and close.
-fn clean() -> Vec<(&'static str, u64)> {
+fn clean() -> Vec<Measured> {
     let mut rig = Rig::new(MemoryBackend::new(nz(64), nz(128)));
     let default = rig.core.default_lineage();
 
@@ -352,13 +463,13 @@ fn clean() -> Vec<(&'static str, u64)> {
         core, mut phases, ..
     } = rig;
     drop(counted(|| core.close()));
-    phases.push(("close", take()));
+    phases.push(take("close"));
     phases
 }
 
 /// The failure paths: a commit that fails, the inventory queried, a heal taking effect, an import,
 /// and an abandon.
-fn failures() -> Vec<(&'static str, u64)> {
+fn failures() -> Vec<Measured> {
     let script = FaultScript::new().on(
         When::any().op(ScriptOp::Commit).target(KEY).nth(1),
         Fault::Fail(scripted_fault("the flush failed")),
@@ -393,7 +504,8 @@ fn failures() -> Vec<(&'static str, u64)> {
     rig.drain();
     rig.phase("writes re-issued");
     let core = &mut rig.core;
-    let actions = counted(|| core.resolve(vec![(token, Resolution::Heal)])).expect("a live token");
+    let items = vec![(token, Resolution::Heal)];
+    let actions = counted(|| core.resolve(items)).expect("a live token");
     rig.act(actions);
     rig.phase("a heal resolved");
     rig.seal(default, 2);
@@ -418,8 +530,8 @@ fn failures() -> Vec<(&'static str, u64)> {
         })
         .expect("the import's entry");
     let core = &mut rig.core;
-    let actions =
-        counted(|| core.resolve(vec![(token, Resolution::Abandon)])).expect("a live token");
+    let items = vec![(token, Resolution::Abandon)];
+    let actions = counted(|| core.resolve(items)).expect("a live token");
     rig.act(actions);
     rig.drain();
     rig.phase("an abandon resolved");
@@ -427,8 +539,8 @@ fn failures() -> Vec<(&'static str, u64)> {
     rig.phases
 }
 
-/// The counts each phase made when DI-23.1 was written. A change that moves one updates its table,
-/// and its commit says why.
+/// The allocations each phase made, as last recorded. A change that moves one updates this table and
+/// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
     ("construction, with two targets", 6),
     ("writes, first round", 12),
@@ -457,6 +569,7 @@ const CLEAN: &[(&str, u64)] = &[
     ("lineages queried", 1),
     ("close", 1),
 ];
+
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
     ("construction, with two targets", 6),
@@ -464,54 +577,505 @@ const FAILURES: &[(&str, u64)] = &[
     ("a commit failure observed", 22),
     ("failures queried", 2),
     ("writes re-issued", 19),
-    ("a heal resolved", 4),
+    ("a heal resolved", 3),
     ("the heal taking effect at the next seal", 11),
     ("writes before the import", 18),
     ("a failure imported", 9),
-    ("an abandon resolved", 4),
+    ("an abandon resolved", 3),
 ];
-/// The measured table, written so it can be pasted over the expected one.
-fn table(name: &str, phases: &[(&'static str, u64)]) -> String {
+
+/// Each phase's allocations by tag, as last recorded, in the order the tags were first seen.
+const CLEAN_TAGS: &[(&str, &str, u64)] = &[
+    (
+        "construction, with two targets",
+        "durability::new::default_lineage",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::served",
+        1,
+    ),
+    ("construction, with two targets", "io_core::new::served", 1),
+    (
+        "construction, with two targets",
+        "domains::intern_all::shared",
+        2,
+    ),
+    (
+        "construction, with two targets",
+        "io_core::add_target::record",
+        1,
+    ),
+    ("writes, first round", "io_core::issue::backend_push", 3),
+    (
+        "writes, first round",
+        "durability::pushed::in_flight_by_epoch",
+        1,
+    ),
+    ("writes, first round", "durability::pushed::write", 3),
+    ("writes, first round", "io_core::issued::in_flight", 4),
+    ("writes, first round", "io_core::issued::per_target", 1),
+    (
+        "write completions, first round",
+        "io_core::complete::queue",
+        3,
+    ),
+    (
+        "write completions, first round",
+        "durability::advance::live",
+        16,
+    ),
+    ("writes, second round", "durability::pushed::write", 2),
+    (
+        "write completions, second round",
+        "durability::advance::live",
+        16,
+    ),
+    ("a seal covering writes", "durability::seal::record", 1),
+    ("a seal covering writes", "durability::advance::live", 1),
+    ("a seal covering writes", "durability::start_seals::file", 1),
+    (
+        "a seal covering writes",
+        "durability::start_seals::flush",
+        1,
+    ),
+    ("a seal covering writes", "io_core::act::commit_submit", 1),
+    ("commit completions", "durability::providers::cover::ops", 6),
+    ("commit completions", "durability::advance::live", 2),
+    ("commit completions", "durability::advance_mark::durable", 1),
+    ("a seal covering no writes", "durability::advance::live", 1),
+    (
+        "a seal covering no writes",
+        "durability::advance_mark::durable",
+        1,
+    ),
+    ("gated writes", "durability::gates::write_cycle::seeds", 4),
+    ("gated writes", "durability::gates::raise::bound", 4),
+    ("gated writes", "durability::gates::hold::gated", 1),
+    ("gated writes", "durability::gates::hold::held_by_epoch", 1),
+    ("gated writes", "durability::gates::hold::waiting", 1),
+    ("gated writes", "durability::gates::hold::held", 1),
+    ("gated writes", "io_core::issue::held", 1),
+    ("the gate's epoch written", "durability::pushed::write", 2),
+    ("the gate's epoch written", "durability::advance::live", 16),
+    (
+        "the gate's epoch sealed, releasing the gated writes",
+        "durability::advance::live",
+        7,
+    ),
+    (
+        "the gate's epoch sealed, releasing the gated writes",
+        "durability::start_seals::file",
+        1,
+    ),
+    (
+        "the gate's epoch sealed, releasing the gated writes",
+        "durability::start_seals::flush",
+        1,
+    ),
+    (
+        "the gate's epoch sealed, releasing the gated writes",
+        "io_core::act::commit_submit",
+        1,
+    ),
+    (
+        "the gate's epoch sealed, releasing the gated writes",
+        "durability::providers::cover::ops",
+        4,
+    ),
+    (
+        "the gate's epoch sealed, releasing the gated writes",
+        "durability::advance_mark::durable",
+        1,
+    ),
+    (
+        "the gate's epoch sealed, releasing the gated writes",
+        "durability::gates::release_through::rest",
+        1,
+    ),
+    (
+        "the gate's epoch sealed, releasing the gated writes",
+        "durability::gates::release_through::released",
+        1,
+    ),
+    (
+        "the gate's epoch sealed, releasing the gated writes",
+        "durability::gates::release_through::due",
+        1,
+    ),
+    (
+        "the gate's epoch sealed, releasing the gated writes",
+        "io_core::release::submit",
+        1,
+    ),
+    ("the gated writes sealed", "durability::advance::live", 2),
+    (
+        "the gated writes sealed",
+        "durability::start_seals::file",
+        1,
+    ),
+    (
+        "the gated writes sealed",
+        "durability::start_seals::flush",
+        1,
+    ),
+    ("the gated writes sealed", "io_core::act::commit_submit", 1),
+    (
+        "the gated writes sealed",
+        "durability::providers::cover::ops",
+        1,
+    ),
+    (
+        "the gated writes sealed",
+        "durability::advance_mark::durable",
+        1,
+    ),
+    (
+        "the minted lineage written and sealed",
+        "durability::pushed::in_flight_by_epoch",
+        1,
+    ),
+    (
+        "the minted lineage written and sealed",
+        "durability::pushed::write",
+        2,
+    ),
+    (
+        "the minted lineage written and sealed",
+        "durability::advance::live",
+        19,
+    ),
+    (
+        "the minted lineage written and sealed",
+        "durability::seal::record",
+        1,
+    ),
+    (
+        "the minted lineage written and sealed",
+        "durability::start_seals::file",
+        1,
+    ),
+    (
+        "the minted lineage written and sealed",
+        "durability::start_seals::flush",
+        1,
+    ),
+    (
+        "the minted lineage written and sealed",
+        "io_core::act::commit_submit",
+        1,
+    ),
+    (
+        "the minted lineage written and sealed",
+        "durability::providers::cover::ops",
+        4,
+    ),
+    (
+        "the minted lineage written and sealed",
+        "durability::advance_mark::durable",
+        1,
+    ),
+    (
+        "the minted lineage written and sealed",
+        "io_core::act::queue",
+        1,
+    ),
+    (
+        "the minted lineage ended",
+        "durability::lineages::end::event",
+        1,
+    ),
+    ("the minted lineage ended", "durability::advance::live", 1),
+    ("a target added", "domains::intern_all::shared", 1),
+    (
+        "the added target written and sealed",
+        "durability::advance::live",
+        3,
+    ),
+    (
+        "the added target written and sealed",
+        "durability::start_seals::file",
+        1,
+    ),
+    (
+        "the added target written and sealed",
+        "durability::start_seals::flush",
+        1,
+    ),
+    (
+        "the added target written and sealed",
+        "io_core::act::commit_submit",
+        1,
+    ),
+    (
+        "the added target written and sealed",
+        "durability::providers::cover::ops",
+        1,
+    ),
+    (
+        "the added target written and sealed",
+        "durability::advance_mark::durable",
+        1,
+    ),
+    ("lineages queried", "durability::lineages::lineages", 1),
+    ("close", "durability::lineages::lineages", 1),
+];
+
+/// As [`CLEAN_TAGS`], for the failure paths.
+const FAILURE_TAGS: &[(&str, &str, u64)] = &[
+    (
+        "construction, with two targets",
+        "durability::new::default_lineage",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::served",
+        1,
+    ),
+    ("construction, with two targets", "io_core::new::served", 1),
+    (
+        "construction, with two targets",
+        "domains::intern_all::shared",
+        2,
+    ),
+    (
+        "construction, with two targets",
+        "io_core::add_target::record",
+        1,
+    ),
+    (
+        "writes before the failure",
+        "io_core::issue::backend_push",
+        3,
+    ),
+    (
+        "writes before the failure",
+        "durability::pushed::in_flight_by_epoch",
+        1,
+    ),
+    ("writes before the failure", "durability::pushed::write", 3),
+    ("writes before the failure", "io_core::issued::in_flight", 4),
+    (
+        "writes before the failure",
+        "io_core::issued::per_target",
+        1,
+    ),
+    ("writes before the failure", "io_core::complete::queue", 3),
+    ("writes before the failure", "durability::advance::live", 16),
+    ("a commit failure observed", "durability::seal::record", 1),
+    ("a commit failure observed", "durability::advance::live", 3),
+    (
+        "a commit failure observed",
+        "durability::start_seals::file",
+        1,
+    ),
+    (
+        "a commit failure observed",
+        "durability::start_seals::flush",
+        1,
+    ),
+    (
+        "a commit failure observed",
+        "io_core::act::commit_submit",
+        1,
+    ),
+    (
+        "a commit failure observed",
+        "durability::observe::suspect",
+        3,
+    ),
+    (
+        "a commit failure observed",
+        "durability::observe::epochs_lineage",
+        1,
+    ),
+    (
+        "a commit failure observed",
+        "durability::observe::epochs_epoch",
+        1,
+    ),
+    ("a commit failure observed", "ids::failure_token::mint", 1),
+    ("a commit failure observed", "types::suspect_set::new", 1),
+    (
+        "a commit failure observed",
+        "durability::observe::failure",
+        1,
+    ),
+    ("a commit failure observed", "durability::observe::event", 1),
+    (
+        "a commit failure observed",
+        "durability::providers::cover::ops",
+        2,
+    ),
+    ("a commit failure observed", "durability::mark::marking", 2),
+    ("a commit failure observed", "durability::mark::event", 2),
+    ("failures queried", "durability::failures::infos", 1),
+    ("failures queried", "durability::failures::markings", 1),
+    ("writes re-issued", "durability::pushed::write", 3),
+    ("writes re-issued", "durability::advance::live", 16),
+    ("a heal resolved", "durability::resolve::heal_pending", 2),
+    ("a heal resolved", "durability::advance::live", 1),
+    (
+        "the heal taking effect at the next seal",
+        "durability::advance::live",
+        3,
+    ),
+    (
+        "the heal taking effect at the next seal",
+        "durability::start_seals::file",
+        1,
+    ),
+    (
+        "the heal taking effect at the next seal",
+        "durability::start_seals::flush",
+        1,
+    ),
+    (
+        "the heal taking effect at the next seal",
+        "io_core::act::commit_submit",
+        1,
+    ),
+    (
+        "the heal taking effect at the next seal",
+        "durability::providers::cover::ops",
+        4,
+    ),
+    (
+        "the heal taking effect at the next seal",
+        "durability::release_healed::event",
+        1,
+    ),
+    ("writes before the import", "durability::pushed::write", 2),
+    ("writes before the import", "durability::advance::live", 16),
+    ("a failure imported", "durability::observe::suspect", 3),
+    (
+        "a failure imported",
+        "durability::observe::epochs_lineage",
+        1,
+    ),
+    ("a failure imported", "durability::observe::epochs_epoch", 1),
+    ("a failure imported", "ids::failure_token::mint", 1),
+    ("a failure imported", "types::suspect_set::new", 1),
+    ("a failure imported", "durability::observe::event", 1),
+    ("a failure imported", "durability::advance::live", 1),
+    ("an abandon resolved", "durability::resolve::abandoned", 1),
+    (
+        "an abandon resolved",
+        "durability::resolve::abandoned_event",
+        1,
+    ),
+    ("an abandon resolved", "durability::advance::live", 1),
+];
+
+/// Each phase's total.
+type Totals = &'static [(&'static str, u64)];
+
+/// Each phase's count for each tag.
+type ByTag = &'static [(&'static str, &'static str, u64)];
+
+/// Each phase's total.
+fn totals(measured: &[Measured]) -> Vec<(&'static str, u64)> {
+    measured.iter().map(|m| (m.phase, m.total)).collect()
+}
+
+/// Each phase's count for each tag.
+fn by_tag(measured: &[Measured]) -> Vec<(&'static str, &'static str, u64)> {
+    measured
+        .iter()
+        .flat_map(|m| m.tags.iter().map(|&(tag, count)| (m.phase, tag, count)))
+        .collect()
+}
+
+/// The measured tables, written so they can be pasted over the expected ones.
+fn tables(name: &str, tags_name: &str, measured: &[Measured]) -> String {
     let mut shown = format!("const {name}: &[(&str, u64)] = &[\n");
-    for (phase, count) in phases {
+    for (phase, count) in totals(measured) {
         let _ = writeln!(shown, "    ({phase:?}, {count}),");
+    }
+    let _ = write!(
+        shown,
+        "];\n\nconst {tags_name}: &[(&str, &str, u64)] = &[\n"
+    );
+    for (phase, tag, count) in by_tag(measured) {
+        let _ = writeln!(shown, "    ({phase:?}, {tag:?}, {count}),");
     }
     shown.push_str("];");
     shown
 }
 
-#[test]
-fn the_clean_paths_allocate_as_recorded() {
-    let measured = clean();
-    assert_eq!(measured, clean(), "the counts are the same on a second run");
+/// The rules every phase keeps: no allocation untagged, no tag seen from two places, and the tags
+/// adding up to the total.
+fn broken_rules(measured: &[Measured]) -> Vec<String> {
+    let mut broken = Vec::new();
+    for m in measured {
+        if m.untagged > 0 {
+            broken.push(format!("{}: {} untagged", m.phase, m.untagged));
+        }
+        if m.overflowed {
+            broken.push(format!("{}: more tags than {SLOTS} slots", m.phase));
+        }
+        for conflict in &m.conflicts {
+            broken.push(format!("{}: {conflict}", m.phase));
+        }
+        let tagged: u64 = m.tags.iter().map(|&(_, count)| count).sum();
+        if tagged + m.untagged != m.total {
+            broken.push(format!(
+                "{}: tags add up to {tagged} of {}",
+                m.phase, m.total
+            ));
+        }
+    }
+    broken
+}
+
+fn check(run: fn() -> Vec<Measured>, expected: (Totals, ByTag), names: (&str, &str)) {
+    let measured = run();
+    let again = run();
+    assert_eq!(
+        totals(&measured),
+        totals(&again),
+        "the same totals on a second run"
+    );
+    assert_eq!(
+        by_tag(&measured),
+        by_tag(&again),
+        "the same tags on a second run"
+    );
+    let broken = broken_rules(&measured);
     assert!(
-        measured == CLEAN,
-        "the clean paths' allocations changed:\n{}",
-        table("CLEAN", &measured)
+        broken.is_empty(),
+        "allocation tags broken:\n{}",
+        broken.join("\n")
+    );
+    assert!(
+        totals(&measured) == expected.0 && by_tag(&measured) == expected.1,
+        "allocations changed:\n{}",
+        tables(names.0, names.1, &measured)
     );
 }
 
 #[test]
+fn the_clean_paths_allocate_as_recorded() {
+    check(clean, (CLEAN, CLEAN_TAGS), ("CLEAN", "CLEAN_TAGS"));
+}
+
+#[test]
 fn the_failure_paths_allocate_as_recorded() {
-    let measured = failures();
-    assert_eq!(
-        measured,
-        failures(),
-        "the counts are the same on a second run"
-    );
-    assert!(
-        measured == FAILURES,
-        "the failure paths' allocations changed:\n{}",
-        table("FAILURES", &measured)
+    check(
+        failures,
+        (FAILURES, FAILURE_TAGS),
+        ("FAILURES", "FAILURE_TAGS"),
     );
 }
 
 #[test]
 fn the_counter_counts_inside_a_counted_call_and_nowhere_else() {
-    take();
+    take("before");
     let outside = vec![1_u8; 32];
     assert_eq!(
-        take(),
+        take("outside").total,
         0,
         "an allocation outside a counted call is not counted"
     );
@@ -521,11 +1085,17 @@ fn the_counter_counts_inside_a_counted_call_and_nowhere_else() {
         grown.extend_from_slice(&[3; 64]);
         grown
     });
+    let measured = take("inside");
     assert_eq!(
-        take(),
-        3,
+        measured.total, 3,
         "an allocation and a reallocation inside are each counted"
     );
+    assert_eq!(measured.untagged, 3, "with no tag set, each is untagged");
+    assert_eq!(
+        broken_rules(&[measured]),
+        ["inside: 3 untagged"],
+        "and the rules report it"
+    );
     drop((outside, inside, grown));
-    assert_eq!(take(), 0, "freeing is not counted");
+    assert_eq!(take("freed").total, 0, "freeing is not counted");
 }

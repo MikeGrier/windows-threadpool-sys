@@ -9,6 +9,7 @@
 use std::fmt;
 
 use crate::access::Access;
+use crate::alloc_tags::{tag, tagged};
 use crate::types::FlushDomain;
 
 #[cfg(test)]
@@ -200,7 +201,9 @@ pub trait IoTarget: Send {
     /// Everything it states, as the core takes it.
     fn describe(&self) -> IoTargetDescription {
         IoTargetDescription {
-            flush_domains: self.flush_domains().to_vec(),
+            flush_domains: tagged(tag::IO_TARGET_DESCRIBE_DOMAINS, || {
+                self.flush_domains().to_vec()
+            }),
             warranty: self.warranty(),
             geometry: self.geometry(),
             capabilities: self.capabilities(),

@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt;
 
+use crate::alloc_tags::{tag, tagged};
 use crate::contract::Identities;
 use crate::provider::{DomainRequest, DurabilityProvider, FlushRequest};
 use crate::types::FlushDomain;
@@ -38,7 +39,11 @@ impl<V: Identities> RouterBuilder<V> {
     /// [`build`](Self::build), not here.
     #[must_use]
     pub fn register(mut self, provider: impl DurabilityProvider<V> + 'static) -> Self {
-        self.providers.push(Box::new(provider));
+        let provider: Box<dyn DurabilityProvider<V>> =
+            tagged(tag::ROUTER_REGISTER_BOX, || Box::new(provider));
+        tagged(tag::ROUTER_REGISTER_PROVIDER, || {
+            self.providers.push(provider)
+        });
         self
     }
 
@@ -51,9 +56,11 @@ impl<V: Identities> RouterBuilder<V> {
     /// with the builder, and those after it are not asked for their domains.
     pub fn build(self) -> Result<RoutingProvider<V>, RoutedTwice> {
         let mut owners: HashMap<FlushDomain, usize> = HashMap::new();
-        let mut routes = Vec::with_capacity(self.providers.len());
+        let mut routes = tagged(tag::ROUTER_BUILD_ROUTES, || {
+            Vec::with_capacity(self.providers.len())
+        });
         for (registration, provider) in self.providers.into_iter().enumerate() {
-            let domains = provider.domains();
+            let domains = tagged(tag::ROUTER_BUILD_PROVIDER_DOMAINS, || provider.domains());
             for domain in &domains {
                 match owners.entry(domain.clone()) {
                     Entry::Occupied(owner) => {
@@ -64,11 +71,13 @@ impl<V: Identities> RouterBuilder<V> {
                         });
                     }
                     Entry::Vacant(vacant) => {
-                        vacant.insert(registration);
+                        tagged(tag::ROUTER_BUILD_OWNER, || vacant.insert(registration));
                     }
                 }
             }
-            routes.push(Route { provider, domains });
+            tagged(tag::ROUTER_BUILD_ROUTE, || {
+                routes.push(Route { provider, domains })
+            });
         }
         Ok(RoutingProvider { routes, owners })
     }
@@ -128,15 +137,18 @@ impl<V: Identities> RoutingProvider<V> {
 
 impl<V: Identities> DurabilityProvider<V> for RoutingProvider<V> {
     fn domains(&self) -> Vec<FlushDomain> {
-        self.routes
-            .iter()
-            .flat_map(|route| route.domains.iter().cloned())
-            .collect()
+        tagged(tag::ROUTER_DOMAINS, || {
+            self.routes
+                .iter()
+                .flat_map(|route| route.domains.iter().cloned())
+                .collect()
+        })
     }
 
     fn make_durable(&mut self, request: FlushRequest<V>) {
-        let mut parts: Vec<Vec<DomainRequest<V>>> =
-            self.routes.iter().map(|_| Vec::new()).collect();
+        let mut parts: Vec<Vec<DomainRequest<V>>> = tagged(tag::ROUTER_MAKE_DURABLE_PARTS, || {
+            self.routes.iter().map(|_| Vec::new()).collect()
+        });
         for part in request.domains {
             let Some(&registration) = self.owners.get(&part.domain) else {
                 panic!(
@@ -145,13 +157,17 @@ impl<V: Identities> DurabilityProvider<V> for RoutingProvider<V> {
                     part.domain
                 );
             };
-            parts[registration].push(part);
+            tagged(tag::ROUTER_MAKE_DURABLE_PART, || {
+                parts[registration].push(part)
+            });
         }
         // A panic here unwinds through `parts`, dropping the parts of the providers not yet called,
         // whose completions then answer as abandoned.
         for (route, domains) in self.routes.iter_mut().zip(parts) {
             if !domains.is_empty() {
-                route.provider.make_durable(FlushRequest { domains });
+                tagged(tag::ROUTER_MAKE_DURABLE_PROVIDER, || {
+                    route.provider.make_durable(FlushRequest { domains });
+                });
             }
         }
     }

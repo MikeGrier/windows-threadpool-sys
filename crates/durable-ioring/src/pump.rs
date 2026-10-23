@@ -16,6 +16,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::alloc_tags::{tag, tagged};
 use crate::backend::IoBackend;
 use crate::clock::StampClock;
 use crate::contract::EpochId;
@@ -84,9 +85,15 @@ where
     ///
     /// The backend's, with the engine handed back: it could not make its notification.
     pub fn new(engine: Engine<E, Bk, C, K>) -> PumpedSetup<E, Bk, C, K> {
-        match engine.backend.notification() {
+        match tagged(tag::PUMP_NEW_NOTIFICATION, || engine.backend.notification()) {
             Ok(notification) => Ok(Self::with_notification(engine, notification)),
-            Err(fault) => Err((fault_error(fault), Box::new(engine))),
+            Err(fault) => {
+                let error = fault_error(fault);
+                Err((
+                    error,
+                    tagged(tag::PUMP_NEW_HANDED_BACK, || Box::new(engine)),
+                ))
+            }
         }
     }
 
@@ -95,7 +102,9 @@ where
     pub fn with_notification(engine: Engine<E, Bk, C, K>, notification: Bk::Notification) -> Self {
         Self {
             notification,
-            engine: Arc::new(Mutex::new(Some(engine))),
+            engine: tagged(tag::PUMP_WITH_NOTIFICATION_SLOT, || {
+                Arc::new(Mutex::new(Some(engine)))
+            }),
             watch: None,
         }
     }
@@ -128,7 +137,7 @@ where
                 waited: Ok(false),
             };
         }
-        let waited = self.notification.wait(timeout);
+        let waited = tagged(tag::PUMP_PUMP_WAIT, || self.notification.wait(timeout));
         let ready = self.locked().as_mut().is_some_and(Engine::drain);
         Pumped { ready, waited }
     }
@@ -170,6 +179,10 @@ where
 /// A backend's fault as the `io::Error` a construction reports: the backend's own report when
 /// nothing else holds it, and otherwise one of its kind and text.
 fn fault_error(fault: IoFault) -> io::Error {
-    Arc::try_unwrap(fault.error)
-        .unwrap_or_else(|shared| io::Error::new(shared.kind(), shared.to_string()))
+    Arc::try_unwrap(fault.error).unwrap_or_else(|shared| {
+        let text = tagged(tag::PUMP_FAULT_ERROR_TEXT, || shared.to_string());
+        tagged(tag::PUMP_FAULT_ERROR_ERROR, || {
+            io::Error::new(shared.kind(), text)
+        })
+    })
 }

@@ -38,6 +38,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
+use crate::alloc_tags::{tag, tagged};
 use crate::backend::{
     Completion, DuplicateTarget, IoBackend, Refused, Submission, SubmissionData, SubmissionOp,
     SubmissionToken, refusal_fault,
@@ -191,7 +192,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             durability: Durability::new(instance, clock, diagnostics),
             targets: HashMap::new(),
             domains: HashMap::new(),
-            served: Arc::from([]),
+            served: tagged(tag::IO_CORE_NEW_SERVED, || Arc::from([])),
             served_names: Vec::new(),
             in_flight: HashMap::new(),
             held: BTreeMap::new(),
@@ -228,14 +229,16 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         }
         let domains = intern_all(&mut self.domains, description.flush_domains.iter().cloned());
         let routing = routing(&domains, &self.served);
-        self.targets.insert(
-            key,
-            TargetRecord {
-                description,
-                domains,
-                routing,
-            },
-        );
+        tagged(tag::IO_CORE_ADD_TARGET_RECORD, || {
+            self.targets.insert(
+                key,
+                TargetRecord {
+                    description,
+                    domains,
+                    routing,
+                },
+            )
+        });
         Ok(())
     }
 
@@ -266,14 +269,16 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         let mut lowest: BTreeMap<u64, Epoch<V<E, K>>> = BTreeMap::new();
         for held in self.held.values().filter(|held| held.target == key) {
             held_for_gate += 1;
-            lowest
-                .entry(held.gate.lineage.seq)
-                .and_modify(|low| {
-                    if held.gate.id < low.id {
-                        *low = held.gate;
-                    }
-                })
-                .or_insert(held.gate);
+            tagged(tag::IO_CORE_REMOVE_TARGET_LOWEST, || {
+                lowest
+                    .entry(held.gate.lineage.seq)
+                    .and_modify(|low| {
+                        if held.gate.id < low.id {
+                            *low = held.gate;
+                        }
+                    })
+                    .or_insert(held.gate);
+            });
         }
         let holds = self.durability.file_holds(key);
         if in_flight == 0 && held_for_gate == 0 && holds.is_empty() {
@@ -284,7 +289,9 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             target: key,
             in_flight,
             held_for_gate,
-            lowest_gates: lowest.into_values().collect(),
+            lowest_gates: tagged(tag::IO_CORE_REMOVE_TARGET_LOWEST_GATES, || {
+                lowest.into_values().collect()
+            }),
             uncovered: holds.uncovered,
             uncovered_through: holds.uncovered_through,
             failures: holds.failures,
@@ -408,13 +415,15 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                     Ok(transferred) => Outcome::Transferred(transferred),
                     Err(fault) => Outcome::Failed(fault),
                 };
-                self.queue.push_back(Entry::Op(OpCompletion {
-                    id,
-                    kind,
-                    outcome,
-                    buffer,
-                    context,
-                }));
+                tagged(tag::IO_CORE_COMPLETE_QUEUE, || {
+                    self.queue.push_back(Entry::Op(OpCompletion {
+                        id,
+                        kind,
+                        outcome,
+                        buffer,
+                        context,
+                    }));
+                });
                 if write {
                     self.durability.completed(id, end)
                 } else {
@@ -458,7 +467,9 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             return CoreActions::none();
         }
         if cause.is_retryable() {
-            self.unpushed.push(submission);
+            tagged(tag::IO_CORE_REFUSED_UNPUSHED, || {
+                self.unpushed.push(submission)
+            });
             return CoreActions::none();
         }
         self.complete(Completion {
@@ -526,17 +537,18 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     pub fn close(self) -> Leftovers<V<E, K>, B, C> {
         let failures = self.durability.failures();
         let lineages = self.durability.lineages();
-        let held = self
-            .held
-            .into_values()
-            .map(|held| HeldOperation {
-                id: held.id,
-                kind: held.kind,
-                gate: held.gate,
-                buffer: owned_op(held.op),
-                context: held.context,
-            })
-            .collect();
+        let held = tagged(tag::IO_CORE_CLOSE_HELD, || {
+            self.held
+                .into_values()
+                .map(|held| HeldOperation {
+                    id: held.id,
+                    kind: held.kind,
+                    gate: held.gate,
+                    buffer: owned_op(held.op),
+                    context: held.context,
+                })
+                .collect()
+        });
         Leftovers {
             held,
             failures,
@@ -554,10 +566,12 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
 
     /// A cycle in the core's terms, as the contract reports it.
     fn epochs(&self, cycle: Vec<Gate<E>>) -> Vec<Epoch<V<E, K>>> {
-        cycle
-            .into_iter()
-            .map(|gate| Epoch::new(self.name(gate.lineage), gate.epoch))
-            .collect()
+        tagged(tag::IO_CORE_EPOCHS, || {
+            cycle
+                .into_iter()
+                .map(|gate| Epoch::new(self.name(gate.lineage), gate.epoch))
+                .collect()
+        })
     }
 
     /// Refuse another core's lineage, which this one has no answer for.
@@ -601,7 +615,9 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             }
         };
         if let (Some(at), Some(named)) = (waiting, gate) {
-            if let Err(cause) = backend.check(target, &op) {
+            if let Err(cause) = tagged(tag::IO_CORE_ISSUE_BACKEND_CHECK, || {
+                backend.check(target, &op)
+            }) {
                 return Err(PushError {
                     reason: PushRefusal::Backend(cause),
                     buffer: owned_op(op),
@@ -611,21 +627,26 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             let id = self.op_id();
             let accepted = epoch.map(|epoch| self.accepted(id, target, epoch));
             self.durability.hold(id, accepted, at);
-            self.held.insert(
-                id.seq,
-                HeldOp {
-                    id,
-                    kind,
-                    target,
-                    op,
-                    context,
-                    gate: named,
-                },
-            );
+            tagged(tag::IO_CORE_ISSUE_HELD, || {
+                self.held.insert(
+                    id.seq,
+                    HeldOp {
+                        id,
+                        kind,
+                        target,
+                        op,
+                        context,
+                        gate: named,
+                    },
+                )
+            });
             return Ok(id);
         }
         let token = self.token();
-        if let Err(refused) = backend.push(Submission { token, target, op }) {
+        let pushed = tagged(tag::IO_CORE_ISSUE_BACKEND_PUSH, || {
+            backend.push(Submission { token, target, op })
+        });
+        if let Err(refused) = pushed {
             return Err(handed_back(refused, context));
         }
         let id = self.op_id();
@@ -740,17 +761,21 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         context: C,
         released: bool,
     ) {
-        self.in_flight.insert(
-            token,
-            InFlight::Op {
-                id,
-                kind,
-                target,
-                context,
-                released,
-            },
-        );
-        *self.per_target.entry(target).or_insert(0) += 1;
+        tagged(tag::IO_CORE_ISSUED_IN_FLIGHT, || {
+            self.in_flight.insert(
+                token,
+                InFlight::Op {
+                    id,
+                    kind,
+                    target,
+                    context,
+                    released,
+                },
+            )
+        });
+        tagged(tag::IO_CORE_ISSUED_PER_TARGET, || {
+            *self.per_target.entry(target).or_insert(0) += 1;
+        });
     }
 
     /// A consumer operation on `target` completed.
@@ -780,7 +805,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         } = due;
         for event in events {
             match event.into_entry(self.instance) {
-                Ok(entry) => self.queue.push_back(entry),
+                Ok(entry) => tagged(tag::IO_CORE_ACT_QUEUE, || self.queue.push_back(entry)),
                 Err((op, abandoned)) => {
                     let abandoned = Epoch::new(self.name(abandoned.lineage), abandoned.epoch);
                     self.never_issued(op, abandoned);
@@ -793,21 +818,31 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         }
         for flush in flushes {
             let token = self.token();
-            self.in_flight.insert(
-                token,
-                InFlight::Commit {
-                    lineage: flush.lineage,
-                    through: flush.through,
+            tagged(tag::IO_CORE_ACT_COMMIT_IN_FLIGHT, || {
+                self.in_flight.insert(
+                    token,
+                    InFlight::Commit {
+                        lineage: flush.lineage,
+                        through: flush.through,
+                        target: flush.file,
+                    },
+                )
+            });
+            tagged(tag::IO_CORE_ACT_COMMIT_SUBMIT, || {
+                submit.push(Submission {
+                    token,
                     target: flush.file,
-                },
-            );
-            submit.push(Submission {
-                token,
-                target: flush.file,
-                op: SubmissionOp::Commit,
+                    op: SubmissionOp::Commit,
+                });
             });
         }
-        let requests = calls.into_iter().map(|call| self.request(call)).collect();
+        let mut requests = tagged(tag::IO_CORE_ACT_REQUESTS, || {
+            Vec::with_capacity(calls.len())
+        });
+        for call in calls {
+            let request = self.request(call);
+            tagged(tag::IO_CORE_ACT_REQUEST, || requests.push(request));
+        }
         CoreActions {
             submit,
             requests,
@@ -825,13 +860,15 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             );
             return;
         };
-        self.queue.push_back(Entry::Op(OpCompletion {
-            id: held.id,
-            kind: held.kind,
-            outcome: Outcome::NeverIssued { abandoned },
-            buffer: owned_op(held.op),
-            context: held.context,
-        }));
+        tagged(tag::IO_CORE_NEVER_ISSUED_QUEUE, || {
+            self.queue.push_back(Entry::Op(OpCompletion {
+                id: held.id,
+                kind: held.kind,
+                outcome: Outcome::NeverIssued { abandoned },
+                buffer: owned_op(held.op),
+                context: held.context,
+            }));
+        });
     }
 
     /// A held operation's gate is durable: emit it, recorded as in flight from now.
@@ -846,10 +883,12 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         let token = self.token();
         self.durability.issued(id);
         self.issued(token, id, held.kind, held.target, held.context, true);
-        submit.push(Submission {
-            token,
-            target: held.target,
-            op: held.op,
+        tagged(tag::IO_CORE_RELEASE_SUBMIT, || {
+            submit.push(Submission {
+                token,
+                target: held.target,
+                op: held.op,
+            });
         });
     }
 }

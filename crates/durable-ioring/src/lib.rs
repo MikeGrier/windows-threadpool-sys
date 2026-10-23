@@ -12,6 +12,10 @@
 #![warn(missing_docs)]
 
 mod access;
+#[cfg(feature = "alloc-tags")]
+pub mod alloc_tags;
+#[cfg(not(feature = "alloc-tags"))]
+mod alloc_tags;
 pub mod backend;
 mod clock;
 mod contract;

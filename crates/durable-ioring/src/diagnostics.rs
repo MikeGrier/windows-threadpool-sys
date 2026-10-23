@@ -8,6 +8,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::alloc_tags::{tag, tagged};
 use crate::correlation::CorrelationId;
 use crate::types::{FlushDomain, IoTargetKey};
 
@@ -114,7 +115,10 @@ impl fmt::Display for FlushPart<'_> {
         match self {
             Self::File(key) => write!(f, "file {}", key.0),
             Self::Domain(domain) => {
-                write!(f, "domain {:?}", String::from_utf8_lossy(domain.bytes()))
+                let text = tagged(tag::DIAGNOSTICS_FLUSH_PART_TEXT, || {
+                    String::from_utf8_lossy(domain.bytes())
+                });
+                write!(f, "domain {text:?}")
             }
         }
     }

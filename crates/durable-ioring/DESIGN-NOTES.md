@@ -1975,17 +1975,25 @@ with the storage a failure holds ([DI-D-100](#di-d-100)), which is open.
 
 ## <a id="di-d-104"></a>DI-D-104: every allocation the core makes is tagged by the code that makes it, with an RAII guard
 
-**Decided, not yet implemented: scheduled as DI-23.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).**
+**Implemented by [DI-23.2](COMPLETED-CHECKLIST.md#di-232) in [alloc_tags.rs](src/alloc_tags.rs).**
 The engineer, 2026-10-23, asking for "caller assigned tags", then: "make the tagging RAII based so that the discipline is
 trivial", and "I don't want to do further analysis without tagging". The details below are the assistant's.
 
 A global allocator is given only a `Layout`: nothing tells it which code asked, and `#[track_caller]` does not reach it
 through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads what it said.
 
-- **A guard per allocating site.** The core makes a guard naming a tag where it is about to allocate. Making it sets the
-  thread's current tag; dropping it, on return or on unwinding, restores the tag it replaced, so tags nest. An allocation
-  hidden inside a container's `insert` or `push` is counted under the tag of the code that called it, which is the
-  attribution wanted. The guard records where it was made with `#[track_caller]`, so a tag also names a file and a line.
+- **A guard per allocating call, held for exactly that call by a functor.** The engineer, 2026-10-23: "Don't use a macro
+  for tagged allocations, use a pattern with an invocation of a functor". So the core writes
+  `tagged(TAG, || self.map.insert(key, value))`: `tagged` makes the guard, calls the closure, and drops the guard when the
+  closure returns or unwinds. Making the guard sets the thread's current tag; dropping it restores the tag it replaced, so
+  tags nest. An allocation hidden inside a container's `insert` or `push` is counted under the tag of the code that called
+  it, which is the attribution wanted. `tagged` is `#[track_caller]`, so a tag also names the file and line of its call.
+- **A tagged closure holds the allocating call and nothing else.** Its arguments, and any call into other code of the core,
+  are made before it, since an allocation inside the closure is counted under its tag: a call there into code that
+  allocates without a tag of its own would be hidden rather than reported as untagged.
+- **Calls into what is plugged in are tagged at the call:** a backend's `push`, `check`, `submit` and `pop`, a provider, a
+  notification's wait, a diagnostic sink's `wants` and `report`, and the clock. What they allocate is theirs (DI-D-97), and
+  is counted under the core's call to them.
 - **One tag per allocating call, and no tag shared.** The engineer, 2026-10-23: "If I had my choice, I would have a unique
   tag for each and every memory allocation. I realize that we cannot change, for example, a container's source code, so
   setting an 'allocation context' around calls into a container's mutation will have to be fine grained enough." So every
@@ -2003,3 +2011,6 @@ through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads wh
   allocation made with no tag set is reported as untagged, and the test asserts there is none, so an allocation the core
   adds without a tag is caught where it is added. Each phase's tags add up to the phase's total, which the counts by phase
   keep checking.
+- **What the test sees is what its scenarios reach.** The rules hold for the paths the clean and failure scenarios
+  exercise; a call no scenario reaches is tagged by reading the code, and an untagged one there would not be reported
+  until a scenario reaches it.

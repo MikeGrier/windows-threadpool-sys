@@ -23,12 +23,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.1** -- Allocations in the core are measured, phase by phase, by a counting global allocator. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-231)
 
-- [ ] **DI-23.2** -- **Tag every allocation the core makes** ([DI-D-104](DESIGN-NOTES.md#di-d-104)). An RAII guard that sets the
-  thread's current allocation tag and restores the previous one when dropped, recording where it was made with
-  `#[track_caller]`, compiled to nothing unless the `alloc-tags` feature is on; the tags as named constants defined in one
-  place, one per allocating call and none shared; a guard scoped to every call in the core that can allocate; and
-  [tests/allocation.rs](tests/allocation.rs) counting by phase and tag, asserting that no counted allocation is untagged,
-  that no tag is seen from two places, and that each phase's tags add up to its total.
+- [x] **DI-23.2** -- Every allocation the core makes is tagged by the call that makes it, and the allocation test counts by tag. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-232)
 
 - [ ] **DI-23.3** -- **Name `core` and `alloc` paths, behind a default `std` feature** ([DI-D-97](DESIGN-NOTES.md#di-d-97)), in
   this crate and `io-buffers`: every `std::` path with a `core` or `alloc` equivalent, `core::error::Error` for

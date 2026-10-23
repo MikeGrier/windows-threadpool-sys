@@ -4245,3 +4245,37 @@ allocation outside a counted call is not counted, and an allocation and a reallo
 
 The counts are in the test and are not restated here. Evidence: the entry "DI-23.1: popping an entry allocates" in
 [sabotage.json](sabotage.json), caught by both scenarios.
+
+## Moved 2026-10-23 12:39:42 -04:00 -- DI-23.2: every allocation the core makes is tagged
+
+### <a id="di-232"></a>DI-23.2 -- Every allocation the core makes is tagged by the call that makes it, and the allocation test counts by tag. *(completed 2026-10-23 12:39:42 -04:00)*
+
+The item as written:
+
+- [x] **DI-23.2** -- **Tag every allocation the core makes** ([DI-D-104](DESIGN-NOTES.md#di-d-104)). An RAII guard that sets the
+  thread's current allocation tag and restores the previous one when dropped, recording where it was made with
+  `#[track_caller]`, compiled to nothing unless the `alloc-tags` feature is on; the tags as named constants defined in one
+  place, one per allocating call and none shared; a guard scoped to every call in the core that can allocate; and
+  [tests/allocation.rs](tests/allocation.rs) counting by phase and tag, asserting that no counted allocation is untagged,
+  that no tag is seen from two places, and that each phase's tags add up to its total.
+
+What was done. [alloc_tags.rs](src/alloc_tags.rs) holds `tagged(tag, || call)`, the guard inside it, the thread's current
+tag under the `alloc-tags` feature, and every tag as a named constant in one module, grouped by the file of its call. On the
+engineer's ruling the call site is a functor, not a macro (DI-D-104). Every call the core makes that can allocate is tagged:
+found first by reading every file of the core, then confirmed by running the scenarios with a temporary trace of any
+allocation counted untagged, which found none in the core. Calls into what is plugged in -- the backend, a provider, a
+notification, a diagnostic sink, the clock -- are tagged at the call. A tagged closure holds only its allocating call, so an
+untagged allocation elsewhere is not hidden under a neighbour's tag; where a call had several allocations in one expression,
+it was split so each has its own. The crate enables the feature for its own tests through a dev-dependency on itself.
+
+[tests/allocation.rs](tests/allocation.rs) now counts by phase and tag in fixed thread-local storage, and fails on an untagged
+allocation, on a tag seen from two places (naming both), and on tags that do not add up to a phase's total; the tables by
+tag are pinned beside the totals. The first run with the rules on reported two untagged allocations in the resolve phases:
+the test was building the call's argument inside the counted call, so it counted its own allocation as the core's. Fixed in
+the test; the two resolve phases' recorded totals each drop by one, which was the over-count, not a change in the core.
+
+Evidence, in [sabotage.json](sabotage.json): a tagged call that sets no tag, and two calls sharing a tag, are caught; renaming
+a tag no scenario reaches survives, which is the limit stated in DI-D-104 (the rules see only the paths the scenarios reach).
+Tagging moved 41 lines that existing sabotage entries patch, here and in
+[win-durable-ioring's](../win-durable-ioring/sabotage.json); each was re-anchored to the same sabotage on the new text, and
+all 45 were swept: every one behaved as declared.

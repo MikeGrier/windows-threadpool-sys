@@ -34,8 +34,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "One completion per operation (DI-D-24): nothing pushed would ever be reported. Every test that waits for a completion times out at its bound.",
-      "find": ["                self.queue.push_back(Entry::Op(OpCompletion {\n                    id,\n                    kind,\n                    outcome,\n                    buffer,\n                    context,\n                }));\n"],
-      "replace": ["                drop::<Entry<V<E, K>, B, C>>(Entry::Op(OpCompletion {\n                    id,\n                    kind,\n                    outcome,\n                    buffer,\n                    context,\n                }));\n"]
+      "find": ["                    self.queue.push_back(Entry::Op(OpCompletion {\n                        id,\n                        kind,\n                        outcome,\n                        buffer,\n                        context,\n                    }));\n"],
+      "replace": ["                    drop::<Entry<V<E, K>, B, C>>(Entry::Op(OpCompletion {\n                        id,\n                        kind,\n                        outcome,\n                        buffer,\n                        context,\n                    }));\n"]
     },
     {
       "name": "DI-3.2.2.1: the readiness event is set only when the queue was already non-empty",
@@ -170,8 +170,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "Guarantee 4: every request is answered. The state still changes, so only the queue shows it; every seal and failure test waits for its entry and times out.",
-      "find": ["                Ok(entry) => self.queue.push_back(entry),\n"],
-      "replace": ["                Ok(entry) => drop::<Entry<V<E, K>, B, C>>(entry),\n"]
+      "find": ["                Ok(entry) => tagged(tag::IO_CORE_ACT_QUEUE, || self.queue.push_back(entry)),"],
+      "replace": ["                Ok(entry) => drop::<Entry<V<E, K>, B, C>>(entry),"]
     },
     {
       "name": "DI-3.2.3: the oracle accepts a write at or below the seal",
@@ -258,8 +258,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-13: a request whose flushes succeeded but which a failure holds is answered Blocked, never left silent. Caught by the Blocked tests, unit and I/O.",
-      "find": ["                due.events.push(Event::Blocked {\n                    lineage,\n                    through,\n                    by,\n                });\n"],
-      "replace": ["                let _ = by;\n"]
+      "find": ["                    due.events.push(Event::Blocked {\n                        lineage,\n                        through,\n                        by,\n                    });\n"],
+      "replace": ["                    let _ = by;\n"]
     },
     {
       "name": "DI-3.2.4: a foreign token is resolved",
@@ -338,8 +338,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "The stamp is the one thing the clock is held for. A core that never reads it reports a time that says nothing about when the failure was observed.",
-      "find": ["        let observed = self.clock.now();\n"],
-      "replace": ["        let observed = self.failures.first().map_or_else(|| self.clock.now(), |first| first.observed);\n"]
+      "find": ["        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());"],
+      "replace": ["        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.failures.first().map_or_else(|| self.clock.now(), |first| first.observed));"]
     },
     {
       "name": "WT-2.2.2: the inventory reports a reading taken when asked",
@@ -386,8 +386,8 @@
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "A covered marking cites who answered (DI-D-47): the default's flush, which dioring observed, or the provider, whose answer is its own warranty. Swapping them attributes a provider's warranty to an observed flush, which is exactly the misportrayed provenance the engineer ruled out.",
-      "find": ["                    flushed: write.routing.default,\n                    provider: write.routing.provider,\n"],
-      "replace": ["                    flushed: write.routing.provider,\n                    provider: write.routing.default,\n"]
+      "find": ["                        flushed: write.routing.default,\n                        provider: write.routing.provider,\n"],
+      "replace": ["                        flushed: write.routing.provider,\n                        provider: write.routing.default,\n"]
     },
     {
       "name": "DI-3.9.2: a covered marking never cites the provider",
@@ -410,8 +410,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Failures and writes are many-to-many: a write two failures suspect belongs to both records, and each must say what happened to it.",
-      "find": ["            due.events.push(Event::Marked {\n                failure: failure.id,\n                marking,\n            });\n        }\n"],
-      "replace": ["            due.events.push(Event::Marked {\n                failure: failure.id,\n                marking,\n            });\n            break;\n        }\n"]
+      "find": ["            tagged(tag::DURABILITY_MARK_EVENT, || {", "                due.events.push(Event::Marked {", "                    failure: failure.id,", "                    marking,", "                });", "            });", "        }"],
+      "replace": ["            tagged(tag::DURABILITY_MARK_EVENT, || {", "                due.events.push(Event::Marked {", "                    failure: failure.id,", "                    marking,", "                });", "            });", "            break;", "        }"]
     },
     {
       "name": "DI-3.2.4.2: a marking finds only the first suspect write",
@@ -426,16 +426,16 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal's final record is the one DI-D-36 found missing: the failure leaves the inventory, and with no entry its record is lost.",
-      "find": ["                let failure = self.failures.remove(at);\n                due.events.push(Event::Healed {\n                    failure: failure.id,\n                    suspect: failure.suspect,\n                    markings: failure.markings,\n                });\n"],
-      "replace": ["                let failure = self.failures.remove(at);\n                drop(failure);\n"]
+      "find": ["                let failure = self.failures.remove(at);", "                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {", "                    due.events.push(Event::Healed {", "                        failure: failure.id,", "                        suspect: failure.suspect,", "                        markings: failure.markings,", "                    });", "                });"],
+      "replace": ["                let failure = self.failures.remove(at);", "                drop(failure);"]
     },
     {
       "name": "DI-3.2.4.2: the inventory reports no markings",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "The inventory is where a consumer reads a live failure's record; reporting it without its markings hides what the stream already said.",
-      "find": ["                markings: failure.markings.clone(),\n"],
-      "replace": ["                markings: Vec::new(),\n"]
+      "find": ["                failure.markings.clone()"],
+      "replace": ["                Vec::new()"]
     },
     {
       "name": "DI-3.10.3.2: the oracle accepts a nullifier with any fault",
@@ -474,8 +474,8 @@
       "file": "src/durability.rs",
       "expect": "survives",
       "why": "The manifest checking itself. Minting the token and freezing the suspect set read no clock and cannot move one, and all of it happens inside the one transition under the lock, so reading the clock first changes no stamp.",
-      "find": ["        let (token, live) = FailureToken::mint(id);\n        let suspect = SuspectSet::new(suspect);\n        let observed = self.clock.now();\n"],
-      "replace": ["        let observed = self.clock.now();\n        let (token, live) = FailureToken::mint(id);\n        let suspect = SuspectSet::new(suspect);\n"]
+      "find": ["        let (token, live) = FailureToken::mint(id);", "        let suspect = SuspectSet::new(suspect);", "        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());"],
+      "replace": ["        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());", "        let (token, live) = FailureToken::mint(id);", "        let suspect = SuspectSet::new(suspect);"]
     },
     {
       "name": "DI-3.2.5.1: ending a lineage abandons nothing",
@@ -626,7 +626,7 @@
       "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "Guarantee 9: a gated operation is released once its gate is durable. Never released, it waits forever. Caught by the core release tests and the ring tests waiting for the completion.",
-      "find": ["            due.released.push(held.op);\n"],
+      "find": ["            tagged(tag::GATES_RELEASE_THROUGH_DUE, || {", "                due.released.push(held.op)", "            });"],
       "replace": [""]
     },
     {
@@ -666,16 +666,16 @@
       "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "DI-D-43: the search from every held write under a seal together can need the lowest of them without any being on a cycle, so a positive is confirmed write by write. Trusted, it refuses a seal that closes nothing. Caught by the core test of a seal the quick test suspects.",
-      "find": ["            .find(|&(write, gate)| self.needs(vec![gate], write, extra))\n"],
-      "replace": ["            .find(|_| true)\n"]
+      "find": ["            .find(|&(write, gate)| {", "                let seeds = tagged(tag::GATES_SEAL_CYCLE_SEED, || vec![gate]);", "                self.needs(seeds, write, extra)", "            })"],
+      "replace": ["            .find(|_| true)"]
     },
     {
       "name": "CONTROL: a seal is searched write by write without the quick test",
       "file": "src/durability/gates.rs",
       "expect": "survives",
       "why": "The manifest checking itself, and the claim that the quick test only filters: the searches it skips would each answer no, so skipping it changes no answer, only the cost.",
-      "find": ["        if !self.needs(\n"],
-      "replace": ["        if false && !self.needs(\n"]
+      "find": ["        if !self.needs(seeds, lowest, extra) {"],
+      "replace": ["        if false && !self.needs(seeds, lowest, extra) {"]
     },
     {
       "name": "DI-3.2.5.2: a seal already made does not widen what reaching an epoch needs",
@@ -794,8 +794,8 @@
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "DI-D-27: a failure of domain D reaches the files whose domains contain D and the unknown ones. Reaching every file suspects writes in other domains, which is a wrong answer about what is at risk.",
-      "find": ["                let reach = Reach::Domains(Arc::from([domain]));\n"],
-      "replace": ["                let reach = Reach::All;\n"]
+      "find": ["                let reach = Reach::Domains(tagged(tag::PROVIDERS_PROVIDED_REACH, || {", "                    Arc::from([domain])", "                }));"],
+      "replace": ["                let reach = Reach::All;"]
     },
     {
       "name": "DI-3.2.6: an answer for an ended lineage is applied",
@@ -842,8 +842,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-27: the seal waits for every domain it asked about. Recording none lets it finish on its flushes, and refuses every answer as one it did not ask for.",
-      "find": ["            let domains = parts\n"],
-      "replace": ["            let domains: Vec<SealDomain> = Vec::new();\n            let _: Vec<SealDomain> = parts\n"]
+      "find": ["            let domains = tagged(tag::DURABILITY_START_SEALS_DOMAINS, || {"],
+      "replace": ["            let domains: Vec<SealDomain> = Vec::new();", "            let _: Vec<SealDomain> = tagged(tag::DURABILITY_START_SEALS_DOMAINS, || {"]
     },
     {
       "name": "DI-3.2.6: a completion dropped unanswered answers nothing",
@@ -978,8 +978,8 @@
       "file": "src/domains.rs",
       "expect": "caught",
       "why": "DI-D-46: a domain the instance was never given is reported, so a misspelling is not silent.",
-      "find": ["                    None => unmatched.push(domain.clone()),\n"],
-      "replace": ["                    None => {}\n"]
+      "find": ["                    None => tagged(tag::DOMAINS_IMPORT_REACH_UNMATCHED, || {", "                        unmatched.push(domain.clone());", "                    }),"],
+      "replace": ["                    None => {}"]
     },
     {
       "name": "DI-3.9.1: an inconsistency is not panicked on",
@@ -1002,16 +1002,16 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-51 routes the inconsistency report through the consumer's sink; dropping it leaves a consumer who chose stderr, OutputDebugString or ETW with a panic and nothing in the place it watches.",
-      "find": ["        diagnostics.report(&Diagnostic::Inconsistency {\n            instance: instance.number(),\n            what,\n            detail,\n        });\n"],
-      "replace": ["        let _ = (instance, what, detail);\n"]
+      "find": ["            diagnostics.report(&Diagnostic::Inconsistency {\n                instance: instance.number(),\n                what,\n                detail,\n            });\n"],
+      "replace": ["            let _ = (instance, what, detail);\n"]
     },
     {
       "name": "DI-3.10.3.3: the core reports to a sink without asking whether it wants the event",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Asking first is what makes a sink that wants nothing cost a branch (DI-D-51 T2); not asking hands every event to every sink.",
-      "find": ["    if diagnostics.wants(DiagnosticKind::Inconsistency) {\n"],
-      "replace": ["    if true {\n"]
+      "find": ["    if tagged(tag::DURABILITY_INCONSISTENT_WANTS, || {", "        diagnostics.wants(DiagnosticKind::Inconsistency)", "    }) {"],
+      "replace": ["    if true {"]
     },
     {
       "name": "DI-3.10.3.3: a fan-out gives each event to every sink",
@@ -1138,8 +1138,8 @@
       "file": "src/io_target.rs",
       "expect": "caught",
       "why": "DI-D-50 P4: the core decides failure sharing from the domains a target declares; a description without them makes every target share fate with every other.",
-      "find": ["            flush_domains: self.flush_domains().to_vec(),\n"],
-      "replace": ["            flush_domains: Vec::new(),\n"]
+      "find": ["            flush_domains: tagged(tag::IO_TARGET_DESCRIBE_DOMAINS, || {", "                self.flush_domains().to_vec()", "            }),"],
+      "replace": ["            flush_domains: Vec::new(),"]
     },
     {
       "name": "DI-3.10.3.5.2: a refused write spends an operation id",
@@ -1154,8 +1154,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-52: a commit the backend refuses is kept and emitted again; dropping it leaves its seal waiting forever.",
-      "find": ["            self.unpushed.push(submission);\n"],
-      "replace": ["            drop(submission);\n"]
+      "find": ["            tagged(tag::IO_CORE_REFUSED_UNPUSHED, || {", "                self.unpushed.push(submission)", "            });"],
+      "replace": ["            drop(submission);"]
     },
     {
       "name": "DI-3.10.3.5.2: a refused commit is not emitted with the next actions",
@@ -1322,8 +1322,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-27: a seal touching a served domain is answered by the provider; without its request the seal never finishes.",
-      "find": ["        let requests = calls.into_iter().map(|call| self.request(call)).collect();\n"],
-      "replace": ["        let requests = {\n            let _ = calls;\n            Vec::new()\n        };\n"]
+      "find": ["        let mut requests = tagged(tag::IO_CORE_ACT_REQUESTS, || {", "            Vec::with_capacity(calls.len())", "        });", "        for call in calls {", "            let request = self.request(call);", "            tagged(tag::IO_CORE_ACT_REQUEST, || requests.push(request));", "        }"],
+      "replace": ["        let requests = {", "            let _ = calls;", "            Vec::new()", "        };"]
     },
     {
       "name": "DI-3.10.3.5.3: every provider answer is taken as success",
@@ -1346,7 +1346,7 @@
       "file": "src/io_core/provider.rs",
       "expect": "caught",
       "why": "DI-D-27: the durability core asks the provider only for the domains it serves; without them a served target's seal waits for an answer never requested.",
-      "find": ["        core.durability\n            .serve(Arc::clone(&served), core.served_names.clone());\n"],
+      "find": ["        let names = tagged(tag::IO_CORE_WITH_PROVIDER_NAMES, || {", "            core.served_names.clone()", "        });", "        core.durability.serve(Arc::clone(&served), names);"],
       "replace": [""]
     },
     {
@@ -1386,16 +1386,16 @@
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "DI-D-52: a refused submission the core originated goes back to it, which keeps it and emits it again; dropped, its seal waits forever.",
-      "find": ["                    pending.push_back(self.core.refused(refused));\n"],
-      "replace": ["                    drop(refused);\n"]
+      "find": ["                    let more = self.core.refused(refused);", "                    tagged(tag::ENGINE_ACT_REFUSED, || pending.push_back(more));"],
+      "replace": ["                    drop(refused);"]
     },
     {
       "name": "DI-3.10.3.5.6.1: the engine keeps no provider requests",
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "DI-D-44: the driver makes the provider's requests with its lock released, so the engine keeps them; dropped, a served seal never finishes.",
-      "find": ["        self.requests.extend(requests);\n"],
-      "replace": ["        let _ = requests;\n"]
+      "find": ["            tagged(tag::ENGINE_ACT_REQUESTS, || self.requests.extend(requests));"],
+      "replace": ["            let _ = requests;"]
     },
     {
       "name": "DI-3.10.3.5.6.1: a drain stops after one pass",
@@ -1426,24 +1426,24 @@
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "The doorbell is rung once for a batch, which is what a ring is for: a push that rings its own makes one submission per push.",
-      "find": ["        match self.backend.push(submission) {\n            Err(refused) if"],
-      "replace": ["        let _ = self.backend.submit();\n        match self.backend.push(submission) {\n            Err(refused) if"]
+      "find": ["        match tagged(tag::ENGINE_PUSH_BACKEND, || self.backend.push(submission)) {"],
+      "replace": ["        let _ = self.backend.submit();", "        match tagged(tag::ENGINE_PUSH_BACKEND, || self.backend.push(submission)) {"]
     },
     {
       "name": "DI-7+.2: a failed doorbell is not told",
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "A doorbell that fails leaves what was pushed queued, with nothing in flight to drive a drain. Not told, the consumer waits for a completion that cannot come.",
-      "find": ["        self.backend.submit().is_err()\n"],
-      "replace": ["        let _ = self.backend.submit();\n        false\n"]
+      "find": ["        tagged(tag::ENGINE_RING_SUBMIT, || self.backend.submit()).is_err()"],
+      "replace": ["        let _ = self.backend.submit();", "        false"]
     },
     {
       "name": "DI-7+.2: a refusal for want of room is not rung and tried once more",
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "A queue that is full is cleared by the doorbell, which the engine can ring at once; without the retry the push waits for a completion to re-emit it.",
-      "find": ["            Err(refused) if refused.cause.needs_submit() && self.backend.submit().is_ok() => {\n"],
-      "replace": ["            Err(refused) if false => {\n"]
+      "find": ["            Err(refused)", "                if refused.cause.needs_submit()", "                    && tagged(tag::ENGINE_PUSH_SUBMIT, || self.backend.submit()).is_ok() =>", "            {"],
+      "replace": ["            Err(refused) if false =>", "            {"]
     },
     {
       "name": "DI-7+.2: a consumer's push does not note its failed doorbell",
@@ -1528,8 +1528,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-54: a gated operation is put to the backend's check before it is held, so it is refused at push for what an ungated one would be. Unasked, a gated span on a backend with no registration is accepted, and fails only once released.",
-      "find": ["            if let Err(cause) = backend.check(target, &op) {\n"],
-      "replace": ["            if let Err(cause) = Ok::<(), crate::backend::RefusalCause>(()) {\n"]
+      "find": ["            if let Err(cause) = tagged(tag::IO_CORE_ISSUE_BACKEND_CHECK, || {", "                backend.check(target, &op)", "            }) {"],
+      "replace": ["            if let Err(cause) = Ok::<(), crate::backend::RefusalCause>(()) {"]
     },
     {
       "name": "DI-3.10.3.5.6.2.1: every refusal of the core's own is kept",
@@ -1552,8 +1552,8 @@
       "file": "src/backend.rs",
       "expect": "caught",
       "why": "The REFUSED fault's error is the RefusalCause itself, so a consumer can recover it by downcasting rather than parsing a message.",
-      "find": ["        error: Arc::new(io::Error::new(kind, cause)),\n"],
-      "replace": ["        error: Arc::new(io::Error::new(kind, cause.to_string())),\n"]
+      "find": ["        io::Error::new(kind, cause)"],
+      "replace": ["        io::Error::new(kind, cause.to_string())"]
     },
     {
       "name": "DI-3.10.3.5.6.2.1: a refusal fault drops the backend's code",
@@ -1568,8 +1568,8 @@
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "A refusal that ends a submission makes its completion due -- a failure, an entry -- and the engine acts on it in the same call, so the readiness it raises is not lost.",
-      "find": ["                    pending.push_back(self.core.refused(refused));\n"],
-      "replace": ["                    let _ = self.core.refused(refused);\n"]
+      "find": ["                    let more = self.core.refused(refused);", "                    tagged(tag::ENGINE_ACT_REFUSED, || pending.push_back(more));"],
+      "replace": ["                    let _ = self.core.refused(refused);"]
     },
     {
       "name": "DI-3.10.3.5.6.2.1: the memory backend's check admits everything",
@@ -1600,16 +1600,16 @@
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "The wait is for the completions the drain then takes. Drained first, a pump woken by a raising returns having taken nothing, and the entries are there only for the next one.",
-      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
-      "replace": ["        let ready = self.locked().as_mut().is_some_and(Engine::drain);", "        let waited = self.notification.wait(timeout);"]
+      "find": ["        let waited = tagged(tag::PUMP_PUMP_WAIT, || self.notification.wait(timeout));", "        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let ready = self.locked().as_mut().is_some_and(Engine::drain);", "        let waited = tagged(tag::PUMP_PUMP_WAIT, || self.notification.wait(timeout));"]
     },
     {
       "name": "DI-7.3: a pump waits holding the engine's lock",
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "The wait is for something another thread does, and doing it takes the lock: a push, a provider's answer, a handle's release. Held through the wait, nothing can wake the pump but its own timeout.",
-      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
-      "replace": ["        let mut held = lock(&self.engine);", "        let waited = self.notification.wait(timeout);", "        let ready = held.as_mut().is_some_and(Engine::drain);"]
+      "find": ["        let waited = tagged(tag::PUMP_PUMP_WAIT, || self.notification.wait(timeout));", "        let ready = self.locked().as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let mut held = lock(&self.engine);", "        let waited = tagged(tag::PUMP_PUMP_WAIT, || self.notification.wait(timeout));", "        let ready = held.as_mut().is_some_and(Engine::drain);"]
     },
     {
       "name": "DI-7.3: a pump whose wait failed does not drain",
@@ -1648,8 +1648,8 @@
       "file": "src/pump.rs",
       "expect": "caught",
       "why": "A report that cannot be taken whole is reproduced by its kind and its text, so a caller that matches on the kind still can.",
-      "find": ["        .unwrap_or_else(|shared| io::Error::new(shared.kind(), shared.to_string()))"],
-      "replace": ["        .unwrap_or_else(|shared| io::Error::other(shared.to_string()))"]
+      "find": ["            io::Error::new(shared.kind(), text)"],
+      "replace": ["            io::Error::other(text)"]
     },
     {
       "name": "DI-7.3: a memory notification forgets what its wait saw",
@@ -1960,25 +1960,8 @@
       "file": "src/lock_watch.rs",
       "expect": "caught",
       "why": "The end says the lock was taken (DI-D-80): written first, it closes the pair while the thread is still waiting, and a wait that never ends reads as one that did.",
-      "find": [
-        "                let taken = mutex.lock().unwrap_or_else(PoisonError::into_inner);",
-        "                // Written with the lock held, as the engineer ruled (DI-D-80): the sink's own",
-        "                // synchronization is a leaf beneath it, which `DiagnosticSink` requires.",
-        "                self.sink.report(&Diagnostic::LockWaitEnded {",
-        "                    instance: self.instance,",
-        "                    lock: name,",
-        "                    id,",
-        "                });",
-        "                taken"
-      ],
-      "replace": [
-        "                self.sink.report(&Diagnostic::LockWaitEnded {",
-        "                    instance: self.instance,",
-        "                    lock: name,",
-        "                    id,",
-        "                });",
-        "                mutex.lock().unwrap_or_else(PoisonError::into_inner)"
-      ]
+      "find": ["                let taken = mutex.lock().unwrap_or_else(PoisonError::into_inner);", "                // Written with the lock held, as the engineer ruled (DI-D-80): the sink's own", "                // synchronization is a leaf beneath it, which `DiagnosticSink` requires.", "                tagged(tag::LOCK_WATCH_LOCK_ENDED, || {", "                    self.sink.report(&Diagnostic::LockWaitEnded {", "                        instance: self.instance,", "                        lock: name,", "                        id,", "                    });", "                });", "                taken"],
+      "replace": ["                tagged(tag::LOCK_WATCH_LOCK_ENDED, || {", "                    self.sink.report(&Diagnostic::LockWaitEnded {", "                        instance: self.instance,", "                        lock: name,", "                        id,", "                    });", "                });", "                mutex.lock().unwrap_or_else(PoisonError::into_inner)"]
     },
     {
       "name": "DI-12.1.3: the line prefix drops its space",
@@ -1993,7 +1976,7 @@
       "file": "src/router.rs",
       "expect": "caught",
       "why": "A domain routed to two providers is refused at build (DI-2.12 point 1): with no refusal the router would serve it twice and the core would refuse the whole instance with less to go on.",
-      "find": ["                        vacant.insert(registration);"],
+      "find": ["                        tagged(tag::ROUTER_BUILD_OWNER, || vacant.insert(registration));"],
       "replace": ["                        drop(vacant);"]
     },
     {
@@ -2017,16 +2000,16 @@
       "file": "src/router.rs",
       "expect": "survives",
       "why": "A control: the same routes gathered without reserving room first, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
-      "find": ["        let mut routes = Vec::with_capacity(self.providers.len());"],
-      "replace": ["        let mut routes = Vec::new();"]
+      "find": ["        let mut routes = tagged(tag::ROUTER_BUILD_ROUTES, || {", "            Vec::with_capacity(self.providers.len())", "        });"],
+      "replace": ["        let mut routes = tagged(tag::ROUTER_BUILD_ROUTES, Vec::new);"]
     },
     {
       "name": "DI-12.2.2: every part goes to the first registration",
       "file": "src/router.rs",
       "expect": "caught",
       "why": "Each domain's part goes to the provider that serves it (DI-D-81); a part given to another provider is flushed by something that never said it could.",
-      "find": ["            parts[registration].push(part);"],
-      "replace": ["            parts[0].push(part);"]
+      "find": ["                parts[registration].push(part)"],
+      "replace": ["                parts[0].push(part)"]
     },
     {
       "name": "DI-12.2.2: a provider with no part is called anyway",
@@ -2049,16 +2032,16 @@
       "file": "src/router.rs",
       "expect": "survives",
       "why": "A control: the same empty parts made by counting the routes instead of walking them, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
-      "find": ["            self.routes.iter().map(|_| Vec::new()).collect();"],
-      "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect();"]
+      "find": ["            self.routes.iter().map(|_| Vec::new()).collect()"],
+      "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect()"]
     },
     {
       "name": "DI-19.1: an id is minted whether or not the sink wants the pair",
       "file": "src/correlation.rs",
       "expect": "caught",
       "why": "An id is minted only for a pair a sink wants (DI-D-80), so a sink that wants nothing costs the counter nothing.",
-      "find": ["    sink.wants(kind)"],
-      "replace": ["    (sink.wants(kind) || kind == kind)"]
+      "find": ["    tagged(tag::CORRELATION_MINT_FOR_WANTS, || sink.wants(kind))"],
+      "replace": ["    (tagged(tag::CORRELATION_MINT_FOR_WANTS, || sink.wants(kind)) || kind == kind)"]
     },
     {
       "name": "DI-19.1: the counter is not advanced",
@@ -2267,6 +2250,30 @@
       "why": "The allocation test (tests/allocation.rs) pins how many allocations each phase of the core makes, so an allocation added to a path is seen. Without it the measurement DI-M23 lowers would not notice a new one. DI-D-97.",
       "find": ["        self.queue.pop_front()\n"],
       "replace": ["        std::hint::black_box(Vec::<u8>::with_capacity(1));\n        self.queue.pop_front()\n"]
+    },
+    {
+      "name": "DI-23.2: a tagged call sets no tag",
+      "file": "src/alloc_tags.rs",
+      "expect": "caught",
+      "why": "Every allocation the core makes runs under a tag the allocation test reads (DI-D-104). If tagging sets nothing, every counted allocation is untagged, and the test's rule that none is must report it, phase by phase.",
+      "find": [".try_with(|current| current.replace(Some(site)))"],
+      "replace": [".try_with(|current| current.replace(None))"]
+    },
+    {
+      "name": "DI-23.2: two calls share one tag",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "A tag names one allocating call (DI-D-104). The guard records where each was made, so the allocation test must report a tag seen from two places in the source, naming both.",
+      "find": ["tagged(tag::IO_CORE_ISSUED_PER_TARGET, || {"],
+      "replace": ["tagged(tag::IO_CORE_ISSUED_IN_FLIGHT, || {"]
+    },
+    {
+      "name": "DI-23.2 control: a tag no scenario reaches is renamed",
+      "file": "src/alloc_tags.rs",
+      "expect": "survives",
+      "why": "A control, and a limit stated: the allocation test pins only the tags its scenarios reach. A gate cycle the search found and the trace did not is never reached, so its tag's name is seen by nothing. The rules hold for the paths exercised; the static pass is what covers the rest.",
+      "find": ["Tag::new(\"durability::gates::trace::unfound\")"],
+      "replace": ["Tag::new(\"durability::gates::trace::unfound_renamed\")"]
     }
   ]
 }

@@ -22,6 +22,7 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 
+use crate::alloc_tags::{tag, tagged};
 use crate::io_target::IoTarget;
 use crate::types::{IoFault, IoTargetKey, WriteCaching};
 
@@ -201,10 +202,13 @@ pub(crate) fn refusal_fault(cause: RefusalCause) -> IoFault {
         RefusalCause::AccessDenied => io::ErrorKind::PermissionDenied,
         _ => io::ErrorKind::Other,
     };
+    let error = tagged(tag::BACKEND_REFUSAL_FAULT_ERROR, || {
+        io::Error::new(kind, cause)
+    });
     IoFault {
         source: REFUSED,
         code,
-        error: Arc::new(io::Error::new(kind, cause)),
+        error: tagged(tag::BACKEND_REFUSAL_FAULT_SHARED, || Arc::new(error)),
     }
 }
 

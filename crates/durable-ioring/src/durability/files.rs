@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Durability, Key, Stage, V};
+use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::ids::FailureId;
@@ -41,10 +42,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             let mut names_file = false;
             for write in failure.suspect.writes().iter().filter(|w| w.target == file) {
                 names_file = true;
-                suspect.insert(write.op.seq);
+                tagged(tag::FILES_FILE_HOLDS_SUSPECT, || {
+                    suspect.insert(write.op.seq)
+                });
             }
             if names_file {
-                failures.push(failure.id);
+                tagged(tag::FILES_FILE_HOLDS_FAILURE, || failures.push(failure.id));
             }
         }
         let mut uncovered = 0;
@@ -53,17 +56,22 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             write.file == file && write.stage != Stage::InFlight && !suspect.contains(&write.op.seq)
         }) {
             uncovered += 1;
-            through
-                .entry(write.lineage)
-                .and_modify(|highest| *highest = (*highest).max(write.epoch))
-                .or_insert(write.epoch);
+            tagged(tag::FILES_FILE_HOLDS_THROUGH, || {
+                through
+                    .entry(write.lineage)
+                    .and_modify(|highest| *highest = (*highest).max(write.epoch))
+                    .or_insert(write.epoch);
+            });
         }
-        FileHolds {
-            uncovered,
-            uncovered_through: through
+        let uncovered_through = tagged(tag::FILES_FILE_HOLDS_UNCOVERED_THROUGH, || {
+            through
                 .into_iter()
                 .map(|(lineage, epoch)| Epoch::new(self.name(lineage), epoch))
-                .collect(),
+                .collect()
+        });
+        FileHolds {
+            uncovered,
+            uncovered_through,
             failures,
         }
     }

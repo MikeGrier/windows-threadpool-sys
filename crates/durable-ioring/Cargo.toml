@@ -17,3 +17,14 @@ readme = "COMPONENT.md"
 # portable, so this crate has no platform dependency (DI-D-50). The version is the one io-buffers'
 # first release is fixed to (`Release-As: 0.1.0`), so it is not a guess.
 io-buffers = { version = "0.1.0", path = "../io-buffers" }
+
+[features]
+# Every call in the core that can allocate names itself with a tag; this feature keeps the thread's
+# current tag so an allocator can read it (DI-D-104). Only the allocation test turns it on, through
+# the dev-dependency below; without it, tagging compiles to nothing. Needs `std`, for the thread-local.
+alloc-tags = []
+
+[dev-dependencies]
+# The crate's own tests use its `alloc-tags` feature, as `win-debugging-sys` does for `test-util`. A
+# dev-dependency's features reach test builds only.
+durable-ioring = { path = ".", features = ["alloc-tags"] }

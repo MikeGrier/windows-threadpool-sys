@@ -14,6 +14,7 @@ use std::sync::Arc;
 use super::{
     DomainPart, Due, Durability, Key, MarkingKind, Part, Reach, SealStage, Stage, V, Write,
 };
+use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::diagnostics::FlushOutcome;
@@ -34,17 +35,22 @@ pub(super) fn name(
         let at = match parts.iter().position(|part| part.domain == domain) {
             Some(at) => at,
             None => {
-                parts.push(DomainPart {
-                    domain,
-                    files: Vec::new(),
+                tagged(tag::PROVIDERS_NAME_PART, || {
+                    parts.push(DomainPart {
+                        domain,
+                        files: Vec::new(),
+                    });
                 });
                 parts.len() - 1
             }
         };
         let files = &mut parts[at].files;
         match files.iter_mut().find(|(key, _)| *key == file) {
-            Some((_, writes)) => writes.push(op),
-            None => files.push((file, vec![op])),
+            Some((_, writes)) => tagged(tag::PROVIDERS_NAME_WRITE, || writes.push(op)),
+            None => {
+                let writes = tagged(tag::PROVIDERS_NAME_WRITES, || vec![op]);
+                tagged(tag::PROVIDERS_NAME_FILE, || files.push((file, writes)));
+            }
         }
     }
 }
@@ -55,7 +61,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// The domains the consumer's provider serves, sorted, as interned when the instance was built,
     /// and the consumer's name for each, in the same order, which a flush pair reports.
     pub(crate) fn serve(&mut self, domains: Arc<[DomainId]>, names: Vec<FlushDomain>) {
-        self.served_names = domains.iter().copied().zip(names).collect();
+        self.served_names = tagged(tag::PROVIDERS_SERVE_NAMES, || {
+            domains.iter().copied().zip(names).collect()
+        });
         self.served = domains;
     }
 
@@ -118,7 +126,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         match outcome {
             Ok(()) => self.cover(lineage, seal, &mut due),
             Err(cause) => {
-                let reach = Reach::Domains(Arc::from([domain]));
+                let reach = Reach::Domains(tagged(tag::PROVIDERS_PROVIDED_REACH, || {
+                    Arc::from([domain])
+                }));
                 self.observe(cause, &reach, None, &mut due);
             }
         }
@@ -153,18 +163,19 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         };
         // Each marking cites who answered for its write (DI-D-47): the default's flush, observed,
         // and the provider's warranty, exactly as the write's file is routed.
-        let ops: Vec<(OpId, MarkingKind)> = self
-            .writes
-            .values()
-            .filter(|write| covered(write))
-            .map(|write| {
-                let kind = MarkingKind::Covered {
-                    flushed: write.routing.default,
-                    provider: write.routing.provider,
-                };
-                (write.op, kind)
-            })
-            .collect();
+        let ops: Vec<(OpId, MarkingKind)> = tagged(tag::PROVIDERS_COVER_OPS, || {
+            self.writes
+                .values()
+                .filter(|write| covered(write))
+                .map(|write| {
+                    let kind = MarkingKind::Covered {
+                        flushed: write.routing.default,
+                        provider: write.routing.provider,
+                    };
+                    (write.op, kind)
+                })
+                .collect()
+        });
         if ops.is_empty() {
             return;
         }

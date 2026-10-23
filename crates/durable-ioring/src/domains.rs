@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::alloc_tags::{tag, tagged};
 use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::durability::{Reach, Routing, State};
@@ -50,15 +51,20 @@ pub(crate) fn import_reach<E: EpochId + 'static, I: Instant>(
         }
         ImportScope::Lineage(lineage) => return Err(UnknownLineage(*lineage)),
         ImportScope::Domains(names) => {
-            let mut known = Vec::with_capacity(names.len());
+            let mut known = tagged(tag::DOMAINS_IMPORT_REACH_KNOWN, || {
+                Vec::with_capacity(names.len())
+            });
             let mut unmatched = Vec::new();
             for domain in names {
                 match domains.get(domain) {
-                    Some(&id) => known.push(id),
-                    None => unmatched.push(domain.clone()),
+                    Some(&id) => tagged(tag::DOMAINS_IMPORT_REACH_KNOWN_ID, || known.push(id)),
+                    None => tagged(tag::DOMAINS_IMPORT_REACH_UNMATCHED, || {
+                        unmatched.push(domain.clone());
+                    }),
                 }
             }
-            (Reach::Domains(known.into()), None, unmatched)
+            let known = tagged(tag::DOMAINS_IMPORT_REACH_SHARED, || known.into());
+            (Reach::Domains(known), None, unmatched)
         }
     })
 }
@@ -81,7 +87,13 @@ pub fn first_repeat<T: Eq + std::hash::Hash + Clone>(
     values: impl IntoIterator<Item = T>,
 ) -> Option<T> {
     let mut seen = HashSet::new();
-    values.into_iter().find(|value| !seen.insert(value.clone()))
+    for value in values {
+        let copy = tagged(tag::DOMAINS_FIRST_REPEAT_COPY, || value.clone());
+        if !tagged(tag::DOMAINS_FIRST_REPEAT_SEEN, || seen.insert(copy)) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 /// Intern `domains`, returning their ids sorted and without repeats.
@@ -89,16 +101,16 @@ pub(crate) fn intern_all(
     table: &mut HashMap<FlushDomain, DomainId>,
     domains: impl IntoIterator<Item = FlushDomain>,
 ) -> Arc<[DomainId]> {
-    let mut ids: Vec<DomainId> = domains
-        .into_iter()
-        .map(|domain| {
-            let next = DomainId(
-                u32::try_from(table.len()).expect("fewer than 2^32 distinct flush domains"),
-            );
+    let mut ids: Vec<DomainId> = Vec::new();
+    for domain in domains {
+        let next =
+            DomainId(u32::try_from(table.len()).expect("fewer than 2^32 distinct flush domains"));
+        let id = tagged(tag::DOMAINS_INTERN_ALL_TABLE, || {
             *table.entry(domain).or_insert(next)
-        })
-        .collect();
+        });
+        tagged(tag::DOMAINS_INTERN_ALL_ID, || ids.push(id));
+    }
     ids.sort_unstable();
     ids.dedup();
-    ids.into()
+    tagged(tag::DOMAINS_INTERN_ALL_SHARED, || ids.into())
 }
