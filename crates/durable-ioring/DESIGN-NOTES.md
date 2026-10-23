@@ -2063,5 +2063,15 @@ through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads wh
   no overflow policy is needed. It needs 64-bit atomics (`target_has_atomic = "64"`), which some 32-bit embedded targets
   lack; those targets are outside the crate until that is revisited.
 
-The crate's own decisions -- which safe constructors it offers, and whether it is checked under Miri, which needs a nightly
-toolchain -- are made in its own design notes when it is created (DI-23.4.1).
+- **Two safe constructors, and no others.** The engineer, 2026-10-23: "just do 1 and 2". (1) One generic, fallible
+  constructor into the shared `dyn Error + Send + Sync`, taking the allocator or using `Global`, and handing the value back
+  with the `AllocError` when allocation fails; the coercion happens inside it, where the target is fixed, so no caller
+  handles a pointer. A consumer downcasts through `dyn Error`'s own `downcast_ref`. (2) A `const`-constructible static
+  error -- a message and an `ErrorCode` -- so the core's refusals are `static` descriptors with no type each. Not offered:
+  a general sized `Shared<T>`, further unsizing targets, and a caller-supplied coercion, safe or `unsafe`.
+- **Open: the header's size.** `&'static (dyn Allocator + Sync)` is a fat pointer, so the header is 24 bytes on a 64-bit
+  target; a thin pointer to a `static` holding the allocator would make it 16, at the cost of every allocator being behind
+  a `static`. Not decided.
+
+Whether the crate is checked under Miri, which needs a nightly toolchain, is decided in its own design notes when it is
+created (DI-23.4.1).
