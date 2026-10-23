@@ -15,52 +15,59 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 ## DI-M23 -- No `std`, and every allocation made at construction
 
 The engineer, 2026-10-22, for a no-std user-mode file-system driver stack: [DI-D-97](DESIGN-NOTES.md#di-d-97) to
-[DI-D-103](DESIGN-NOTES.md#di-d-103), from
+[DI-D-104](DESIGN-NOTES.md#di-d-104), from
 [DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md).
-Sharp through `DI-23.8`; the items after it are coarse on purpose, since the designs they depend on are open in the session
-and `DI-23.9` is where they are settled.
+Sharp through `DI-23.9`; the items after it are coarse on purpose, since the designs they depend on are open in the session
+and `DI-23.10` is where they are settled. **No allocation is analysed or removed before `DI-23.2` is done**: the engineer,
+2026-10-23, "I don't want to do further analysis without tagging".
 
 - [x] **DI-23.1** -- Allocations in the core are measured, phase by phase, by a counting global allocator. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-231)
 
-- [ ] **DI-23.2** -- **Name `core` and `alloc` paths, behind a default `std` feature** ([DI-D-97](DESIGN-NOTES.md#di-d-97)), in
+- [ ] **DI-23.2** -- **Tag every allocation the core makes** ([DI-D-104](DESIGN-NOTES.md#di-d-104)). An RAII guard that sets the
+  thread's current allocation tag and restores the previous one when dropped, recording where it was made with
+  `#[track_caller]`, compiled to nothing unless the `alloc-tags` feature is on; the tags as named constants defined in one
+  place; a guard at every allocating site in the core; and [tests/allocation.rs](tests/allocation.rs) counting by phase
+  and tag, asserting that no counted allocation is untagged and that each phase's tags add up to its total.
+
+- [ ] **DI-23.3** -- **Name `core` and `alloc` paths, behind a default `std` feature** ([DI-D-97](DESIGN-NOTES.md#di-d-97)), in
   this crate and `io-buffers`: every `std::` path with a `core` or `alloc` equivalent, `core::error::Error` for
   `std::error::Error`, and `StderrDiagnostics` behind `std`. No behaviour changes.
 
-- [ ] **DI-23.3** -- **A fault's report is an associated type** ([DI-D-102](DESIGN-NOTES.md#di-d-102)), on the backend trait and
+- [ ] **DI-23.4** -- **A fault's report is an associated type** ([DI-D-102](DESIGN-NOTES.md#di-d-102)), on the backend trait and
   the provider trait, with `std` interop behind the feature; `win-durable-ioring`'s backend reports a `Copy` error carrying
   its `HRESULT`. Breaking for this crate and `win-durable-ioring`.
 
-- [ ] **DI-23.4** -- **Capacity declared at construction, and construction fallible** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
+- [ ] **DI-23.5** -- **Capacity declared at construction, and construction fallible** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
   [DI-D-98](DESIGN-NOTES.md#di-d-98)): the capacities the consumer declares, reserved with `try_reserve`, and the refusal at
   capacity for a submit, a mint and an import. The containers that already take a capacity (`HashMap`, `VecDeque`, `Vec`)
   are sized from it here.
 
-- [ ] **DI-23.5** -- **Charge a seal's work to the (lineage, file, seal span)** ([DI-D-98](DESIGN-NOTES.md#di-d-98)): the
+- [ ] **DI-23.6** -- **Charge a seal's work to the (lineage, file, seal span)** ([DI-D-98](DESIGN-NOTES.md#di-d-98)): the
   first write to a file in its lineage's unsealed span pays for the flush, the flush pair and the provider's parts; the
   charge stays with the span's entry while any write to the file remains in it.
 
-- [ ] **DI-23.6** -- **A seal that covers no writes makes no record** ([DI-D-99](DESIGN-NOTES.md#di-d-99)), held in the
+- [ ] **DI-23.7** -- **A seal that covers no writes makes no record** ([DI-D-99](DESIGN-NOTES.md#di-d-99)), held in the
   trailing field and the per-lineage slot, releasing heals and the mark in order, with an overwritten one's pair ended as
   `Superseded`.
 
-- [ ] **DI-23.7** -- **A failure holds its suspect writes' capacity until resolved** ([DI-D-100](DESIGN-NOTES.md#di-d-100)), and
+- [ ] **DI-23.8** -- **A failure holds its suspect writes' capacity until resolved** ([DI-D-100](DESIGN-NOTES.md#di-d-100)), and
   [CONTRACT.md](CONTRACT.md) and the crate's documentation say so with worked examples of a consumer refused at submit and
   resolving its failures to clear it.
 
-- [ ] **DI-23.8** -- **Coalesce `Durable`** ([DI-D-101](DESIGN-NOTES.md#di-d-101)): remove the older un-popped entry and append
+- [ ] **DI-23.9** -- **Coalesce `Durable`** ([DI-D-101](DESIGN-NOTES.md#di-d-101)): remove the older un-popped entry and append
   the new one at the tail; the oracle and the tests that expect one `Durable` per seal follow.
 
-- [ ] **DI-23.9** -- **Settle the open designs with the engineer**, as the session lists them: the storage a failure holds and
+- [ ] **DI-23.10** -- **Settle the open designs with the engineer**, as the session lists them: the storage a failure holds and
   how events and the inventory lend out its suspect set and markings; the `Arc`-shared contract types; the ordered tables;
   `Mutex` and `thread::panicking()` without `std`; and whether a portable `ErrorKind` is wanted.
 
-- [ ] **DI-23.10** -- **The clean paths hand out no allocated collection** ([DI-D-103](DESIGN-NOTES.md#di-d-103)): visitors for
+- [ ] **DI-23.11** -- **The clean paths hand out no allocated collection** ([DI-D-103](DESIGN-NOTES.md#di-d-103)): visitors for
   provider requests, lineages and `close()`, and visitor queries behind `IoTargetBusy` and `LineageBusy`.
 
-- [ ] **DI-23.11** -- **Implement what `DI-23.9` settles**, until `DI-23.1` asserts zero allocations after construction in
+- [ ] **DI-23.12** -- **Implement what `DI-23.10` settles**, until `DI-23.1` asserts zero allocations after construction in
   every phase.
 
-- [ ] **DI-23.12** -- **Build without `std` in CI**: this crate with `--no-default-features` for a target that has no `std`.
+- [ ] **DI-23.13** -- **Build without `std` in CI**: this crate with `--no-default-features` for a target that has no `std`.
 
 ## DI-M21 -- A sample log on durable-ioring
 

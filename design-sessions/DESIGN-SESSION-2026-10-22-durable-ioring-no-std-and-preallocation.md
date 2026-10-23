@@ -13,6 +13,8 @@ investigated and proposed. Decisions that resulted, all in
 - [DI-D-101](../crates/durable-ioring/DESIGN-NOTES.md#di-d-101) -- `Durable` entries coalesce.
 - [DI-D-102](../crates/durable-ioring/DESIGN-NOTES.md#di-d-102) -- a fault's report is an associated type.
 - [DI-D-103](../crates/durable-ioring/DESIGN-NOTES.md#di-d-103) -- the clean paths return no allocated collection.
+- [DI-D-104](../crates/durable-ioring/DESIGN-NOTES.md#di-d-104) -- every allocation is tagged by the code that makes it
+  (continued 2026-10-23).
 
 The work is queued as DI-M23 in [CHECKLIST.md](../crates/durable-ioring/CHECKLIST.md).
 
@@ -185,6 +187,30 @@ failure.
 The engineer: "just for lack of a better term, let's call these the clean paths. for these clean paths, let's ensure
 that these are allocation free, so either the caller passes in arrays to fill or the collection elements are accessed by
 calling a function that invokes a functor for each collection element." Recorded as DI-D-103.
+
+## Allocation tags (continued 2026-10-23)
+
+With the measurement of `DI-23.1` in place, counting allocations per phase, the engineer: "I would consider going even
+stricter: give each allocation a unique label, at least by source code location and establish counts by source code
+location. Is there any capability for that in the allocation discipline?"
+
+The assistant: a global allocator is given only a `Layout`, and `#[track_caller]` does not reach it through the standard
+containers. It can walk the stack itself and attribute an allocation to the innermost frame in the crate, through the
+`backtrace` crate (whose frame access is specified; `std::backtrace`'s is unstable, and parsing its text would bind to an
+unspecified format), debug builds only, keyed by function so an edit above a site does not move it.
+
+The engineer: "I was hoping for caller assigned tags. That's not possible?" The assistant: it is, as a facility in the
+core rather than in the test -- the code sets a thread's current tag around its allocating code, the allocator reads it,
+the tags are named constants, `#[track_caller]` adds the location, the facility is behind a feature only the test enables,
+and an allocation counted with no tag set fails the test, so the discipline is enforced where an allocation is added.
+
+The engineer: "oh that's a good idea, I've done that before too. make the tagging RAII based so that the discipline is
+trivial. please schedule this before going further in the allocation analysis, I don't want to do further analysis
+without tagging." Recorded as DI-D-104 and scheduled as `DI-23.2`, ahead of every item that analyses or removes an
+allocation.
+
+The assistant's question of how coarse a tag should be -- per table and container, or per operation -- was not answered.
+DI-D-104 makes a tag name a site, with the location recorded beside it.
 
 ## Working positions and open questions (not decisions)
 

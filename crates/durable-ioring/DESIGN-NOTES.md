@@ -1837,7 +1837,7 @@ the begin. A sink filters either way, so nothing waits on it.
 
 ## <a id="di-d-97"></a>DI-D-97: durable-ioring runs without `std`, and allocates everything it needs at construction
 
-**Decided, not yet implemented: scheduled as DI-23.1, DI-23.2, DI-23.4, DI-23.11 and DI-23.12 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22, for a no-std user-mode file-system
+**Decided, not yet implemented: scheduled as DI-23.1, DI-23.3, DI-23.5, DI-23.12 and DI-23.13 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22, for a no-std user-mode file-system
 driver stack: "we allocate all heap needed for operation during construction", and "It's not acceptable for the driver to
 panic due to OOM in the middle of things." The session is
 [DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md).
@@ -1854,7 +1854,8 @@ panic due to OOM in the middle of things." The session is
 - **Not in scope:** the inconsistency panics of [DI-D-46](#di-d-46), a different class from allocation failure.
 - **The proof is a test.** A counting global allocator in an integration test builds an instance, resets the count, drives a
   workload through the in-memory backend, and asserts how many allocations each phase made. Written first, it measures the
-  census in the session; each change drives a phase's count to zero.
+  census in the session; each change drives a phase's count to zero. Every allocation it counts is tagged by the code that
+  made it ([DI-D-104](#di-d-104)).
 
 The capacity model is [DI-D-98](#di-d-98) to [DI-D-101](#di-d-101); the errors are [DI-D-102](#di-d-102); what the clean
 paths hand out is [DI-D-103](#di-d-103). Open, and not decided: the storage a failure holds and how events lend it out; the
@@ -1863,7 +1864,7 @@ They are listed in the session.
 
 ## <a id="di-d-98"></a>DI-D-98: capacity is declared at construction; submit, mint and import may be refused for it, and a seal never is
 
-**Decided, not yet implemented: scheduled as DI-23.4 and DI-23.5 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22.
+**Decided, not yet implemented: scheduled as DI-23.5 and DI-23.6 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22.
 
 - **Growth the consumer starts is refused at admission when it would exceed capacity:** a submit, minting a lineage, and
   importing a failure. A refusal is backpressure, reported as being at capacity and distinct from the contract's own
@@ -1883,7 +1884,7 @@ They are listed in the session.
 
 ## <a id="di-d-99"></a>DI-D-99: a seal that covers no writes makes no record, and a superseded one's pair is ended
 
-**Decided, not yet implemented: scheduled as DI-23.6 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "It should call any diagnostic channels to
+**Decided, not yet implemented: scheduled as DI-23.7 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "It should call any diagnostic channels to
 announce its having been sealed and depending on the environment, *they* may allocate but the core algorithm forces no
 allocation." The heal analysis is the assistant's, on the engineer's "I will let you work this through".
 
@@ -1905,7 +1906,7 @@ overwrites the earlier, whose values every release and mark advance are satisfie
 
 ## <a id="di-d-100"></a>DI-D-100: a failure holds the capacity of the writes it puts at risk until it is resolved
 
-**Decided, not yet implemented: scheduled as DI-23.7 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "agreed. make this clear and the
+**Decided, not yet implemented: scheduled as DI-23.8 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "agreed. make this clear and the
 documentation must include examples of how to address."
 
 A suspect write's capacity is not released when its seal fails: it is held by the failure until the failure is healed or
@@ -1916,7 +1917,7 @@ refusal and resolving its failures to clear it.
 
 ## <a id="di-d-101"></a>DI-D-101: an un-popped `Durable` is replaced by a later one, which goes to the tail
 
-**Decided, not yet implemented: scheduled as DI-23.8 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "ok so coalescing Durable is approved!"
+**Decided, not yet implemented: scheduled as DI-23.9 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "ok so coalescing Durable is approved!"
 
 A seal's capacity is released when the high-water mark passes it, but its `Durable` entry waits for the consumer to pop it,
 so a consumer slow to pop could exhaust the completion queue. A lineage therefore has at most one un-popped `Durable`. A
@@ -1927,7 +1928,7 @@ consumer behind on popping sees the mark later, never earlier.
 
 ## <a id="di-d-102"></a>DI-D-102: a fault's report is an associated type of the trait that reports it
 
-**Decided, not yet implemented: scheduled as DI-23.3 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22, after the assistant reported what no-std,
+**Decided, not yet implemented: scheduled as DI-23.4 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22, after the assistant reported what no-std,
 no-alloc I/O crates do: "seems like you have a good plan here." Amends [DI-D-50](#di-d-50).
 
 - **`IoFault` stays the error at the portable boundary** -- source, `ErrorCode`, report -- and `std::io::Error` leaves the
@@ -1949,7 +1950,7 @@ An earlier answer in the same session, to keep the report as an `Arc<dyn Error>`
 
 ## <a id="di-d-103"></a>DI-D-103: the clean paths hand out no allocated collection
 
-**Decided, not yet implemented: scheduled as DI-23.10 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "let's call these the clean paths. for
+**Decided, not yet implemented: scheduled as DI-23.11 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "let's call these the clean paths. for
 these clean paths, let's ensure that these are allocation free, so either the caller passes in arrays to fill or the
 collection elements are accessed by calling a function that invokes a functor for each collection element."
 
@@ -1971,3 +1972,26 @@ each visitor. A caller-supplied array is the other form allowed, where moving an
 **Not clean paths:** a `GateCycle`, which only a consumer's mistake produces, and everything that arises from a failure --
 suspect sets, markings, `failures()`, `FailureInfo`, `ResolveError::returned`, `Imported::unmatched`. Those are designed
 with the storage a failure holds ([DI-D-100](#di-d-100)), which is open.
+
+## <a id="di-d-104"></a>DI-D-104: every allocation the core makes is tagged by the code that makes it, with an RAII guard
+
+**Decided, not yet implemented: scheduled as DI-23.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).**
+The engineer, 2026-10-23, asking for "caller assigned tags", then: "make the tagging RAII based so that the discipline is
+trivial", and "I don't want to do further analysis without tagging". The details below are the assistant's.
+
+A global allocator is given only a `Layout`: nothing tells it which code asked, and `#[track_caller]` does not reach it
+through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads what it said.
+
+- **A guard per allocating site.** The core makes a guard naming a tag where it is about to allocate. Making it sets the
+  thread's current tag; dropping it, on return or on unwinding, restores the tag it replaced, so tags nest. An allocation
+  hidden inside a container's `insert` or `push` is counted under the tag of the code that called it, which is the
+  attribution wanted. The guard records where it was made with `#[track_caller]`, so a tag also names a file and a line.
+- **Tags are named constants**, defined in one place, whose names are what the measurement reports. A tag names a site, so
+  an edit that moves a line does not move it.
+- **Zero cost when off.** The guard and the thread-local behind it exist only under the `alloc-tags` feature, which only the
+  allocation test turns on. The feature needs `std`, for the thread-local; without it the guard is an empty type and the
+  core stays as [DI-D-97](#di-d-97) wants it.
+- **Untagged allocation fails the test.** [tests/allocation.rs](tests/allocation.rs) counts by phase and tag. A counted
+  allocation made with no tag set is reported as untagged, and the test asserts there is none, so an allocation the core
+  adds without a tag is caught where it is added. Each phase's tags add up to the phase's total, which the counts by phase
+  keep checking.
