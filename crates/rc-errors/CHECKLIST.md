@@ -9,10 +9,7 @@ Written by durable-ioring's [DI-23.4.1](../durable-ioring/COMPLETED-CHECKLIST.md
 [DI-D-105](../durable-ioring/DESIGN-NOTES.md#di-d-105). Every item's tests run on stable; Miri is parked
 ([RCE-D-8](DESIGN-NOTES.md#rce-d-8)).
 
-- [ ] **RCE-1.1** -- **The allocator interface** ([RCE-D-3](DESIGN-NOTES.md#rce-d-3)): `unsafe trait Allocator` with
-  `allocate` and `deallocate`, `AllocError`, and `Global` over `alloc::alloc`, mirroring upstream's names and signatures,
-  and usable as `dyn Allocator + Sync`. `Global` returns a dangling, aligned block for a zero-sized layout and frees none,
-  and reports failure without panicking. The `NOTICE` file crediting the standard library ([RCE-D-9](DESIGN-NOTES.md#rce-d-9)).
+- [x] **RCE-1.1** -- The allocator interface: Allocator, AllocError and Global, mirroring upstream, with the NOTICE crediting the standard library. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#rce-11)
 
 - [ ] **RCE-1.2** -- **The shared error** ([RCE-D-4](DESIGN-NOTES.md#rce-d-4), [RCE-D-5](DESIGN-NOTES.md#rce-d-5)): the
   `repr(C)` block, the fallible constructor and its `Global` variant handing the error back on failure, `Clone`, `Drop`,
