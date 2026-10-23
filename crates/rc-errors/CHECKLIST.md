@@ -13,10 +13,7 @@ Written by durable-ioring's [DI-23.4.1](../durable-ioring/COMPLETED-CHECKLIST.md
 
 - [x] **RCE-1.2** -- The shared error: one repr(C) block, a fallible constructor handing the error back, and counting freed through the recorded allocator, tested with a recording allocator. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#rce-12)
 
-- [ ] **RCE-1.3** -- **The static error and the report** ([RCE-D-6](DESIGN-NOTES.md#rce-d-6),
-  [RCE-D-7](DESIGN-NOTES.md#rce-d-7)): a `const`-constructible static error holding a message; the two-form report, `Clone`,
-  dereferencing to `dyn Error + Send + Sync`, comparing by identity and never equal across forms. The README gains examples
-  of both, compiled as doctests through the crate's `#![doc = include_str!("../README.md")]`.
+- [x] **RCE-1.3** -- The static error and the two-form report, comparing by identity, with README examples compiled as doctests. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#rce-13)
 
 - [ ] **RCE-1.4** -- **Sabotage entries** in a `sabotage.json` for the free condition, the count's increment and the
   layout the free uses, each shown caught; and for the decrement's `Release` and the fence's `Acquire`, recorded as

@@ -34,7 +34,8 @@ struct Block<E: ?Sized> {
 /// frees its block through the allocator that made it. It dereferences to
 /// `dyn Error + Send + Sync`, so a caller reads the error, its source, and its concrete type
 /// through `downcast_ref`, and it compares by identity: two `SharedError`s are equal when they
-/// share one block.
+/// share one block. It is an `Error` itself too, so `&shared as &dyn Error` is the `SharedError`,
+/// which downcasts only to `SharedError`; reach the error it holds through `Deref` (`&*shared`).
 ///
 /// ```
 /// use rc_errors::SharedError;

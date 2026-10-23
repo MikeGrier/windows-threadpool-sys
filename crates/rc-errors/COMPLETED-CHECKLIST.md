@@ -44,3 +44,21 @@ per test, so no two tests share its counts. Beyond the item's list, the tests co
 alone, were caught: freeing when the count reached 2 (eight tests, one of which read the poison back as `probe 3722304989`,
 `0xDDDDDDDD`); a clone that did not increment; and freeing with the error's layout instead of the block's, which the
 recording allocator refused. The manifest entries are RCE-1.4's.
+
+## Moved 2026-10-23 19:11:50 -04:00 -- RCE-1.3: the static error and the report
+
+### <a id="rce-13"></a>RCE-1.3 -- The static error and the two-form report, comparing by identity, with README examples compiled as doctests. *(completed 2026-10-23 19:11:50 -04:00)*
+
+Per [RCE-D-6](DESIGN-NOTES.md#rce-d-6) and [RCE-D-7](DESIGN-NOTES.md#rce-d-7). The item as it stood at completion:
+
+**The static error and the report**: a `const`-constructible static error holding a message; the two-form report, `Clone`,
+dereferencing to `dyn Error + Send + Sync`, comparing by identity and never equal across forms. The README gains examples of
+both, compiled as doctests through the crate's `#![doc = include_str!("../README.md")]`.
+
+What was done. [static_error.rs](src/static_error.rs) holds `StaticError` (`new` and `message`, both `const`), whose own
+equality compares messages; [report.rs](src/report.rs) holds `ErrorReport`, with `from_static` (`const`) and `From` for
+both forms. The README gains two examples, a static and a shared report side by side, and an allocator of the caller's own
+through `try_new_in`. One defect was found by its test before commit: the report's `Deref` returned the `SharedError` coerced
+to `dyn Error` -- it is an `Error` itself -- so downcasting saw the `SharedError` and not the error it holds. It now derefs
+through it, and both `SharedError`'s and `ErrorReport`'s documentation say that each is an `Error` itself and is downcast
+through `Deref`. The docs also say a zero-sized static's address may be shared with another's, which identity rests on.
