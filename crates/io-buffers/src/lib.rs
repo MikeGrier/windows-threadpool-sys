@@ -5,6 +5,10 @@
 // Every `unsafe` here states why it is sound.
 #![deny(clippy::undocumented_unsafe_blocks)]
 
+// Paths are `core` and `alloc` ones wherever `std` has an equivalent, so `durable-ioring` can be
+// built without `std` (its DI-D-97); this crate names no `std::` path at all.
+extern crate alloc;
+
 mod aligned;
 mod buf;
 mod span;

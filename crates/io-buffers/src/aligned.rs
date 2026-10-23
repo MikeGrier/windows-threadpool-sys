@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Mike Grier
 //! An owned, aligned buffer for I/O.
 
-use std::alloc::{self, Layout};
-use std::fmt;
-use std::num::NonZeroUsize;
-use std::ops::{Deref, DerefMut};
-use std::ptr::NonNull;
-use std::slice;
+use ::alloc::alloc::{self, Layout};
+use core::fmt;
+use core::num::NonZeroUsize;
+use core::ops::{Deref, DerefMut};
+use core::ptr::NonNull;
+use core::slice;
 
 use crate::{IoBuf, IoBufMut};
 
@@ -97,7 +97,7 @@ impl fmt::Display for AlignedBufError {
     }
 }
 
-impl std::error::Error for AlignedBufError {}
+impl core::error::Error for AlignedBufError {}
 
 /// The layout of a buffer of `len` bytes aligned to `align`, or why there is none.
 fn layout(len: usize, align: usize) -> Result<Layout, AlignedBufError> {
