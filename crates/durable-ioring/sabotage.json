@@ -2259,6 +2259,14 @@
       "why": "A control: `map_or(false, ..)` is `is_some_and(..)`, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["            .is_some_and(|pairing| pairing.edge == Edge::End);\n"],
       "replace": ["            .map_or(false, |pairing| pairing.edge == Edge::End);\n"]
+    },
+    {
+      "name": "DI-23.1: popping an entry allocates",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The allocation test (tests/allocation.rs) pins how many allocations each phase of the core makes, so an allocation added to a path is seen. Without it the measurement DI-M23 lowers would not notice a new one. DI-D-97.",
+      "find": ["        self.queue.pop_front()\n"],
+      "replace": ["        std::hint::black_box(Vec::<u8>::with_capacity(1));\n        self.queue.pop_front()\n"]
     }
   ]
 }

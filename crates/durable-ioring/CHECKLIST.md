@@ -20,11 +20,7 @@ The engineer, 2026-10-22, for a no-std user-mode file-system driver stack: [DI-D
 Sharp through `DI-23.8`; the items after it are coarse on purpose, since the designs they depend on are open in the session
 and `DI-23.9` is where they are settled.
 
-- [ ] **DI-23.1** -- **Measure allocation by phase** ([DI-D-97](DESIGN-NOTES.md#di-d-97)). An integration test with a counting
-  global allocator: build an instance, reset the count, and drive a workload through the in-memory backend -- writes and
-  reads, gated writes, seals that cover writes and seals that cover none, lineages minted and ended, targets added and
-  removed, and each failure path -- recording the allocations each phase makes. It asserts today's counts, so each later
-  item lowers a number it can see, and asserts zero for a phase once that phase is done.
+- [x] **DI-23.1** -- Allocations in the core are measured, phase by phase, by a counting global allocator. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-231)
 
 - [ ] **DI-23.2** -- **Name `core` and `alloc` paths, behind a default `std` feature** ([DI-D-97](DESIGN-NOTES.md#di-d-97)), in
   this crate and `io-buffers`: every `std::` path with a `core` or `alloc` equivalent, `core::error::Error` for

@@ -4222,3 +4222,26 @@ What was done. Recorded as [DE-D-7](../durable-ioring-events/DESIGN-NOTES.md#de-
 [encode/tests.rs](../durable-ioring-events/src/encode/tests.rs), and one session test that decodes the event as a reader does.
 Evidence, in [sabotage.json](../durable-ioring-events/sabotage.json): three entries caught and a control.
 
+
+## Moved 2026-10-23 11:21:01 -04:00 -- DI-23.1: allocation measured by phase
+
+### <a id="di-231"></a>DI-23.1 -- Allocations in the core are measured, phase by phase, by a counting global allocator. *(completed 2026-10-23 11:21:01 -04:00)*
+
+The item as written:
+
+- [x] **DI-23.1** -- **Measure allocation by phase** ([DI-D-97](DESIGN-NOTES.md#di-d-97)). An integration test with a counting
+  global allocator: build an instance, reset the count, and drive a workload through the in-memory backend -- writes and
+  reads, gated writes, seals that cover writes and seals that cover none, lineages minted and ended, targets added and
+  removed, and each failure path -- recording the allocations each phase makes. It asserts today's counts, so each later
+  item lowers a number it can see, and asserts zero for a phase once that phase is done.
+
+What was done. [tests/allocation.rs](tests/allocation.rs) installs a global allocator that counts allocations, zeroed
+allocations and reallocations, per thread, and only inside calls into the core: the test's buffers, the backend's work and
+the test's bookkeeping are not counted. Two scenarios over the in-memory backend, the clean paths of
+[DI-D-103](DESIGN-NOTES.md#di-d-103) and the failure paths, each split into named phases, are compared with the tables in
+the test, which are the counts today; a change that moves one fails and prints the new table to paste. Each scenario is run
+twice and must give the same counts, which is what makes exact tables usable. A third test holds the counter itself: an
+allocation outside a counted call is not counted, and an allocation and a reallocation inside are.
+
+The counts are in the test and are not restated here. Evidence: the entry "DI-23.1: popping an entry allocates" in
+[sabotage.json](sabotage.json), caught by both scenarios.
