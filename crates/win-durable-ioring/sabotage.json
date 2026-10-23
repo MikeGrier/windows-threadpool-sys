@@ -2123,8 +2123,8 @@
       "file": "../durable-ioring/src/router.rs",
       "expect": "caught",
       "why": "Through a real instance, each routed provider is asked only for its own domains (DI-D-81): a part sent to another is flushed by something that never said it could, and the instance's tests here see it without the router's own.",
-      "find": ["            parts[registration].push(part);"],
-      "replace": ["            parts[0].push(part);"]
+      "find": ["                parts[registration].push(part)"],
+      "replace": ["                parts[0].push(part)"]
     },
     {
       "name": "DI-12.2.4: the router calls its providers in reverse registration order",
@@ -2139,26 +2139,16 @@
       "file": "../durable-ioring/src/router.rs",
       "expect": "survives",
       "why": "A control: the same empty parts made by counting the routes instead of walking them, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
-      "find": ["            self.routes.iter().map(|_| Vec::new()).collect();"],
-      "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect();"]
+      "find": ["            self.routes.iter().map(|_| Vec::new()).collect()"],
+      "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect()"]
     },
     {
       "name": "DI-19.2.4: a lock wait's end names a pair of its own, as the driver's tests see it",
       "file": "../durable-ioring/src/lock_watch.rs",
       "expect": "caught",
       "why": "The driver's lock-wait tests bind to PairingChecker (DI-D-87), the one definition of the pairing rule; an end whose id is not its begin's is visible to the checker alone, so this is caught only if the binding is real.",
-      "find": [
-        "                self.sink.report(&Diagnostic::LockWaitEnded {",
-        "                    instance: self.instance,",
-        "                    lock: name,",
-        "                    id,"
-      ],
-      "replace": [
-        "                self.sink.report(&Diagnostic::LockWaitEnded {",
-        "                    instance: self.instance,",
-        "                    lock: name,",
-        "                    id: CorrelationId::for_pair(&*self.sink, DiagnosticKind::LockWait).unwrap_or(id),"
-      ]
+      "find": ["                    self.sink.report(&Diagnostic::LockWaitEnded {", "                        instance: self.instance,", "                        lock: name,", "                        id,"],
+      "replace": ["                    self.sink.report(&Diagnostic::LockWaitEnded {", "                        instance: self.instance,", "                        lock: name,", "                        id: CorrelationId::for_pair(&*self.sink, DiagnosticKind::LockWait).unwrap_or(id),"]
     },
     {
       "name": "DI-19.2.4: a lock wait's end is not reported, as the driver's tests see it",
