@@ -2069,9 +2069,14 @@ through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads wh
   handles a pointer. A consumer downcasts through `dyn Error`'s own `downcast_ref`. (2) A `const`-constructible static
   error -- a message and an `ErrorCode` -- so the core's refusals are `static` descriptors with no type each. Not offered:
   a general sized `Shared<T>`, further unsizing targets, and a caller-supplied coercion, safe or `unsafe`.
-- **Open: the header's size.** `&'static (dyn Allocator + Sync)` is a fat pointer, so the header is 24 bytes on a 64-bit
-  target; a thin pointer to a `static` holding the allocator would make it 16, at the cost of every allocator being behind
-  a `static`. Not decided.
-
-Whether the crate is checked under Miri, which needs a nightly toolchain, is decided in its own design notes when it is
-created (DI-23.4.1).
+- **The header holds the allocator as a fat pointer**, `&'static (dyn Allocator + Sync)`: 24 bytes on a 64-bit target,
+  where a thin pointer to a `static` holding the allocator would make it 16. The engineer, 2026-10-23: "For the header size
+  on an error only, I don't really care - whatever makes the code simpler." The fat pointer is simpler: no allocator has to
+  be placed behind a `static` of the crate's type.
+- **No nightly toolchain in CI, and Miri is deferred.** The engineer, 2026-10-23: "I don't care to take on the complexity
+  of a nightly toolchain in CI if we can help it. ... I think we can at least defer for now." What Miri would check is
+  covered on stable instead, by a test allocator in the crate's tests that asserts every deallocation returns exactly the
+  pointer and layout it handed out, counts allocations against frees, and poisons a freed block; and the decrement's
+  `Release` and fence's `Acquire` carry sabotage entries. What that leaves unchecked is undefined behaviour inside the
+  `unsafe` blocks that does not show as a wrong pointer, layout or count, such as an aliasing violation. Running Miri,
+  locally or in CI, is parked in the crate's `PARKED.md` when DI-23.4.1 creates it.

@@ -34,8 +34,9 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 - [ ] **DI-23.4.1** -- **Create `crates/rc-errors`**, `no_std` with `alloc`: a workspace member registered for release and
   publication, with its own `COMPONENT.md`, `DESIGN-NOTES.md`, `CHECKLIST.md` and `PLANS.md` row. Its first milestone, which
   this item writes, holds the copied `Allocator` interface (`allocate`, `deallocate`, `AllocError`, `Global`), the one-count
-  shared pointer with its allocator in the header, the two-form report, and their tests; its design notes settle
-  Miri, and the credit to the standard library.
+  shared pointer with its allocator in the header, the two-form report, and their tests, among them a test allocator that checks every
+  deallocation's pointer and layout; its design notes record the credit to the standard library, and its PARKED.md holds
+  running Miri.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/rc-errors` -> its first milestone, written by this
   > item. Control returns here at `DI-23.4.2`.
