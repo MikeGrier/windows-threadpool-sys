@@ -2067,7 +2067,9 @@ through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads wh
   constructor into the shared `dyn Error + Send + Sync`, taking the allocator or using `Global`, and handing the value back
   with the `AllocError` when allocation fails; the coercion happens inside it, where the target is fixed, so no caller
   handles a pointer. A consumer downcasts through `dyn Error`'s own `downcast_ref`. (2) A `const`-constructible static
-  error -- a message and an `ErrorCode` -- so the core's refusals are `static` descriptors with no type each. Not offered:
+  error holding a message, so the core's refusals are `static` descriptors with no type each; the refusal's `ErrorCode` is
+  carried beside the report in `IoFault`, since `rc-errors` cannot name this crate's type
+  ([RCE-D-6](../rc-errors/DESIGN-NOTES.md#rce-d-6)). Not offered:
   a general sized `Shared<T>`, further unsizing targets, and a caller-supplied coercion, safe or `unsafe`.
 - **The header holds the allocator as a fat pointer**, `&'static (dyn Allocator + Sync)`: 24 bytes on a 64-bit target,
   where a thin pointer to a `static` holding the allocator would make it 16. The engineer, 2026-10-23: "For the header size

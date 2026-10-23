@@ -4300,3 +4300,24 @@ default, gates `StderrDiagnostics`; `alloc-tags` requires it. Neither crate is `
 consumer in the workspace does; the commit says so. No behaviour changed: both crates' suites pass unchanged, and the
 allocation test's tables did not move. Two sabotage entries whose patches named `std::mem::take` were re-anchored on
 `core::mem::take` and swept: both are caught.
+
+## Moved 2026-10-23 16:38:35 -04:00 -- DI-23.4.1: the rc-errors crate is created, with its first milestone
+
+### <a id="di-2341"></a>DI-23.4.1 -- The rc-errors crate is created, registered, and given its decisions and its first milestone. *(completed 2026-10-23 16:38:35 -04:00)*
+
+Per [DI-D-105](DESIGN-NOTES.md#di-d-105). The item as it stood at completion:
+
+**Create `crates/rc-errors`**, `no_std` with `alloc`: a workspace member registered for release and publication, with its
+own `COMPONENT.md`, `DESIGN-NOTES.md`, `CHECKLIST.md` and `PLANS.md` row. Its first milestone, which this item writes, holds
+the copied `Allocator` interface (`allocate`, `deallocate`, `AllocError`, `Global`), the one-count shared pointer with its
+allocator in the header, the two-form report, and their tests, among them a test allocator that checks every deallocation's
+pointer and layout; its design notes record the credit to the standard library, and its `PARKED.md` holds running Miri.
+
+What was done. The crate is a workspace member at version `0.0.1`, unreleased, registered as `win-job-launcher` was: in
+release-please's config and manifest, in the publish workflow's tags, choices and crate list, and in CI's `portable` job.
+Its library is `#![no_std]` and holds only the crate documentation, its README; the code is
+[RCE-M1](../rc-errors/CHECKLIST.md). Its decisions are [RCE-D-1 to RCE-D-9](../rc-errors/DESIGN-NOTES.md), which link
+DI-D-105 for the engineer's rulings rather than restating them. One is the assistant's, raised with the engineer:
+[RCE-D-6](../rc-errors/DESIGN-NOTES.md#rce-d-6), a static error holding only a message, since `ErrorCode` is this crate's
+type and DI-D-105 already carries a refusal's code beside its report; DI-D-105's wording was corrected to match. Miri is
+parked as [RCE-inf.1](../rc-errors/PARKED.md#m-inf----the-horizon).

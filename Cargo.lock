@@ -66,6 +66,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-errors"
+version = "0.0.1"
+
+[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"

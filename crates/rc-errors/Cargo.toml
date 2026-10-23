@@ -1,0 +1,20 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "rc-errors"
+version = "0.0.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "A shared, reference-counted error for no_std code that must not depend on the global allocator: one count, no weak references, and the allocator that made it recorded beside it. Portable."
+keywords = ["error", "no-std", "allocator", "refcount", "shared"]
+categories = ["no-std", "memory-management", "rust-patterns"]
+
+# Named by the engineer, 2026-10-23, from the proposed `durable-ioring-rc-errors-sys`: `-sys` marks a thin unsafe Win32
+# wrapper in this workspace and this crate is portable, and it serves any no_std crate, so the name was shortened
+# (durable-ioring's DI-D-105). Portable: no `cfg(windows)` gating and no dependencies.
+[dependencies]

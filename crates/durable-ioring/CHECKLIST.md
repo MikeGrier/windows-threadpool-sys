@@ -31,15 +31,10 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   ([DI-D-105](DESIGN-NOTES.md#di-d-105)). Re-planned 2026-10-23: [DI-D-102](DESIGN-NOTES.md#di-d-102)'s associated types were
   superseded before any code was written, and the pointer needs `unsafe`, which this crate forbids.
 
-- [ ] **DI-23.4.1** -- **Create `crates/rc-errors`**, `no_std` with `alloc`: a workspace member registered for release and
-  publication, with its own `COMPONENT.md`, `DESIGN-NOTES.md`, `CHECKLIST.md` and `PLANS.md` row. Its first milestone, which
-  this item writes, holds the copied `Allocator` interface (`allocate`, `deallocate`, `AllocError`, `Global`), the one-count
-  shared pointer with its allocator in the header, the two-form report, and their tests, among them a test allocator that checks every
-  deallocation's pointer and layout; its design notes record the credit to the standard library, and its PARKED.md holds
-  running Miri.
+- [x] **DI-23.4.1** -- The rc-errors crate is created, registered, and given its decisions and its first milestone. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-2341)
 
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/rc-errors` -> its first milestone, written by this
-  > item. Control returns here at `DI-23.4.2`.
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/rc-errors` -> `RCE-M1` -> `RCE-1.1` (the allocator
+  > interface). See [CHECKLIST.md](../rc-errors/CHECKLIST.md). Control returns here at `DI-23.4.2`.
 
 - [ ] **DI-23.4.2** -- **The core's faults carry the report.** `IoFault`, `FailureCause::Provider`, `DomainCompletion` and
   `DomainOutcome`, the `DurableRing` trait, the notification and the pump's setup lose `io::Error`; the core's refusals are
