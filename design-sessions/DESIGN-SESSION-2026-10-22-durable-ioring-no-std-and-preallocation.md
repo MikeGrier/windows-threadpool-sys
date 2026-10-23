@@ -11,10 +11,13 @@ investigated and proposed. Decisions that resulted, all in
 - [DI-D-99](../crates/durable-ioring/DESIGN-NOTES.md#di-d-99) -- a seal that covers no writes makes no record.
 - [DI-D-100](../crates/durable-ioring/DESIGN-NOTES.md#di-d-100) -- a failure holds the capacity of what it puts at risk.
 - [DI-D-101](../crates/durable-ioring/DESIGN-NOTES.md#di-d-101) -- `Durable` entries coalesce.
-- [DI-D-102](../crates/durable-ioring/DESIGN-NOTES.md#di-d-102) -- a fault's report is an associated type.
+- [DI-D-102](../crates/durable-ioring/DESIGN-NOTES.md#di-d-102) -- a fault's report is an associated type. Superseded by
+  DI-D-105.
 - [DI-D-103](../crates/durable-ioring/DESIGN-NOTES.md#di-d-103) -- the clean paths return no allocated collection.
 - [DI-D-104](../crates/durable-ioring/DESIGN-NOTES.md#di-d-104) -- every allocation is tagged by the code that makes it
   (continued 2026-10-23).
+- [DI-D-105](../crates/durable-ioring/DESIGN-NOTES.md#di-d-105) -- a fault's report is a static or a shared `dyn Error`,
+  shared through a new crate, `rc-errors` (continued 2026-10-23).
 
 The work is queued as DI-M23 in [CHECKLIST.md](../crates/durable-ioring/CHECKLIST.md).
 
@@ -214,6 +217,70 @@ engineer: "If I had my choice, I would have a unique tag for each and every memo
 change, for example, a container's source code, so setting an 'allocation context' around calls into a container's
 mutation will have to be fine grained enough." So a tag names one allocating call, each guard is scoped to that call, and
 the assistant proposed checking uniqueness from the location the guard records. Recorded in DI-D-104.
+
+## The fault report without the global allocator (continued 2026-10-23)
+
+Starting DI-23.4, the assistant stopped before writing code: the core is not generic over its backend in the way DI-D-102
+assumed, the core makes refusal faults itself, and the ring trait, the notification and the pump's setup all report
+`io::Error`. It proposed error types on `Identities`. The engineer approved, then asked: "Isn't there an alternative here
+with dyn traits though? I know that if we have one provider stack top to bottom avoiding dyn traits is a good thing but
+here since we don't know what may come up, I wonder if it's a false efficiency." The assistant agreed that dispatch cost
+on an error path is irrelevant and that storage is the real constraint, and proposed a report of two forms: a static
+`dyn Error`, and an `Arc<dyn Error>`.
+
+**`Arc` without `std`.** The engineer asked the status of no-std `Arc`. Checked against the stable documentation (1.99 at
+the time): `alloc::sync::Arc` works without `std`, but `try_new`, `new_in` and every fallible or allocator-aware
+constructor is unstable behind `allocator_api`, and `UniqueArc` is not on stable. An `Arc` made at failure time is an
+infallible allocation after construction.
+
+**What an `Arc` without weak references needs.** The engineer asked what the real allocation requirements are if weak
+references are dropped. The assistant: one fallible allocation of header and payload, a deallocation callable from any
+thread with the layout recovered from the value, and the destruction of the value and the freeing of the block in one
+step. Stable `alloc::alloc::alloc` returns null on failure, so such a type can be fallible on stable. Unsizing, which the
+engineer asked to have explained, is the conversion of a thin pointer to a fat one carrying a length or a vtable; `Arc`
+opts into it through the unstable `CoerceUnsized`, while a raw `NonNull` coerces on stable, so a type of ours can unsize
+inside its constructor. Asked whether `Arc` relies on unsafe and layout assumptions: it is all `unsafe`, over a
+`#[repr(C)]` header, with features only the standard library may use; ours would be `unsafe` too, and `repr(C)` removes the
+one layout question (whether freeing with `Layout::for_value` matches the allocation) that is otherwise not documented.
+
+**"Arc, just without weak support."** The engineer: "I rarely see a utility for weak references and see the provision for
+them as a waste in any case so to me this has been something I've wanted to build for a while. My mental model here is
+'take the Arc source code, delete the weak reference parts, fix what's broken, see what's left'", with "We would specify
+our own allocation api which would be a copy of the current allocator API. The goal would be to move to the final
+allocator API when possible", and "this would be a derivative work, would be credited as such but would have its own
+destiny." The assistant surveyed upstream's `library/alloc/src/rcs/arc.rs` (5,212 lines, about 1,900 of code): deleting
+weak removes the weak count (a word of header), the weak-count lock in `is_unique`, a case of `make_mut`, two-phase
+destruction, `new_cyclic` and most of `UniqueArc`; what breaks on stable is mostly not weak but the language features only
+the standard library may use -- `Unsize`, `CoerceUnsized`, `DispatchFromDyn`, `may_dangle`, specialization, intrinsics, and
+the allocator traits, which upstream has recently split into four.
+
+**Dispatch.** The engineer asked why `DispatchFromDyn` is harder than unsizing, and whether the compiler knows `Arc`
+specifically. It does: `self: Arc<Self>` is accepted for `Box`, `Rc`, `Arc` and `Pin` because the standard library
+implements unstable traits for them. The general mechanism, `derive(CoercePointee)` with arbitrary self types, is
+unstable (#123430, #44874), confirmed by compiling on the pinned 1.98. Unsizing is a value conversion made once, which a
+library can do on a raw pointer; dispatch is code the compiler emits for every `dyn` call, which only the compiler can
+make. Linux's `kernel::sync::Arc` is the prior art: no weak references, a smaller header, and those features reached
+through the kernel's nightly build. A caller-supplied coercion closure would be safe code able to forge a length or a
+vtable, so it would have to be an `unsafe fn`.
+
+The engineer: "This has soured me on the Arc replacement. The Linux parallel is a good one, I want the same efficiency
+and to replace the allocate/deallocate." Replacing `Arc`'s deallocation per instance is impossible on stable; only the
+process-wide `#[global_allocator]` is replaceable, and "a library may not require a global allocator override so that's
+really out of the question."
+
+**The choice.** Three ways to carry a fault without the core depending on the global allocator: a small one-count shared
+pointer for fault reports only, which loses nothing to the dispatch limitation since `Error`'s methods take `&self`; a
+fault pool owned by the core; or the report's type chosen by the backend, as DI-D-102 had it. The engineer chose the
+first. Two questions followed: whether the pointer reaches its deallocator through a type parameter or through an
+allocator recorded in its header, where the engineer chose the header ("A: ii"); and whether the core keeps a static
+form for its own refusals, so it never allocates a fault ("B: sounds good").
+
+**Where it lives.** Recording it, the assistant found that the pointer needs `unsafe` and durable-ioring is
+`#![forbid(unsafe_code)]`, with DI-D-4 saying that is the moment to fix the layer below. The engineer chose a new crate
+over io-buffers and over amending DI-D-4, proposing `durable-ioring-rc-errors-sys`: "please use it unless you have an
+objection. If you think that it will be applicable more broadly, feel free to shorten it." The assistant objected to
+`-sys`, which marks a thin unsafe Win32 wrapper in this workspace, and shortened the name to `rc-errors`, free on
+crates.io. Recorded as DI-D-105.
 
 ## Working positions and open questions (not decisions)
 

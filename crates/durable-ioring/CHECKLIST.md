@@ -15,7 +15,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 ## DI-M23 -- No `std`, and every allocation made at construction
 
 The engineer, 2026-10-22, for a no-std user-mode file-system driver stack: [DI-D-97](DESIGN-NOTES.md#di-d-97) to
-[DI-D-104](DESIGN-NOTES.md#di-d-104), from
+[DI-D-105](DESIGN-NOTES.md#di-d-105), from
 [DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md).
 Sharp through `DI-23.9`; the items after it are coarse on purpose, since the designs they depend on are open in the session
 and `DI-23.10` is where they are settled. **No allocation is analysed or removed before `DI-23.2` is done**: the engineer,
@@ -27,9 +27,28 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.3** -- Every std path with a core or alloc equivalent is named by it, here and in io-buffers, and StderrDiagnostics is behind a default std feature. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-233)
 
-- [ ] **DI-23.4** -- **A fault's report is an associated type** ([DI-D-102](DESIGN-NOTES.md#di-d-102)), on the backend trait and
-  the provider trait, with `std` interop behind the feature; `win-durable-ioring`'s backend reports a `Copy` error carrying
-  its `HRESULT`. Breaking for this crate and `win-durable-ioring`.
+- [ ] **DI-23.4** -- **A fault's report is a static or a shared `dyn Error`, shared through `rc-errors`**
+  ([DI-D-105](DESIGN-NOTES.md#di-d-105)). Re-planned 2026-10-23: [DI-D-102](DESIGN-NOTES.md#di-d-102)'s associated types were
+  superseded before any code was written, and the pointer needs `unsafe`, which this crate forbids.
+
+- [ ] **DI-23.4.1** -- **Create `crates/rc-errors`**, `no_std` with `alloc`: a workspace member registered for release and
+  publication, with its own `COMPONENT.md`, `DESIGN-NOTES.md`, `CHECKLIST.md` and `PLANS.md` row. Its first milestone, which
+  this item writes, holds the copied `Allocator` interface (`allocate`, `deallocate`, `AllocError`, `Global`), the one-count
+  shared pointer with its allocator in the header, the two-form report, and their tests; its design notes settle the
+  count's overflow policy, the safe constructors, Miri, and the credit to the standard library.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/rc-errors` -> its first milestone, written by this
+  > item. Control returns here at `DI-23.4.2`.
+
+- [ ] **DI-23.4.2** -- **The core's faults carry the report.** `IoFault`, `FailureCause::Provider`, `DomainCompletion` and
+  `DomainOutcome`, the `DurableRing` trait, the notification and the pump's setup lose `io::Error`; the core's refusals are
+  static descriptors; `std` interop is behind the feature. Breaking for this crate.
+
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/rc-errors`' first milestone must land first.
+
+- [ ] **DI-23.4.3** -- **`win-durable-ioring` reports through it**: `windows_fault` makes the shared form from an
+  `io::Error`, and its callers' downcasts to `RefusalCause` and `SharingViolation` go through `dyn Error`. Breaking for
+  `win-durable-ioring`.
 
 - [ ] **DI-23.5** -- **Capacity declared at construction, and construction fallible** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
   [DI-D-98](DESIGN-NOTES.md#di-d-98)): the capacities the consumer declares, reserved with `try_reserve`, and the refusal at
