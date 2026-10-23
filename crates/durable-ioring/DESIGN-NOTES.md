@@ -1986,7 +1986,15 @@ through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads wh
   thread's current tag; dropping it, on return or on unwinding, restores the tag it replaced, so tags nest. An allocation
   hidden inside a container's `insert` or `push` is counted under the tag of the code that called it, which is the
   attribution wanted. The guard records where it was made with `#[track_caller]`, so a tag also names a file and a line.
-- **Tags are named constants**, defined in one place, whose names are what the measurement reports. A tag names a site, so
+- **One tag per allocating call, and no tag shared.** The engineer, 2026-10-23: "If I had my choice, I would have a unique
+  tag for each and every memory allocation. I realize that we cannot change, for example, a container's source code, so
+  setting an 'allocation context' around calls into a container's mutation will have to be fine grained enough." So every
+  call in the core that can allocate -- a container's mutation, an `Arc::new`, a `Box::new`, a `collect`, a `clone` of
+  something that owns memory -- has a guard of its own, scoped to that one call, naming a tag no other call uses. An
+  allocation inside a container is as fine as the attribution can go, since the container's code is not ours.
+- **Uniqueness is checked, not trusted.** The guard records where it was made, so the test fails if one tag is seen from
+  two places in the source.
+- **Tags are named constants**, defined in one place, whose names are what the measurement reports. A tag names a call, so
   an edit that moves a line does not move it.
 - **Zero cost when off.** The guard and the thread-local behind it exist only under the `alloc-tags` feature, which only the
   allocation test turns on. The feature needs `std`, for the thread-local; without it the guard is an empty type and the

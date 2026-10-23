@@ -209,8 +209,11 @@ trivial. please schedule this before going further in the allocation analysis, I
 without tagging." Recorded as DI-D-104 and scheduled as `DI-23.2`, ahead of every item that analyses or removes an
 allocation.
 
-The assistant's question of how coarse a tag should be -- per table and container, or per operation -- was not answered.
-DI-D-104 makes a tag name a site, with the location recorded beside it.
+The assistant's question of how coarse a tag should be -- per table and container, or per operation -- was answered by the
+engineer: "If I had my choice, I would have a unique tag for each and every memory allocation. I realize that we cannot
+change, for example, a container's source code, so setting an 'allocation context' around calls into a container's
+mutation will have to be fine grained enough." So a tag names one allocating call, each guard is scoped to that call, and
+the assistant proposed checking uniqueness from the location the guard records. Recorded in DI-D-104.
 
 ## Working positions and open questions (not decisions)
 
