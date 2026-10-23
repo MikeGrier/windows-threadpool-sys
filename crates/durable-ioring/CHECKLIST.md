@@ -40,7 +40,8 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   `DomainOutcome`, the `DurableRing` trait, the notification and the pump's setup lose `io::Error`; the core's refusals are
   static descriptors; `std` interop is behind the feature. Breaking for this crate.
 
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/rc-errors`' first milestone must land first.
+  > **CROSS-COMPONENT PREREQUISITE (met 2026-10-23):** `crates/rc-errors`' first milestone must land first; it is
+  > [RCE-M1](../rc-errors/COMPLETED-CHECKLIST.md#rce-m1-complete).
 
 - [ ] **DI-23.4.3** -- **`win-durable-ioring` reports through it**: `windows_fault` makes the shared form from an
   `io::Error`, and its callers' downcasts to `RefusalCause` and `SharingViolation` go through `dyn Error`. Breaking for

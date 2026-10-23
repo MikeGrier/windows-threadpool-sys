@@ -62,3 +62,24 @@ through `try_new_in`. One defect was found by its test before commit: the report
 to `dyn Error` -- it is an `Error` itself -- so downcasting saw the `SharedError` and not the error it holds. It now derefs
 through it, and both `SharedError`'s and `ErrorReport`'s documentation say that each is an `Error` itself and is downcast
 through `Deref`. The docs also say a zero-sized static's address may be shared with another's, which identity rests on.
+
+## Moved 2026-10-23 19:34:03 -04:00 -- RCE-1.4: sabotage entries, and RCE-M1 complete
+
+### <a id="rce-14"></a>RCE-1.4 -- A sabotage manifest: eight defects the tests catch, two orderings no test can see recorded as surviving, and one control. *(completed 2026-10-23 19:34:03 -04:00)*
+
+Per [RCE-D-8](DESIGN-NOTES.md#rce-d-8). The item as it stood at completion:
+
+**Sabotage entries** in a `sabotage.json` for the free condition, the count's increment and the layout the free uses, each
+shown caught; and for the decrement's `Release` and the fence's `Acquire`, recorded as surviving.
+
+What was done. [sabotage.json](sabotage.json) holds eleven entries, beyond the item's five: the error never dropped, the
+three report defects RCE-1.3 could make -- the deref to the wrapper, which RCE-1.3 found before commit, and identity
+weakened across forms and between statics -- the zero-sized block's alignment, and a control, a clone counting with
+`SeqCst`, which is slower and not wrong. A full sweep behaved as declared in every entry. The wrong-layout entry ends the
+suite with `0xC0000409` rather than a test failure: the recording allocator's assertion fires inside `Drop`, so the panic
+aborts the process. It fires every time; it is an assertion, not a corruption that happened to crash, and a single test run
+of the same mutation shows its message. The manifest is found by CI's sweep planner through its `crates/*/sabotage*.json`
+glob, so nothing registers it.
+
+<a id="rce-m1-complete"></a>**RCE-M1 is complete**, and with it [CHECKLIST.md](CHECKLIST.md): its stubs are deleted, the
+plan is recorded in [COMPLETED-PLANS.md](COMPLETED-PLANS.md), and the next work is durable-ioring's `DI-23.4.2`.

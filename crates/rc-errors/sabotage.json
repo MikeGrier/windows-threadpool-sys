@@ -1,0 +1,95 @@
+{
+  "package": "rc-errors",
+  "description": "Sabotages for rc-errors. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "The two orderings on the shared error's last drop -- the decrement's Release and the Acquire fence after it -- are recorded below as surviving: weakening either is a real defect, a data race between the last reader of the error and its destruction, but no test can make it fail on a strongly ordered machine, and on a weakly ordered one only by chance (RCE-D-8). They are entries so that a sweep keeps saying so. Undefined behaviour inside the unsafe blocks that shows as no wrong pointer, layout or count is what Miri would add, parked as RCE-inf.1. Global's free of a zero-sized block is not sabotaged: making it free one would hand the global allocator a dangling pointer, which crashes rather than failing a test.",
+  "sabotages": [
+    {
+      "name": "RCE-1.2: the block is freed while a reference remains",
+      "file": "src/shared.rs",
+      "expect": "caught",
+      "why": "Freeing when the count reaches one instead of zero frees the block under the last reference, which then reads freed memory. The recording allocator's counts see the free happen while a clone is still alive.",
+      "find": ["        if self.block().count.fetch_sub(1, Ordering::Release) != 1 {"],
+      "replace": ["        if self.block().count.fetch_sub(1, Ordering::Release) != 2 {"]
+    },
+    {
+      "name": "RCE-1.2: a clone does not count itself",
+      "file": "src/shared.rs",
+      "expect": "caught",
+      "why": "A clone that does not increment lets the first drop free the block under every other reference.",
+      "find": ["        self.block().count.fetch_add(1, Ordering::Relaxed);"],
+      "replace": ["        self.block().count.fetch_add(0, Ordering::Relaxed);"]
+    },
+    {
+      "name": "RCE-1.2: the block is freed with the error's layout",
+      "file": "src/shared.rs",
+      "expect": "caught",
+      "why": "The allocator must be given back the layout it allocated, which is the whole block's; the error's alone is smaller. The recording allocator refuses a free whose layout differs.",
+      "find": ["        let layout = Layout::for_value(self.block());"],
+      "replace": ["        let layout = Layout::for_value(&self.block().error);"]
+    },
+    {
+      "name": "RCE-1.2: the error is never dropped",
+      "file": "src/shared.rs",
+      "expect": "caught",
+      "why": "Freeing the block without dropping the error leaks whatever the error owns. The tests' errors count their drops.",
+      "find": ["            ptr::drop_in_place(self.block.as_ptr());"],
+      "replace": [""]
+    },
+    {
+      "name": "RCE-1.2: the last decrement does not release",
+      "file": "src/shared.rs",
+      "expect": "survives",
+      "why": "A real defect that no test can see: without Release, another thread's use of the error is not ordered before the last reference destroys it. On a strongly ordered machine the hardware orders it anyway, so the suite passes (RCE-D-8).",
+      "find": ["        if self.block().count.fetch_sub(1, Ordering::Release) != 1 {"],
+      "replace": ["        if self.block().count.fetch_sub(1, Ordering::Relaxed) != 1 {"]
+    },
+    {
+      "name": "RCE-1.2: the last drop does not acquire",
+      "file": "src/shared.rs",
+      "expect": "survives",
+      "why": "A real defect that no test can see: without the Acquire fence, the destruction is not ordered after every other reference's use of the error. As for the decrement, a strongly ordered machine hides it (RCE-D-8).",
+      "find": ["        atomic::fence(Ordering::Acquire);"],
+      "replace": [""]
+    },
+    {
+      "name": "RCE-1.2: a clone counts with a stronger ordering than it needs",
+      "file": "src/shared.rs",
+      "expect": "survives",
+      "why": "The control. A clone is made from a reference already held, so Relaxed is enough; SeqCst is slower and not wrong. A test that failed here would be asserting the implementation.",
+      "find": ["        self.block().count.fetch_add(1, Ordering::Relaxed);"],
+      "replace": ["        self.block().count.fetch_add(1, Ordering::SeqCst);"]
+    },
+    {
+      "name": "RCE-1.3: a shared report derefs to the SharedError and not to its error",
+      "file": "src/report.rs",
+      "expect": "caught",
+      "why": "The defect RCE-1.3 found before commit: a SharedError is an Error itself, so handing it out coerces the wrapper, and downcasting sees the wrapper and not the error a caller made.",
+      "find": ["            Self::Shared(error) => &**error,"],
+      "replace": ["            Self::Shared(error) => error,"]
+    },
+    {
+      "name": "RCE-1.3: reports of different forms are equal",
+      "file": "src/report.rs",
+      "expect": "caught",
+      "why": "A static report and a shared one are different errors, even with the same message.",
+      "find": ["            _ => false,"],
+      "replace": ["            _ => true,"]
+    },
+    {
+      "name": "RCE-1.3: static reports are all equal",
+      "file": "src/report.rs",
+      "expect": "caught",
+      "why": "Identity of a static report is the static's address; two statics with the same message are still two errors.",
+      "find": ["            (Self::Static(a), Self::Static(b)) => ptr::addr_eq(*a, *b),"],
+      "replace": ["            (Self::Static(_), Self::Static(_)) => true,"]
+    },
+    {
+      "name": "RCE-1.1: a zero-sized block is not aligned",
+      "file": "src/allocator.rs",
+      "expect": "caught",
+      "why": "A zero-sized block must still be aligned to its layout; an address of one is aligned only to one.",
+      "find": ["            NonNull::new(ptr::without_provenance_mut::<u8>(layout.align())).ok_or(AllocError)?"],
+      "replace": ["            NonNull::new(ptr::without_provenance_mut::<u8>(1)).ok_or(AllocError)?"]
+    }
+  ]
+}
