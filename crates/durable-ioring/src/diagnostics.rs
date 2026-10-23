@@ -5,8 +5,8 @@
 //! each one-to-one, and a sink that prints formats them as it likes. A sink states which kinds it
 //! wants, and the core asks before it builds an event, so a sink that wants nothing costs a branch.
 
-use std::fmt;
-use std::sync::Arc;
+use alloc::sync::Arc;
+use core::fmt;
 
 use crate::alloc_tags::{tag, tagged};
 use crate::correlation::CorrelationId;
@@ -351,10 +351,13 @@ impl DiagnosticSink for NoDiagnostics {
 /// space, and the event's text.
 pub const LINE_PREFIX: &str = "dioring: ";
 
-/// A sink that writes every event as a line on standard error, prefixed [`LINE_PREFIX`].
+/// A sink that writes every event as a line on standard error, prefixed [`LINE_PREFIX`]. Under the
+/// `std` feature, which is on by default: standard error is `std`'s.
+#[cfg(feature = "std")]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StderrDiagnostics;
 
+#[cfg(feature = "std")]
 impl DiagnosticSink for StderrDiagnostics {
     fn wants(&self, _: DiagnosticKind) -> bool {
         true

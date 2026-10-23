@@ -34,9 +34,9 @@
 //! [DI-D-104]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/durable-ioring/DESIGN-NOTES.md#di-d-104
 
 #[cfg(feature = "alloc-tags")]
-use std::cell::Cell;
+use core::cell::Cell;
 #[cfg(feature = "alloc-tags")]
-use std::panic::Location;
+use core::panic::Location;
 
 #[cfg(test)]
 mod tests;

@@ -13,11 +13,13 @@
 //! not yet popped as the completion queue holds -- so a completion always has room -- and with
 //! [`RefusalCause::SubmitAndDrainNeeded`] when both hold.
 
-use std::collections::{HashMap, TryReserveError, VecDeque};
+use alloc::collections::{TryReserveError, VecDeque};
+use alloc::sync::Arc;
+use core::num::NonZeroU32;
+use core::time::Duration;
+use std::collections::HashMap;
 use std::io;
-use std::num::NonZeroU32;
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
-use std::time::Duration;
+use std::sync::{Condvar, Mutex, PoisonError};
 
 use crate::access::Access;
 use crate::backend::{
@@ -494,7 +496,7 @@ impl MemoryBackend {
     fn ripen(&mut self) -> Vec<Completion<Vec<u8>>> {
         let mut ripe = Vec::new();
         let mut kept = Vec::with_capacity(self.held.len());
-        for mut held in std::mem::take(&mut self.held) {
+        for mut held in core::mem::take(&mut self.held) {
             if let Some(left) = held.late.as_mut() {
                 *left -= 1;
                 if *left == 0 {

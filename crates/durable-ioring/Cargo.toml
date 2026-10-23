@@ -19,10 +19,15 @@ readme = "COMPONENT.md"
 io-buffers = { version = "0.1.0", path = "../io-buffers" }
 
 [features]
+default = ["std"]
+# What the core needs `std` for (DI-D-97), on by default. The rest of the core names `core` and
+# `alloc` paths, so what this feature covers is what is spelled `std::`; today that is only
+# `StderrDiagnostics`, standard error being `std`'s.
+std = []
 # Every call in the core that can allocate names itself with a tag; this feature keeps the thread's
 # current tag so an allocator can read it (DI-D-104). Only the allocation test turns it on, through
 # the dev-dependency below; without it, tagging compiles to nothing. Needs `std`, for the thread-local.
-alloc-tags = []
+alloc-tags = ["std"]
 
 [dev-dependencies]
 # The crate's own tests use its `alloc-tags` feature, as `win-debugging-sys` does for `test-util`. A

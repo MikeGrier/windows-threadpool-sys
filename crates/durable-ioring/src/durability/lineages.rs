@@ -6,7 +6,7 @@
 //! stay recorded until they complete -- a failure already suspecting one is marked by its end --
 //! and the lineage is retired once the last has.
 
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use super::{DEFAULT_LINEAGE, Due, Durability, Event, Key, LineageState, Stage, Standing, V};
 use crate::alloc_tags::{tag, tagged};

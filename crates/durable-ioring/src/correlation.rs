@@ -7,8 +7,8 @@
 //! sink wants: [`CorrelationId::for_pair`] asks the sink first, so a sink that wants nothing costs
 //! the counter nothing.
 
-use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use core::fmt;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::alloc_tags::{tag, tagged};
 use crate::diagnostics::{DiagnosticKind, DiagnosticSink};

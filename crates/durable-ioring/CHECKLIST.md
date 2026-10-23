@@ -25,9 +25,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.2** -- Every allocation the core makes is tagged by the call that makes it, and the allocation test counts by tag. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-232)
 
-- [ ] **DI-23.3** -- **Name `core` and `alloc` paths, behind a default `std` feature** ([DI-D-97](DESIGN-NOTES.md#di-d-97)), in
-  this crate and `io-buffers`: every `std::` path with a `core` or `alloc` equivalent, `core::error::Error` for
-  `std::error::Error`, and `StderrDiagnostics` behind `std`. No behaviour changes.
+- [x] **DI-23.3** -- Every std path with a core or alloc equivalent is named by it, here and in io-buffers, and StderrDiagnostics is behind a default std feature. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-233)
 
 - [ ] **DI-23.4** -- **A fault's report is an associated type** ([DI-D-102](DESIGN-NOTES.md#di-d-102)), on the backend trait and
   the provider trait, with `std` interop behind the feature; `win-durable-ioring`'s backend reports a `Copy` error carrying

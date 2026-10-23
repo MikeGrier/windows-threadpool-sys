@@ -11,6 +11,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+// The core names `alloc` and `core` paths wherever `std` has an equivalent (DI-D-97), so what still
+// needs `std` is what is spelled `std::`.
+extern crate alloc;
+
 mod access;
 #[cfg(feature = "alloc-tags")]
 pub mod alloc_tags;
@@ -49,9 +53,11 @@ pub use contract::{
     PushResult, RegisteredBufferRing, TokenOf,
 };
 pub use correlation::CorrelationId;
+#[cfg(feature = "std")]
+pub use diagnostics::StderrDiagnostics;
 pub use diagnostics::{
     Diagnostic, DiagnosticKind, DiagnosticSink, Edge, FanOutDiagnostics, FlushOutcome, FlushPart,
-    LINE_PREFIX, NoDiagnostics, Pairing, SealOutcome, StderrDiagnostics,
+    LINE_PREFIX, NoDiagnostics, Pairing, SealOutcome,
 };
 pub use error_code::ErrorCode;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};

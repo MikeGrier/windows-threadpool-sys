@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Mike Grier
 //! The consumer's durability provider (DI-2.12, DI-D-27).
 
-use std::fmt::{self, Debug};
+use alloc::sync::{Arc, Weak};
+use core::fmt::{self, Debug};
 use std::io;
-use std::sync::{Arc, Weak};
 
 use crate::alloc_tags::{tag, tagged};
 use crate::contract::Identities;

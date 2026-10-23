@@ -9,7 +9,7 @@
 //! -- `Reach::Domains` of that one domain -- which is narrower than a failed flush's reach, the
 //! intersection with the failed file's whole set (DI-D-21).
 
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use super::{
     DomainPart, Due, Durability, Key, MarkingKind, Part, Reach, SealStage, Stage, V, Write,

@@ -10,8 +10,9 @@
 //! An acquisition that is immediate costs a `try_lock` and nothing else: no id is minted and no
 //! event is built. A sink is asked once a lock is found held, and only then.
 
-use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
+use alloc::sync::Arc;
+use core::ops::{Deref, DerefMut};
+use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
 use crate::alloc_tags::{tag, tagged};
 use crate::correlation::CorrelationId;

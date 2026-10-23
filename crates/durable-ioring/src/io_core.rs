@@ -35,8 +35,9 @@
 //! The durability rules themselves -- seals, coverage, failures and their suspect sets -- are the
 //! durability core's, shared with the Windows driver while both paths exist.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::Arc;
+use alloc::collections::{BTreeMap, VecDeque};
+use alloc::sync::Arc;
+use std::collections::HashMap;
 
 use crate::alloc_tags::{tag, tagged};
 use crate::backend::{
@@ -483,7 +484,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// as their causes said.
     pub fn retry(&mut self) -> Actions<E, B, K> {
         CoreActions {
-            submit: std::mem::take(&mut self.unpushed),
+            submit: core::mem::take(&mut self.unpushed),
             requests: Vec::new(),
             deliver: false,
         }
@@ -812,7 +813,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 }
             }
         }
-        let mut submit = std::mem::take(&mut self.unpushed);
+        let mut submit = core::mem::take(&mut self.unpushed);
         for id in released {
             self.release(id, &mut submit);
         }

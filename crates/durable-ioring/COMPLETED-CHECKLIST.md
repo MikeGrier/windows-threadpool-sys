@@ -4279,3 +4279,24 @@ a tag no scenario reaches survives, which is the limit stated in DI-D-104 (the r
 Tagging moved 41 lines that existing sabotage entries patch, here and in
 [win-durable-ioring's](../win-durable-ioring/sabotage.json); each was re-anchored to the same sabotage on the new text, and
 all 45 were swept: every one behaved as declared.
+
+## Moved 2026-10-23 13:28:25 -04:00 -- DI-23.3: core and alloc paths, behind a default std feature
+
+### <a id="di-233"></a>DI-23.3 -- Every std path with a core or alloc equivalent is named by it, here and in io-buffers, and StderrDiagnostics is behind a default std feature. *(completed 2026-10-23 13:28:25 -04:00)*
+
+The item as written:
+
+- [x] **DI-23.3** -- **Name `core` and `alloc` paths, behind a default `std` feature** ([DI-D-97](DESIGN-NOTES.md#di-d-97)), in
+  this crate and `io-buffers`: every `std::` path with a `core` or `alloc` equivalent, `core::error::Error` for
+  `std::error::Error`, and `StderrDiagnostics` behind `std`. No behaviour changes.
+
+What was done. Both crates declare `extern crate alloc;` and name `core` and `alloc` paths in their library source wherever
+`std` has an equivalent; the tests keep `std`. What this crate still spells `std::` is exactly what needs it, the remaining
+blockers DI-D-97 names: `io` (the fault's report, `DI-23.4`), `Mutex` and `Condvar`, `HashMap` and `HashSet`, and
+`thread::panicking()` (all settled at `DI-23.10`). `io-buffers` names no `std::` path at all. A new `std` feature, on by
+default, gates `StderrDiagnostics`; `alloc-tags` requires it. Neither crate is `no_std` yet: that waits for the blockers.
+
+`StderrDiagnostics` behind a feature is a breaking change for a consumer building with `default-features = false`, which no
+consumer in the workspace does; the commit says so. No behaviour changed: both crates' suites pass unchanged, and the
+allocation test's tables did not move. Two sabotage entries whose patches named `std::mem::take` were re-anchored on
+`core::mem::take` and swept: both are caught.

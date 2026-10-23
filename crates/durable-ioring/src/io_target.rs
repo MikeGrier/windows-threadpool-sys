@@ -6,7 +6,7 @@
 //! capabilities and data access. The driver hands the target itself to the backend, which runs its
 //! I/O, and its [`IoTargetDescription`] to the core, which decides with it (DI-D-52).
 
-use std::fmt;
+use core::fmt;
 
 use crate::access::Access;
 use crate::alloc_tags::{tag, tagged};
@@ -51,7 +51,7 @@ impl fmt::Display for GeometryError {
     }
 }
 
-impl std::error::Error for GeometryError {}
+impl core::error::Error for GeometryError {}
 
 fn power_of_two(alignment: u32) -> Result<u32, GeometryError> {
     if alignment.is_power_of_two() {

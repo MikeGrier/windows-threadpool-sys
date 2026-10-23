@@ -15,9 +15,10 @@
 //! handle's release, on any thread, can reach it under the same lock; stopping delivery takes the
 //! engine out of the slot, so anything reaching it afterwards finds it empty.
 
-use std::collections::VecDeque;
-use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use core::ops::{Deref, DerefMut};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crate::alloc_tags::{tag, tagged};
 use crate::backend::{IoBackend, Refused, Submission, SubmissionData};
@@ -176,7 +177,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// Whether a doorbell rung for a consumer's push failed since this was last asked, so the
     /// driver is to tell the consumer, whose pop rings it again.
     pub fn take_attention(&mut self) -> bool {
-        std::mem::take(&mut self.attention)
+        core::mem::take(&mut self.attention)
     }
     /// Write `data` to `target` at `offset`, tagged `epoch`, through the backend.
     ///
@@ -245,7 +246,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
 
     /// The provider requests made so far, in order, taken for the driver to make.
     pub fn take_requests(&mut self) -> Vec<ProviderRequest<V<E, K>>> {
-        std::mem::take(&mut self.requests)
+        core::mem::take(&mut self.requests)
     }
 }
 

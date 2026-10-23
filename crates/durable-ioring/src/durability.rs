@@ -54,11 +54,12 @@
 //! domain through [`providers`]; a failed or abandoned domain is observed as a failed flush is, with
 //! its own reach: the files whose declared domains contain it, and every file declared with none.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::fmt;
-use std::ops::Bound;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
+use alloc::sync::Arc;
+use core::fmt;
+use core::ops::Bound;
+use core::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
 
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};

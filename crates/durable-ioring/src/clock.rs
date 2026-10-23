@@ -3,7 +3,7 @@
 //! that never decreases. A driver supplies one -- interrupt time for Windows' -- and a test, a
 //! mock it advances by hand.
 
-use std::fmt::Debug;
+use core::fmt::Debug;
 
 /// What a stamp is: a reading of a [`StampClock`], ordered, and cheap to copy and share.
 pub trait Instant: Copy + Ord + Debug + Send + Sync + 'static {}

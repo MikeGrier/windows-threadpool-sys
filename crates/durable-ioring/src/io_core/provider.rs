@@ -7,8 +7,8 @@
 //! [`DurableIoCore::provided`]. Calling the provider, and doing so with no lock held so that it may
 //! answer inside its call, is the driver's.
 
-use std::fmt;
-use std::sync::Arc;
+use alloc::sync::Arc;
+use core::fmt;
 
 use super::{Actions, DurableIoCore, V};
 use crate::alloc_tags::{tag, tagged};
@@ -31,7 +31,7 @@ impl fmt::Display for DuplicateDomain {
     }
 }
 
-impl std::error::Error for DuplicateDomain {}
+impl core::error::Error for DuplicateDomain {}
 
 impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// A core whose consumer's provider serves `domains`, read once, as [`new`](Self::new) builds

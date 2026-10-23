@@ -2,10 +2,10 @@
 //! The contract's shared values. Those that carry an identity are generic over the
 //! implementation's [`Identities`]; the rest are plain.
 
-use std::cmp::Ordering;
-use std::fmt;
+use alloc::sync::Arc;
+use core::cmp::Ordering;
+use core::fmt;
 use std::io;
-use std::sync::Arc;
 
 use crate::access::Access;
 use crate::alloc_tags::{tag, tagged};
@@ -108,7 +108,7 @@ impl<V: Identities> fmt::Display for UnknownLineage<V> {
     }
 }
 
-impl<V: Identities> std::error::Error for UnknownLineage<V> {}
+impl<V: Identities> core::error::Error for UnknownLineage<V> {}
 
 /// One lineage, as the enumeration reports it. Owned, so holding it borrows nothing.
 #[derive(Clone, Debug)]
@@ -236,8 +236,8 @@ impl fmt::Display for IoFault {
 
 /// So a driver can hand a fault to a consumer as the `source` of an [`io::Error`] that downcasts
 /// back to it, as a [`RefusalCause`] does.
-impl std::error::Error for IoFault {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for IoFault {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&*self.error)
     }
 }
@@ -635,7 +635,7 @@ impl<V: Identities> fmt::Display for SealError<V> {
     }
 }
 
-impl<V: Identities> std::error::Error for SealError<V> {}
+impl<V: Identities> core::error::Error for SealError<V> {}
 
 /// How a failure is resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

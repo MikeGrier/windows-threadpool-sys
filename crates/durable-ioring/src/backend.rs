@@ -18,9 +18,9 @@
 //! submit, drain -- without probing for why. A backend that cannot tell says so with
 //! [`RefusalCause::Unknown`], carrying what it was told.
 
-use std::fmt;
+use alloc::sync::Arc;
+use core::fmt;
 use std::io;
-use std::sync::Arc;
 
 use crate::alloc_tags::{tag, tagged};
 use crate::io_target::IoTarget;
@@ -174,8 +174,8 @@ impl fmt::Display for RefusalCause {
 
 /// The cause is the error: [`Unusable`](RefusalCause::Unusable) and [`Unknown`](RefusalCause::Unknown)
 /// name what the backend reported as their source.
-impl std::error::Error for RefusalCause {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for RefusalCause {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Unusable(fault) | Self::Unknown(fault) => Some(fault.error.as_ref()),
             _ => None,

@@ -2,7 +2,7 @@
 //! A fault's code, as the layer that reported it numbers it (DI-D-39, DI-D-50). Reading one out of
 //! an `io::Error` is the reporting layer's: `win-durable-ioring` reads a Windows backend's.
 
-use std::fmt;
+use core::fmt;
 
 #[cfg(test)]
 mod tests;

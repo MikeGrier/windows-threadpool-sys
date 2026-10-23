@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Mike Grier
 // Split from dioring.rs at f13cd814.
 
+use alloc::sync::Arc;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::Instant;
@@ -83,7 +83,7 @@ pub(crate) fn epoch_state<E: EpochId + 'static, I: Instant>(
 }
 
 /// The first value `values` yields twice.
-pub fn first_repeat<T: Eq + std::hash::Hash + Clone>(
+pub fn first_repeat<T: Eq + core::hash::Hash + Clone>(
     values: impl IntoIterator<Item = T>,
 ) -> Option<T> {
     let mut seen = HashSet::new();

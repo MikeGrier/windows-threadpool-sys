@@ -16,7 +16,7 @@
 //! What a marker asks of a platform is the backend's: `win-durable-ioring` turns [`DataAccess::READ`]
 //! and [`DataAccess::WRITE`] into the rights it opens with.
 
-use std::fmt;
+use core::fmt;
 
 mod sealed {
     pub trait Sealed {}

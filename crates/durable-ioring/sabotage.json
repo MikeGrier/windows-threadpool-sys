@@ -1162,7 +1162,7 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-52: a kept commit rides on the next actions, so a driver that only acts on actions still issues it.",
-      "find": ["        let mut submit = std::mem::take(&mut self.unpushed);\n"],
+      "find": ["        let mut submit = core::mem::take(&mut self.unpushed);\n"],
       "replace": ["        let mut submit = Vec::new();\n"]
     },
     {
@@ -1458,7 +1458,7 @@
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "Told once: a note that is not cleared tells the consumer on every push after.",
-      "find": ["        std::mem::take(&mut self.attention)\n"],
+      "find": ["        core::mem::take(&mut self.attention)\n"],
       "replace": ["        self.attention\n"]
     },
     {

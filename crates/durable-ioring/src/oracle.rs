@@ -109,7 +109,8 @@
 //! signal's own kind, which runs beside the oracle (DI-D-28); the Windows event's is
 //! `win-durable-ioring`'s `check_readiness`.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use alloc::collections::BTreeSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::contract::Identities;
 use crate::types::{Entry, Epoch, IoFault, Marking, MarkingKind, OpKind, Outcome, SuspectWrite};

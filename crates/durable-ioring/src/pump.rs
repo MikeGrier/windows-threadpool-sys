@@ -12,9 +12,10 @@
 //! backend, whose notification is the ring's completion event, and the in-memory one, whose
 //! notification is a count, alike.
 
+use alloc::sync::Arc;
+use core::time::Duration;
 use std::io;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::Mutex;
 
 use crate::alloc_tags::{tag, tagged};
 use crate::backend::IoBackend;

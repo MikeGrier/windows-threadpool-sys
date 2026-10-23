@@ -2,7 +2,7 @@
 //! What the core holds of one file (DI-3.2.7): the part of `remove_target`'s refusal the core
 //! answers. Operations in flight and held for a gate are the I/O core's to count.
 
-use std::collections::{BTreeMap, BTreeSet};
+use alloc::collections::{BTreeMap, BTreeSet};
 
 use super::{Durability, Key, Stage, V};
 use crate::alloc_tags::{tag, tagged};

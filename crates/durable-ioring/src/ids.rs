@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Mike Grier
 //! dioring's identity types, and the marker that names them.
 
-use std::cmp::Ordering;
-use std::fmt::{self, Debug};
-use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{Arc, Weak};
+use alloc::sync::{Arc, Weak};
+use core::cmp::Ordering;
+use core::fmt::{self, Debug};
+use core::hash::{Hash, Hasher};
+use core::marker::PhantomData;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::Instant;
@@ -125,7 +125,7 @@ impl LineageHandle {
     /// reference to the instance's own cannot name it.
     #[must_use]
     pub fn is_homed_at<T: ?Sized>(&self, home: &Arc<T>) -> bool {
-        std::ptr::addr_eq(self.0.home.as_ptr(), Arc::as_ptr(home))
+        core::ptr::addr_eq(self.0.home.as_ptr(), Arc::as_ptr(home))
     }
 
     /// Whether this is the lineage's only remaining copy.

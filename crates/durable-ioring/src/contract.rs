@@ -6,8 +6,8 @@
 //! as the implementation does: it carries only the operations dioring implements, never a
 //! method that cannot yet be called.
 
-use std::fmt::Debug;
-use std::hash::Hash;
+use core::fmt::Debug;
+use core::hash::Hash;
 use std::io;
 
 use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};

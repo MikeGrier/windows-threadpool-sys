@@ -22,9 +22,9 @@
 //! cycle, [`Durability::trace`] repeats the search with a parent per step to name it. A push with
 //! no gate, and a seal over no held write, never search at all.
 
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
-use std::ops::Bound;
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
+use core::ops::Bound;
 
 use super::{Accepted, Due, Durability, Event, Gate, HeldOp, Key, Standing, State};
 use crate::alloc_tags::{tag, tagged};
@@ -71,7 +71,7 @@ fn span<E: EpochId>(lower: Bound<E>, upper: E) -> Span<E> {
 fn raise<E: EpochId>(bounds: &mut Vec<(Key, E)>, lineage: Key, extent: E) -> Option<Bound<E>> {
     match bounds.iter_mut().find(|(key, _)| *key == lineage) {
         Some((_, bound)) if *bound >= extent => None,
-        Some((_, bound)) => Some(Bound::Excluded(std::mem::replace(bound, extent))),
+        Some((_, bound)) => Some(Bound::Excluded(core::mem::replace(bound, extent))),
         None => {
             tagged(tag::GATES_RAISE_BOUND, || bounds.push((lineage, extent)));
             Some(Bound::Unbounded)
@@ -342,7 +342,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let rest = tagged(tag::GATES_RELEASE_THROUGH_REST, || {
             state.waiting.split_off(&(through, u64::MAX))
         });
-        let ready = std::mem::replace(&mut state.waiting, rest);
+        let ready = core::mem::replace(&mut state.waiting, rest);
         let mut released: Vec<u64> = tagged(tag::GATES_RELEASE_THROUGH_RELEASED, || {
             ready.into_iter().map(|(_, seq)| seq).collect()
         });

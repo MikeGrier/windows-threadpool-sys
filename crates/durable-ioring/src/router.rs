@@ -11,9 +11,9 @@
 //! came, so its answer goes straight back to the instance; the router answers nothing itself. A
 //! domain no provider serves is a caller breaking the protocol, and is panicked on (DI-D-46).
 
+use core::fmt;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::fmt;
 
 use crate::alloc_tags::{tag, tagged};
 use crate::contract::Identities;
@@ -221,7 +221,7 @@ impl fmt::Display for RoutedTwice {
     }
 }
 
-impl std::error::Error for RoutedTwice {}
+impl core::error::Error for RoutedTwice {}
 
 #[cfg(test)]
 mod tests;

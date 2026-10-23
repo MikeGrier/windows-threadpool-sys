@@ -15,8 +15,8 @@
 //! - **No begin is left open** when the stream is declared finished, except those the caller names,
 //!   and each of those must be open.
 
+use core::fmt;
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 
 use crate::correlation::CorrelationId;
 use crate::diagnostics::{Diagnostic, DiagnosticKind, Edge};
@@ -260,4 +260,4 @@ impl fmt::Display for PairingViolation {
     }
 }
 
-impl std::error::Error for PairingViolation {}
+impl core::error::Error for PairingViolation {}
