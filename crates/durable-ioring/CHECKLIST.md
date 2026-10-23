@@ -35,7 +35,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   publication, with its own `COMPONENT.md`, `DESIGN-NOTES.md`, `CHECKLIST.md` and `PLANS.md` row. Its first milestone, which
   this item writes, holds the copied `Allocator` interface (`allocate`, `deallocate`, `AllocError`, `Global`), the one-count
   shared pointer with its allocator in the header, the two-form report, and their tests; its design notes settle the
-  count's overflow policy, the safe constructors, Miri, and the credit to the standard library.
+  safe constructors, Miri, and the credit to the standard library.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/rc-errors` -> its first milestone, written by this
   > item. Control returns here at `DI-23.4.2`.

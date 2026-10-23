@@ -2058,5 +2058,10 @@ through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads wh
 - **`std` interop stays behind the `std` feature**: a conversion from `io::Error` makes the shared form through the global
   allocator, which is the caller's choice under `std`.
 
-The crate's own decisions -- the overflow policy for its count, which safe constructors it offers, and whether it is checked
-under Miri, which needs a nightly toolchain -- are made in its own design notes when it is created (DI-23.4.1).
+- **The count is a `u64`.** The engineer, 2026-10-23: "use u64, they cannot overflow unless we're going beyond inc/dec."
+  The count only ever moves by one, so reaching 2^64 takes centuries of increments at any rate a machine can sustain, and
+  no overflow policy is needed. It needs 64-bit atomics (`target_has_atomic = "64"`), which some 32-bit embedded targets
+  lack; those targets are outside the crate until that is revisited.
+
+The crate's own decisions -- which safe constructors it offers, and whether it is checked under Miri, which needs a nightly
+toolchain -- are made in its own design notes when it is created (DI-23.4.1).
