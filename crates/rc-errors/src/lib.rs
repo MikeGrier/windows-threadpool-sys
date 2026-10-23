@@ -13,5 +13,7 @@ extern crate alloc;
 extern crate std;
 
 mod allocator;
+mod shared;
 
 pub use allocator::{AllocError, Allocator, Global};
+pub use shared::SharedError;

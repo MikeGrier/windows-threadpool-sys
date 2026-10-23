@@ -21,3 +21,26 @@ rust-lang/rust's `LICENSE-MIT` on 2026-10-23. The tests cover `AllocError`'s tex
 through `&'static (dyn Allocator + Sync)`, and a block freed on another thread; `Global`'s doc example is a doctest. A
 sabotage of the dangling pointer's address (`layout.align()` to `1`) failed the zero-sized test, and was reverted; the
 manifest entries are RCE-1.4's.
+
+## Moved 2026-10-23 19:03:04 -04:00 -- RCE-1.2: the shared error
+
+### <a id="rce-12"></a>RCE-1.2 -- The shared error: one repr(C) block, a fallible constructor handing the error back, and counting freed through the recorded allocator, tested with a recording allocator. *(completed 2026-10-23 19:03:04 -04:00)*
+
+Per [RCE-D-4](DESIGN-NOTES.md#rce-d-4), [RCE-D-5](DESIGN-NOTES.md#rce-d-5) and [RCE-D-8](DESIGN-NOTES.md#rce-d-8). The item
+as it stood at completion:
+
+**The shared error**: the `repr(C)` block, the fallible constructor and its `Global` variant handing the error back on
+failure, `Clone`, `Drop`, `Deref` to `dyn Error + Send + Sync`, `Display`, `Debug`, `Error`, identity equality, and `Send`
+and `Sync`. Tested with a recording allocator that checks every free's pointer and layout, counts allocations against frees
+and poisons a freed block: the last drop frees once and drops the error once, on another thread too; clones dropped
+concurrently free once; a failing allocator returns the error undropped; a zero-sized and an over-aligned error;
+downcasting; and a source delegated.
+
+What was done. [shared.rs](src/shared.rs) holds `SharedError`, `try_new` and `try_new_in`, and `ptr_eq`; the one unsizing is
+a `NonNull` coercion inside `try_new_in`. The tests' `Recording` allocator ([tests.rs](src/shared/tests.rs)) is leaked once
+per test, so no two tests share its counts. Beyond the item's list, the tests cover the global variant over an
+`io::Error`, a `SharedError` boxed as a source, a hundred errors of two layouts from one allocator, and, at compile time,
+`Send`, `Sync` and the type being two words; the type's doc example is a doctest. Three sabotages, each made and reverted
+alone, were caught: freeing when the count reached 2 (eight tests, one of which read the poison back as `probe 3722304989`,
+`0xDDDDDDDD`); a clone that did not increment; and freeing with the error's layout instead of the block's, which the
+recording allocator refused. The manifest entries are RCE-1.4's.

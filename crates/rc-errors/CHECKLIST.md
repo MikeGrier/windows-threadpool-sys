@@ -11,13 +11,7 @@ Written by durable-ioring's [DI-23.4.1](../durable-ioring/COMPLETED-CHECKLIST.md
 
 - [x] **RCE-1.1** -- The allocator interface: Allocator, AllocError and Global, mirroring upstream, with the NOTICE crediting the standard library. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#rce-11)
 
-- [ ] **RCE-1.2** -- **The shared error** ([RCE-D-4](DESIGN-NOTES.md#rce-d-4), [RCE-D-5](DESIGN-NOTES.md#rce-d-5)): the
-  `repr(C)` block, the fallible constructor and its `Global` variant handing the error back on failure, `Clone`, `Drop`,
-  `Deref` to `dyn Error + Send + Sync`, `Display`, `Debug`, `Error`, identity equality, and `Send` and `Sync`. Tested with a
-  recording allocator that checks every free's pointer and layout, counts allocations against frees and poisons a freed
-  block ([RCE-D-8](DESIGN-NOTES.md#rce-d-8)): the last drop frees once and drops the error once, on another thread too;
-  clones dropped concurrently free once; a failing allocator returns the error undropped; a zero-sized and an over-aligned
-  error; downcasting; and a source delegated.
+- [x] **RCE-1.2** -- The shared error: one repr(C) block, a fallible constructor handing the error back, and counting freed through the recorded allocator, tested with a recording allocator. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#rce-12)
 
 - [ ] **RCE-1.3** -- **The static error and the report** ([RCE-D-6](DESIGN-NOTES.md#rce-d-6),
   [RCE-D-7](DESIGN-NOTES.md#rce-d-7)): a `const`-constructible static error holding a message; the two-form report, `Clone`,
