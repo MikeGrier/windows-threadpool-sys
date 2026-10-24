@@ -1,5 +1,7 @@
 # Plans: fixed-hash-table
 
+Completed checklists are recorded in [COMPLETED-PLANS.md](COMPLETED-PLANS.md), and the milestones they
+contained are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
+
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | FHT-M1: a fixed-capacity map and set that refuse an insert when full, with inline or boxed storage and the hasher a type parameter. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |

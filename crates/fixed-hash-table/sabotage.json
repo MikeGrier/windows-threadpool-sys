@@ -1,0 +1,103 @@
+{
+  "package": "fixed-hash-table",
+  "description": "Sabotages for fixed-hash-table. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "The default hasher's mixing (FixedState) is not sabotaged: a worse mix changes which slots keys land in, not any answer the tables give, so no test could fail on it short of measuring probe lengths. The slot-count assertion of an inline table is a compile_fail doctest, which the build already enforces.",
+  "sabotages": [
+    {
+      "name": "FHT-1.1: a probe stops at the first slot held by another key",
+      "file": "src/map.rs",
+      "expect": "caught",
+      "why": "Linear probing must walk past every occupied slot that is not the key's; stopping at the first reports a colliding key absent and lets insert overwrite the entry it stopped at (FHT-D-4).",
+      "find": ["                Some(_) => i = (i + 1) & mask,"],
+      "replace": ["                Some(_) => return Err(i),"]
+    },
+    {
+      "name": "FHT-1.1: a probe does not wrap past the last slot",
+      "file": "src/map.rs",
+      "expect": "caught",
+      "why": "A run that starts near the end of the table continues at its start; without the mask the probe indexes past the slots. The tests with a run wrapping past the last slot reach it.",
+      "find": ["                Some(_) => i = (i + 1) & mask,"],
+      "replace": ["                Some(_) => i += 1,"]
+    },
+    {
+      "name": "FHT-1.1: backward shift refuses an entry that may move into the hole",
+      "file": "src/map.rs",
+      "expect": "caught",
+      "why": "An entry may move back into the hole when the hole lies within its run, from its home up to where it sits, inclusive of its home. Excluding the home leaves an entry stranded past an empty slot, so its key is no longer found (FHT-D-4).",
+      "find": ["            if next.wrapping_sub(home) & mask >= next.wrapping_sub(hole) & mask {"],
+      "replace": ["            if next.wrapping_sub(home) & mask > next.wrapping_sub(hole) & mask {"]
+    },
+    {
+      "name": "FHT-1.1: backward shift stops at the first entry that cannot move",
+      "file": "src/map.rs",
+      "expect": "caught",
+      "why": "An entry that cannot move does not end the run: entries after it, with other homes, may still belong in the hole. Stopping there strands them past an empty slot. Only a run mixing homes shows it, which the run checked against std's map produces.",
+      "find": ["                hole = next;", "            }"],
+      "replace": ["                hole = next;", "            } else {", "                break;", "            }"]
+    },
+    {
+      "name": "FHT-1.1: insert admits one entry past capacity",
+      "file": "src/map.rs",
+      "expect": "caught",
+      "why": "The capacity keeps one slot empty at least, which is what ends every probe (FHT-D-4). Admitting one more fills the last slot: the refusal tests fail, and a lookup of an absent key in the full table probes forever, so this may be caught as a hang.",
+      "find": ["            Err(_) if self.len == self.capacity => Err(Full { key, value }),"],
+      "replace": ["            Err(_) if self.len > self.capacity => Err(Full { key, value }),"]
+    },
+    {
+      "name": "FHT-1.1: insert refuses one entry early",
+      "file": "src/map.rs",
+      "expect": "caught",
+      "why": "The table holds exactly its capacity; refusing before that is a capacity smaller than the one it reports (FHT-D-7).",
+      "find": ["            Err(_) if self.len == self.capacity => Err(Full { key, value }),"],
+      "replace": ["            Err(_) if self.len + 1 == self.capacity => Err(Full { key, value }),"]
+    },
+    {
+      "name": "FHT-1.2: retain steps past a slot a removal shifted an entry into",
+      "file": "src/map/iter.rs",
+      "expect": "caught",
+      "why": "A removal shifts the next entry of the run back into the slot just looked at; stepping on skips that entry, so it is never offered to the test. The wrapping-run test counts each entry's visits.",
+      "find": ["                self.remove_at(at);", "            }"],
+      "replace": ["                self.remove_at(at);", "                step += 1;", "            }"]
+    },
+    {
+      "name": "FHT-1.2: a drain dropped part-way leaves the rest in place",
+      "file": "src/map/iter.rs",
+      "expect": "caught",
+      "why": "Dropping a drain must empty the map. Setting the length to zero without emptying the slots leaves entries a lookup still finds, in a map that says it is empty.",
+      "find": ["            *slot = None;"],
+      "replace": [""]
+    },
+    {
+      "name": "FHT-1.2: or_insert_with on a full map makes and places the value",
+      "file": "src/map/entry.rs",
+      "expect": "caught",
+      "why": "A full map must refuse a new key, handing the closure back uncalled. Without the guard the value is made and placed in the slot that ends every probe.",
+      "find": ["    pub fn or_insert_with<F: FnOnce() -> V>(self, make: F) -> Result<&'a mut V, Full<K, F>> {", "        match self {", "            Self::Occupied(entry) => Ok(entry.into_mut()),", "            Self::Vacant(entry) if entry.map.len == entry.map.capacity => Err(Full {", "                key: entry.key,", "                value: make,", "            }),"],
+      "replace": ["    pub fn or_insert_with<F: FnOnce() -> V>(self, make: F) -> Result<&'a mut V, Full<K, F>> {", "        match self {", "            Self::Occupied(entry) => Ok(entry.into_mut()),"]
+    },
+    {
+      "name": "FHT-1.3: difference yields the values the other set holds",
+      "file": "src/set/iter.rs",
+      "expect": "caught",
+      "why": "A difference is the values the other set lacks; without the negation it is the intersection.",
+      "find": ["        self.values.find(|value| !other.contains(*value))"],
+      "replace": ["        self.values.find(|value| other.contains(*value))"]
+    },
+    {
+      "name": "FHT-1.3: replace keeps the value already held",
+      "file": "src/set.rs",
+      "expect": "caught",
+      "why": "Inserting a present value keeps the one held, so replace must remove it first; without that the new value is dropped and nothing is reported replaced.",
+      "find": ["        let replaced = self.map.remove_entry(&value).map(|(held, ())| held);"],
+      "replace": ["        let replaced: Option<T> = None;"]
+    },
+    {
+      "name": "FHT-1.3: is_disjoint always walks this set",
+      "file": "src/set/iter.rs",
+      "expect": "survives",
+      "why": "The control. Walking the smaller set makes fewer lookups; walking this one gives the same answer. A test that failed here would be asserting the implementation.",
+      "find": ["        if self.len() <= other.len() {"],
+      "replace": ["        if true {"]
+    }
+  ]
+}

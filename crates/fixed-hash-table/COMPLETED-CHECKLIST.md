@@ -59,3 +59,25 @@ iterators and the set operations: `difference`, `intersection`, `symmetric_diffe
 and `try_extend`. The map's `clear` moved to an `impl` needing only mutable storage, since it hashes nothing; the set could
 not call it otherwise. A sabotage of `Difference` (dropping its negation) failed two tests and was reverted; the manifest
 entries are FHT-1.4's.
+
+## Moved 2026-10-23 21:43:22 -04:00 -- FHT-1.4: README examples and the sabotage manifest; FHT-M1 complete
+
+### <a id="fht-14"></a>FHT-1.4 -- README examples compiled as doctests, and a sabotage manifest whose every entry behaves as declared. *(completed 2026-10-23 21:43:22 -04:00)*
+
+The item as it stood at completion:
+
+**README examples compiled as doctests**, through the crate's `#![doc = include_str!("../README.md")]`, and a
+`sabotage.json` for probing, backward-shift deletion, `retain`'s re-examination of a slot after a removal, the set's
+`Difference`, and the capacity refusal, each shown caught.
+
+What was done. [README.md](README.md) has five examples: a map refusing past capacity, the entry API, a set and its
+operations, heap storage, and a keyed `std` hasher. The last two sit behind hidden `cfg(feature)` blocks; breaking an
+assertion in each failed its doctest, so both run under the test build's features rather than compiling to nothing.
+[sabotage.json](sabotage.json) has twelve entries: eleven caught and one control, `is_disjoint` walking either set, that
+survives. Beyond the item's list it covers a probe that does not wrap, a backward shift that stops at the first entry that
+cannot move, a capacity refused one early, a drain that leaves entries behind, `or_insert_with` placing into a full map, and
+`replace` keeping the old value. Admitting one entry past capacity is caught as a hang, since a table with no empty slot
+probes forever on a miss: the reason FHT-D-4 keeps one.
+
+<a id="fht-m1-complete"></a>**FHT-M1 is complete**, and with it [CHECKLIST.md](CHECKLIST.md): its stubs are deleted, the
+plan is recorded in [COMPLETED-PLANS.md](COMPLETED-PLANS.md), and the next work is durable-ioring's `DI-23.5.2`.
