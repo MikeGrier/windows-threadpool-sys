@@ -5,6 +5,8 @@
 //! silent one is not possible. Each count is a ceiling the instance enforces by refusing, never by
 //! growing.
 
+use alloc::collections::VecDeque;
+use alloc::vec::Vec;
 use core::fmt;
 
 use fixed_hash_table::{HeapMap, ReserveError};
@@ -98,6 +100,65 @@ pub(crate) fn ordered<K: Ord, V>(
         table: name,
         error: ReserveError::Alloc(error),
     })
+}
+
+/// A list named `name` with room for `items` reserved now (DI-D-97): the core's per-call lists,
+/// each sized from a bound on what one call can put in it, or why it cannot be made; `None` is a
+/// size past what a `usize` holds.
+pub(crate) fn list<T>(
+    name: &'static str,
+    items: Option<usize>,
+) -> Result<Vec<T>, ConstructionError> {
+    let mut list = Vec::new();
+    list.try_reserve_exact(reserved(name, items)?)
+        .map_err(|error| ConstructionError::Table {
+            table: name,
+            error: ReserveError::Alloc(error),
+        })?;
+    Ok(list)
+}
+
+/// As [`list`], a queue taken from the front.
+pub(crate) fn queue<T>(
+    name: &'static str,
+    items: Option<usize>,
+) -> Result<VecDeque<T>, ConstructionError> {
+    let mut queue = VecDeque::new();
+    queue
+        .try_reserve_exact(reserved(name, items)?)
+        .map_err(|error| ConstructionError::Table {
+            table: name,
+            error: ReserveError::Alloc(error),
+        })?;
+    Ok(queue)
+}
+
+/// The size `items` names, or the refusal for one past a `usize`.
+fn reserved(name: &'static str, items: Option<usize>) -> Result<usize, ConstructionError> {
+    items.ok_or(ConstructionError::Table {
+        table: name,
+        error: ReserveError::TooLarge,
+    })
+}
+
+/// Push `item` onto `list` if its reserved room has space for it, or hand it back: a list made by
+/// [`list`] is sized so this never happens, and a caller handed an item back reports the
+/// inconsistency rather than let the list grow.
+pub(crate) fn within<T>(list: &mut Vec<T>, item: T) -> Result<(), T> {
+    if list.len() == list.capacity() {
+        return Err(item);
+    }
+    list.push(item);
+    Ok(())
+}
+
+/// As [`within`], for a queue.
+pub(crate) fn within_queue<T>(queue: &mut VecDeque<T>, item: T) -> Result<(), T> {
+    if queue.len() == queue.capacity() {
+        return Err(item);
+    }
+    queue.push_back(item);
+    Ok(())
 }
 
 /// Which of a [`Capacity`]'s counts was reached.

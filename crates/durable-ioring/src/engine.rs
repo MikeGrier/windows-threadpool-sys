@@ -5,8 +5,8 @@
 //!
 //! The engine is the one place that turns the core's [`CoreActions`] into backend pushes: a
 //! submission the backend refuses goes back to the core, which keeps it to emit again or, for a
-//! cause that cannot clear, ends it (DI-D-54); and a provider request is kept for the driver to
-//! make with the lock released (DI-D-44). Draining pops
+//! cause that cannot clear, ends it (DI-D-54); and a provider request stays in the core for the
+//! driver to drain and make with the lock released (DI-D-44). Draining pops
 //! the backend to empty, as an edge-triggered notification requires
 //! (`windows-ioring-sys`' D-19), so it is the same for every delivery: woken by a thread pool, or
 //! pumped by the consumer's own thread.
@@ -15,7 +15,6 @@
 //! handle's release, on any thread, can reach it under the same lock; stopping delivery takes the
 //! engine out of the slot, so anything reaching it afterwards finds it empty.
 
-use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use core::ops::{Deref, DerefMut};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -51,9 +50,6 @@ pub struct Engine<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> {
     pub core: DurableIoCore<E, Bk::Buffer, C, K>,
     /// The backend, which runs the I/O the core asks for.
     pub backend: Bk,
-    /// Requests for the consumer's provider the core has made, in order, for the driver to make
-    /// with its lock released.
-    pub requests: Vec<ProviderRequest<V<E, K>>>,
     /// A fault the backend gave when its completions were read, kept for a consumer's pop to report
     /// once (DI-7+.2).
     fault: Option<IoFault>,
@@ -68,39 +64,28 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
         Self {
             core,
             backend,
-            requests: Vec::new(),
             fault: None,
             attention: false,
         }
     }
 
-    /// Act on what the core asked for: push each submission, handing a refused one back to the
-    /// core, which keeps it or ends it (DI-D-54) and says what that made due, acted on in turn;
-    /// keep each provider request, in the order made; and ring the doorbell once for everything
-    /// pushed. Whether entries became poppable, or the doorbell failed, which a consumer's pop
-    /// rings again and reports (DI-7+.2).
+    /// Act on what the core asked for: take and push each submission, handing a refused one back
+    /// to the core, which keeps it or ends it (DI-D-54) and puts what that made due with the rest,
+    /// taken in turn; leave each provider request in the core, for
+    /// [`drain_requests`](Self::drain_requests); and ring the doorbell once for everything pushed.
+    /// Whether entries became poppable, or the doorbell failed, which a consumer's pop rings again
+    /// and reports (DI-7+.2).
     ///
     /// A backend only queues what it is pushed, so the doorbell is the engine's to ring, once for a
     /// batch. A push refused because the queue is full is made once more after the doorbell has
     /// made room: the one condition that retry is for.
     ///
     /// It ends: a refusal either is kept, making nothing due, or ends one submission for good.
-    pub fn act(&mut self, actions: CoreActions<V<E, K>, Bk::Buffer>) -> bool {
-        let mut deliver = false;
-        let mut pending = tagged(tag::ENGINE_ACT_PENDING, || VecDeque::from([actions]));
-        while let Some(CoreActions {
-            submit,
-            requests,
-            deliver: ready,
-        }) = pending.pop_front()
-        {
-            deliver |= ready;
-            tagged(tag::ENGINE_ACT_REQUESTS, || self.requests.extend(requests));
-            for submission in submit {
-                if let Err(refused) = self.push(submission) {
-                    let more = self.core.refused(refused);
-                    tagged(tag::ENGINE_ACT_REFUSED, || pending.push_back(more));
-                }
+    pub fn act(&mut self, actions: CoreActions) -> bool {
+        let mut deliver = actions.deliver;
+        while let Some(submission) = self.core.next_submission() {
+            if let Err(refused) = self.push(submission) {
+                deliver |= self.core.refused(refused).deliver;
             }
         }
         deliver | self.ring()
@@ -249,7 +234,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// holds one, so a driver whose provider may answer inside its call moves each request out
     /// and makes it once the lock is released.
     pub fn drain_requests(&mut self, visit: impl FnMut(ProviderRequest<V<E, K>>)) {
-        self.requests.drain(..).for_each(visit);
+        self.core.drain_requests(visit);
     }
 }
 

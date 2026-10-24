@@ -69,7 +69,7 @@ fn a_gated_read_is_held_then_released() {
         .expect("held");
     rig.backend.submit().expect("submit");
     let write = rig.backend.pop().expect("never fails").expect("the write");
-    let actions = rig.core.complete(write);
+    let actions = rig.completed(write);
     assert!(actions.submit.is_empty(), "the gate is not yet sealed");
     rig.act(actions);
     rig.seal(1);
@@ -111,7 +111,7 @@ fn a_gate_on_an_ended_lineage_is_refused() {
     assert!(matches!(refused.reason, PushRefusal::UnknownLineage(_)));
 }
 
-fn rig_end(rig: &mut Rig, lineage: crate::ids::Lineage) -> super::CoreActions<V, Vec<u8>> {
+fn rig_end(rig: &mut Rig, lineage: crate::ids::Lineage) -> super::CoreActions {
     rig.core
         .end_lineage(lineage)
         .expect("live, not the default")
@@ -314,19 +314,17 @@ fn a_released_operation_the_backend_refuses_is_kept_and_emitted_again() {
     rig.backend.submit().expect("submit");
     let commit = rig.backend.pop().expect("never fails").expect("the commit");
     rig.read(0, 1).expect("fills the queue");
-    let actions = rig.core.complete(commit);
+    let actions = rig.completed(commit);
     assert_eq!(actions.submit.len(), 1, "the released read");
     let refused = rig
         .backend
         .push(actions.submit.into_iter().next().expect("one"))
         .expect_err("full");
     assert_eq!(refused.cause, RefusalCause::SubmitNeeded);
-    assert!(
-        rig.core.refused(refused).is_empty(),
-        "kept, so nothing is due"
-    );
+    let kept = rig.core.refused(refused);
+    assert!(rig.core.taken(kept).is_empty(), "kept, so nothing is due");
     rig.backend.submit().expect("submit");
-    let again = rig.core.retry();
+    let again = rig.retried();
     assert_eq!(again.submit.len(), 1, "kept");
     rig.act(again);
     rig.run();

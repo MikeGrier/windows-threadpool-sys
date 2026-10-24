@@ -187,7 +187,8 @@ fn a_commit_the_backend_refuses_for_good_is_ended_and_what_that_makes_due_is_act
     oracle.sealed(at(&engine, 1));
     assert!(deliver, "the ended commit's failure became poppable");
     assert_eq!(engine.backend.queued(), 0, "nothing was pushed");
-    assert!(engine.core.retry().is_empty(), "nothing was kept");
+    let retried = engine.core.retry();
+    assert!(engine.core.taken(retried).is_empty(), "nothing was kept");
     let entries = entries(&mut engine, &mut oracle);
     assert!(
         matches!(entries.as_slice(), [Entry::Failed(_)]),

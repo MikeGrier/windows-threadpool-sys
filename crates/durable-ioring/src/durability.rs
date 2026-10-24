@@ -62,7 +62,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use fixed_hash_table::HeapMap;
 
 use crate::alloc_tags::{tag, tagged};
-use crate::capacity::{Capacity, ConstructionError, ordered, table};
+use crate::capacity::{Capacity, ConstructionError, ordered, table, within};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::correlation::CorrelationId;
@@ -81,12 +81,14 @@ mod files;
 mod gates;
 mod lineages;
 mod providers;
+mod scratch;
 mod spans;
 mod tables;
 mod window;
 
 use crate::ordered::Ordered;
 use empties::{Empty, release_heals};
+use scratch::Scratch;
 use spans::{Span, SpanFile, Spans};
 use tables::{Counts, Seals};
 use window::Window;
@@ -582,6 +584,14 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     flush_pairs: HeapMap<(Key, u64, Part), FlushPair<E>>,
     /// The consumer's name for each domain the provider serves, which a flush pair reports.
     served_names: HeapMap<DomainId, FlushDomain>,
+    /// The lists a change makes due into, while they are not lent out ([`scratch`]).
+    spare: Due<E, T, I>,
+    /// Whether they are lent out.
+    due_out: bool,
+    /// What a call collects into, reused by every call.
+    scratch: Scratch<E>,
+    /// What the consumer declared, which sized them.
+    capacity: Capacity,
 }
 
 /// An open flush pair: its id, and the seal it is part of.
@@ -703,6 +713,8 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         let served_names = tagged(tag::DURABILITY_NEW_SERVED_NAMES, || {
             table("the served domains' names", Some(served))
         })?;
+        let spare = tagged(tag::DURABILITY_NEW_DUE, || Due::reserved(capacity))?;
+        let scratch = Scratch::new(capacity, served)?;
         Ok(Self {
             instance,
             lineages,
@@ -722,6 +734,10 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             diagnostics,
             flush_pairs,
             served_names,
+            spare,
+            due_out: false,
+            scratch,
+            capacity: *capacity,
         })
     }
 
@@ -915,7 +931,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// in flight keeps it, because suspect sets are frozen, and marks it nullified. A write of an
     /// ended lineage is let go either way.
     pub(crate) fn completed(&mut self, op: OpId, end: WriteEnd) -> Due<E, T, I> {
-        let mut due = Due::default();
+        let mut due = self.fresh();
         let Some(write) = self.writes.get_mut(&op.seq) else {
             self.inconsistent(
                 "a write completed that was never recorded as pushed",
@@ -993,7 +1009,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         }
         let Some(op) = pin else {
             self.record_empty(lineage, Empty::new(seq, through, pair));
-            return Sealing::Submitted(self.advance(Due::default()));
+            let due = self.fresh();
+            return Sealing::Submitted(self.advance(due));
         };
         let recorded = self.seals.insert(
             (lineage, seq),
@@ -1015,7 +1032,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         } else {
             self.hold_for_seal(op);
         }
-        Sealing::Submitted(self.advance(Due::default()))
+        let due = self.fresh();
+        Sealing::Submitted(self.advance(due))
     }
 
     /// `lineage`'s seal `through`'s flush of `file` completed. Success covers the writes it was
@@ -1028,7 +1046,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         file: IoTargetKey,
         result: Result<(), IoFault>,
     ) -> Due<E, T, I> {
-        let mut due = Due::default();
+        let mut due = self.fresh();
         let answered = match self.lineages.get_mut(&lineage) {
             Some(state) if !state.ended => answer(
                 &mut self.seals,
@@ -1114,7 +1132,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         reach: &Reach,
         only: Option<Key>,
     ) -> (FailureId, Due<E, T, I>) {
-        let mut due = Due::default();
+        let mut due = self.fresh();
         let id = self.observe(cause, reach, only, &mut due);
         (id, self.advance(due))
     }
@@ -1135,7 +1153,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 returned: items,
             });
         }
-        let mut due = Due::default();
+        let mut due = self.fresh();
         for (token, resolution) in items {
             // A live token's failure is unresolved: resolving it consumed its only other token.
             let Some(index) = self.failures.iter().position(|f| f.id == token.id) else {
@@ -1393,13 +1411,19 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// seal whose flushes have all answered. Then report the heals that took effect, advance each
     /// lineage's high-water mark, and answer the seals a failure holds.
     fn advance(&mut self, mut due: Due<E, T, I>) -> Due<E, T, I> {
-        let live: Vec<Key> = tagged(tag::DURABILITY_ADVANCE_LIVE, || {
-            self.lineages
-                .iter()
-                .filter(|(_, state)| !state.ended)
-                .map(|(key, _)| *key)
-                .collect()
-        });
+        let mut live = core::mem::take(&mut self.scratch.live);
+        let mut lost = None;
+        for (&key, state) in self.lineages.iter() {
+            if !state.ended && within(&mut live, key).is_err() {
+                lost.get_or_insert(key);
+            }
+        }
+        if let Some(key) = lost {
+            self.inconsistent(
+                "more live lineages than the lineages declared",
+                format_args!("lineage {key}"),
+            );
+        }
         for &lineage in &live {
             self.start_seals(lineage, &mut due);
             self.finish_empties(lineage);
@@ -1409,6 +1433,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         for &lineage in &live {
             self.advance_mark(lineage, &mut due);
         }
+        live.clear();
+        self.scratch.live = live;
         #[cfg(test)]
         assert!(
             self.spans_agree(),
@@ -1428,6 +1454,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let mut lost = None;
         let mut full = None;
         let mut pairs_full = false;
+        let mut unlisted = false;
         for (_, seal) in tables::seals_of_mut(&mut self.seals, lineage) {
             if !matches!(seal.stage, SealStage::Waiting) {
                 continue;
@@ -1476,15 +1503,15 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 if write.routing.default && !entry.flushed {
                     entry.flushed = true;
                     unanswered += 1;
-                    let target = write.target.clone();
-                    tagged(tag::DURABILITY_START_SEALS_FLUSH, || {
-                        due.flushes.push(Flush {
-                            lineage,
-                            through,
-                            file: write.file,
-                            target,
-                        });
-                    });
+                    let flush = Flush {
+                        lineage,
+                        through,
+                        file: write.file,
+                        target: write.target.clone(),
+                    };
+                    if within(&mut due.flushes, flush).is_err() {
+                        unlisted = true;
+                    }
                 }
             }
             parts.sort_unstable_by_key(|part| part.domain);
@@ -1528,13 +1555,14 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 }
             }
             if !parts.is_empty() {
-                tagged(tag::DURABILITY_START_SEALS_CALL, || {
-                    due.calls.push(ProviderCall {
-                        lineage,
-                        seal: seq,
-                        domains: parts,
-                    });
-                });
+                let call = ProviderCall {
+                    lineage,
+                    seal: seq,
+                    domains: parts,
+                };
+                if within(&mut due.calls, call).is_err() {
+                    unlisted = true;
+                }
             }
             seal.stage = SealStage::Flushing {
                 unanswered,
@@ -1557,6 +1585,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         if pairs_full {
             self.inconsistent(
                 "a flush pair was opened past what the operations declared allow",
+                format_args!("lineage {lineage}"),
+            );
+        }
+        if unlisted {
+            self.inconsistent(
+                "a change made more flushes or provider requests due than the operations declared",
                 format_args!("lineage {lineage}"),
             );
         }
@@ -1644,37 +1678,41 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// flushes' abandoned. For a lineage that ends, and for the instance's state as it is dropped.
     pub(super) fn end_pairs(&mut self, only: Option<Key>) {
         let instance = self.instance.number();
-        let mut flushes: Vec<((Key, u64, Part), FlushPair<E>)> =
-            tagged(tag::DURABILITY_END_PAIRS_FLUSHES, || {
-                let mut taken = Vec::new();
-                self.flush_pairs.retain(|key, pair| {
-                    let ours = only.is_none_or(|only| key.0 == only);
-                    if ours {
-                        taken.push((
-                            *key,
-                            FlushPair {
-                                id: pair.id,
-                                through: pair.through,
-                            },
-                        ));
-                    }
-                    !ours
-                });
-                taken
-            });
+        // Made for as many pairs as the table holds, so every pair taken fits.
+        let mut flushes = core::mem::take(&mut self.scratch.pairs);
+        let mut unlisted = false;
+        self.flush_pairs.retain(|key, pair| {
+            if only.is_some_and(|only| key.0 != only) {
+                return true;
+            }
+            let taken = FlushPair {
+                id: pair.id,
+                through: pair.through,
+            };
+            let fits = within(&mut flushes, (*key, taken)).is_ok();
+            unlisted |= !fits;
+            !fits
+        });
+        if unlisted {
+            self.inconsistent(
+                "more flush pairs were open than the flush parts declared",
+                format_args!("lineage {only:?}"),
+            );
+        }
         flushes.sort_unstable_by_key(|((key, seq, _), pair)| (*key, *seq, pair.id));
-        for ((lineage, _, part), pair) in &flushes {
-            if let Some(shown) = flush_part(*part, &self.served_names) {
+        for ((lineage, _, part), pair) in flushes.drain(..) {
+            if let Some(shown) = flush_part(part, &self.served_names) {
                 end_flush(
                     &*self.diagnostics,
                     instance,
-                    *lineage,
-                    pair,
+                    lineage,
+                    &pair,
                     shown,
                     FlushOutcome::Abandoned,
                 );
             }
         }
+        self.scratch.pairs = flushes;
         for (&lineage, state) in self.lineages.iter_mut() {
             if only.is_some_and(|only| only != lineage) {
                 continue;

@@ -28,6 +28,7 @@ use core::ops::Bound;
 
 use super::{Accepted, Due, Durability, Event, Gate, HeldOp, Key, Standing, State, tables};
 use crate::alloc_tags::{tag, tagged};
+use crate::capacity::within;
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::ids::OpId;
@@ -46,7 +47,7 @@ pub(crate) enum GateState {
 }
 
 /// One step of a traced cycle: a held write, and the gate it waits for.
-struct Step<E> {
+pub(super) struct Step<E> {
     write: Gate<E>,
     gate: Gate<E>,
     /// The step whose gate needed this write; the first step has none.
@@ -59,15 +60,20 @@ fn span<E>(lower: Bound<E>, upper: E) -> (Bound<E>, Bound<E>) {
 }
 
 /// Raise `lineage`'s bound to `extent`, returning the bound below the newly covered range, or
-/// `None` if the bound already covers it.
-fn raise<E: EpochId>(bounds: &mut Vec<(Key, E)>, lineage: Key, extent: E) -> Option<Bound<E>> {
+/// `None` if the bound already covers it. `Err` is a lineage past the room `bounds` was made with,
+/// which is one for each lineage declared.
+fn raise<E: EpochId>(
+    bounds: &mut Vec<(Key, E)>,
+    lineage: Key,
+    extent: E,
+) -> Result<Option<Bound<E>>, Key> {
     match bounds.iter_mut().find(|(key, _)| *key == lineage) {
-        Some((_, bound)) if *bound >= extent => None,
-        Some((_, bound)) => Some(Bound::Excluded(core::mem::replace(bound, extent))),
-        None => {
-            tagged(tag::GATES_RAISE_BOUND, || bounds.push((lineage, extent)));
-            Some(Bound::Unbounded)
-        }
+        Some((_, bound)) if *bound >= extent => Ok(None),
+        Some((_, bound)) => Ok(Some(Bound::Excluded(core::mem::replace(bound, extent)))),
+        None => match within(bounds, (lineage, extent)) {
+            Ok(()) => Ok(Some(Bound::Unbounded)),
+            Err(_) => Err(lineage),
+        },
     }
 }
 
@@ -88,10 +94,17 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// `gate`'s lineage reaching it needs, transitively, `write`'s lineage to complete writes at or
     /// above `write`'s epoch. A gate on the write's own lineage at or above its epoch is the
     /// one-step case.
-    pub(crate) fn write_cycle(&self, write: Gate<E>, gate: Gate<E>) -> Option<Vec<Gate<E>>> {
-        let seeds = tagged(tag::GATES_WRITE_CYCLE_SEEDS, || vec![gate]);
-        self.needs(seeds, write, None)
-            .then(|| self.trace(write, gate, None))
+    pub(crate) fn write_cycle(&mut self, write: Gate<E>, gate: Gate<E>) -> Option<Vec<Gate<E>>> {
+        let mut work = core::mem::take(&mut self.scratch.work);
+        let mut bounds = core::mem::take(&mut self.scratch.bounds);
+        let found = self.seed(&mut work, gate) && self.needs(&mut work, &mut bounds, write, None);
+        bounds.clear();
+        let cycle = found.then(|| self.trace(&mut bounds, write, gate, None));
+        work.clear();
+        bounds.clear();
+        self.scratch.work = work;
+        self.scratch.bounds = bounds;
+        cycle
     }
 
     /// The cycle sealing `lineage` through `through` would close, if any (DI-D-43). The seal only
@@ -99,31 +112,78 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// held write of `lineage` at or below `through`. One search from all of them at once is the
     /// cheap test: if it never needs the lowest of them, none is on a cycle. Only if it does is each
     /// tested alone, in epoch order.
-    pub(super) fn seal_cycle(&self, lineage: Key, through: E) -> Option<Vec<Gate<E>>> {
+    pub(super) fn seal_cycle(&mut self, lineage: Key, through: E) -> Option<Vec<Gate<E>>> {
         self.live(lineage)?;
-        let covered = tables::of(&self.gated, lineage, ..=through);
-        let (&(_, lowest, _), _) = covered.clone().next()?;
         let extra = Some(Gate {
             lineage,
             epoch: through,
         });
+        let mut work = core::mem::take(&mut self.scratch.work);
+        let mut bounds = core::mem::take(&mut self.scratch.bounds);
+        let found = self.sealing_needs(&mut work, &mut bounds, lineage, through, extra);
+        bounds.clear();
+        let cycle = found.map(|(write, gate)| self.trace(&mut bounds, write, gate, extra));
+        work.clear();
+        bounds.clear();
+        self.scratch.work = work;
+        self.scratch.bounds = bounds;
+        cycle
+    }
+
+    /// The held write of `lineage` at or below `through`, and its gate, that sealing it through
+    /// `through` would put on a cycle, if any. `work` and `bounds` are the search's, empty.
+    fn sealing_needs(
+        &self,
+        work: &mut Vec<Gate<E>>,
+        bounds: &mut Vec<(Key, E)>,
+        lineage: Key,
+        through: E,
+        extra: Option<Gate<E>>,
+    ) -> Option<(Gate<E>, Gate<E>)> {
+        let covered = tables::of(&self.gated, lineage, ..=through);
+        let (&(_, lowest, _), _) = covered.clone().next()?;
         let lowest = Gate {
             lineage,
             epoch: lowest,
         };
-        let seeds = tagged(tag::GATES_SEAL_CYCLE_SEEDS, || {
-            covered.clone().map(|(_, gate)| *gate).collect()
-        });
-        if !self.needs(seeds, lowest, extra) {
+        let seeded = covered.clone().all(|(_, &gate)| self.seed(work, gate));
+        if !seeded || !self.needs(work, bounds, lowest, extra) {
             return None;
         }
         covered
             .map(|(&(_, epoch, _), &gate)| (Gate { lineage, epoch }, gate))
             .find(|&(write, gate)| {
-                let seeds = tagged(tag::GATES_SEAL_CYCLE_SEED, || vec![gate]);
-                self.needs(seeds, write, extra)
+                work.clear();
+                bounds.clear();
+                self.seed(work, gate) && self.needs(work, bounds, write, extra)
             })
-            .map(|(write, gate)| self.trace(write, gate, extra))
+    }
+
+    /// Put `gate` on a search's `work`, reporting a gate past its room as an inconsistency.
+    /// Whether it fitted.
+    fn seed(&self, work: &mut Vec<Gate<E>>, gate: Gate<E>) -> bool {
+        let fits = within(work, gate).is_ok();
+        if !fits {
+            self.inconsistent(
+                "a cycle search visited more gates than the operations declared",
+                format_args!("gate {gate:?}"),
+            );
+        }
+        fits
+    }
+
+    /// Put `step` on a trace's `steps`, reporting a step past their room as an inconsistency.
+    /// Whether it fitted.
+    fn step(&self, steps: &mut Vec<Step<E>>, step: Step<E>) -> bool {
+        let (write, gate) = (step.write, step.gate);
+        let fits = within(steps, step).is_ok();
+        if !fits {
+            self.inconsistent(
+                "a traced cycle took more steps than the operations declared",
+                format_args!("write {write:?}, gated on {gate:?}"),
+            );
+        }
+        fits
     }
 
     /// How far `target`'s lineage must complete its writes for its mark to reach `target`'s epoch,
@@ -171,11 +231,16 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         Some(extent)
     }
 
-    /// Whether reaching every gate in `seeds` needs, transitively, `goal`'s lineage to complete its
-    /// writes at or above `goal`'s epoch.
-    fn needs(&self, seeds: Vec<Gate<E>>, goal: Gate<E>, extra: Option<Gate<E>>) -> bool {
-        let mut bounds = Vec::new();
-        let mut work = seeds;
+    /// Whether reaching every gate on `work`, its seeds, needs, transitively, `goal`'s lineage to
+    /// complete its writes at or above `goal`'s epoch. `bounds` starts empty; both are the
+    /// search's own, and are left as it left them.
+    fn needs(
+        &self,
+        work: &mut Vec<Gate<E>>,
+        bounds: &mut Vec<(Key, E)>,
+        goal: Gate<E>,
+        extra: Option<Gate<E>>,
+    ) -> bool {
         while let Some(gate) = work.pop() {
             let Some(extent) = self.extent(gate, extra) else {
                 continue;
@@ -183,30 +248,65 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             if gate.lineage == goal.lineage && extent >= goal.epoch {
                 return true;
             }
-            let Some(lower) = raise(&mut bounds, gate.lineage, extent) else {
-                continue;
+            let lower = match raise(bounds, gate.lineage, extent) {
+                Ok(Some(lower)) => lower,
+                Ok(None) => continue,
+                Err(lineage) => {
+                    self.unbounded(lineage);
+                    return false;
+                }
             };
-            let gated = tables::of(&self.gated, gate.lineage, span(lower, extent));
-            tagged(tag::GATES_NEEDS_WORK, || {
-                work.extend(gated.map(|(_, gate)| *gate));
-            });
+            let mut gated = tables::of(&self.gated, gate.lineage, span(lower, extent));
+            if !gated.all(|(_, &gate)| self.seed(work, gate)) {
+                return false;
+            }
         }
         false
+    }
+
+    /// A search reached more lineages than were declared: an inconsistency.
+    fn unbounded(&self, lineage: Key) {
+        self.inconsistent(
+            "a cycle search reached more lineages than were declared",
+            format_args!("lineage {lineage}"),
+        );
     }
 
     /// The cycle through a held write `start`, gated on `gate`, that [`Self::needs`] found: each
     /// held write's epoch followed by its gate, starting at `start`, and ending at the gate whose
     /// reaching needs `start` again. The same search, breadth first, with a parent per step, so the
     /// cycle named is a shortest one.
-    fn trace(&self, start: Gate<E>, gate: Gate<E>, extra: Option<Gate<E>>) -> Vec<Gate<E>> {
-        let mut steps = tagged(tag::GATES_TRACE_STEPS, || {
-            vec![Step {
-                write: start,
-                gate,
-                parent: None,
-            }]
-        });
-        let mut bounds = Vec::new();
+    fn trace(
+        &mut self,
+        bounds: &mut Vec<(Key, E)>,
+        start: Gate<E>,
+        gate: Gate<E>,
+        extra: Option<Gate<E>>,
+    ) -> Vec<Gate<E>> {
+        let mut steps = core::mem::take(&mut self.scratch.steps);
+        let cycle = self.trace_in(&mut steps, bounds, start, gate, extra);
+        steps.clear();
+        self.scratch.steps = steps;
+        cycle
+    }
+
+    /// [`trace`](Self::trace), into its `steps` and `bounds`, both empty.
+    fn trace_in(
+        &self,
+        steps: &mut Vec<Step<E>>,
+        bounds: &mut Vec<(Key, E)>,
+        start: Gate<E>,
+        gate: Gate<E>,
+        extra: Option<Gate<E>>,
+    ) -> Vec<Gate<E>> {
+        let first = Step {
+            write: start,
+            gate,
+            parent: None,
+        };
+        if !self.step(steps, first) {
+            return tagged(tag::GATES_TRACE_UNFOUND, || vec![start, gate]);
+        }
         let mut next = 0;
         while next < steps.len() {
             let index = next;
@@ -228,22 +328,28 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 cycle.reverse();
                 return cycle;
             }
-            let Some(lower) = raise(&mut bounds, gate.lineage, extent) else {
-                continue;
+            let lower = match raise(bounds, gate.lineage, extent) {
+                Ok(Some(lower)) => lower,
+                Ok(None) => continue,
+                Err(lineage) => {
+                    self.unbounded(lineage);
+                    break;
+                }
             };
             for (&(_, epoch, _), &next_gate) in
                 tables::of(&self.gated, gate.lineage, span(lower, extent))
             {
-                tagged(tag::GATES_TRACE_STEP, || {
-                    steps.push(Step {
-                        write: Gate {
-                            lineage: gate.lineage,
-                            epoch,
-                        },
-                        gate: next_gate,
-                        parent: Some(index),
-                    });
-                });
+                let step = Step {
+                    write: Gate {
+                        lineage: gate.lineage,
+                        epoch,
+                    },
+                    gate: next_gate,
+                    parent: Some(index),
+                };
+                if !self.step(steps, step) {
+                    return tagged(tag::GATES_TRACE_UNFOUND, || vec![start, gate]);
+                }
             }
         }
         // `needs` found the cycle, and this is the same search.
@@ -327,6 +433,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// what waits for it at once.
     pub(super) fn release_through(&mut self, lineage: Key, through: E, due: &mut Due<E, T, I>) {
         // The held operations are kept in push order, so they are released in it.
+        let mut unlisted = None;
         for held in self.held.values_mut() {
             if held.ready || held.gate.lineage != lineage || held.gate.epoch > through {
                 continue;
@@ -336,9 +443,15 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 self.gated
                     .remove(&(write.lineage, write.epoch, held.op.seq));
             }
-            tagged(tag::GATES_RELEASE_THROUGH_DUE, || {
-                due.released.push(held.op)
-            });
+            if within(&mut due.released, held.op).is_err() {
+                unlisted.get_or_insert(held.op);
+            }
+        }
+        if let Some(op) = unlisted {
+            self.inconsistent(
+                "a change released more operations than the operations declared",
+                format_args!("operation {op:?}, lineage {lineage}, through {through:?}"),
+            );
         }
     }
 

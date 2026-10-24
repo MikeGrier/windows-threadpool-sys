@@ -2,7 +2,7 @@
 //! The core's failures (DI-D-12, DI-D-34): resolving them, importing one learned of outside the
 //! instance, and the inventory.
 
-use super::{Actions, DurableIoCore, V};
+use super::{CoreActions, DurableIoCore, V};
 use crate::capacity::{AtCapacity, Limit};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
@@ -13,7 +13,7 @@ use crate::types::{
 };
 
 /// What an import recorded and made due, or why it was refused.
-type ImportAnswer<E, B, K> = Result<(Imported<V<E, K>>, Actions<E, B, K>), ImportError<V<E, K>>>;
+type ImportAnswer<E, K> = Result<(Imported<V<E, K>>, CoreActions), ImportError<V<E, K>>>;
 
 impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// Resolve failures, validated whole and applied together: a refused call changes nothing and
@@ -25,7 +25,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     pub fn resolve(
         &mut self,
         items: Vec<(FailureToken, Resolution)>,
-    ) -> Result<Actions<E, B, K>, ResolveError<V<E, K>>> {
+    ) -> Result<CoreActions, ResolveError<V<E, K>>> {
         let was_empty = self.queue.is_empty();
         let due = self.durability.resolve(items)?;
         Ok(self.act(due, was_empty))
@@ -39,7 +39,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// [`ImportError::UnknownLineage`] for an [`ImportScope::Lineage`] that is not this core's live
     /// one, and [`ImportError::AtCapacity`] when the core holds as many unresolved imported
     /// failures as it was built for (DI-D-107); nothing is recorded.
-    pub fn import_failure(&mut self, scope: ImportScope<V<E, K>>) -> ImportAnswer<E, B, K> {
+    pub fn import_failure(&mut self, scope: ImportScope<V<E, K>>) -> ImportAnswer<E, K> {
         let (reach, only, unmatched) =
             import_reach(&scope, &self.domains, |lineage| self.is_live(lineage))?;
         if self.durability.imports() >= self.capacity.imports {

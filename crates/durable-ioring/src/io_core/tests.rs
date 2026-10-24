@@ -6,7 +6,7 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use super::{CoreActions, DurableIoCore};
+use super::{CoreActions, DurableIoCore, Taken};
 use crate::backend::{
     Completion, IoBackend, RefusalCause, RegisteredRegion, Submission, SubmissionData,
     SubmissionOp, SubmissionToken,
@@ -30,6 +30,7 @@ mod failures;
 mod flush_failures;
 mod gates;
 mod lineages;
+mod lists;
 mod pairs;
 mod provider;
 mod refusals;
@@ -43,6 +44,27 @@ const OTHER: IoTargetKey = IoTargetKey(2);
 type Core = DurableIoCore<u64, Vec<u8>, &'static str, Ticks>;
 type V = DioringIds<u64, u64>;
 type Pushed = Result<OpId, PushError<V, Vec<u8>, &'static str>>;
+
+/// What a call left to do, as lists of its own.
+type Due = Taken<V, Vec<u8>>;
+
+/// What a test acts on: what a call returned, its submissions and requests still in the core, or
+/// those already taken out to look at.
+trait Acts {
+    fn taken(self, core: &mut Core) -> Due;
+}
+
+impl Acts for CoreActions {
+    fn taken(self, core: &mut Core) -> Due {
+        core.taken(self)
+    }
+}
+
+impl Acts for Due {
+    fn taken(self, _: &mut Core) -> Due {
+        self
+    }
+}
 
 fn nz(n: u32) -> NonZeroU32 {
     NonZeroU32::new(n).expect("non-zero")
@@ -244,7 +266,7 @@ impl Rig {
 
     /// Seal through `through`, telling the oracle of a new seal: the answer, and what it made due,
     /// not yet acted on.
-    fn sealed(&mut self, through: Epoch<V>) -> (DurabilityRequest<V>, CoreActions<V, Vec<u8>>) {
+    fn sealed(&mut self, through: Epoch<V>) -> (DurabilityRequest<V>, Due) {
         let (answer, actions) = self
             .core
             .make_durable_through(through)
@@ -252,7 +274,19 @@ impl Rig {
         if answer == DurabilityRequest::Submitted {
             self.oracle.sealed(through);
         }
-        (answer, actions)
+        (answer, self.core.taken(actions))
+    }
+
+    /// Hand `completion` to the core: what that made due, taken out to look at.
+    fn completed(&mut self, completion: Completion<Vec<u8>>) -> Due {
+        let actions = self.core.complete(completion);
+        self.core.taken(actions)
+    }
+
+    /// The submissions refused before, taken out to look at.
+    fn retried(&mut self) -> Due {
+        let actions = self.core.retry();
+        self.core.taken(actions)
     }
 
     fn write(&mut self, epoch: u64, offset: u64, bytes: &[u8]) -> Pushed {
@@ -270,15 +304,16 @@ impl Rig {
 
     /// Push what the core asks for, handing refusals back and acting on what they make due, and
     /// keep its provider requests: the engine's `act`, played here.
-    fn act(&mut self, actions: CoreActions<V, Vec<u8>>) -> bool {
+    fn act(&mut self, actions: impl Acts) -> bool {
         let mut deliver = false;
-        let mut pending = std::collections::VecDeque::from([actions]);
+        let mut pending = std::collections::VecDeque::from([actions.taken(&mut self.core)]);
         while let Some(actions) = pending.pop_front() {
             deliver |= actions.deliver;
             self.requests.extend(actions.requests);
             for submission in actions.submit {
                 if let Err(refused) = self.backend.push(submission) {
-                    pending.push_back(self.core.refused(refused));
+                    let more = self.core.refused(refused);
+                    pending.push_back(self.core.taken(more));
                 }
             }
         }
@@ -556,7 +591,7 @@ fn a_seal_commits_each_target_its_writes_reached_once() {
     rig.backend.submit().expect("submit");
     let mut commits = Vec::new();
     while let Some(completion) = rig.backend.pop().expect("never fails") {
-        let actions = rig.core.complete(completion);
+        let actions = rig.completed(completion);
         commits.extend(actions.submit.iter().map(|s| s.target));
         rig.act(actions);
     }
@@ -580,7 +615,7 @@ fn a_failed_commit_is_reported_as_a_failure_suspecting_its_writes() {
     rig.seal(1);
     rig.backend.submit().expect("submit");
     let write = rig.backend.pop().expect("never fails").expect("the write");
-    let actions = rig.core.complete(write);
+    let actions = rig.completed(write);
     assert_eq!(actions.submit.len(), 1, "the commit is due");
     rig.act(actions);
     // The commit runs against a target the backend no longer has, and fails.
@@ -631,14 +666,14 @@ fn a_refused_commit_is_kept_and_emitted_again() {
     let write = rig.backend.pop().expect("never fails").expect("the write");
     // Fill the submission queue so the commit the write's completion makes due is refused.
     rig.read(0, 1).expect("accepted");
-    let actions = rig.core.complete(write);
+    let actions = rig.completed(write);
     assert_eq!(actions.submit.len(), 1);
     rig.act(actions);
     assert_eq!(rig.backend.queued(), 1, "only the read is queued");
     rig.backend.submit().expect("submit");
-    let retried = rig.core.retry();
+    let retried = rig.retried();
     assert_eq!(retried.submit.len(), 1, "the refused commit comes back");
-    assert!(rig.core.retry().submit.is_empty(), "and only once");
+    assert!(rig.retried().submit.is_empty(), "and only once");
     rig.act(retried);
     rig.run();
     let shown = shown(&mut rig);
@@ -658,7 +693,7 @@ fn a_refused_commit_rides_on_the_next_actions() {
     rig.act(actions);
     rig.backend.submit().expect("submit");
     let read = rig.backend.pop().expect("never fails").expect("the read");
-    let actions = rig.core.complete(read);
+    let actions = rig.completed(read);
     assert_eq!(
         actions.submit.len(),
         1,
@@ -963,7 +998,7 @@ fn each_core_has_its_own_lineages() {
 #[test]
 fn nothing_to_do_is_empty() {
     let mut rig = Rig::new();
-    assert!(rig.core.retry().is_empty());
+    assert!(rig.retried().is_empty());
     let (_, actions) = rig.sealed(rig.epoch(1));
     assert!(!actions.is_empty(), "it delivered");
 }

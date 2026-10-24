@@ -181,7 +181,8 @@ fn a_full_queue_is_rung_and_the_push_made_once_more() {
         .expect("the default lineage");
     assert_eq!(engine.backend.queued(), 0);
     assert_eq!(engine.backend.completed(), 2, "both commits ran");
-    assert!(engine.core.retry().is_empty(), "nothing was kept");
+    let retried = engine.core.retry();
+    assert!(engine.core.taken(retried).is_empty(), "nothing was kept");
 }
 
 #[test]

@@ -286,15 +286,16 @@ impl Rig {
         self.phases.push(take(name));
     }
 
-    /// Push what the core asks for, handing refusals back to it.
-    fn act(&mut self, actions: CoreActions<V, Vec<u8>>) {
-        let mut pending = vec![actions];
-        while let Some(actions) = pending.pop() {
-            for submission in actions.submit {
-                if let Err(refused) = self.backend.push(submission) {
-                    let core = &mut self.core;
-                    pending.push(counted(|| core.refused(refused)));
-                }
+    /// Push what the core asks for, handing refusals back to it, as the engine does.
+    fn act(&mut self, _: CoreActions) {
+        loop {
+            let core = &mut self.core;
+            let Some(submission) = counted(|| core.next_submission()) else {
+                return;
+            };
+            if let Err(refused) = self.backend.push(submission) {
+                let core = &mut self.core;
+                let _ = counted(|| core.refused(refused));
             }
         }
     }
@@ -567,33 +568,33 @@ fn failures() -> Vec<Measured> {
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
-    ("construction, with two targets", 20),
+    ("construction, with two targets", 33),
     ("writes, first round", 3),
-    ("write completions, first round", 19),
+    ("write completions, first round", 3),
     ("pops, first round", 0),
     ("writes, second round", 0),
-    ("write completions, second round", 16),
+    ("write completions, second round", 0),
     ("pops, second round", 0),
     ("reads", 0),
     ("read completions and pops", 0),
-    ("a seal covering writes", 3),
-    ("commit completions", 9),
+    ("a seal covering writes", 0),
+    ("commit completions", 0),
     ("pops after the seal", 0),
-    ("a seal covering no writes", 2),
+    ("a seal covering no writes", 0),
     ("completions and pops after the empty seal", 0),
-    ("gated writes", 8),
-    ("the gate's epoch written", 16),
-    ("the gate's epoch sealed, releasing the gated writes", 16),
-    ("the gated writes sealed", 6),
+    ("gated writes", 0),
+    ("the gate's epoch written", 0),
+    ("the gate's epoch sealed, releasing the gated writes", 0),
+    ("the gated writes sealed", 0),
     ("a lineage minted", 0),
-    ("the minted lineage written", 16),
+    ("the minted lineage written", 0),
     ("a busy lineage refused, and its holds named", 0),
-    ("the minted lineage sealed", 10),
-    ("the minted lineage ended", 2),
+    ("the minted lineage sealed", 0),
+    ("the minted lineage ended", 0),
     ("a target added", 1),
-    ("the added target written", 1),
+    ("the added target written", 0),
     ("a busy target refused, and its holds named", 0),
-    ("the added target sealed", 6),
+    ("the added target sealed", 0),
     ("the added target removed", 0),
     ("lineages queried", 0),
     ("close", 0),
@@ -601,16 +602,16 @@ const CLEAN: &[(&str, u64)] = &[
 
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
-    ("construction, with two targets", 20),
-    ("writes before the failure", 22),
-    ("a commit failure observed", 20),
+    ("construction, with two targets", 33),
+    ("writes before the failure", 6),
+    ("a commit failure observed", 10),
     ("failures queried", 2),
-    ("writes re-issued", 16),
-    ("a heal resolved", 3),
-    ("the heal taking effect at the next seal", 10),
-    ("writes before the import", 16),
-    ("a failure imported", 9),
-    ("an abandon resolved", 3),
+    ("writes re-issued", 0),
+    ("a heal resolved", 2),
+    ("the heal taking effect at the next seal", 0),
+    ("writes before the import", 0),
+    ("a failure imported", 7),
+    ("an abandon resolved", 1),
 ];
 
 /// Each phase's allocations by tag, as last recorded, in the order the tags were first seen.
@@ -666,6 +667,37 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "durability::new::served_names",
         1,
     ),
+    ("construction, with two targets", "durability::new::due", 4),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_live",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_covered",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_work",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_bounds",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_steps",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_pairs",
+        1,
+    ),
     (
         "construction, with two targets",
         "durability::new::served",
@@ -684,6 +716,21 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         1,
     ),
     ("construction, with two targets", "io_core::new::held", 1),
+    (
+        "construction, with two targets",
+        "io_core::new::unpushed",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "io_core::new::outgoing",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "io_core::new::requests",
+        1,
+    ),
     ("construction, with two targets", "io_core::new::served", 1),
     (
         "construction, with two targets",
@@ -696,138 +743,7 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "io_core::complete::queue",
         3,
     ),
-    (
-        "write completions, first round",
-        "durability::advance::live",
-        16,
-    ),
-    (
-        "write completions, second round",
-        "durability::advance::live",
-        16,
-    ),
-    ("a seal covering writes", "durability::advance::live", 1),
-    (
-        "a seal covering writes",
-        "durability::start_seals::flush",
-        1,
-    ),
-    ("a seal covering writes", "io_core::act::commit_submit", 1),
-    ("commit completions", "durability::providers::cover::ops", 6),
-    ("commit completions", "durability::advance::live", 2),
-    ("commit completions", "durability::advance_mark::durable", 1),
-    ("a seal covering no writes", "durability::advance::live", 1),
-    (
-        "a seal covering no writes",
-        "durability::advance_mark::durable",
-        1,
-    ),
-    ("gated writes", "durability::gates::write_cycle::seeds", 4),
-    ("gated writes", "durability::gates::raise::bound", 4),
-    ("the gate's epoch written", "durability::advance::live", 16),
-    (
-        "the gate's epoch sealed, releasing the gated writes",
-        "durability::advance::live",
-        7,
-    ),
-    (
-        "the gate's epoch sealed, releasing the gated writes",
-        "durability::start_seals::flush",
-        1,
-    ),
-    (
-        "the gate's epoch sealed, releasing the gated writes",
-        "io_core::act::commit_submit",
-        1,
-    ),
-    (
-        "the gate's epoch sealed, releasing the gated writes",
-        "durability::providers::cover::ops",
-        4,
-    ),
-    (
-        "the gate's epoch sealed, releasing the gated writes",
-        "durability::advance_mark::durable",
-        1,
-    ),
-    (
-        "the gate's epoch sealed, releasing the gated writes",
-        "durability::gates::release_through::due",
-        1,
-    ),
-    (
-        "the gate's epoch sealed, releasing the gated writes",
-        "io_core::release::submit",
-        1,
-    ),
-    ("the gated writes sealed", "durability::advance::live", 2),
-    (
-        "the gated writes sealed",
-        "durability::start_seals::flush",
-        1,
-    ),
-    ("the gated writes sealed", "io_core::act::commit_submit", 1),
-    (
-        "the gated writes sealed",
-        "durability::providers::cover::ops",
-        1,
-    ),
-    (
-        "the gated writes sealed",
-        "durability::advance_mark::durable",
-        1,
-    ),
-    (
-        "the minted lineage written",
-        "durability::advance::live",
-        16,
-    ),
-    ("the minted lineage sealed", "durability::advance::live", 3),
-    (
-        "the minted lineage sealed",
-        "durability::start_seals::flush",
-        1,
-    ),
-    (
-        "the minted lineage sealed",
-        "io_core::act::commit_submit",
-        1,
-    ),
-    (
-        "the minted lineage sealed",
-        "durability::providers::cover::ops",
-        4,
-    ),
-    (
-        "the minted lineage sealed",
-        "durability::advance_mark::durable",
-        1,
-    ),
-    (
-        "the minted lineage ended",
-        "durability::lineages::end::event",
-        1,
-    ),
-    ("the minted lineage ended", "durability::advance::live", 1),
     ("a target added", "domains::intern_all::shared", 1),
-    ("the added target written", "durability::advance::live", 1),
-    ("the added target sealed", "durability::advance::live", 2),
-    (
-        "the added target sealed",
-        "durability::start_seals::flush",
-        1,
-    ),
-    ("the added target sealed", "io_core::act::commit_submit", 1),
-    (
-        "the added target sealed",
-        "durability::providers::cover::ops",
-        1,
-    ),
-    (
-        "the added target sealed",
-        "durability::advance_mark::durable",
-        1,
-    ),
 ];
 
 /// As [`CLEAN_TAGS`], for the failure paths.
@@ -883,6 +799,37 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "durability::new::served_names",
         1,
     ),
+    ("construction, with two targets", "durability::new::due", 4),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_live",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_covered",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_work",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_bounds",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_steps",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::scratch_pairs",
+        1,
+    ),
     (
         "construction, with two targets",
         "durability::new::served",
@@ -901,6 +848,21 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         1,
     ),
     ("construction, with two targets", "io_core::new::held", 1),
+    (
+        "construction, with two targets",
+        "io_core::new::unpushed",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "io_core::new::outgoing",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "io_core::new::requests",
+        1,
+    ),
     ("construction, with two targets", "io_core::new::served", 1),
     (
         "construction, with two targets",
@@ -913,18 +875,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         3,
     ),
     ("writes before the failure", "io_core::complete::queue", 3),
-    ("writes before the failure", "durability::advance::live", 16),
-    ("a commit failure observed", "durability::advance::live", 3),
-    (
-        "a commit failure observed",
-        "durability::start_seals::flush",
-        1,
-    ),
-    (
-        "a commit failure observed",
-        "io_core::act::commit_submit",
-        1,
-    ),
     (
         "a commit failure observed",
         "durability::observe::suspect",
@@ -947,45 +897,10 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "durability::observe::failure",
         1,
     ),
-    ("a commit failure observed", "durability::observe::event", 1),
-    (
-        "a commit failure observed",
-        "durability::providers::cover::ops",
-        2,
-    ),
     ("a commit failure observed", "durability::mark::marking", 2),
-    ("a commit failure observed", "durability::mark::event", 2),
     ("failures queried", "durability::failures::infos", 1),
     ("failures queried", "durability::failures::markings", 1),
-    ("writes re-issued", "durability::advance::live", 16),
     ("a heal resolved", "durability::resolve::heal_pending", 2),
-    ("a heal resolved", "durability::advance::live", 1),
-    (
-        "the heal taking effect at the next seal",
-        "durability::advance::live",
-        3,
-    ),
-    (
-        "the heal taking effect at the next seal",
-        "durability::start_seals::flush",
-        1,
-    ),
-    (
-        "the heal taking effect at the next seal",
-        "io_core::act::commit_submit",
-        1,
-    ),
-    (
-        "the heal taking effect at the next seal",
-        "durability::providers::cover::ops",
-        4,
-    ),
-    (
-        "the heal taking effect at the next seal",
-        "durability::release_healed::event",
-        1,
-    ),
-    ("writes before the import", "durability::advance::live", 16),
     ("a failure imported", "durability::observe::suspect", 3),
     (
         "a failure imported",
@@ -995,15 +910,7 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     ("a failure imported", "durability::observe::epochs_epoch", 1),
     ("a failure imported", "ids::failure_token::mint", 1),
     ("a failure imported", "types::suspect_set::new", 1),
-    ("a failure imported", "durability::observe::event", 1),
-    ("a failure imported", "durability::advance::live", 1),
     ("an abandon resolved", "durability::resolve::abandoned", 1),
-    (
-        "an abandon resolved",
-        "durability::resolve::abandoned_event",
-        1,
-    ),
-    ("an abandon resolved", "durability::advance::live", 1),
 ];
 
 /// Each phase's total.

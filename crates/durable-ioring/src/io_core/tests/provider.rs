@@ -209,7 +209,7 @@ fn an_answer_for_an_ended_lineage_reports_nothing() {
         &domain("log"),
         DomainOutcome::Succeeded,
     );
-    assert!(actions.is_empty());
+    assert!(rig.core.taken(actions).is_empty());
     assert!(rig.entries().is_empty());
 }
 

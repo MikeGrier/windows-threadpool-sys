@@ -9,7 +9,7 @@
 
 use alloc::sync::Arc;
 
-use super::{Actions, DurableIoCore, V};
+use super::{CoreActions, DurableIoCore, V};
 use crate::alloc_tags::{tag, tagged};
 use crate::capacity::{Capacity, ConstructionError};
 use crate::clock::StampClock;
@@ -89,7 +89,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         seal: u64,
         domain: &FlushDomain,
         outcome: DomainOutcome,
-    ) -> Actions<E, B, K> {
+    ) -> CoreActions {
         let was_empty = self.queue.is_empty();
         let id = self
             .domains

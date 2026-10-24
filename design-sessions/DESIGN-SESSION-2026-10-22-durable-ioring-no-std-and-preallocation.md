@@ -28,6 +28,8 @@ investigated and proposed. Decisions that resulted, all in
   rest of DI-23.10 (continued 2026-10-24).
 - [DI-D-110](../crates/durable-ioring/DESIGN-NOTES.md#di-d-110) -- a recorded seal holds the place of a write it covers
   until the mark passes it (continued 2026-10-24).
+- [DI-D-111](../crates/durable-ioring/DESIGN-NOTES.md#di-d-111) -- what a call makes due stays in the core, in storage
+  made at construction (continued 2026-10-24).
 
 The work is queued as DI-M23 in [CHECKLIST.md](../crates/durable-ioring/CHECKLIST.md). The prior art behind these
 decisions is in [DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md](DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md).
@@ -509,6 +511,33 @@ Working it out in the code refined (a) in two ways:
   the write's.
 
 The seal queue then moved onto one table for every lineage, keyed by lineage and seal number, made for `operations`.
+
+## DI-23.12.2: the lists a call collects into and hands the driver (continued 2026-10-24)
+
+The engineer asked for DI-23.12.2 to be implemented, its item text saying the `CoreActions` a call hands the driver are to
+be drained in place as `drain_requests` is. The assistant took that as settling the shape and built it, recording it as
+DI-D-111 because it changes DI-D-50 P11's ratified `CoreActions { submit, deliver }`.
+
+Three shapes were weighed for the submissions. Recycling the vector the driver was handed -- the driver giving it back --
+leaves an obligation nothing enforces, and a driver that forgets it allocates every call. A borrow of the core's queue in
+the value returned cannot work: the driver hands a refused submission back to the core while it is still taking them.
+Taking them one at a time from a queue the core keeps has neither problem, and keeps the order the engine's own pending
+list kept, so it was taken.
+
+For the durability core's lists the choice was between making every change write into one set the core owns, which
+changes every function that returns what it made due and every one of the durability core's own tests, and lending one
+set out per change, which changes neither. Lending was taken. Its one hazard, a change made while the set is out, gets a
+set of its own at the same sizes: first written as lists with no room, which the durability core's own tests -- which
+never give the set back -- showed refusing changes well inside their bounds. A set too small is an inconsistency; an
+allocation is only a cost, and the allocation test sees it.
+
+Working out each bound for its fill test showed the cycle search's work list had been given twice what it needs: the
+search returns on reaching the sealed lineage's range, so it never scans the gated writes it was seeded with, and every
+gate on the list but a lone first seed is a distinct gated write's. A bound twice too large cannot be checked by a
+sabotage of it, so it was tightened to the operations.
+
+Two allocations were found that no step owned: a provider request's contents and a gate cycle's report. Both reach the
+consumer, so they were queued as DI-23.12.8 for the engineer rather than given a shape here.
 
 ## Working positions and open questions (not decisions)
 

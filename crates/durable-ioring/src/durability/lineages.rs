@@ -78,7 +78,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// does, and an operation held by a gate on one of its epochs, or a held write of its own, is
     /// never issued (DI-D-43). The lineage must be live and not the default.
     pub(crate) fn end(&mut self, lineage: Key) -> Due<E, T, I> {
-        let mut due = Due::default();
+        let mut due = self.fresh();
         let Some(state) = self
             .lineages
             .get_mut(&lineage)

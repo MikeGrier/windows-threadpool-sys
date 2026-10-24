@@ -226,7 +226,7 @@
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "Guarantee 3: a later failure never reaches back past a write covered successfully. Caught by the finality unit test.",
-      "find": ["        // `ops` is in push order, as the writes are kept.\n        self.let_go(|write| {\n            ops.binary_search_by_key(&write.op.seq, |(op, _)| op.seq)\n                .is_ok()\n        });"],
+      "find": ["        if !ops.is_empty() {\n            self.let_go(|write| {\n                ops.binary_search_by_key(&write.op.seq, |(op, _)| op.seq)\n                    .is_ok()\n            });\n        }\n"],
       "replace": [""]
     },
     {
@@ -386,24 +386,24 @@
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "A covered marking cites who answered (DI-D-47): the default's flush, which dioring observed, or the provider, whose answer is its own warranty. Swapping them attributes a provider's warranty to an observed flush, which is exactly the misportrayed provenance the engineer ruled out.",
-      "find": ["                        flushed: write.routing.default,\n                        provider: write.routing.provider,\n"],
-      "replace": ["                        flushed: write.routing.provider,\n                        provider: write.routing.default,\n"]
+      "find": ["                flushed: write.routing.default,\n                provider: write.routing.provider,\n"],
+      "replace": ["                flushed: write.routing.provider,\n                provider: write.routing.default,\n"]
     },
     {
       "name": "DI-3.9.2: a covered marking never cites the provider",
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "A write the provider covered must say so: information that came from a durability provider is cited as the provider's (DI-D-47). A marking that always reads as the default's flush hides that the warranty was the consumer's.",
-      "find": ["                    provider: write.routing.provider,\n"],
-      "replace": ["                    provider: false,\n"]
+      "find": ["                provider: write.routing.provider,\n"],
+      "replace": ["                provider: false,\n"]
     },
     {
       "name": "DI-3.9.2: a covered marking always cites a flush",
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "A file only the provider serves had no flush of dioring's; a marking claiming one reports an observation dioring never made (DI-D-47).",
-      "find": ["                    flushed: write.routing.default,\n"],
-      "replace": ["                    flushed: true,\n"]
+      "find": ["                flushed: write.routing.default,\n"],
+      "replace": ["                flushed: true,\n"]
     },
     {
       "name": "DI-3.2.4.2: only the first failure suspecting a write is marked",
@@ -626,8 +626,8 @@
       "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "Guarantee 9: a gated operation is released once its gate is durable. Never released, it waits forever. Caught by the core release tests and the ring tests waiting for the completion.",
-      "find": ["            tagged(tag::GATES_RELEASE_THROUGH_DUE, || {", "                due.released.push(held.op)", "            });"],
-      "replace": [""]
+      "find": ["            if within(&mut due.released, held.op).is_err() {"],
+      "replace": ["            if false {"]
     },
     {
       "name": "DI-3.2.5.2: operations released together go in gate order",
@@ -666,7 +666,7 @@
       "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "DI-D-43: the search from every held write under a seal together can need the lowest of them without any being on a cycle, so a positive is confirmed write by write. Trusted, it refuses a seal that closes nothing. Caught by the core test of a seal the quick test suspects.",
-      "find": ["            .find(|&(write, gate)| {", "                let seeds = tagged(tag::GATES_SEAL_CYCLE_SEED, || vec![gate]);", "                self.needs(seeds, write, extra)", "            })"],
+      "find": ["            .find(|&(write, gate)| {\n                work.clear();\n                bounds.clear();\n                self.seed(work, gate) && self.needs(work, bounds, write, extra)\n            })"],
       "replace": ["            .find(|_| true)"]
     },
     {
@@ -674,8 +674,8 @@
       "file": "src/durability/gates.rs",
       "expect": "survives",
       "why": "The manifest checking itself, and the claim that the quick test only filters: the searches it skips would each answer no, so skipping it changes no answer, only the cost.",
-      "find": ["        if !self.needs(seeds, lowest, extra) {"],
-      "replace": ["        if false && !self.needs(seeds, lowest, extra) {"]
+      "find": ["        if !seeded || !self.needs(work, bounds, lowest, extra) {"],
+      "replace": ["        if !seeded || (false && !self.needs(work, bounds, lowest, extra)) {"]
     },
     {
       "name": "DI-3.2.5.2: a seal already made does not widen what reaching an epoch needs",
@@ -738,8 +738,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-43: a released operation is emitted with the actions of the change that released it. Never emitted, it never completes. Caught by every test that waits for a gated operation.",
-      "find": ["        for id in released {\n            self.release(id, &mut submit);\n        }\n"],
-      "replace": ["        drop(released);\n"]
+      "find": ["        for id in due.released.drain(..) {\n            self.release(id);\n        }\n"],
+      "replace": ["        due.released.clear();\n"]
     },
     {
       "name": "DI-3.2.5.2: the oracle lets a gated operation complete before its gate",
@@ -1154,16 +1154,16 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-52: a commit the backend refuses is kept and emitted again; dropping it leaves its seal waiting forever.",
-      "find": ["            tagged(tag::IO_CORE_REFUSED_UNPUSHED, || {", "                self.unpushed.push(submission)", "            });"],
-      "replace": ["            drop(submission);"]
+      "find": ["            if within(&mut self.unpushed, submission).is_err() {"],
+      "replace": ["            if { drop(submission); false } {"]
     },
     {
       "name": "DI-3.10.3.5.2: a refused commit is not emitted with the next actions",
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-52: a kept commit rides on the next actions, so a driver that only acts on actions still issues it.",
-      "find": ["        let mut submit = core::mem::take(&mut self.unpushed);\n"],
-      "replace": ["        let mut submit = Vec::new();\n"]
+      "find": ["        self.emit_unpushed();\n        for id in due.released.drain(..) {"],
+      "replace": ["        for id in due.released.drain(..) {"]
     },
     {
       "name": "DI-3.10.3.5.2: deliver is set whenever the queue holds entries",
@@ -1322,8 +1322,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-27: a seal touching a served domain is answered by the provider; without its request the seal never finishes.",
-      "find": ["        let mut requests = tagged(tag::IO_CORE_ACT_REQUESTS, || {", "            Vec::with_capacity(calls.len())", "        });", "        for call in calls {", "            let request = self.request(call);", "            tagged(tag::IO_CORE_ACT_REQUEST, || requests.push(request));", "        }"],
-      "replace": ["        let requests = {", "            let _ = calls;", "            Vec::new()", "        };"]
+      "find": ["            if within_queue(&mut self.requests, request).is_err() {"],
+      "replace": ["            if { drop(request); false } {"]
     },
     {
       "name": "DI-3.10.3.5.3: every provider answer is taken as success",
@@ -1386,16 +1386,16 @@
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "DI-D-52: a refused submission the core originated goes back to it, which keeps it and emits it again; dropped, its seal waits forever.",
-      "find": ["                    let more = self.core.refused(refused);", "                    tagged(tag::ENGINE_ACT_REFUSED, || pending.push_back(more));"],
-      "replace": ["                    drop(refused);"]
+      "find": ["                deliver |= self.core.refused(refused).deliver;"],
+      "replace": ["                drop(refused);"]
     },
     {
       "name": "DI-3.10.3.5.6.1: the engine keeps no provider requests",
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "DI-D-44: the driver makes the provider's requests with its lock released, so the engine keeps them; dropped, a served seal never finishes.",
-      "find": ["            tagged(tag::ENGINE_ACT_REQUESTS, || self.requests.extend(requests));"],
-      "replace": ["            let _ = requests;"]
+      "find": ["        deliver | self.ring()\n"],
+      "replace": ["        self.core.drain_requests(drop);\n        deliver | self.ring()\n"]
     },
     {
       "name": "DI-3.10.3.5.6.1: a drain stops after one pass",
@@ -1568,8 +1568,8 @@
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "A refusal that ends a submission makes its completion due -- a failure, an entry -- and the engine acts on it in the same call, so the readiness it raises is not lost.",
-      "find": ["                    let more = self.core.refused(refused);", "                    tagged(tag::ENGINE_ACT_REFUSED, || pending.push_back(more));"],
-      "replace": ["                    let _ = self.core.refused(refused);"]
+      "find": ["                deliver |= self.core.refused(refused).deliver;"],
+      "replace": ["                let _ = self.core.refused(refused);"]
     },
     {
       "name": "DI-3.10.3.5.6.2.1: the memory backend's check admits everything",
@@ -1584,8 +1584,8 @@
       "file": "src/engine.rs",
       "expect": "survives",
       "why": "The manifest checking itself on the reworked act: an equivalent spelling of the same fold must survive; caught would mean a test is matching incidental code.",
-      "find": ["            deliver |= ready;\n"],
-      "replace": ["            deliver = deliver || ready;\n"]
+      "find": ["                deliver |= self.core.refused(refused).deliver;"],
+      "replace": ["                deliver = self.core.refused(refused).deliver || deliver;"]
     },
     {
       "name": "DI-7.1: a pool drain does not submit first",
@@ -2264,8 +2264,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "A tag names one allocating call (DI-D-104). The guard records where each was made, so the allocation test must report a tag seen from two places in the source, naming both.",
-      "find": ["tagged(tag::IO_CORE_ACT_COMMIT_SUBMIT, || {"],
-      "replace": ["tagged(tag::IO_CORE_ISSUE_BACKEND_PUSH, || {"]
+      "find": ["tagged(tag::IO_CORE_NEW_OUTGOING, || {"],
+      "replace": ["tagged(tag::IO_CORE_NEW_UNPUSHED, || {"]
     },
     {
       "name": "DI-23.2 control: a tag no scenario reaches is renamed",
@@ -2872,16 +2872,16 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A lineage that ends ends its own open pairs and no other's.",
-      "find": ["                    let ours = only.is_none_or(|only| key.0 == only);"],
-      "replace": ["                    let ours = true;"]
+      "find": ["            if only.is_some_and(|only| key.0 != only) {"],
+      "replace": ["            if false {"]
     },
     {
       "name": "DI-23.5.2.3: ending a lineage keeps its open flush pairs",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "The pairs a lineage ends are taken from the table, so the table does not keep what was reported ended.",
-      "find": ["                    !ours\n"],
-      "replace": ["                    true\n"]
+      "find": ["            unlisted |= !fits;\n            !fits\n"],
+      "replace": ["            unlisted |= !fits;\n            true\n"]
     },
     {
       "name": "DI-23.11: a target names one lowest gate for every lineage",
@@ -2917,7 +2917,7 @@
     },
     {
       "name": "DI-23.11: the engine gives no provider request",
-      "file": "src/engine.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "drain_requests gives each request made, by value, for the driver to make.",
       "find": ["        self.requests.drain(..).for_each(visit);\n"],
@@ -3066,6 +3066,134 @@
       "why": "A range whose end is before its start names no entry, mutably as well.",
       "find": ["            .partition_point(|(key, _)| upto(key))\n            .max(start);\n        PresentMut("],
       "replace": ["            .partition_point(|(key, _)| upto(key));\n        PresentMut("]
+    },
+    {
+      "name": "DI-23.12.2: the flushes a change makes due is made one short",
+      "file": "src/durability/scratch.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["            flushes: list(\"the flushes a change makes due\", operations)?,"],
+      "replace": ["            flushes: list(\"the flushes a change makes due\", operations.map(|n| n - 1))?,"]
+    },
+    {
+      "name": "DI-23.12.2: the operations a change releases is made one short",
+      "file": "src/durability/scratch.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["            released: list(\"the operations a change releases\", operations)?,"],
+      "replace": ["            released: list(\"the operations a change releases\", operations.map(|n| n - 1))?,"]
+    },
+    {
+      "name": "DI-23.12.2: the provider requests a change makes is made one short",
+      "file": "src/durability/scratch.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["            calls: list(\"the provider requests a change makes\", operations)?,"],
+      "replace": ["            calls: list(\"the provider requests a change makes\", operations.map(|n| n - 1))?,"]
+    },
+    {
+      "name": "DI-23.12.2: the live lineages a change walks is made one short",
+      "file": "src/durability/scratch.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["                list(\"the live lineages a change walks\", Some(capacity.lineages))"],
+      "replace": ["                list(\"the live lineages a change walks\", Some(capacity.lineages - 1))"]
+    },
+    {
+      "name": "DI-23.12.2: the writes a seal's answers cover is made one short",
+      "file": "src/durability/scratch.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["                list(\"the writes a seal's answers cover\", Some(operations))"],
+      "replace": ["                list(\"the writes a seal's answers cover\", Some(operations - 1))"]
+    },
+    {
+      "name": "DI-23.12.2: the gates a cycle search visits is made one short",
+      "file": "src/durability/scratch.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["                list(\"the gates a cycle search visits\", Some(operations))"],
+      "replace": ["                list(\"the gates a cycle search visits\", Some(operations - 1))"]
+    },
+    {
+      "name": "DI-23.12.2: a cycle search's bounds is made one short",
+      "file": "src/durability/scratch.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["                list(\"a cycle search's bounds\", Some(capacity.lineages))"],
+      "replace": ["                list(\"a cycle search's bounds\", Some(capacity.lineages - 1))"]
+    },
+    {
+      "name": "DI-23.12.2: a traced cycle's steps is made one short",
+      "file": "src/durability/scratch.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["                list(\"a traced cycle's steps\", operations.checked_add(1))"],
+      "replace": ["                list(\"a traced cycle's steps\", Some(operations))"]
+    },
+    {
+      "name": "DI-23.12.2: the flush pairs an end closes is made one short",
+      "file": "src/durability/scratch.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["                    capacity.flush_parts(served),\n"],
+      "replace": ["                    capacity.flush_parts(served).map(|n| n - 1),\n"]
+    },
+    {
+      "name": "DI-23.12.2: the submissions refused and kept is made one short",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["            list(\"the submissions refused and kept\", operations)"],
+      "replace": ["            list(\"the submissions refused and kept\", operations.map(|n| n - 1))"]
+    },
+    {
+      "name": "DI-23.12.2: the submissions to push is made one short",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["            queue(\"the submissions to push\", operations)"],
+      "replace": ["            queue(\"the submissions to push\", operations.map(|n| n - 1))"]
+    },
+    {
+      "name": "DI-23.12.2: the provider's requests is made one short",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
+      "find": ["            queue(\"the provider's requests\", operations)"],
+      "replace": ["            queue(\"the provider's requests\", operations.map(|n| n - 1))"]
+    },
+    {
+      "name": "DI-23.12.2: a change's lists are not given back",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The lists a change makes due into are lent and given back once acted on, so the next change uses them rather than allocating its own.",
+      "find": ["        self.durability.recycle(due);\n"],
+      "replace": ["        drop(due);\n"]
+    },
+    {
+      "name": "DI-23.12.2: a list at its room grows",
+      "file": "src/capacity.rs",
+      "expect": "caught",
+      "why": "A list pushed past the room it was made with hands the item back, to be reported, rather than reallocating after construction.",
+      "find": ["    if list.len() == list.capacity() {\n        return Err(item);\n    }\n    list.push(item);"],
+      "replace": ["    list.push(item);"]
+    },
+    {
+      "name": "DI-23.12.2: a queue at its room grows",
+      "file": "src/capacity.rs",
+      "expect": "caught",
+      "why": "As for a list: a queue pushed past its room hands the item back rather than reallocating.",
+      "find": ["    if queue.len() == queue.capacity() {\n        return Err(item);\n    }\n    queue.push_back(item);"],
+      "replace": ["    queue.push_back(item);"]
+    },
+    {
+      "name": "DI-23.12.2: a change made while the lists are out gets lists with no room",
+      "file": "src/durability/scratch.rs",
+      "expect": "caught",
+      "why": "Lists lent out are replaced by lists of the same sizes, an allocation and never a list too small: one with no room would refuse a change inside its bound.",
+      "find": ["            return tagged(tag::DURABILITY_FRESH_DUE, || Due::reserved(&self.capacity))\n                .unwrap_or_default();\n"],
+      "replace": ["            return Due::default();\n"]
     }
   ]
 }

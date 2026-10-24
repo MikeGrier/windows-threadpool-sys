@@ -15,6 +15,7 @@ use super::{
     DomainPart, Due, Durability, Key, MarkingKind, Part, Reach, SealStage, Span, Stage, V, Write,
 };
 use crate::alloc_tags::{tag, tagged};
+use crate::capacity::within;
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::diagnostics::FlushOutcome;
@@ -86,7 +87,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         domain: DomainId,
         outcome: Result<(), FailureCause<V<E, I>>>,
     ) -> Due<E, T, I> {
-        let mut due = Due::default();
+        let mut due = self.fresh();
         if !self
             .lineages
             .get(&lineage)
@@ -172,29 +173,34 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         };
         // Each marking cites who answered for its write (DI-D-47): the default's flush, observed,
         // and the provider's warranty, exactly as the write's file is routed.
-        let ops: Vec<(OpId, MarkingKind)> = tagged(tag::PROVIDERS_COVER_OPS, || {
-            self.writes
-                .values()
-                .filter(|write| covered(write))
-                .map(|write| {
-                    let kind = MarkingKind::Covered {
-                        flushed: write.routing.default,
-                        provider: write.routing.provider,
-                    };
-                    (write.op, kind)
-                })
-                .collect()
-        });
-        if ops.is_empty() {
-            return;
+        // Made for as many writes as can be uncovered, so every write covered fits.
+        let mut ops = core::mem::take(&mut self.scratch.covered);
+        let mut unlisted = None;
+        for write in self.writes.values().filter(|write| covered(write)) {
+            let kind = MarkingKind::Covered {
+                flushed: write.routing.default,
+                provider: write.routing.provider,
+            };
+            if within(&mut ops, (write.op, kind)).is_err() {
+                unlisted.get_or_insert(write.op);
+            }
+        }
+        if let Some(op) = unlisted {
+            self.inconsistent(
+                "a seal covered more writes than the operations declared",
+                format_args!("write {op:?}, lineage {lineage}, seal {seal}"),
+            );
         }
         // `ops` is in push order, as the writes are kept.
-        self.let_go(|write| {
-            ops.binary_search_by_key(&write.op.seq, |(op, _)| op.seq)
-                .is_ok()
-        });
-        for (op, kind) in ops {
+        if !ops.is_empty() {
+            self.let_go(|write| {
+                ops.binary_search_by_key(&write.op.seq, |(op, _)| op.seq)
+                    .is_ok()
+            });
+        }
+        for (op, kind) in ops.drain(..) {
             self.mark(op, kind, due);
         }
+        self.scratch.covered = ops;
     }
 }

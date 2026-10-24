@@ -5,7 +5,7 @@
 //! copy, retiring only through the last -- are the driver's. A lineage this core cannot answer for,
 //! another core's or one already ended or retired, is refused as `Foreign`.
 
-use super::{Actions, DurableIoCore, V};
+use super::{CoreActions, DurableIoCore, V};
 use crate::capacity::{AtCapacity, Limit};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
@@ -57,7 +57,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     pub fn end_lineage(
         &mut self,
         lineage: Lineage,
-    ) -> Result<Actions<E, B, K>, EndLineageRefusal<V<E, K>>> {
+    ) -> Result<CoreActions, EndLineageRefusal<V<E, K>>> {
         if !self.is_live(lineage) {
             return Err(EndLineageRefusal::Foreign(lineage));
         }

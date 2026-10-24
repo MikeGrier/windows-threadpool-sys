@@ -528,13 +528,10 @@ struct Clocked {
 }
 
 impl Clocked {
-    fn act(&mut self, actions: CoreActions<V, Vec<u8>>) {
-        let mut pending = std::collections::VecDeque::from([actions]);
-        while let Some(actions) = pending.pop_front() {
-            for submission in actions.submit {
-                if let Err(refused) = self.backend.push(submission) {
-                    pending.push_back(self.core.refused(refused));
-                }
+    fn act(&mut self, _: CoreActions) {
+        while let Some(submission) = self.core.next_submission() {
+            if let Err(refused) = self.backend.push(submission) {
+                let _ = self.core.refused(refused);
             }
         }
     }

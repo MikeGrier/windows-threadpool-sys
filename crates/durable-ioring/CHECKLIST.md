@@ -72,12 +72,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.1** -- The ordered tables, the seal queue among them, are on fixed storage of the crate's own, and a recorded seal holds a place of the window until the mark passes it (DI-D-110). -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23121)
 
-- [ ] **DI-23.12.2** -- **The core's per-call scratch and the lists a call returns onto storage made at construction**
-  ([DI-D-97](DESIGN-NOTES.md#di-d-97)): what `advance`, `cover` and `end_pairs` collect into, the
-  gate search's work lists, and `Due`'s events, flushes and submissions with the `CoreActions` a call hands the driver,
-  drained in place as `drain_requests` is, so their storage is kept. Added 2026-10-24 when `DI-23.12.1` began: the
-  allocation test's tags showed these lists allocating on every clean-path call and no step owning them. A change to the
-  driver's side of the core, not to the consumer's contract.
+- [x] **DI-23.12.2** -- The core's per-call scratch and the lists a call hands the driver are made at construction, each for a stated bound, and `CoreActions` carries no lists (DI-D-111). -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23122)
 
 - [ ] **DI-23.12.3** -- **A failure's storage** ([DI-D-108](DESIGN-NOTES.md#di-d-108),
   [DI-D-109](DESIGN-NOTES.md#di-d-109)): the suspect set as the rule that made it -- the cut, the reach, the lineage --

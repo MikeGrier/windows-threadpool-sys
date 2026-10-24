@@ -133,17 +133,15 @@ pub(crate) mod tag {
     pub(crate) const IO_CORE_NEW_IN_FLIGHT: Tag = Tag::new("io_core::new::in_flight");
     pub(crate) const IO_CORE_NEW_PER_TARGET: Tag = Tag::new("io_core::new::per_target");
     pub(crate) const IO_CORE_NEW_HELD: Tag = Tag::new("io_core::new::held");
+    pub(crate) const IO_CORE_NEW_UNPUSHED: Tag = Tag::new("io_core::new::unpushed");
+    pub(crate) const IO_CORE_NEW_OUTGOING: Tag = Tag::new("io_core::new::outgoing");
+    pub(crate) const IO_CORE_NEW_REQUESTS: Tag = Tag::new("io_core::new::requests");
     pub(crate) const IO_CORE_COMPLETE_QUEUE: Tag = Tag::new("io_core::complete::queue");
-    pub(crate) const IO_CORE_REFUSED_UNPUSHED: Tag = Tag::new("io_core::refused::unpushed");
     pub(crate) const IO_CORE_EPOCHS: Tag = Tag::new("io_core::epochs");
     pub(crate) const IO_CORE_ISSUE_BACKEND_CHECK: Tag = Tag::new("io_core::issue::backend_check");
     pub(crate) const IO_CORE_ISSUE_BACKEND_PUSH: Tag = Tag::new("io_core::issue::backend_push");
     pub(crate) const IO_CORE_ACT_QUEUE: Tag = Tag::new("io_core::act::queue");
-    pub(crate) const IO_CORE_ACT_COMMIT_SUBMIT: Tag = Tag::new("io_core::act::commit_submit");
-    pub(crate) const IO_CORE_ACT_REQUESTS: Tag = Tag::new("io_core::act::requests");
-    pub(crate) const IO_CORE_ACT_REQUEST: Tag = Tag::new("io_core::act::request");
     pub(crate) const IO_CORE_NEVER_ISSUED_QUEUE: Tag = Tag::new("io_core::never_issued::queue");
-    pub(crate) const IO_CORE_RELEASE_SUBMIT: Tag = Tag::new("io_core::release::submit");
 
     // durability.rs
     pub(crate) const DURABILITY_NEW_LINEAGES: Tag = Tag::new("durability::new::lineages");
@@ -159,6 +157,16 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_WINDOW: Tag = Tag::new("durability::new::window");
     pub(crate) const DURABILITY_NEW_FLUSH_PAIRS: Tag = Tag::new("durability::new::flush_pairs");
     pub(crate) const DURABILITY_NEW_SERVED_NAMES: Tag = Tag::new("durability::new::served_names");
+    pub(crate) const DURABILITY_NEW_DUE: Tag = Tag::new("durability::new::due");
+    pub(crate) const DURABILITY_FRESH_DUE: Tag = Tag::new("durability::fresh::due");
+    pub(crate) const DURABILITY_NEW_SCRATCH_LIVE: Tag = Tag::new("durability::new::scratch_live");
+    pub(crate) const DURABILITY_NEW_SCRATCH_COVERED: Tag =
+        Tag::new("durability::new::scratch_covered");
+    pub(crate) const DURABILITY_NEW_SCRATCH_WORK: Tag = Tag::new("durability::new::scratch_work");
+    pub(crate) const DURABILITY_NEW_SCRATCH_BOUNDS: Tag =
+        Tag::new("durability::new::scratch_bounds");
+    pub(crate) const DURABILITY_NEW_SCRATCH_STEPS: Tag = Tag::new("durability::new::scratch_steps");
+    pub(crate) const DURABILITY_NEW_SCRATCH_PAIRS: Tag = Tag::new("durability::new::scratch_pairs");
     pub(crate) const DURABILITY_RESOLVE_ABANDONED: Tag = Tag::new("durability::resolve::abandoned");
     pub(crate) const DURABILITY_RESOLVE_ABANDONED_EVENT: Tag =
         Tag::new("durability::resolve::abandoned_event");
@@ -180,16 +188,12 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_MARK_EVENT: Tag = Tag::new("durability::mark::event");
     pub(crate) const DURABILITY_RELEASE_HEALED_EVENT: Tag =
         Tag::new("durability::release_healed::event");
-    pub(crate) const DURABILITY_ADVANCE_LIVE: Tag = Tag::new("durability::advance::live");
     pub(crate) const DURABILITY_ADVANCE_MARK_DURABLE: Tag =
         Tag::new("durability::advance_mark::durable");
     pub(crate) const DURABILITY_ADVANCE_MARK_BLOCKED: Tag =
         Tag::new("durability::advance_mark::blocked");
-    pub(crate) const DURABILITY_START_SEALS_FLUSH: Tag = Tag::new("durability::start_seals::flush");
     pub(crate) const DURABILITY_START_SEALS_DOMAINS: Tag =
         Tag::new("durability::start_seals::domains");
-    pub(crate) const DURABILITY_START_SEALS_CALL: Tag = Tag::new("durability::start_seals::call");
-    pub(crate) const DURABILITY_END_PAIRS_FLUSHES: Tag = Tag::new("durability::end_pairs::flushes");
     pub(crate) const DURABILITY_END_SEAL_REPORT: Tag = Tag::new("durability::end_seal::report");
     pub(crate) const DURABILITY_END_FLUSH_REPORT: Tag = Tag::new("durability::end_flush::report");
     pub(crate) const DURABILITY_INCONSISTENT_WANTS: Tag =
@@ -203,20 +207,10 @@ pub(crate) mod tag {
         Tag::new("durability::start_seals::report");
 
     // durability/gates.rs
-    pub(crate) const GATES_RAISE_BOUND: Tag = Tag::new("durability::gates::raise::bound");
-    pub(crate) const GATES_WRITE_CYCLE_SEEDS: Tag =
-        Tag::new("durability::gates::write_cycle::seeds");
-    pub(crate) const GATES_SEAL_CYCLE_SEEDS: Tag = Tag::new("durability::gates::seal_cycle::seeds");
-    pub(crate) const GATES_SEAL_CYCLE_SEED: Tag = Tag::new("durability::gates::seal_cycle::seed");
-    pub(crate) const GATES_NEEDS_WORK: Tag = Tag::new("durability::gates::needs::work");
-    pub(crate) const GATES_TRACE_STEPS: Tag = Tag::new("durability::gates::trace::steps");
     pub(crate) const GATES_TRACE_CYCLE_GATE: Tag = Tag::new("durability::gates::trace::cycle_gate");
     pub(crate) const GATES_TRACE_CYCLE_WRITE: Tag =
         Tag::new("durability::gates::trace::cycle_write");
-    pub(crate) const GATES_TRACE_STEP: Tag = Tag::new("durability::gates::trace::step");
     pub(crate) const GATES_TRACE_UNFOUND: Tag = Tag::new("durability::gates::trace::unfound");
-    pub(crate) const GATES_RELEASE_THROUGH_DUE: Tag =
-        Tag::new("durability::gates::release_through::due");
     pub(crate) const GATES_STOP_HELD_EVENT: Tag = Tag::new("durability::gates::stop_held::event");
 
     // durability/providers.rs
@@ -226,7 +220,6 @@ pub(crate) mod tag {
     pub(crate) const PROVIDERS_NAME_FILE: Tag = Tag::new("durability::providers::name::file");
     pub(crate) const PROVIDERS_PROVIDED_REACH: Tag =
         Tag::new("durability::providers::provided::reach");
-    pub(crate) const PROVIDERS_COVER_OPS: Tag = Tag::new("durability::providers::cover::ops");
 
     // durability/lineages.rs
     pub(crate) const LINEAGES_MINT_DESCRIPTION: Tag =
@@ -267,9 +260,6 @@ pub(crate) mod tag {
     pub(crate) const ROUTER_MAKE_DURABLE_PROVIDER: Tag = Tag::new("router::make_durable::provider");
 
     // engine.rs
-    pub(crate) const ENGINE_ACT_PENDING: Tag = Tag::new("engine::act::pending");
-    pub(crate) const ENGINE_ACT_REQUESTS: Tag = Tag::new("engine::act::requests");
-    pub(crate) const ENGINE_ACT_REFUSED: Tag = Tag::new("engine::act::refused");
     pub(crate) const ENGINE_PUSH_BACKEND: Tag = Tag::new("engine::push::backend");
     pub(crate) const ENGINE_PUSH_SUBMIT: Tag = Tag::new("engine::push::submit");
     pub(crate) const ENGINE_PUSH_BACKEND_AGAIN: Tag = Tag::new("engine::push::backend_again");

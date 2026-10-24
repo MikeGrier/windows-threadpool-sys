@@ -4621,3 +4621,23 @@ go of a dropped seal's place; the holder in the window's own tests. Sabotage: fi
 
 The parent of [DI-23.12.1.1](#di-231211) and [DI-23.12.1.2](#di-231212); what was built is
 [DI-D-109](DESIGN-NOTES.md#di-d-109)'s "As built (DI-23.12.1)" and [DI-D-110](DESIGN-NOTES.md#di-d-110).
+
+## Moved 2026-10-24 19:38:41 -04:00 -- DI-23.12.2: the per-call lists on storage made at construction
+
+### <a id="di-23122"></a>DI-23.12.2 -- The core's per-call scratch and the lists a call hands the driver are made at construction, each for a stated bound, and `CoreActions` carries no lists (DI-D-111). *(completed 2026-10-24 19:38:41 -04:00)*
+
+**The core's per-call scratch and the lists a call returns onto storage made at construction**
+([DI-D-97](DESIGN-NOTES.md#di-d-97)): what `advance`, `cover` and `end_pairs` collect into, the gate search's work lists,
+and `Due`'s events, flushes and submissions with the `CoreActions` a call hands the driver, drained in place as
+`drain_requests` is, so their storage is kept. Added 2026-10-24 when `DI-23.12.1` began: the allocation test's tags showed
+these lists allocating on every clean-path call and no step owning them. A change to the driver's side of the core, not to
+the consumer's contract.
+
+What was built is [DI-D-111](DESIGN-NOTES.md#di-d-111), which amends DI-D-50 P11's `CoreActions` shape. The clean paths
+of the allocation test now allocate nothing after construction but in three places owned elsewhere: the memory backend's
+own queue, the completion queue (`DI-23.12.3`), and a new target's domains (`DI-23.12.4`). The failure path is down to a
+failure's own storage. [io_core/tests/lists.rs](src/io_core/tests/lists.rs) has one call reach each list's bound. The
+cycle search's work list was first sized at twice the operations and tightened to the operations once its bound was argued.
+A provider request's contents and a gate cycle's report, found unowned, were queued as `DI-23.12.8` for the engineer. A
+win-durable-ioring test that read `CoreActions` directly was moved onto the engine first, in its own commit. Sabotage:
+nineteen entries re-anchored and sixteen added, swept with every entry on the files this rewrote.

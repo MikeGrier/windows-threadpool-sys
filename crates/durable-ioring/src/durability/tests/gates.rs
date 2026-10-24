@@ -364,7 +364,7 @@ fn issuing_what_was_never_held_or_not_yet_released_is_inconsistent() {
 
 #[test]
 fn a_gate_on_the_writes_own_lineage_at_or_above_its_epoch_is_a_cycle() {
-    let lineage = lineage();
+    let mut lineage = lineage();
     assert_eq!(
         lineage.write_cycle(at(D, 3), at(D, 3)),
         Some(vec![at(D, 3), at(D, 3)])

@@ -200,7 +200,7 @@ fn a_released_write_the_backend_refuses_for_good_completes_as_failed_and_is_null
     rig.backend.detach(KEY).expect("attached");
     rig.seal_in(lineage, 1);
     rig.run();
-    assert!(rig.core.retry().is_empty(), "ended, not kept");
+    assert!(rig.retried().is_empty(), "ended, not kept");
     assert_eq!(rig.backend.queued(), 0, "and never pushed again");
     let entries = rig.entries();
     let released = entries
@@ -255,7 +255,7 @@ fn a_released_read_the_backend_refuses_for_good_completes_as_failed() {
     };
     assert_eq!(*refusal(fault), RefusalCause::UnknownTarget);
     assert_eq!(read.buffer.as_deref(), Some([0; 4].as_slice()));
-    assert!(rig.core.retry().is_empty());
+    assert!(rig.retried().is_empty());
 }
 
 #[test]
@@ -267,10 +267,10 @@ fn a_commit_the_backend_refuses_for_good_fails_its_seals_flush() {
     let write = rig.backend.pop().expect("never fails").expect("the write");
     // Gone before the commit the write's completion makes due is pushed.
     rig.backend.detach(KEY).expect("attached");
-    let actions = rig.core.complete(write);
+    let actions = rig.completed(write);
     assert_eq!(actions.submit.len(), 1, "the commit is due");
     rig.act(actions);
-    assert!(rig.core.retry().is_empty(), "ended, not kept");
+    assert!(rig.retried().is_empty(), "ended, not kept");
     let entries = rig.entries();
     let Some(Entry::Failed(failed)) = entries.last() else {
         panic!("a failure: {entries:?}");
@@ -305,14 +305,15 @@ fn a_retryable_refusal_is_kept_and_any_other_ends_the_submission() {
         rig.seal(1);
         rig.backend.submit().expect("submit");
         let write = rig.backend.pop().expect("never fails").expect("the write");
-        let actions = rig.core.complete(write);
+        let actions = rig.completed(write);
         let commit = actions.submit.into_iter().next().expect("the commit");
         let due = rig.core.refused(crate::backend::Refused {
             cause: cause.clone(),
             submission: commit,
         });
+        let due = rig.core.taken(due);
         assert!(due.submit.is_empty(), "{cause}: nothing to push at once");
-        assert_eq!(rig.core.retry().submit.len(), usize::from(kept), "{cause}");
+        assert_eq!(rig.retried().submit.len(), usize::from(kept), "{cause}");
         let failed = rig
             .entries()
             .iter()
