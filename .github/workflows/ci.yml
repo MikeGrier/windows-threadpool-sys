@@ -21,7 +21,7 @@ env:
 # union and the minimal default (no-feature) configuration are exercised: the
 # default set is a supported, published configuration, and a feature-union-only
 # build can hide a missing `cfg` or an item that depends on an opt-in feature.
-# `wtf-string`, `io-buffers`, `durable-ioring`, `win-error-codes` and `rc-errors` are portable, so they are additionally built, tested, and
+# `wtf-string`, `io-buffers`, `durable-ioring`, `win-error-codes`, `rc-errors` and `fixed-hash-table` are portable, so they are additionally built, tested, and
 # linted on Linux and macOS (the `portable` job) to keep their non-Windows support verified.
 jobs:
   probe-release-tests:
@@ -1174,11 +1174,11 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: cargo build (portable crates)
-        run: cargo build -p wtf-string -p io-buffers -p durable-ioring -p win-error-codes -p rc-errors --all-targets --locked
+        run: cargo build -p wtf-string -p io-buffers -p durable-ioring -p win-error-codes -p rc-errors -p fixed-hash-table --all-targets --locked
       - name: cargo test (portable crates)
         env:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
-        run: cargo test -p wtf-string -p io-buffers -p durable-ioring -p win-error-codes -p rc-errors --locked --no-fail-fast
+        run: cargo test -p wtf-string -p io-buffers -p durable-ioring -p win-error-codes -p rc-errors -p fixed-hash-table --locked --no-fail-fast
       - name: cargo clippy (portable crates)
-        run: cargo clippy -p wtf-string -p io-buffers -p durable-ioring -p win-error-codes -p rc-errors --all-targets --locked -- -D warnings
+        run: cargo clippy -p wtf-string -p io-buffers -p durable-ioring -p win-error-codes -p rc-errors -p fixed-hash-table --all-targets --locked -- -D warnings

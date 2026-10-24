@@ -21,6 +21,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fixed-hash-table"
+version = "0.0.1"
+
+[[package]]
 name = "io-buffers"
 version = "0.1.0"
 

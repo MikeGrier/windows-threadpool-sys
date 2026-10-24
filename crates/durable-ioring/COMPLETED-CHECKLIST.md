@@ -4355,3 +4355,23 @@ whose signatures DI-23.4.2 changed, so they are one commit. `windows_fault` repo
 `io::Error` APIs convert through `From`. `SharingViolation`'s downcasts are on the open path's own `io::Error`s, which do not
 cross the portable boundary, so they did not change. Running the suite found two things the compiler did not: a delivery's
 failure now displays as the fault does, and `Dioring::pump` lost its kind, which is why the `From` keeps it.
+
+## Moved 2026-10-23 20:56:56 -04:00 -- DI-23.5.1: the fixed-hash-table crate is created, with its first milestone
+
+### <a id="di-2351"></a>DI-23.5.1 -- The fixed-hash-table crate is created, registered, and given its decisions and its first milestone. *(completed 2026-10-23 20:56:56 -04:00)*
+
+Per [DI-D-106](DESIGN-NOTES.md#di-d-106). The item as it stood at completion:
+
+**Create `crates/fixed-hash-table`**, `no_std` and allocation-free by default, with generics for clients that want `std` and
+`alloc`: a workspace member registered for release and publication, with its own `COMPONENT.md`, `DESIGN-NOTES.md`,
+`CHECKLIST.md` and `PLANS.md` row. Its first milestone, which this item writes, holds a fixed-capacity open-addressed map that
+refuses an insert when full, with the hasher a `BuildHasher` type parameter, the usual collection affordances, and their
+tests; its design notes settle the storage generics, the default hasher, and which affordances it keeps.
+
+What was done. The crate is a workspace member at version `0.0.1`, unreleased, registered as `rc-errors` was, with `alloc` and
+`std` as additive features. Its library is `#![no_std]` and `#![forbid(unsafe_code)]` and holds only its documentation; the
+code is [FHT-M1](../fixed-hash-table/CHECKLIST.md). Its decisions are
+[FHT-D-1 to FHT-D-8](../fixed-hash-table/DESIGN-NOTES.md): FHT-D-1 and FHT-D-2 are the engineer's rulings from DI-D-106, and
+FHT-D-3 to FHT-D-8 are the assistant's, raised with the engineer -- storage a type parameter (inline, or boxed under `alloc`),
+linear probing with backward-shift deletion and capacity distinct from slots, the default a zero-sized seedless hasher, no
+`unsafe`, a full table handing the entry back, and the affordances kept and left out.

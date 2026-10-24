@@ -39,15 +39,10 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   [DI-D-98](DESIGN-NOTES.md#di-d-98)). Re-planned 2026-10-23: the tables are fixed-capacity and preallocated
   ([DI-D-106](DESIGN-NOTES.md#di-d-106)), so the crate that provides them comes first.
 
-- [ ] **DI-23.5.1** -- **Create `crates/fixed-hash-table`**, `no_std` and allocation-free by default, with generics for clients
-  that want `std` and `alloc`: a workspace member registered for release and publication, with its own `COMPONENT.md`,
-  `DESIGN-NOTES.md`, `CHECKLIST.md` and `PLANS.md` row. Its first milestone, which this item writes, holds a fixed-capacity
-  open-addressed map that refuses an insert when full, with the hasher a `BuildHasher` type parameter, the usual collection
-  affordances, and their tests; its design notes settle the storage generics, the default hasher, and which affordances it
-  keeps.
+- [x] **DI-23.5.1** -- The fixed-hash-table crate is created, registered, and given its decisions and its first milestone. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-2351)
 
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/fixed-hash-table` -> its first milestone, written by
-  > this item. Control returns here at `DI-23.5.2`.
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/fixed-hash-table` -> `FHT-M1` -> `FHT-1.1` (the map's
+  > core). See [CHECKLIST.md](../fixed-hash-table/CHECKLIST.md). Control returns here at `DI-23.5.2`.
 
 - [ ] **DI-23.5.2** -- **Declare capacity and refuse past it** ([DI-D-107](DESIGN-NOTES.md#di-d-107)): `operations`,
   `lineages`, `imports` and `targets`, given at construction, which becomes fallible; the queue and observed-failure storage

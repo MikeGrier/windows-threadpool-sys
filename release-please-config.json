@@ -49,6 +49,10 @@
             "package-name": "rc-errors",
             "component": "rc-errors"
         },
+        "crates/fixed-hash-table": {
+            "package-name": "fixed-hash-table",
+            "component": "fixed-hash-table"
+        },
         "crates/win-authorization-sys": {
             "package-name": "win-authorization-sys",
             "component": "win-authorization-sys"

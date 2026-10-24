@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "fixed-hash-table"
+version = "0.0.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "Hash tables whose capacity is fixed when they are made, which refuse an insert when full rather than grow: no_std and allocation-free by default, with storage on the heap, allocated once, for clients that want it. Portable."
+keywords = ["hashmap", "no-std", "fixed-capacity", "no-alloc", "collections"]
+categories = ["no-std", "data-structures", "embedded"]
+
+# Named by the engineer, 2026-10-23, for durable-ioring's DI-D-106: "build, put it in a separate crate, call it
+# fixed-hash-table". Portable: no `cfg(windows)` gating and no dependencies.
+[dependencies]
+
+[features]
+# Storage allocated once, on the heap, when a table is made; without it a table's storage is inline.
+alloc = []
+# The standard library's hasher, among others, for clients that have it.
+std = ["alloc"]
