@@ -130,6 +130,7 @@ fn every_outcome_ends_a_pair() {
         SealOutcome::Failed,
         SealOutcome::Blocked,
         SealOutcome::Ended,
+        SealOutcome::Superseded,
     ]
     .into_iter()
     .enumerate()

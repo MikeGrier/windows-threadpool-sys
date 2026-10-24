@@ -64,6 +64,9 @@ pub enum SealOutcome {
     Blocked,
     /// The seal was never answered: its lineage ended, or its instance was closed or dropped.
     Ended,
+    /// The seal covered no writes and was overwritten by a later one that also covers none,
+    /// which answers in its place (DI-D-99).
+    Superseded,
 }
 
 impl fmt::Display for SealOutcome {
@@ -73,6 +76,7 @@ impl fmt::Display for SealOutcome {
             Self::Failed => "failed",
             Self::Blocked => "blocked",
             Self::Ended => "ended unanswered",
+            Self::Superseded => "superseded",
         })
     }
 }

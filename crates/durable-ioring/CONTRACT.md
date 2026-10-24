@@ -118,7 +118,10 @@ Everything below either sharpens one word of that sentence or states a condition
    stalls a request silently; a request waiting on a provider that has not answered stays pending,
    and that wait is reported to the diagnostic sink the instance was given -- ETW, unless the
    consumer chose another, for the Windows driver ([DI-D-26](DESIGN-NOTES.md#di-d-26),
-   [DI-D-51](DESIGN-NOTES.md#di-d-51)).
+   [DI-D-51](DESIGN-NOTES.md#di-d-51)). A request whose span holds no write, replaced before it is
+   answered by a later such request of its lineage, is answered by the later one's entry: a
+   `Durable { through: m }` with m above n says the mark has passed n too
+   ([DI-D-99](DESIGN-NOTES.md#di-d-99)).
 5. **Durable follows the writes it covers.** `Durable { through: n }` is delivered after the
    completion of every write of n's lineage tagged at or below n. Nothing further is promised about
    order between lineages ([DI-D-18](DESIGN-NOTES.md#di-d-18)).

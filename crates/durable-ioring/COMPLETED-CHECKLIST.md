@@ -4402,3 +4402,23 @@ entry first survived, because the test answered with success, which releases the
 and a test whose first answer fails now catches it. Five existing entries whose lines the change rewrote (DI-3.2.3,
 DI-3.2.4, DI-3.2.4.2 and DI-3.2.5.1) were re-anchored to the same defect in the new code and swept: all caught, the
 provider-hold one as a hang.
+
+## Moved 2026-10-23 23:32:57 -04:00 -- DI-23.7: a seal that covers no writes makes no record
+
+### <a id="di-237"></a>DI-23.7 -- A seal that covers no writes makes no record, kept in a slot, evaluated in order, and overwritten by a later one whose pair ends Superseded. *(completed 2026-10-23 23:32:57 -04:00)*
+
+Per [DI-D-99](DESIGN-NOTES.md#di-d-99), whose "What building it settled" records the engineer's ruling on the one case
+it got wrong and how it was built. The item as it stood at completion:
+
+**A seal that covers no writes makes no record** (DI-D-99), held in the trailing field and the per-lineage slot,
+releasing heals and the mark in order, with an overwritten one's pair ended as `Superseded`.
+
+What was done. [durability/empties.rs](src/durability/empties.rs) holds the empty seal, its two slots -- trailing a
+recorded seal, or leading with none queued -- and the passes over them: finishing an empty seal and releasing its heals,
+advancing the mark over recorded and empty seals in order, and answering `Blocked`. `advance_mark` moved there from
+[durability.rs](src/durability.rs), and the queries over seals (an epoch's state, a gate's extent) now read every seal
+point, recorded or empty. `SealOutcome::Superseded` is new, and CONTRACT.md's guarantee 4 says how a replaced request is
+answered. Before building it, the assistant found that DI-D-99's claim about mark advances fails while a failure holds an
+epoch between two empty seals; the engineer accepted the delay ("I choose a"), and a test pins it. Tests are in
+[tests/empties.rs](src/durability/tests/empties.rs). Sabotage: nine entries added, eight caught and one surviving control;
+six existing entries whose lines moved into the new module re-anchored and swept, all caught.

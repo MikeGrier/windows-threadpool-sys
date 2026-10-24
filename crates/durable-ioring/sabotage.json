@@ -135,11 +135,11 @@
     },
     {
       "name": "DI-3.2.3: a later seal is reported past a pending one",
-      "file": "src/durability.rs",
+      "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "The prefix property (guarantee 2): Durable through 2 covers 1, so it must wait for 1. Caught by the I/O test whose first seal a provider holds, and by the unit tests.",
-      "find": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.front()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            let popped = state.seals.pop_front().expect(\"found above\");\n"],
-      "replace": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.back()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            let popped = state.seals.pop_back().expect(\"found above\");\n"]
+      "find": ["            } else if let Some(seal) = state.seals.front() {"],
+      "replace": ["            } else if let Some(seal) = state.seals.back() {"]
     },
     {
       "name": "DI-3.2.3: a write a provider serves does not hold its seal",
@@ -255,11 +255,11 @@
     },
     {
       "name": "DI-3.2.4: Blocked is never appended",
-      "file": "src/durability.rs",
+      "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "DI-D-13: a request whose flushes succeeded but which a failure holds is answered Blocked, never left silent. Caught by the Blocked tests, unit and I/O.",
-      "find": ["                    due.events.push(Event::Blocked {\n                        lineage,\n                        through,\n                        by,\n                    });\n"],
-      "replace": ["                    let _ = by;\n"]
+      "find": ["                due.events.push(Event::Blocked {\n                    lineage,\n                    through,\n                    by,\n                });"],
+      "replace": ["                let _ = by;"]
     },
     {
       "name": "DI-3.2.4: a foreign token is resolved",
@@ -495,11 +495,11 @@
     },
     {
       "name": "DI-3.2.5.1: a heal takes effect in every lineage at the first one's seal",
-      "file": "src/durability.rs",
+      "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "DI-D-41: each lineage's re-issued writes are committed only by its own next seal, so one lineage's seal ending the failure everywhere lets another's mark pass epochs it has not committed -- a wrong answer. Caught by the core and ring tests of a failure spanning two lineages, whose Healed must wait for the second seal.",
-      "find": ["                        pending.remove(&lineage);\n"],
-      "replace": ["                        pending.clear();\n"]
+      "find": ["            pending.remove(&lineage);"],
+      "replace": ["            pending.clear();"]
     },
     {
       "name": "DI-3.2.5.1: a heal never releases a lineage it reached",
@@ -639,11 +639,11 @@
     },
     {
       "name": "DI-3.2.5.2: a seal does not wait for the held writes it covers",
-      "file": "src/durability.rs",
+      "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "Guarantee 5: Durable follows every write it covers, and a held write is one. A seal that passes it reports durable a write not yet written. Caught by the core and ring tests whose seal covers a held write, and by the oracle's Durable-before-completion rule.",
-      "find": ["        let held = state.held_by_epoch.keys().next().copied();\n"],
-      "replace": ["        let held: Option<E> = None;\n"]
+      "find": ["        let held = self.held_by_epoch.keys().next().copied();"],
+      "replace": ["        let held: Option<E> = None;"]
     },
     {
       "name": "DI-3.2.5.2: an issued write is not recorded in flight",
@@ -2117,19 +2117,19 @@
     },
     {
       "name": "DI-19.2.2: a seal answered durable leaves its pair open",
-      "file": "src/durability.rs",
+      "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "A seal's pair ends at its first answer (DI-D-87); one left open is a begin with no end, which the pairing checker refuses.",
-      "find": ["                popped.pair,"],
-      "replace": ["                None,"]
+      "find": ["                pair,\n                SealOutcome::Durable,"],
+      "replace": ["                None,\n                SealOutcome::Durable,"]
     },
     {
       "name": "DI-19.2.2: a seal answered blocked leaves its pair open",
-      "file": "src/durability.rs",
+      "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "Blocked is an answer, so it ends the seal's pair; left open, the pair would end later as durable, saying the wrong answer.",
-      "find": ["                let pair = state.seals[index].pair.take();"],
-      "replace": ["                let pair: Option<crate::correlation::CorrelationId> = None;"]
+      "find": ["            let pair = state.answer_at(place);"],
+      "replace": ["            let pair: Option<CorrelationId> = state.answer_at(place).filter(|_| false);"]
     },
     {
       "name": "DI-19.2.2: a seal whose flush failed ends as durable",
@@ -2338,6 +2338,78 @@
       "why": "The control. Which lost write the inconsistency names, when several are lost in one let-go, changes no state and no outcome; a test failing here would be asserting the message's choice of example.",
       "find": ["                lost = Some(write.op);"],
       "replace": ["                lost.get_or_insert(write.op);"]
+    },
+    {
+      "name": "DI-23.7: every seal is recorded",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A seal covering no writes makes no record (DI-D-99); recording it keeps one record per seal, which a consumer sealing ever-higher empty epochs grows without bound, and answers every one it would have overwritten.",
+      "find": ["        let empty = self.covers_no_writes(lineage, through);"],
+      "replace": ["        let empty = false;"]
+    },
+    {
+      "name": "DI-23.7: a seal with a write in its span is taken as empty",
+      "file": "src/durability/empties.rs",
+      "expect": "caught",
+      "why": "A seal over a write must be recorded, or no seal names the write and nothing flushes its file.",
+      "find": ["            write.lineage == lineage && core::ops::RangeBounds::contains(&span, &write.epoch)"],
+      "replace": ["            false && write.lineage == lineage"]
+    },
+    {
+      "name": "DI-23.7: a held write in the span does not make the seal a record",
+      "file": "src/durability/empties.rs",
+      "expect": "caught",
+      "why": "A write held for its gate is outstanding as one in flight is (guarantee 5): a seal over it must wait for it and name it, so the seal is not empty.",
+      "find": ["        }) && state.held_by_epoch.range(span).next().is_none()"],
+      "replace": ["        })"]
+    },
+    {
+      "name": "DI-23.7: an overwritten empty seal's pair is left open",
+      "file": "src/durability/empties.rs",
+      "expect": "caught",
+      "why": "Every begin is ended (DI-D-96): the empty seal a later one overwrites ends its pair at once, as Superseded, since nothing will answer it.",
+      "find": ["        if let Some(old) = state.place(empty) {"],
+      "replace": ["        if let Some(old) = state.place(empty).filter(|_| false) {"]
+    },
+    {
+      "name": "DI-23.7: the empty seal trailing a recorded one is lost when the mark passes it",
+      "file": "src/durability/empties.rs",
+      "expect": "caught",
+      "why": "What trailed a recorded seal is next in order once the mark passes it; dropping it loses a seal the consumer made, which is never answered.",
+      "find": ["                state.leading = popped.trailing;"],
+      "replace": ["                let _ = popped.trailing;"]
+    },
+    {
+      "name": "DI-23.7: an empty seal behind a failure is not answered",
+      "file": "src/durability/empties.rs",
+      "expect": "caught",
+      "why": "An empty seal finished but held by a failure is answered Blocked, as a recorded one is; leaving it unanswered leaves the consumer no answer to its seal.",
+      "find": ["        (self.finished && !self.answered).then_some(self.through)"],
+      "replace": ["        (false && self.finished && !self.answered).then_some(self.through)"]
+    },
+    {
+      "name": "DI-23.7: an empty seal releases no heal",
+      "file": "src/durability/empties.rs",
+      "expect": "caught",
+      "why": "A heal is released by the first seal made after it that reaches the re-issue (DI-D-41, DI-D-46), empty or not; an empty seal releasing nothing leaves the heal held until a recorded seal comes.",
+      "find": ["                release_heals(failures, lineage, empty.seq, empty.through);"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.7: an empty seal takes no sequence number",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A heal is released by a seal made after it, known by its sequence number; an empty seal that took none would share the next seal's, so one made before a heal would release it.",
+      "find": ["        state.next_seal += 1;"],
+      "replace": ["        state.next_seal += u64::from(!empty);"]
+    },
+    {
+      "name": "DI-23.7: finishing empty seals looks past a seal not started",
+      "file": "src/durability/empties.rs",
+      "expect": "survives",
+      "why": "The control. A seal not started has a write at or below it outstanding, so no empty seal after it is ready either; the break only stops looking. Continuing changes nothing a test could see.",
+      "find": ["                // after it is ready either: this only stops looking.", "                break;"],
+      "replace": ["                // after it is ready either: this only stops looking.", "                continue;"]
     }
   ]
 }

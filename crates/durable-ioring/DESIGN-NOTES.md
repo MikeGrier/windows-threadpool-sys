@@ -1557,7 +1557,7 @@ The choices [DI-19.1](COMPLETED-CHECKLIST.md#di-191) left to its implementation,
   `FlushAnswered` and `SealWaited` go, a seal's wait being the gap between its begin and its first flush's begin.
   `SealBegan { instance, lineage, through, id }` and `SealEnded { ..., id, outcome }`, the outcome how the seal was answered
   -- durable, failed, or blocked by an earlier failure -- or ended unanswered, by its lineage ending or its instance being
-  dropped. `FlushBegan { instance, lineage, through, part, id }` and `FlushEnded { ..., id, outcome }`, succeeded, failed or
+  dropped; and, since [DI-D-99](#di-d-99), superseded, for an empty seal a later empty one overwrote. `FlushBegan { instance, lineage, through, part, id }` and `FlushEnded { ..., id, outcome }`, succeeded, failed or
   abandoned. `LockWaitBegan { instance, lock, id }` and `LockWaitEnded { instance, lock, id }`. An end repeats its begin's
   identity fields, which pairing does not need and a reader of one line does.
 - **The core's duration code is removed** ("remove the clock"): `StampClock::elapsed` and the lock watch's `LockTimer`,
@@ -1892,7 +1892,7 @@ last write. That a division needs a second entry is why the window, and not a co
 
 ## <a id="di-d-99"></a>DI-D-99: a seal that covers no writes makes no record, and a superseded one's pair is ended
 
-**Decided, not yet implemented: scheduled as DI-23.7 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "It should call any diagnostic channels to
+**Implemented in DI-23.7; corrected 2026-10-23: overwriting can hold the mark back, see "What building it settled" below.** The engineer, 2026-10-22: "It should call any diagnostic channels to
 announce its having been sealed and depending on the environment, *they* may allocate but the core algorithm forces no
 allocation." The heal analysis is the assistant's, on the engineer's "I will let you work this through".
 
@@ -1907,10 +1907,29 @@ no writes therefore makes no record. It still:
 
 It is held in fixed space: one "trailing empty seal" field on each recorded seal, and one per-lineage slot when no recorded
 seal is queued, each holding the highest sequence number and the highest `through` sealed empty since. A later empty seal
-overwrites the earlier, whose values every release and mark advance are satisfied by.
+overwrites the earlier, whose values every release is satisfied by, and every mark advance but one, below.
 
 **An overwritten empty seal's pair is ended at once with a `Superseded` outcome**, so every begin is ended
 ([DI-D-96](#di-d-96)) and one correlation id is stored. Agreed by the engineer, 2026-10-22.
+
+**What building it settled** (DI-23.7, 2026-10-23):
+
+- **Overwriting can hold the mark below the overwritten seal, while a failure holds an epoch between the two.** A failure
+  can hold an epoch no uncovered write is left at -- a write it suspected that then failed, nullified and let go -- so two
+  seals can both be empty with that epoch between them. The later one is then blocked where the earlier was not, and with
+  the earlier gone, the mark waits at the seal before both until the failure is resolved, which the consumer must do
+  anyway before the later seal can answer. Nothing is reported falsely; the mark arrives later. The engineer, 2026-10-23:
+  "I choose a", over keeping the overwritten `through` in a slot the failure holds, or deferring that slot to DI-23.8.
+  The test `a_failure_between_two_empty_seals_holds_the_mark_below_the_earlier_until_resolved` pins it.
+- **CONTRACT.md's guarantee 4 says how a replaced request is answered**: by the later request's entry, whose
+  `Durable { through: m }` says the mark has passed it.
+- **As built**: [durability/empties.rs](src/durability/empties.rs). A seal is empty when no write of its lineage --
+  in flight, completed or held for a gate -- is above the seal point and at or below its `through`; that is final,
+  since a later write at or below it is refused. An empty seal finishes, releasing the heals it is the release of, once
+  every write at or below it is out of flight and the recorded seal it trails has started, which is when a recorded
+  seal in its place would have started. The mark passes the leading slot before the queue's front, and a recorded
+  seal's trailing one moves to the leading slot when the mark passes it. A blocked empty seal is answered `Blocked`
+  once, as a recorded one is, and its replacement is answered again.
 
 ## <a id="di-d-100"></a>DI-D-100: a failure holds the capacity of the writes it puts at risk until it is resolved
 

@@ -338,6 +338,17 @@ would grow that record without bound. Offered: (i) a write holds its place in th
 uncovered, or (ii) a separate declared count of uncovered writes. The engineer: "then (i) seems logical". Recorded in
 DI-D-107.
 
+## An overwritten empty seal and the mark (continued 2026-10-23)
+
+Starting DI-23.7, the assistant found that DI-D-99's claim -- every release and mark advance of an overwritten empty seal
+is satisfied by the later one -- fails for the mark in one case: a failure observed while a write at epoch 6 is in
+flight holds 6 after the write fails and is let go, so seals through 5 and through 8 can both be empty while the seal
+before them flushes. Overwriting 5 with 8 leaves the mark at the earlier seal when the flush answers, since the failure
+blocks 8, where a record per seal would have made 5 durable. It offered (a) accepting the delay, which ends when the
+failure is resolved, as the consumer must do for 8 anyway; (b) keeping the overwritten `through` in a slot the failure
+holds, failures being bounded; or (c) deferring that slot to DI-23.8, where a failure's storage is designed. The
+engineer: "I choose a". Recorded in DI-D-99.
+
 ## Working positions and open questions (not decisions)
 
 - **The failure's slot.** How a failure's fixed storage holds its suspect set and markings, and how the events and the

@@ -75,12 +75,14 @@ use crate::types::{
     MarkingKind, Resolution, ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
 };
 
+mod empties;
 mod files;
 mod gates;
 mod lineages;
 mod providers;
 mod spans;
 
+use empties::{Empty, release_heals};
 use spans::{Span, SpanFile, Spans};
 
 pub(crate) use gates::GateState;
@@ -396,6 +398,8 @@ struct Seal<E> {
     /// Its pair's id while the pair is open: taken as the pair ends, at the seal's first answer,
     /// so it ends once (DI-D-87).
     pair: Option<CorrelationId>,
+    /// The latest empty seal made after it and before any later recorded one (DI-D-99).
+    trailing: Option<Empty<E>>,
 }
 
 /// Where an unresolved failure stands.
@@ -455,6 +459,8 @@ struct LineageState<E> {
     durable_through: Option<E>,
     in_flight_by_epoch: BTreeMap<E, usize>,
     seals: VecDeque<Seal<E>>,
+    /// The latest empty seal made with no recorded seal queued before it (DI-D-99).
+    leading: Option<Empty<E>>,
     next_seal: u64,
     /// Every epoch an abandoned failure contained.
     abandoned: BTreeSet<E>,
@@ -481,6 +487,7 @@ impl<E: EpochId> LineageState<E> {
             durable_through: None,
             in_flight_by_epoch: BTreeMap::new(),
             seals: VecDeque::new(),
+            leading: None,
             next_seal: 0,
             abandoned: BTreeSet::new(),
             ended: false,
@@ -749,10 +756,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             return Some(State::Durable);
         }
         let finished = state
-            .seals
-            .iter()
+            .seal_points()
             .find(|seal| seal.through >= epoch)
-            .is_some_and(|seal| matches!(seal.stage, SealStage::Done { .. }));
+            .is_some_and(|seal| seal.finished);
         Some(match self.blocking(lineage, epoch) {
             Some(by) if finished => State::Blocked(by),
             _ => State::Pending,
@@ -889,6 +895,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         if let Some(cycle) = self.seal_cycle(lineage, through) {
             return Sealing::Cycle(cycle);
         }
+        let empty = self.covers_no_writes(lineage, through);
         let state = self
             .lineages
             .get_mut(&lineage)
@@ -907,15 +914,20 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 });
             });
         }
-        tagged(tag::DURABILITY_SEAL_RECORD, || {
-            state.seals.push_back(Seal {
-                seq,
-                through,
-                stage: SealStage::Waiting,
-                answered: false,
-                pair,
+        if empty {
+            self.record_empty(lineage, Empty::new(seq, through, pair));
+        } else {
+            tagged(tag::DURABILITY_SEAL_RECORD, || {
+                state.seals.push_back(Seal {
+                    seq,
+                    through,
+                    stage: SealStage::Waiting,
+                    answered: false,
+                    pair,
+                    trailing: None,
+                });
             });
-        });
+        }
         Sealing::Submitted(self.advance(Due::default()))
     }
 
@@ -1251,6 +1263,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         });
         for &lineage in &live {
             self.start_seals(lineage, &mut due);
+            self.finish_empties(lineage);
             self.finish_seals(lineage);
         }
         self.release_healed(&mut due);
@@ -1265,76 +1278,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         due
     }
 
-    /// Advance `lineage`'s high-water mark over its finished seals, in order, and answer the seals
-    /// a failure holds.
-    fn advance_mark(&mut self, lineage: Key, due: &mut Due<E, T, I>) {
-        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.front()) {
-            if !matches!(seal.stage, SealStage::Done { .. })
-                || self.blocking(lineage, seal.through).is_some()
-            {
-                break;
-            }
-            let through = seal.through;
-            let state = self.lineages.get_mut(&lineage).expect("found above");
-            let popped = state.seals.pop_front().expect("found above");
-            state.durable_through = Some(through);
-            end_seal(
-                &*self.diagnostics,
-                self.instance.number(),
-                lineage,
-                &through,
-                popped.pair,
-                SealOutcome::Durable,
-            );
-            // Only writes whose flush failed are left at or below a finished seal; once the mark
-            // passes them, no later failure can reach back to them (guarantee 3).
-            self.let_go(|write| write.lineage == lineage && write.epoch <= through);
-            tagged(tag::DURABILITY_ADVANCE_MARK_DURABLE, || {
-                due.events.push(Event::Durable { lineage, through });
-            });
-            self.release_through(lineage, through, due);
-        }
-        let count = self.lineages.get(&lineage).map_or(0, |s| s.seals.len());
-        for index in 0..count {
-            let seal = &self.lineages[&lineage].seals[index];
-            if seal.answered || !matches!(seal.stage, SealStage::Done { succeeded: true }) {
-                continue;
-            }
-            let through = seal.through;
-            if let Some(by) = self.blocking(lineage, through) {
-                let state = self.lineages.get_mut(&lineage).expect("counted above");
-                state.seals[index].answered = true;
-                let pair = state.seals[index].pair.take();
-                end_seal(
-                    &*self.diagnostics,
-                    self.instance.number(),
-                    lineage,
-                    &through,
-                    pair,
-                    SealOutcome::Blocked,
-                );
-                tagged(tag::DURABILITY_ADVANCE_MARK_BLOCKED, || {
-                    due.events.push(Event::Blocked {
-                        lineage,
-                        through,
-                        by,
-                    });
-                });
-            }
-        }
-    }
-
     fn start_seals(&mut self, lineage: Key, due: &mut Due<E, T, I>) {
         let Some(state) = self.lineages.get_mut(&lineage) else {
             return;
         };
         // A held write is outstanding as one in flight is: the seal waits for it (guarantee 5).
-        let in_flight = state.in_flight_by_epoch.keys().next().copied();
-        let held = state.held_by_epoch.keys().next().copied();
-        let oldest_in_flight = match (in_flight, held) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        let oldest_in_flight = state.oldest_outstanding();
         let mut lost = None;
         for index in 0..state.seals.len() {
             if !matches!(state.seals[index].stage, SealStage::Waiting) {
@@ -1475,15 +1424,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             let (seq, through) = (seal.seq, seal.through);
             seal.stage = SealStage::Done { succeeded };
             if succeeded {
-                for failure in &mut self.failures {
-                    if let Standing::Healing { pending } = &mut failure.standing
-                        && pending
-                            .get(&lineage)
-                            .is_some_and(|release| release.by(seq, through))
-                    {
-                        pending.remove(&lineage);
-                    }
-                }
+                release_heals(&mut self.failures, lineage, seq, through);
             }
         }
     }
@@ -1569,14 +1510,13 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             if only.is_some_and(|only| only != lineage) {
                 continue;
             }
-            for seal in &mut state.seals {
-                let pair = seal.pair.take();
+            for (through, pair) in state.take_pairs() {
                 end_seal(
                     &*self.diagnostics,
                     instance,
                     lineage,
-                    &seal.through,
-                    pair,
+                    &through,
+                    Some(pair),
                     SealOutcome::Ended,
                 );
             }

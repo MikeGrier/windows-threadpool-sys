@@ -47,9 +47,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.6** -- A seal's work on a file is charged to a (lineage, file, seal span) entry, made at push and released with its last uncovered write. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-236)
 
-- [ ] **DI-23.7** -- **A seal that covers no writes makes no record** ([DI-D-99](DESIGN-NOTES.md#di-d-99)), held in the
-  trailing field and the per-lineage slot, releasing heals and the mark in order, with an overwritten one's pair ended as
-  `Superseded`.
+- [x] **DI-23.7** -- A seal that covers no writes makes no record, kept in a slot, evaluated in order, and overwritten by a later one whose pair ends Superseded. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-237)
 
 - [ ] **DI-23.8** -- **A failure holds its suspect writes' capacity until resolved** ([DI-D-100](DESIGN-NOTES.md#di-d-100)), and
   [CONTRACT.md](CONTRACT.md) and the crate's documentation say so with worked examples of a consumer refused at submit and

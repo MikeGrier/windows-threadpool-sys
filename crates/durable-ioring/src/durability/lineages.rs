@@ -89,6 +89,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             .expect("live, checked above");
         state.ended = true;
         state.seals.clear();
+        state.leading = None;
         self.let_go(|write| write.lineage == lineage && write.stage != Stage::InFlight);
         for failure in &mut self.failures {
             if let Standing::Healing { pending } = &mut failure.standing {
