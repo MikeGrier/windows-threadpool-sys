@@ -2160,7 +2160,7 @@ through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads wh
 
 ## <a id="di-d-106"></a>DI-D-106: the core's tables are fixed-capacity, preallocated, and refuse when full, from a new crate, `fixed-hash-table`
 
-**Decided, not yet implemented: scheduled as DI-23.5.1 and DI-23.5.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction), with the sequence-keyed tables at DI-23.10.** The engineer, 2026-10-23: "Seems like the collections need to move to closed hashing", then "yes fixed capacity preallocated tables".
+**Decided; the crate is DI-23.5.1 and the core's hashed tables moved onto it in DI-23.5.2.3 ([DI-D-107](#di-d-107)'s "As built"), with the sequence-keyed tables still at DI-23.10 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-23: "Seems like the collections need to move to closed hashing", then "yes fixed capacity preallocated tables".
 
 - **Why not `std`'s.** `std`'s `HashMap` is already closed hashing (hashbrown's SwissTable). What rules it out is that it grows
   on insert past its capacity -- `try_reserve` at construction sizes it but does not stop a later insert growing it -- that it
@@ -2237,7 +2237,18 @@ notes when it is created.
   since the commit out for it is the I/O core's to count; and only a flush out keeps a write, so a file only the provider
   answers for, or a flush that has answered, does not.
 - **Derived, not declared:** the hashed tables' sizes, from the declared counts: `targets`, `domains`, `operations`, and for
-  the flush pairs `operations` times one plus the served domains (DI-23.5.2.3).
+  the flush pairs `operations` times one plus the served domains (DI-23.5.2.3). **As built** (DI-23.5.2.3), each a
+  `fixed-hash-table` `HeapMap` made when the core is built, so a count too large for a table or the allocator fails the
+  build as `ConstructionError::Table`, naming it: `targets` and `per_target` for `targets`; `domains` for `domains`;
+  `spans` and the window's places for `operations`; the open flush pairs for `operations` times one plus the served
+  domains, a file part for each span entry and a part for each served domain of each seal, a seal holding at least one
+  uncovered write; and the served domains' names for the served count. **`in_flight` is sized for `operations`, not twice
+  that**, which the plan had: an operation in flight holds a place, and a commit in flight belongs to an entry with a
+  completed write in it, which holds another, so the two together never exceed the places, and the places never exceed
+  `operations` (an ended lineage keeps those of a commit still out, DI-23.5.2.1). **A table refusing inside its bound is an
+  inconsistency**, panicked on as every other is (DI-D-46), since the bounds are proved from the places and the count
+  checks before them; the tests fill each table to its bound and let go. The hasher is `fixed-hash-table`'s, which is
+  seedless: its keys are the consumer's own, and the hash is not a defence against a consumer.
 
 **Split** (the engineer, 2026-10-24: "2: ok. 3: agree no default in library. maybe examples in docs? 4: split approved"):
 

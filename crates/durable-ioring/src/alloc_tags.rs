@@ -128,7 +128,10 @@ pub(crate) mod tag {
 
     // io_core.rs
     pub(crate) const IO_CORE_NEW_SERVED: Tag = Tag::new("io_core::new::served");
-    pub(crate) const IO_CORE_ADD_TARGET_RECORD: Tag = Tag::new("io_core::add_target::record");
+    pub(crate) const IO_CORE_NEW_TARGETS: Tag = Tag::new("io_core::new::targets");
+    pub(crate) const IO_CORE_NEW_DOMAINS: Tag = Tag::new("io_core::new::domains");
+    pub(crate) const IO_CORE_NEW_IN_FLIGHT: Tag = Tag::new("io_core::new::in_flight");
+    pub(crate) const IO_CORE_NEW_PER_TARGET: Tag = Tag::new("io_core::new::per_target");
     pub(crate) const IO_CORE_REMOVE_TARGET_LOWEST: Tag = Tag::new("io_core::remove_target::lowest");
     pub(crate) const IO_CORE_REMOVE_TARGET_LOWEST_GATES: Tag =
         Tag::new("io_core::remove_target::lowest_gates");
@@ -139,10 +142,7 @@ pub(crate) mod tag {
     pub(crate) const IO_CORE_ISSUE_BACKEND_CHECK: Tag = Tag::new("io_core::issue::backend_check");
     pub(crate) const IO_CORE_ISSUE_HELD: Tag = Tag::new("io_core::issue::held");
     pub(crate) const IO_CORE_ISSUE_BACKEND_PUSH: Tag = Tag::new("io_core::issue::backend_push");
-    pub(crate) const IO_CORE_ISSUED_IN_FLIGHT: Tag = Tag::new("io_core::issued::in_flight");
-    pub(crate) const IO_CORE_ISSUED_PER_TARGET: Tag = Tag::new("io_core::issued::per_target");
     pub(crate) const IO_CORE_ACT_QUEUE: Tag = Tag::new("io_core::act::queue");
-    pub(crate) const IO_CORE_ACT_COMMIT_IN_FLIGHT: Tag = Tag::new("io_core::act::commit_in_flight");
     pub(crate) const IO_CORE_ACT_COMMIT_SUBMIT: Tag = Tag::new("io_core::act::commit_submit");
     pub(crate) const IO_CORE_ACT_REQUESTS: Tag = Tag::new("io_core::act::requests");
     pub(crate) const IO_CORE_ACT_REQUEST: Tag = Tag::new("io_core::act::request");
@@ -153,12 +153,12 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_DEFAULT_LINEAGE: Tag =
         Tag::new("durability::new::default_lineage");
     pub(crate) const DURABILITY_NEW_SERVED: Tag = Tag::new("durability::new::served");
+    pub(crate) const DURABILITY_NEW_SPANS: Tag = Tag::new("durability::new::spans");
+    pub(crate) const DURABILITY_NEW_WINDOW: Tag = Tag::new("durability::new::window");
+    pub(crate) const DURABILITY_NEW_FLUSH_PAIRS: Tag = Tag::new("durability::new::flush_pairs");
+    pub(crate) const DURABILITY_NEW_SERVED_NAMES: Tag = Tag::new("durability::new::served_names");
     pub(crate) const DURABILITY_PUSHED_IN_FLIGHT_BY_EPOCH: Tag =
         Tag::new("durability::pushed::in_flight_by_epoch");
-    pub(crate) const DURABILITY_ADMIT_WINDOW: Tag = Tag::new("durability::admit::window");
-    pub(crate) const DURABILITY_PUSHED_WINDOW: Tag = Tag::new("durability::pushed::window");
-    pub(crate) const DURABILITY_OBSERVE_WINDOW: Tag = Tag::new("durability::observe::window");
-    pub(crate) const DURABILITY_PUSHED_SPAN: Tag = Tag::new("durability::pushed::span");
     pub(crate) const DURABILITY_PUSHED_WRITE: Tag = Tag::new("durability::pushed::write");
     pub(crate) const DURABILITY_RESOLVE_ABANDONED: Tag = Tag::new("durability::resolve::abandoned");
     pub(crate) const DURABILITY_RESOLVE_ABANDONED_EVENT: Tag =
@@ -186,12 +186,9 @@ pub(crate) mod tag {
         Tag::new("durability::advance_mark::durable");
     pub(crate) const DURABILITY_ADVANCE_MARK_BLOCKED: Tag =
         Tag::new("durability::advance_mark::blocked");
-    pub(crate) const DURABILITY_START_SEALS_SPAN: Tag = Tag::new("durability::start_seals::span");
     pub(crate) const DURABILITY_START_SEALS_FLUSH: Tag = Tag::new("durability::start_seals::flush");
     pub(crate) const DURABILITY_START_SEALS_DOMAINS: Tag =
         Tag::new("durability::start_seals::domains");
-    pub(crate) const DURABILITY_START_SEALS_FLUSH_PAIR: Tag =
-        Tag::new("durability::start_seals::flush_pair");
     pub(crate) const DURABILITY_START_SEALS_CALL: Tag = Tag::new("durability::start_seals::call");
     pub(crate) const DURABILITY_SEAL_RECORD: Tag = Tag::new("durability::seal::record");
     pub(crate) const DURABILITY_END_PAIRS_FLUSHES: Tag = Tag::new("durability::end_pairs::flushes");
@@ -251,7 +248,6 @@ pub(crate) mod tag {
     pub(crate) const PROVIDERS_NAME_WRITE: Tag = Tag::new("durability::providers::name::write");
     pub(crate) const PROVIDERS_NAME_WRITES: Tag = Tag::new("durability::providers::name::writes");
     pub(crate) const PROVIDERS_NAME_FILE: Tag = Tag::new("durability::providers::name::file");
-    pub(crate) const PROVIDERS_SERVE_NAMES: Tag = Tag::new("durability::providers::serve::names");
     pub(crate) const PROVIDERS_PROVIDED_REACH: Tag =
         Tag::new("durability::providers::provided::reach");
     pub(crate) const PROVIDERS_COVER_OPS: Tag = Tag::new("durability::providers::cover::ops");
@@ -282,7 +278,6 @@ pub(crate) mod tag {
     pub(crate) const DOMAINS_IMPORT_REACH_SHARED: Tag = Tag::new("domains::import_reach::shared");
     pub(crate) const DOMAINS_FIRST_REPEAT_COPY: Tag = Tag::new("domains::first_repeat::copy");
     pub(crate) const DOMAINS_FIRST_REPEAT_SEEN: Tag = Tag::new("domains::first_repeat::seen");
-    pub(crate) const DOMAINS_INTERN_ALL_TABLE: Tag = Tag::new("domains::intern_all::table");
     pub(crate) const DOMAINS_INTERN_ALL_ID: Tag = Tag::new("domains::intern_all::id");
     pub(crate) const DOMAINS_INTERN_ALL_SHARED: Tag = Tag::new("domains::intern_all::shared");
 

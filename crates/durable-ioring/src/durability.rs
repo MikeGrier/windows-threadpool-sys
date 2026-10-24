@@ -59,9 +59,10 @@ use alloc::sync::Arc;
 use core::fmt;
 use core::ops::Bound;
 use core::sync::atomic::{AtomicBool, Ordering};
-use std::collections::HashMap;
+use fixed_hash_table::HeapMap;
 
 use crate::alloc_tags::{tag, tagged};
+use crate::capacity::{Capacity, ConstructionError, table};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::correlation::CorrelationId;
@@ -563,9 +564,9 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     diagnostics: Arc<dyn DiagnosticSink>,
     /// Each part of a seal's flush whose pair is open, kept only while the sink wants the pair, and
     /// removed as the pair ends (DI-D-87).
-    flush_pairs: HashMap<(Key, u64, Part), FlushPair<E>>,
+    flush_pairs: HeapMap<(Key, u64, Part), FlushPair<E>>,
     /// The consumer's name for each domain the provider serves, which a flush pair reports.
-    served_names: HashMap<DomainId, FlushDomain>,
+    served_names: HeapMap<DomainId, FlushDomain>,
 }
 
 /// An open flush pair: its id, and the seal it is part of.
@@ -575,7 +576,7 @@ struct FlushPair<E> {
 }
 
 /// `part`, as a flush pair reports it, the domain by the name `names` gives it.
-fn flush_part(part: Part, names: &HashMap<DomainId, FlushDomain>) -> Option<FlushPart<'_>> {
+fn flush_part(part: Part, names: &HeapMap<DomainId, FlushDomain>) -> Option<FlushPart<'_>> {
     match part {
         Part::File(file) => Some(FlushPart::File(file)),
         Part::Domain(domain) => names.get(&domain).map(FlushPart::Domain),
@@ -633,32 +634,52 @@ pub(super) enum Part {
 }
 
 impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
-    /// An instance's state, with its default lineage.
+    /// An instance's state, with its default lineage, its tables made at the sizes `capacity`
+    /// gives them (DI-D-107) for a provider that serves `served` domains.
+    ///
+    /// # Errors
+    ///
+    /// [`ConstructionError::Table`] if a table's size is more than a table can be, or cannot be
+    /// allocated.
     pub(crate) fn new(
         instance: InstanceId,
         clock: K,
         diagnostics: Arc<dyn DiagnosticSink>,
-    ) -> Self {
+        capacity: &Capacity,
+        served: usize,
+    ) -> Result<Self, ConstructionError> {
         let mut lineages = BTreeMap::new();
         tagged(tag::DURABILITY_NEW_DEFAULT_LINEAGE, || {
             lineages.insert(DEFAULT_LINEAGE, LineageState::new(None))
         });
-        Self {
+        let spans = tagged(tag::DURABILITY_NEW_SPANS, || {
+            table("the span entries", Some(capacity.operations))
+        })?;
+        let window = tagged(tag::DURABILITY_NEW_WINDOW, || {
+            Window::new(capacity.operations)
+        })?;
+        let flush_pairs = tagged(tag::DURABILITY_NEW_FLUSH_PAIRS, || {
+            table("the open flush pairs", capacity.flush_parts(served))
+        })?;
+        let served_names = tagged(tag::DURABILITY_NEW_SERVED_NAMES, || {
+            table("the served domains' names", Some(served))
+        })?;
+        Ok(Self {
             instance,
             lineages,
             next_lineage: DEFAULT_LINEAGE + 1,
             writes: BTreeMap::new(),
-            spans: HashMap::new(),
-            window: Window::default(),
+            spans,
+            window,
             failures: Vec::new(),
             next_failure: 0,
             held: BTreeMap::new(),
             served: tagged(tag::DURABILITY_NEW_SERVED, || Arc::from([])),
             clock,
             diagnostics,
-            flush_pairs: HashMap::new(),
-            served_names: HashMap::new(),
-        }
+            flush_pairs,
+            served_names,
+        })
     }
 
     /// This instance's state is inconsistent: see [`inconsistent`].
@@ -809,12 +830,20 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         });
         state.pushed_through = state.pushed_through.max(Some(epoch));
         let shared = Arc::clone(&domains);
-        tagged(tag::DURABILITY_PUSHED_SPAN, || {
-            self.spans
-                .entry((lineage, file, Span::Unsealed))
-                .or_insert_with(|| SpanFile::new(shared))
-                .writes += 1;
-        });
+        match self
+            .spans
+            .entry((lineage, file, Span::Unsealed))
+            .or_insert_with(|| SpanFile::new(shared))
+        {
+            Ok(entry) => entry.writes += 1,
+            Err(_) => {
+                self.inconsistent(
+                    "a span entry was made past the operations declared",
+                    format_args!("write {op:?} to {file:?}, lineage {lineage}"),
+                );
+                return;
+            }
+        }
         self.hold_uncovered(op);
         tagged(tag::DURABILITY_PUSHED_WRITE, || {
             self.writes.insert(
@@ -1327,6 +1356,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         // A held write is outstanding as one in flight is: the seal waits for it (guarantee 5).
         let oldest_in_flight = state.oldest_outstanding();
         let mut lost = None;
+        let mut full = None;
+        let mut pairs_full = false;
         for index in 0..state.seals.len() {
             if !matches!(state.seals[index].stage, SealStage::Waiting) {
                 continue;
@@ -1363,11 +1394,14 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     );
                 }
                 let shared = Arc::clone(&write.domains);
-                let entry = tagged(tag::DURABILITY_START_SEALS_SPAN, || {
-                    self.spans
-                        .entry((lineage, write.file, Span::Seal(seq)))
-                        .or_insert_with(|| SpanFile::new(shared))
-                });
+                let Ok(entry) = self
+                    .spans
+                    .entry((lineage, write.file, Span::Seal(seq)))
+                    .or_insert_with(|| SpanFile::new(shared))
+                else {
+                    full.get_or_insert(write.op);
+                    continue;
+                };
                 entry.writes += 1;
                 if write.routing.default && !entry.flushed {
                     entry.flushed = true;
@@ -1415,10 +1449,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                         id,
                     });
                 });
-                tagged(tag::DURABILITY_START_SEALS_FLUSH_PAIR, || {
-                    self.flush_pairs
-                        .insert((lineage, seq, part), FlushPair { id, through })
-                });
+                if self
+                    .flush_pairs
+                    .insert((lineage, seq, part), FlushPair { id, through })
+                    .is_err()
+                {
+                    pairs_full = true;
+                }
             }
             if !parts.is_empty() {
                 tagged(tag::DURABILITY_START_SEALS_CALL, || {
@@ -1439,6 +1476,18 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             self.inconsistent(
                 "a write named to a seal was in no unsealed span",
                 format_args!("write {op:?}, lineage {lineage}"),
+            );
+        }
+        if let Some(op) = full {
+            self.inconsistent(
+                "a span entry was made past the operations declared",
+                format_args!("write {op:?}, lineage {lineage}"),
+            );
+        }
+        if pairs_full {
+            self.inconsistent(
+                "a flush pair was opened past what the operations declared allow",
+                format_args!("lineage {lineage}"),
             );
         }
     }
@@ -1530,9 +1579,21 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         let instance = self.instance.number();
         let mut flushes: Vec<((Key, u64, Part), FlushPair<E>)> =
             tagged(tag::DURABILITY_END_PAIRS_FLUSHES, || {
-                self.flush_pairs
-                    .extract_if(|(key, ..), _| only.is_none_or(|only| *key == only))
-                    .collect()
+                let mut taken = Vec::new();
+                self.flush_pairs.retain(|key, pair| {
+                    let ours = only.is_none_or(|only| key.0 == only);
+                    if ours {
+                        taken.push((
+                            *key,
+                            FlushPair {
+                                id: pair.id,
+                                through: pair.through,
+                            },
+                        ));
+                    }
+                    !ours
+                });
+                taken
             });
         flushes.sort_unstable_by_key(|((key, seq, _), pair)| (*key, *seq, pair.id));
         for ((lineage, _, part), pair) in &flushes {

@@ -51,8 +51,14 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 declared: capacity.domains,
             });
         }
-        let mut core = Self::new(clock, diagnostics, capacity)?;
-        let served = intern_all(&mut core.domains, domains.iter().cloned());
+        let mut core = Self::build(clock, diagnostics, capacity, domains.len())?;
+        // Checked above to fit the table made for them.
+        let served = intern_all(&mut core.domains, domains.iter().cloned()).map_err(|_| {
+            ConstructionError::TooManyDomains {
+                served: domains.len(),
+                declared: capacity.domains,
+            }
+        })?;
         let mut named: Vec<_> = tagged(tag::IO_CORE_WITH_PROVIDER_NAMED, || {
             domains
                 .into_iter()

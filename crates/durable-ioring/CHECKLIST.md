@@ -35,10 +35,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.4.3** -- win-durable-ioring reports through the report, landed with DI-23.4.2. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-2343)
 
-- [ ] **DI-23.5** -- **Capacity declared at construction, and construction fallible** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
-  [DI-D-98](DESIGN-NOTES.md#di-d-98)). Re-planned 2026-10-23: the tables are fixed-capacity and preallocated
-  ([DI-D-106](DESIGN-NOTES.md#di-d-106)), so the crate that provides them comes first. Re-planned again 2026-10-23
-  ([DI-D-107](DESIGN-NOTES.md#di-d-107)'s "Order"): `DI-23.5.2` follows `DI-23.9`, whose work bounds three of its sizes.
+- [x] **DI-23.5** -- Capacity is declared at construction and construction is fallible, over fixed-capacity preallocated tables, in the crate `DI-23.5.1` made and the steps of `DI-23.5.2`. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-235)
 
 - [x] **DI-23.5.1** -- The fixed-hash-table crate is created, registered, and given its decisions and its first milestone. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-2351)
 
@@ -53,20 +50,13 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.9** -- A lineage has at most one un-popped Durable: a later one removes the older and goes to the tail. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-239)
 
-- [ ] **DI-23.5.2** -- **Declare capacity and refuse past it** ([DI-D-107](DESIGN-NOTES.md#di-d-107)), in three steps,
-  split 2026-10-24 on the engineer's approval ("4: split approved") after the findings in DI-D-107's "Split". Placed after
-  `DI-23.9`.
-
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/fixed-hash-table`' first milestone must land first.
+- [x] **DI-23.5.2** -- Capacity is declared and refused past, in three steps: a flush's places outlive its lineage, the declaration and its refusals, and the core's tables on `fixed-hash-table`. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-2352)
 
 - [x] **DI-23.5.2.1** -- A flush's places outlive its lineage: ending a lineage keeps the writes named to a seal whose flush is out, with their span entries and places, until it answers. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23521)
 
 - [x] **DI-23.5.2.2** -- A `Capacity` of five counts, with no library default, is declared at construction, and a push, a mint, an import and an `add_target` are refused past it. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23522)
 
-- [ ] **DI-23.5.2.3** -- **The core's keyed tables onto `fixed-hash-table`**: `targets`, `domains`, `per_target`,
-  `in_flight`, `spans`, `window`, `flush_pairs` and `served_names`, each sized from the declared counts: `targets`,
-  `domains`, `operations`, and for the flush pairs `operations` times one plus the served domains. The queue and the
-  observed-failure storage are not sized here (the engineer: "2: ok"): they follow what `DI-23.10` settles, in `DI-23.12`.
+- [x] **DI-23.5.2.3** -- The core's keyed tables are `fixed-hash-table` tables made when it is built, each sized from the declared counts, so nothing hashed allocates after construction. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23523)
 
 - [ ] **DI-23.8.2** -- **Say so in the contract and the documentation** ([DI-D-100](DESIGN-NOTES.md#di-d-100)):
   [CONTRACT.md](CONTRACT.md) and the crate's documentation, with compiled worked examples of a consumer refused at submit

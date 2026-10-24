@@ -4517,3 +4517,41 @@ nothing when the core refuses. Allocation records did not move. The tests build 
 examples and the blocking-push example state theirs. New tests are in the core's `capacity` tests and the driver's.
 Sabotage: twenty entries added, all caught. "Too large or a refused allocation" waits for DI-23.5.2.3, which makes the
 allocations; the contract's prose on the refusals is DI-23.8.2's.
+
+## Moved 2026-10-24 09:47:05 -04:00 -- DI-23.5.2.3: the core's tables onto fixed-hash-table, and DI-23.5 and DI-23.5.2 complete
+
+### <a id="di-23523"></a>DI-23.5.2.3 -- The core's keyed tables are `fixed-hash-table` tables made when it is built, each sized from the declared counts, so nothing hashed allocates after construction. *(completed 2026-10-24 09:47:05 -04:00)*
+
+**The core's keyed tables onto `fixed-hash-table`**: `targets`, `domains`, `per_target`, `in_flight`, `spans`, `window`,
+`flush_pairs` and `served_names`, each sized from the declared counts: `targets`, `domains`, `operations`, and for the flush
+pairs `operations` times one plus the served domains. The queue and the observed-failure storage are not sized here (the
+engineer: "2: ok"): they follow what `DI-23.10` settles, in `DI-23.12`.
+
+What was done. The crate depends on `fixed-hash-table` with heap storage. [capacity.rs](src/capacity.rs) sizes the open flush
+pairs and makes a table, failing as the new `ConstructionError::Table`, which names it, for a count too large for a table or
+the allocator. `Durability::new` and `DurableIoCore::new` make the eight tables, each in a tagged call of its own, so the
+build is where they allocate; the inserts no longer are, and their tags went with them. A table refusing inside its bound is
+reported as an inconsistency, as every other is. `in_flight` is sized for `operations`, not twice that: an operation in flight
+and a commit in flight hold distinct places, and the places never exceed `operations` (DI-D-107's "As built"). `end_pairs`
+takes a lineage's pairs out with `retain`, there being no `extract_if`. The allocation records moved as they should: the
+phases that inserted into a hashed table allocate less (the first round of writes from seventeen allocations to seven), and
+construction more. New tests fill each table to its bound -- operations and commits in flight together, the pairs of four
+seals of a provider's two domains, one span entry for each operation, the per-target table -- and let go, and refuse a count
+too large. Sabotage: fourteen entries added, two re-anchored, and a test added for the two that first survived, which showed
+nothing checked that ending a lineage leaves another's open flush pair open, or takes its own out of the table.
+
+### <a id="di-2352"></a>DI-23.5.2 -- Capacity is declared and refused past, in three steps: a flush's places outlive its lineage, the declaration and its refusals, and the core's tables on `fixed-hash-table`. *(completed 2026-10-24 09:47:05 -04:00)*
+
+**Declare capacity and refuse past it** ([DI-D-107](DESIGN-NOTES.md#di-d-107)), in three steps, split 2026-10-24 on the
+engineer's approval ("4: split approved") after the findings in DI-D-107's "Split": [DI-23.5.2.1](#di-23521),
+[DI-23.5.2.2](#di-23522) and [DI-23.5.2.3](#di-23523). It carried a `CROSS-COMPONENT PREREQUISITE`, that
+`crates/fixed-hash-table`'s first milestone land first, which it did.
+
+### <a id="di-235"></a>DI-23.5 -- Capacity is declared at construction and construction is fallible, over fixed-capacity preallocated tables, in the crate `DI-23.5.1` made and the steps of `DI-23.5.2`. *(completed 2026-10-24 09:47:05 -04:00)*
+
+**Capacity declared at construction, and construction fallible** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
+[DI-D-98](DESIGN-NOTES.md#di-d-98)). Re-planned 2026-10-23: the tables are fixed-capacity and preallocated
+([DI-D-106](DESIGN-NOTES.md#di-d-106)), so the crate that provides them comes first. Re-planned again 2026-10-23
+([DI-D-107](DESIGN-NOTES.md#di-d-107)'s "Order"): `DI-23.5.2` follows `DI-23.9`, whose work bounds three of its sizes. What
+remains of what it named -- the queue's size and the failure storage's -- is `DI-23.10`'s and `DI-23.12`'s, by the rulings
+recorded in DI-D-107's "Split".

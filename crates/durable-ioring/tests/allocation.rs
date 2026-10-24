@@ -553,16 +553,16 @@ fn failures() -> Vec<Measured> {
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
-    ("construction, with two targets", 6),
-    ("writes, first round", 17),
+    ("construction, with two targets", 13),
+    ("writes, first round", 7),
     ("write completions, first round", 19),
     ("pops, first round", 0),
-    ("writes, second round", 3),
+    ("writes, second round", 2),
     ("write completions, second round", 16),
     ("pops, second round", 0),
     ("reads", 0),
     ("read completions and pops", 0),
-    ("a seal covering writes", 5),
+    ("a seal covering writes", 4),
     ("commit completions", 9),
     ("pops after the seal", 0),
     ("a seal covering no writes", 2),
@@ -583,11 +583,11 @@ const CLEAN: &[(&str, u64)] = &[
 
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
-    ("construction, with two targets", 6),
-    ("writes before the failure", 36),
-    ("a commit failure observed", 22),
+    ("construction, with two targets", 13),
+    ("writes before the failure", 26),
+    ("a commit failure observed", 21),
     ("failures queried", 2),
-    ("writes re-issued", 20),
+    ("writes re-issued", 19),
     ("a heal resolved", 3),
     ("the heal taking effect at the next seal", 10),
     ("writes before the import", 18),
@@ -604,7 +604,39 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
     ),
     (
         "construction, with two targets",
+        "durability::new::spans",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::window",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::flush_pairs",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::served_names",
+        1,
+    ),
+    (
+        "construction, with two targets",
         "durability::new::served",
+        1,
+    ),
+    ("construction, with two targets", "io_core::new::targets", 1),
+    ("construction, with two targets", "io_core::new::domains", 1),
+    (
+        "construction, with two targets",
+        "io_core::new::in_flight",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "io_core::new::per_target",
         1,
     ),
     ("construction, with two targets", "io_core::new::served", 1),
@@ -613,22 +645,13 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "domains::intern_all::shared",
         2,
     ),
-    (
-        "construction, with two targets",
-        "io_core::add_target::record",
-        1,
-    ),
     ("writes, first round", "io_core::issue::backend_push", 3),
-    ("writes, first round", "durability::admit::window", 4),
     (
         "writes, first round",
         "durability::pushed::in_flight_by_epoch",
         1,
     ),
-    ("writes, first round", "durability::pushed::span", 1),
     ("writes, first round", "durability::pushed::write", 3),
-    ("writes, first round", "io_core::issued::in_flight", 4),
-    ("writes, first round", "io_core::issued::per_target", 1),
     (
         "write completions, first round",
         "io_core::complete::queue",
@@ -640,7 +663,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         16,
     ),
     ("writes, second round", "durability::pushed::write", 2),
-    ("writes, second round", "durability::admit::window", 1),
     (
         "write completions, second round",
         "durability::advance::live",
@@ -653,7 +675,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "durability::start_seals::flush",
         1,
     ),
-    ("a seal covering writes", "durability::start_seals::span", 1),
     ("a seal covering writes", "io_core::act::commit_submit", 1),
     ("commit completions", "durability::providers::cover::ops", 6),
     ("commit completions", "durability::advance::live", 2),
@@ -825,7 +846,39 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     ),
     (
         "construction, with two targets",
+        "durability::new::spans",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::window",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::flush_pairs",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::served_names",
+        1,
+    ),
+    (
+        "construction, with two targets",
         "durability::new::served",
+        1,
+    ),
+    ("construction, with two targets", "io_core::new::targets", 1),
+    ("construction, with two targets", "io_core::new::domains", 1),
+    (
+        "construction, with two targets",
+        "io_core::new::in_flight",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "io_core::new::per_target",
         1,
     ),
     ("construction, with two targets", "io_core::new::served", 1),
@@ -835,29 +888,16 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         2,
     ),
     (
-        "construction, with two targets",
-        "io_core::add_target::record",
-        1,
-    ),
-    (
         "writes before the failure",
         "io_core::issue::backend_push",
         3,
     ),
-    ("writes before the failure", "durability::admit::window", 4),
     (
         "writes before the failure",
         "durability::pushed::in_flight_by_epoch",
         1,
     ),
-    ("writes before the failure", "durability::pushed::span", 1),
     ("writes before the failure", "durability::pushed::write", 3),
-    ("writes before the failure", "io_core::issued::in_flight", 4),
-    (
-        "writes before the failure",
-        "io_core::issued::per_target",
-        1,
-    ),
     ("writes before the failure", "io_core::complete::queue", 3),
     ("writes before the failure", "durability::advance::live", 16),
     ("a commit failure observed", "durability::seal::record", 1),
@@ -865,11 +905,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     (
         "a commit failure observed",
         "durability::start_seals::flush",
-        1,
-    ),
-    (
-        "a commit failure observed",
-        "durability::start_seals::span",
         1,
     ),
     (
@@ -910,7 +945,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     ("failures queried", "durability::failures::infos", 1),
     ("failures queried", "durability::failures::markings", 1),
     ("writes re-issued", "durability::pushed::write", 3),
-    ("writes re-issued", "durability::admit::window", 1),
     ("writes re-issued", "durability::advance::live", 16),
     ("a heal resolved", "durability::resolve::heal_pending", 2),
     ("a heal resolved", "durability::advance::live", 1),

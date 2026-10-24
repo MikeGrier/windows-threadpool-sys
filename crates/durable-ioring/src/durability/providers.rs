@@ -61,10 +61,17 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// The domains the consumer's provider serves, sorted, as interned when the instance was built,
     /// and the consumer's name for each, in the same order, which a flush pair reports.
     pub(crate) fn serve(&mut self, domains: Arc<[DomainId]>, names: Vec<FlushDomain>) {
-        self.served_names = tagged(tag::PROVIDERS_SERVE_NAMES, || {
-            domains.iter().copied().zip(names).collect()
-        });
         self.served = domains;
+        // The table was made for the domains the provider serves, so this never refuses.
+        let named = self
+            .served_names
+            .try_extend(self.served.iter().copied().zip(names));
+        if named.is_err() {
+            self.inconsistent(
+                "the provider's domains outnumber the table made for them",
+                format_args!("{} domains", self.served.len()),
+            );
+        }
     }
 
     /// The provider answered `domain` of `lineage`'s seal `seal`: `Ok` for success, or the cause of

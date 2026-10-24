@@ -7,9 +7,20 @@
 
 use core::fmt;
 
+use fixed_hash_table::{HeapMap, ReserveError};
+
 use crate::types::FlushDomain;
 
+#[cfg(test)]
+mod tests;
+
 /// The most an instance holds of each thing it counts, declared when it is built (DI-D-107).
+///
+/// Each count sizes tables that are allocated once, when the instance is built (DI-D-106):
+/// `operations` sizes the span entries, the places of the submit window and the submissions in
+/// flight, and with the provider's domains the open flush pairs; `targets` sizes the targets and
+/// the operations counted by target; and `domains` the interned flush domains. A count too large
+/// for a table, or for the allocator, fails the build, naming the table.
 ///
 /// ```
 /// use durable_ioring::Capacity;
@@ -41,6 +52,34 @@ pub struct Capacity {
     /// The distinct flush domains the instance has been given, the provider's among them. A
     /// domain stays counted after the target that declared it is removed.
     pub domains: usize,
+}
+
+impl Capacity {
+    /// How many parts of seals' flushes can be out at once when a provider serves `served` domains:
+    /// a file's flush for each span entry, and a part for each served domain of each seal, a seal
+    /// holding at least one uncovered write. `None` if that is more than a `usize`.
+    pub(crate) fn flush_parts(&self, served: usize) -> Option<usize> {
+        self.operations.checked_mul(served.checked_add(1)?)
+    }
+}
+
+/// A table named `name`, empty, holding `entries` at least, its storage allocated now and never
+/// again (DI-D-106).
+///
+/// # Errors
+///
+/// [`ConstructionError::Table`] when `entries` is `None`, the size being more than a `usize`, or no
+/// table that large can be made or allocated.
+pub(crate) fn table<K, V>(
+    name: &'static str,
+    entries: Option<usize>,
+) -> Result<HeapMap<K, V>, ConstructionError> {
+    let entries = entries.ok_or(ConstructionError::Table {
+        table: name,
+        error: ReserveError::TooLarge,
+    })?;
+    HeapMap::try_with_capacity(entries)
+        .map_err(|error| ConstructionError::Table { table: name, error })
 }
 
 /// Which of a [`Capacity`]'s counts was reached.
@@ -110,6 +149,14 @@ pub enum ConstructionError {
         /// What was declared.
         declared: usize,
     },
+    /// One of the tables the declaration sizes could not be made: its size is more than a table can
+    /// be, or the allocator could not provide it.
+    Table {
+        /// Which table, by what it holds.
+        table: &'static str,
+        /// Why.
+        error: ReserveError,
+    },
 }
 
 impl fmt::Display for ConstructionError {
@@ -125,6 +172,9 @@ impl fmt::Display for ConstructionError {
                 f,
                 "the provider serves {served} flush domains and the capacity declares {declared}"
             ),
+            Self::Table { table, error } => {
+                write!(f, "the table of {table} could not be made: {error}")
+            }
         }
     }
 }

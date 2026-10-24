@@ -1186,8 +1186,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-45: removing a target is refused while operations on it are in flight.",
-      "find": ["        *self.per_target.entry(target).or_insert(0) += 1;\n"],
-      "replace": ["        let _ = target;\n"]
+      "find": ["            Ok(count) => *count += 1,\n"],
+      "replace": ["            Ok(_) => {}\n"]
     },
     {
       "name": "DI-3.10.3.5.2: a write's completion is not told to the durability core",
@@ -2264,8 +2264,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "A tag names one allocating call (DI-D-104). The guard records where each was made, so the allocation test must report a tag seen from two places in the source, naming both.",
-      "find": ["tagged(tag::IO_CORE_ISSUED_PER_TARGET, || {"],
-      "replace": ["tagged(tag::IO_CORE_ISSUED_IN_FLIGHT, || {"]
+      "find": ["tagged(tag::IO_CORE_ISSUE_HELD, || {"],
+      "replace": ["tagged(tag::IO_CORE_ISSUE_BACKEND_PUSH, || {"]
     },
     {
       "name": "DI-23.2 control: a tag no scenario reaches is renamed",
@@ -2786,6 +2786,102 @@
       "why": "A domain a description names twice is one domain.",
       "find": ["                !self.domains.contains_key(*domain) && !declared[..*at].contains(domain)"],
       "replace": ["                !self.domains.contains_key(*domain)"]
+    },
+    {
+      "name": "DI-23.5.2.3: the flush parts leave out the served domains",
+      "file": "src/capacity.rs",
+      "expect": "caught",
+      "why": "A seal opens a pair for its file's flush and one for each served domain, so the table of open pairs is sized for the operations times one plus the served domains; sized for the operations alone it is full before the bound.",
+      "find": ["        self.operations.checked_mul(served.checked_add(1)?)"],
+      "replace": ["        self.operations.checked_mul(served)"]
+    },
+    {
+      "name": "DI-23.5.2.3: a table is made smaller than asked for",
+      "file": "src/capacity.rs",
+      "expect": "caught",
+      "why": "A table holds at least the entries it is made for; made for fewer, it refuses an insert inside the declared bound.",
+      "find": ["    HeapMap::try_with_capacity(entries)"],
+      "replace": ["    HeapMap::try_with_capacity(entries / 2)"]
+    },
+    {
+      "name": "DI-23.5.2.3: the span entries table is made for half the operations",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A span entry holds a write, and each write a place, so there are never more entries than operations declared; a table for fewer refuses one inside the bound.",
+      "find": ["            table(\"the span entries\", Some(capacity.operations))"],
+      "replace": ["            table(\"the span entries\", Some(capacity.operations / 2))"]
+    },
+    {
+      "name": "DI-23.5.2.3: the open flush pairs table ignores the served domains",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "The pairs a provider's domains open are bounded by the operations times the served domains, beside the file parts.",
+      "find": ["            table(\"the open flush pairs\", capacity.flush_parts(served))"],
+      "replace": ["            table(\"the open flush pairs\", Some(capacity.operations))"]
+    },
+    {
+      "name": "DI-23.5.2.3: the served domains names table is made for none",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "The names a flush pair reports are kept for each domain the provider serves.",
+      "find": ["            table(\"the served domains' names\", Some(served))"],
+      "replace": ["            table(\"the served domains' names\", Some(0))"]
+    },
+    {
+      "name": "DI-23.5.2.3: the submit window is made for half the operations",
+      "file": "src/durability/window.rs",
+      "expect": "caught",
+      "why": "The window holds a place for each operation declared, so it is made for that many.",
+      "find": ["            places: table(\"the places of the submit window\", Some(operations))?,"],
+      "replace": ["            places: table(\"the places of the submit window\", Some(operations / 2))?,"]
+    },
+    {
+      "name": "DI-23.5.2.3: the submissions in flight table is made for half the operations",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "An operation in flight holds a place and a commit in flight an entry with a completed write in it, which holds another, so the two together never exceed the operations declared, and may reach them.",
+      "find": ["            table(\"the submissions in flight\", Some(capacity.operations))"],
+      "replace": ["            table(\"the submissions in flight\", Some(capacity.operations / 2))"]
+    },
+    {
+      "name": "DI-23.5.2.3: the per-target table is made for one target",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "Operations in flight are counted for each target attached, so the table is made for the targets declared.",
+      "find": ["            table(\"the operations in flight by target\", Some(capacity.targets))"],
+      "replace": ["            table(\"the operations in flight by target\", Some(1))"]
+    },
+    {
+      "name": "DI-23.5.2.3: the targets table is made for one target",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The core decides for the targets declared, so its table of them is made for that many.",
+      "find": ["            table(\"the targets\", Some(capacity.targets))"],
+      "replace": ["            table(\"the targets\", Some(1))"]
+    },
+    {
+      "name": "DI-23.5.2.3: the flush domains table is made for half the domains",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The core interns the flush domains declared, so its table of them is made for that many.",
+      "find": ["            table(\"the flush domains\", Some(capacity.domains))"],
+      "replace": ["            table(\"the flush domains\", Some(capacity.domains / 2))"]
+    },
+    {
+      "name": "DI-23.5.2.3: ending a lineage ends every lineage's open flush pairs",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A lineage that ends ends its own open pairs and no other's.",
+      "find": ["                    let ours = only.is_none_or(|only| key.0 == only);"],
+      "replace": ["                    let ours = true;"]
+    },
+    {
+      "name": "DI-23.5.2.3: ending a lineage keeps its open flush pairs",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "The pairs a lineage ends are taken from the table, so the table does not keep what was reported ended.",
+      "find": ["                    !ours\n"],
+      "replace": ["                    true\n"]
     }
   ]
 }

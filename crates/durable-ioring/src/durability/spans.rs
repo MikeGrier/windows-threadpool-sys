@@ -10,7 +10,8 @@
 //! the commit in flight for it, and its flush pair each belong to one entry.
 
 use alloc::sync::Arc;
-use std::collections::HashMap;
+
+use fixed_hash_table::HeapMap;
 
 use super::window::{Holder, Window};
 use super::{Durability, Key, Stage, Write};
@@ -41,8 +42,9 @@ impl Span {
 /// A span entry's key: the lineage, the file, and the span.
 pub(super) type SpanKey = (Key, IoTargetKey, Span);
 
-/// Every span entry, by key.
-pub(super) type Spans = HashMap<SpanKey, SpanFile>;
+/// Every span entry, by key. Never more than the operations declared, since each holds a write
+/// and each write holds a place (DI-D-107).
+pub(super) type Spans = HeapMap<SpanKey, SpanFile>;
 
 /// One (lineage, file, seal span) entry.
 pub(super) struct SpanFile {
@@ -155,7 +157,8 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// writes: no entry without a write, and no write without its entry.
     #[cfg(test)]
     pub(super) fn spans_agree(&self) -> bool {
-        let mut counts: HashMap<SpanKey, usize> = HashMap::new();
+        let mut counts: std::collections::HashMap<SpanKey, usize> =
+            std::collections::HashMap::new();
         for write in self.writes.values() {
             *counts
                 .entry((write.lineage, write.file, Span::of(write.stage)))

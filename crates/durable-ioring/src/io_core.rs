@@ -37,14 +37,15 @@
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
-use std::collections::HashMap;
+
+use fixed_hash_table::HeapMap;
 
 use crate::alloc_tags::{tag, tagged};
 use crate::backend::{
     Completion, IoBackend, Refused, Submission, SubmissionData, SubmissionOp, SubmissionToken,
     refusal_fault,
 };
-use crate::capacity::{AtCapacity, Capacity, ConstructionError, Limit};
+use crate::capacity::{AtCapacity, Capacity, ConstructionError, Limit, table};
 use crate::clock::StampClock;
 use crate::contract::{EpochId, Identities};
 use crate::diagnostics::DiagnosticSink;
@@ -162,20 +163,20 @@ pub struct DurableIoCore<E: EpochId + 'static, B, C, K: StampClock> {
     /// What the consumer declared when the core was built, and what is refused past (DI-D-107).
     capacity: Capacity,
     durability: Durability<E, IoTargetKey, K::Instant, K>,
-    targets: HashMap<IoTargetKey, TargetRecord>,
+    targets: HeapMap<IoTargetKey, TargetRecord>,
     /// Every flush domain any target or the provider was declared with, interned.
-    domains: HashMap<FlushDomain, DomainId>,
+    domains: HeapMap<FlushDomain, DomainId>,
     /// The domains the consumer's provider serves, sorted; empty without one.
     served: Arc<[DomainId]>,
     /// Each served domain's name, at its id's position in `served`.
     served_names: Vec<FlushDomain>,
     /// Every submission handed out and not yet completed.
-    in_flight: HashMap<SubmissionToken, InFlight<E, K::Instant, C>>,
+    in_flight: HeapMap<SubmissionToken, InFlight<E, K::Instant, C>>,
     /// The operations held for their gates, by push order.
     held: BTreeMap<u64, HeldOp<E, K::Instant, B, C>>,
     /// Consumer operations in flight, by target, as `remove_target` reports them; a target with
     /// none has no entry.
-    per_target: HashMap<IoTargetKey, usize>,
+    per_target: HeapMap<IoTargetKey, usize>,
     queue: VecDeque<Entry<V<E, K>, B, C>>,
     /// Submissions the core originated that the backend refused for a retryable cause, emitted
     /// again with the next actions.
@@ -188,29 +189,60 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// A core with no targets, no provider, and only its default lineage, stamping failures with
     /// `clock` and reporting to `diagnostics`, and refusing past `capacity` (DI-D-107).
     ///
+    /// Every table the core keys is made now, at the size `capacity` gives it, and never grows.
+    ///
     /// # Errors
     ///
-    /// [`ConstructionError::NoLineages`] if `capacity` declares no lineage, the default being one.
+    /// [`ConstructionError::NoLineages`] if `capacity` declares no lineage, the default being one,
+    /// and [`ConstructionError::Table`] if a table's size is more than a table can be, or cannot be
+    /// allocated.
     pub fn new(
         clock: K,
         diagnostics: Arc<dyn DiagnosticSink>,
         capacity: Capacity,
     ) -> Result<Self, ConstructionError> {
+        Self::build(clock, diagnostics, capacity, 0)
+    }
+
+    /// A core for a provider serving `served` domains, with the tables made at the sizes `capacity`
+    /// and `served` give them.
+    pub(super) fn build(
+        clock: K,
+        diagnostics: Arc<dyn DiagnosticSink>,
+        capacity: Capacity,
+        served: usize,
+    ) -> Result<Self, ConstructionError> {
         if capacity.lineages == 0 {
             return Err(ConstructionError::NoLineages);
         }
         let instance = InstanceId::next();
+        let durability = Durability::new(instance, clock, diagnostics, &capacity, served)?;
+        let targets = tagged(tag::IO_CORE_NEW_TARGETS, || {
+            table("the targets", Some(capacity.targets))
+        })?;
+        let domains = tagged(tag::IO_CORE_NEW_DOMAINS, || {
+            table("the flush domains", Some(capacity.domains))
+        })?;
+        // An operation in flight holds a place, and a commit in flight belongs to an entry with a
+        // completed write in it, which holds another: so the two together never exceed the places,
+        // which never exceed the operations declared (DI-D-107).
+        let in_flight = tagged(tag::IO_CORE_NEW_IN_FLIGHT, || {
+            table("the submissions in flight", Some(capacity.operations))
+        })?;
+        let per_target = tagged(tag::IO_CORE_NEW_PER_TARGET, || {
+            table("the operations in flight by target", Some(capacity.targets))
+        })?;
         Ok(Self {
             instance,
             capacity,
-            durability: Durability::new(instance, clock, diagnostics),
-            targets: HashMap::new(),
-            domains: HashMap::new(),
+            durability,
+            targets,
+            domains,
             served: tagged(tag::IO_CORE_NEW_SERVED, || Arc::from([])),
             served_names: Vec::new(),
-            in_flight: HashMap::new(),
+            in_flight,
             held: BTreeMap::new(),
-            per_target: HashMap::new(),
+            per_target,
             queue: VecDeque::new(),
             unpushed: Vec::new(),
             next_op: 0,
@@ -269,18 +301,41 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 AddTargetCause::AtCapacity(AtCapacity { limit, declared }),
             );
         }
-        let domains = intern_all(&mut self.domains, description.flush_domains.iter().cloned());
+        let Ok(domains) = intern_all(&mut self.domains, description.flush_domains.iter().cloned())
+        else {
+            // The domains were checked to fit above, so this does not happen.
+            self.durability.inconsistent(
+                "the flush domains outnumbered the table made for them",
+                format_args!("target {key:?}"),
+            );
+            return refuse(
+                description,
+                AddTargetCause::AtCapacity(AtCapacity {
+                    limit: Limit::Domains,
+                    declared: self.capacity.domains,
+                }),
+            );
+        };
         let routing = routing(&domains, &self.served);
-        tagged(tag::IO_CORE_ADD_TARGET_RECORD, || {
-            self.targets.insert(
-                key,
-                TargetRecord {
-                    description,
-                    domains,
-                    routing,
-                },
-            )
-        });
+        let record = TargetRecord {
+            description,
+            domains,
+            routing,
+        };
+        if let Err(full) = self.targets.insert(key, record) {
+            // The count was checked above, so this does not happen.
+            self.durability.inconsistent(
+                "the targets outnumbered the table made for them",
+                format_args!("target {key:?}"),
+            );
+            return refuse(
+                full.value.description,
+                AddTargetCause::AtCapacity(AtCapacity {
+                    limit: Limit::Targets,
+                    declared: self.capacity.targets,
+                }),
+            );
+        }
         Ok(())
     }
 
@@ -871,21 +926,29 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         context: C,
         released: bool,
     ) {
-        tagged(tag::IO_CORE_ISSUED_IN_FLIGHT, || {
-            self.in_flight.insert(
-                token,
-                InFlight::Op {
-                    id,
-                    kind,
-                    target,
-                    context,
-                    released,
-                },
-            )
-        });
-        tagged(tag::IO_CORE_ISSUED_PER_TARGET, || {
-            *self.per_target.entry(target).or_insert(0) += 1;
-        });
+        let recorded = self.in_flight.insert(
+            token,
+            InFlight::Op {
+                id,
+                kind,
+                target,
+                context,
+                released,
+            },
+        );
+        if recorded.is_err() {
+            self.durability.inconsistent(
+                "an operation was put in flight past the submissions the operations declared allow",
+                format_args!("operation {id:?} on {target:?}"),
+            );
+        }
+        match self.per_target.entry(target).or_insert(0) {
+            Ok(count) => *count += 1,
+            Err(_) => self.durability.inconsistent(
+                "an operation was put in flight for more targets than were declared",
+                format_args!("operation {id:?} on {target:?}"),
+            ),
+        }
     }
 
     /// A consumer operation on `target` completed.
@@ -928,16 +991,20 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         }
         for flush in flushes {
             let token = self.token();
-            tagged(tag::IO_CORE_ACT_COMMIT_IN_FLIGHT, || {
-                self.in_flight.insert(
-                    token,
-                    InFlight::Commit {
-                        lineage: flush.lineage,
-                        through: flush.through,
-                        target: flush.file,
-                    },
-                )
-            });
+            let recorded = self.in_flight.insert(
+                token,
+                InFlight::Commit {
+                    lineage: flush.lineage,
+                    through: flush.through,
+                    target: flush.file,
+                },
+            );
+            if recorded.is_err() {
+                self.durability.inconsistent(
+                    "a commit was put in flight past the submissions the operations declared allow",
+                    format_args!("commit of {:?}", flush.file),
+                );
+            }
             tagged(tag::IO_CORE_ACT_COMMIT_SUBMIT, || {
                 submit.push(Submission {
                     token,

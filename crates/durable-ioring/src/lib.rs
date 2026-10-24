@@ -91,3 +91,5 @@ pub use types::{
 pub use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
 // A fault's report and what makes one (DI-D-105), for the same reason.
 pub use rc_errors::{AllocError, Allocator, ErrorReport, Global, SharedError, StaticError};
+// Why a table could not be made (DI-D-106), which `ConstructionError::Table` carries.
+pub use fixed_hash_table::ReserveError;

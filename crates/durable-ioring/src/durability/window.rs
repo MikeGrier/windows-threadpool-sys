@@ -10,12 +10,13 @@
 //! is one, however many holders it has, so the count is of operations and not of holds.
 //!
 //! Nothing here refuses: the count is what [`Durability::window_places`] reports, and the capacity
-//! it is compared with is declared at construction (DI-23.5.2).
+//! it is compared with is declared at construction (DI-23.5.2). The table is made at that capacity,
+//! so holding a place past it is an inconsistency, which a push's refusal makes unreachable.
 
-use std::collections::HashMap;
+use fixed_hash_table::HeapMap;
 
 use super::{Durability, V};
-use crate::alloc_tags::{tag, tagged};
+use crate::capacity::{ConstructionError, table};
 use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::ids::OpId;
@@ -51,12 +52,22 @@ impl Holds {
 }
 
 /// The places held, by operation sequence number.
-#[derive(Default)]
 pub(super) struct Window {
-    places: HashMap<u64, Holds>,
+    places: HeapMap<u64, Holds>,
 }
 
 impl Window {
+    /// A window of `operations` places, the table's storage allocated now.
+    ///
+    /// # Errors
+    ///
+    /// [`ConstructionError::Table`] if no table that large can be made.
+    pub(super) fn new(operations: usize) -> Result<Self, ConstructionError> {
+        Ok(Self {
+            places: table("the places of the submit window", Some(operations))?,
+        })
+    }
+
     /// How many places are held.
     pub(super) fn places(&self) -> usize {
         self.places.len()
@@ -68,7 +79,9 @@ impl Window {
     ///
     /// What about the hold is inconsistent: the operation or the write already holds it.
     pub(super) fn hold(&mut self, op: u64, holder: Holder) -> Result<(), &'static str> {
-        let holds = self.places.entry(op).or_default();
+        let Ok(holds) = self.places.entry(op).or_default() else {
+            return Err("a place was held past the operations declared");
+        };
         match holder {
             Holder::Operation if holds.operation => Err("an operation was admitted twice"),
             Holder::Operation => {
@@ -144,9 +157,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// Operation `op` was accepted -- pushed, or held for its gate -- and holds its place until its
     /// completion is popped.
     pub(crate) fn admit(&mut self, op: OpId) {
-        let held = tagged(tag::DURABILITY_ADMIT_WINDOW, || {
-            self.window.hold(op.seq, Holder::Operation)
-        });
+        let held = self.window.hold(op.seq, Holder::Operation);
         self.window_inconsistent(held, op);
     }
 
@@ -158,9 +169,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
 
     /// Write `op` is recorded uncovered, and holds its place for as long.
     pub(super) fn hold_uncovered(&mut self, op: OpId) {
-        let held = tagged(tag::DURABILITY_PUSHED_WINDOW, || {
-            self.window.hold(op.seq, Holder::Uncovered)
-        });
+        let held = self.window.hold(op.seq, Holder::Uncovered);
         self.window_inconsistent(held, op);
     }
 
@@ -168,9 +177,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// resolved.
     pub(super) fn hold_suspects(&mut self, suspect: &SuspectSet<V<E, I>>) {
         for write in suspect.writes() {
-            let held = tagged(tag::DURABILITY_OBSERVE_WINDOW, || {
-                self.window.hold(write.op.seq, Holder::Suspect)
-            });
+            let held = self.window.hold(write.op.seq, Holder::Suspect);
             self.window_inconsistent(held, write.op);
         }
     }

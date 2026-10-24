@@ -2,7 +2,9 @@
 // Split from dioring.rs at f13cd814.
 
 use alloc::sync::Arc;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+
+use fixed_hash_table::{Full, HeapMap};
 
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::Instant;
@@ -41,7 +43,7 @@ pub(crate) type ImportReach = (Reach, Option<u64>, Vec<FlushDomain>);
 /// the instance has interned.
 pub(crate) fn import_reach<E: EpochId + 'static, I: Instant>(
     scope: &ImportScope<DioringIds<E, I>>,
-    domains: &HashMap<FlushDomain, DomainId>,
+    domains: &HeapMap<FlushDomain, DomainId>,
     live: impl Fn(Lineage) -> bool,
 ) -> Result<ImportReach, UnknownLineage<DioringIds<E, I>>> {
     Ok(match scope {
@@ -97,20 +99,24 @@ pub fn first_repeat<T: Eq + core::hash::Hash + Clone>(
 }
 
 /// Intern `domains`, returning their ids sorted and without repeats.
+///
+/// # Errors
+///
+/// [`Full`], handing back the domain, when the table has no room for one `domains` names that it
+/// does not hold: those it interned before it are kept. The core checks that `domains` fit before
+/// it interns any.
 pub(crate) fn intern_all(
-    table: &mut HashMap<FlushDomain, DomainId>,
+    table: &mut HeapMap<FlushDomain, DomainId>,
     domains: impl IntoIterator<Item = FlushDomain>,
-) -> Arc<[DomainId]> {
+) -> Result<Arc<[DomainId]>, Full<FlushDomain, DomainId>> {
     let mut ids: Vec<DomainId> = Vec::new();
     for domain in domains {
         let next =
             DomainId(u32::try_from(table.len()).expect("fewer than 2^32 distinct flush domains"));
-        let id = tagged(tag::DOMAINS_INTERN_ALL_TABLE, || {
-            *table.entry(domain).or_insert(next)
-        });
+        let id = *table.entry(domain).or_insert(next)?;
         tagged(tag::DOMAINS_INTERN_ALL_ID, || ids.push(id));
     }
     ids.sort_unstable();
     ids.dedup();
-    tagged(tag::DOMAINS_INTERN_ALL_SHARED, || ids.into())
+    Ok(tagged(tag::DOMAINS_INTERN_ALL_SHARED, || ids.into()))
 }

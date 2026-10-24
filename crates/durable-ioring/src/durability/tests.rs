@@ -14,7 +14,7 @@ use crate::diagnostics::NoDiagnostics;
 use crate::diagnostics::tests::Recording;
 use crate::domains::DomainId;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, OpId};
-use crate::test_support::{ManualClock, Ticks, fault};
+use crate::test_support::{CAPACITY, ManualClock, Ticks, fault};
 use crate::types::{FailureCause, IoFault, IoTargetKey, MarkingKind, SuspectWrite};
 
 /// What a stamp is in these tests: a plain number, read from a clock the test moves by hand.
@@ -73,7 +73,10 @@ impl<K: StampClocked> One<K> {
 
     /// A core reporting to `sink`.
     fn reporting(clock: K, sink: Arc<dyn crate::diagnostics::DiagnosticSink>) -> Self {
-        Self(Durability::new(InstanceId::next(), clock, sink))
+        Self(
+            Durability::new(InstanceId::next(), clock, sink, &CAPACITY, SERVED)
+                .expect("a valid capacity"),
+        )
     }
 
     fn sealed_through(&self) -> Option<u64> {
@@ -154,6 +157,9 @@ fn nullified() -> MarkingKind {
 }
 /// A covered marking for a file only the built-in default answers for, as every file here is
 /// unless a test routes it otherwise: the flush was observed, and no provider was asked.
+/// The most domains a test here has a provider serve, which the tables are made for.
+const SERVED: usize = 8;
+
 const COVERED: MarkingKind = MarkingKind::Covered {
     flushed: true,
     provider: false,
@@ -370,7 +376,8 @@ fn an_inconsistency_reaches_the_sink_before_the_panic() {
     let sink = Recording::wanting();
     let instance = InstanceId::next();
     let mut core: Durability<u64, &'static str, Stamp, ManualClock> =
-        Durability::new(instance, ManualClock::default(), sink.clone());
+        Durability::new(instance, ManualClock::default(), sink.clone(), &CAPACITY, 0)
+            .expect("a valid capacity");
     let never = OpId { instance, seq: 99 };
     inconsistent(
         "a write completed that was never recorded as pushed",
@@ -395,7 +402,8 @@ fn an_inconsistency_is_not_given_to_a_sink_that_does_not_want_it() {
     let sink = std::sync::Arc::new(Recording::default());
     let instance = InstanceId::next();
     let mut core: Durability<u64, &'static str, Stamp, ManualClock> =
-        Durability::new(instance, ManualClock::default(), sink.clone());
+        Durability::new(instance, ManualClock::default(), sink.clone(), &CAPACITY, 0)
+            .expect("a valid capacity");
     let never = OpId { instance, seq: 99 };
     inconsistent(
         "a write completed that was never recorded as pushed",
@@ -414,7 +422,10 @@ fn the_core_reads_its_clock_once_for_each_failure_it_stamps() {
         InstanceId::next(),
         Ticks::default(),
         Arc::new(NoDiagnostics),
-    );
+        &CAPACITY,
+        0,
+    )
+    .expect("a valid capacity");
     for _ in 0..2 {
         let cause = FailureCause::Imported {
             scope: ImportScope::All,
