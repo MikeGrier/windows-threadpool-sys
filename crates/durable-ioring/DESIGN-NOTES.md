@@ -2321,3 +2321,5 @@ notes when it is created.
   `ErrorCode` is, so nothing is allocated; amends [DI-D-54](#di-d-54).
 - **Not provided:** a portable `ErrorKind`, a working position revisited if a stack generic over backends asks for it. The
   inconsistency panics of [DI-D-46](#di-d-46) stay out of scope.
+- **Prior art** for this decision and the ones it builds on, with what each source says, is in
+  [DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md](../../design-sessions/DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md).

@@ -27,7 +27,8 @@ investigated and proposed. Decisions that resulted, all in
 - [DI-D-109](../crates/durable-ioring/DESIGN-NOTES.md#di-d-109) -- what arrives unasked is bounded by derivation, and the
   rest of DI-23.10 (continued 2026-10-24).
 
-The work is queued as DI-M23 in [CHECKLIST.md](../crates/durable-ioring/CHECKLIST.md).
+The work is queued as DI-M23 in [CHECKLIST.md](../crates/durable-ioring/CHECKLIST.md). The prior art behind these
+decisions is in [DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md](DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md).
 
 ## Why
 
