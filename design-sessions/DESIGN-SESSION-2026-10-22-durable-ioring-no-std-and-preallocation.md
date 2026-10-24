@@ -22,6 +22,8 @@ investigated and proposed. Decisions that resulted, all in
   from a new crate, `fixed-hash-table` (continued 2026-10-23).
 - [DI-D-107](../crates/durable-ioring/DESIGN-NOTES.md#di-d-107) -- what capacity the consumer declares (continued
   2026-10-23).
+- [DI-D-108](../crates/durable-ioring/DESIGN-NOTES.md#di-d-108) -- a failure lends its records by borrow, and handles and
+  tokens are slots (continued 2026-10-24). The rest of DI-23.10 is a proposal awaiting review.
 
 The work is queued as DI-M23 in [CHECKLIST.md](../crates/durable-ioring/CHECKLIST.md).
 
@@ -373,19 +375,102 @@ failure suspecting it. Offered: (a) split it -- count places per write now, chec
 and write the contract and documentation after DI-23.5.2; (b) fold it into DI-23.5.2; (c) leave it coarse until DI-23.10
 settles a failure's storage. The engineer: "take path a. then implement di-23.8.1". Recorded in DI-D-100.
 
+## DI-23.10: a failure's storage, the shared handles, and the tables (continued 2026-10-24)
+
+The assistant set out the open designs DI-23.10 names. For a failure's storage: (a) fixed slots from a declared count,
+(b) a bound from the places, (c) no storage of its own, indexing the write records. The engineer: "My immediate response
+also was (c). Once a failure ensures, can we ensure that the ring stops mutating so that the lifetimes become trivial? Is
+there a scenario for concurrent access to a ring where this would be problematic?"
+
+The assistant's answer: the suspect set is already frozen at observation; only the markings grow, one per suspect write's
+end, and those ends are completions, which are the kernel's and keep arriving. The engine is also reached off the
+consumer's thread -- a pool drain, a provider's answer, a lineage handle's release -- so a borrow held across the
+consumer's code would hold the engine's lock, stall delivery, and deadlock a `resolve` made from inside it, which is what a
+consumer does with a `Failed`. Failures are scoped by reach and lineage, so a global pause would stop lineages the contract
+says carry on. Instead: a scoped borrow, as DI-D-103's visitors are, and a failure's records kept until its `Abandoned` or
+`Healed` is popped. The assistant also found `mark` takes one clock reading and one kind for every failure suspecting a
+write, so a marking can be kept once per write.
+
+On the shared types, the engineer: "Creating a lineage handle should be able to allocate, that seems like a clear boundary
+where failure should be anticipated", and for the description, "can we solve by inverting the problem and having a
+delegate/functor that is called with a borrow of the string?", asking whether the token was what remained. The assistant:
+mint already returns a `Result`, but `Arc::new` cannot report a refused allocation on stable and DI-23.1 asserts nothing
+after construction, so slots in storage made at construction were offered against allocating at mint; the description is
+the caller's own `String`, so it can be kept and lent; and two more remain besides the token, `SuspectSet` (the failure's
+storage) and a target's `Arc<[DomainId]>`. For the token: (A) preallocated atomic cells, index and generation, keeping
+DI-D-12's one live token; (B) no liveness, so a stale token is refused, changing DI-D-12 (c); (C) a token whose drop calls
+the core, ruled out for locking the engine from `Drop`.
+
+On the ordered tables the assistant read where order is used: by push sequence (`writes`, `held`, the suspect set's binary
+search, event order), lineages by key (`advance`, for a deterministic order), and by epoch (`oldest_outstanding`'s minimum,
+`gated`'s ranges in the cycle search, `waiting`'s `split_off`, `blocking`'s range over a failure's epochs, `abandoned`'s
+membership). Only `gated` needs a ranged structure. Every per-epoch table is bounded by `operations` across lineages, except
+`abandoned`, which is never pruned.
+
+The engineer: "1: agreed. 2: slots in preallocated storage. 3: a. 4: yes. 5: declare I think. Is this coherent? I am getting
+overloaded with these micro-decisions". The assistant: 1 to 3 are coherent and one mechanism serves 2 and 3; 4 and 5 count
+things that arrive unasked -- a commit failure from the kernel, an abandon that is how a consumer clears capacity -- so
+"declare" cannot mean "refuse past it", for the reason DI-D-98 never refuses a seal. It proposed settling the rest itself
+against three rules -- nothing allocates after construction; nothing that clears capacity or arrives from the kernel is
+refused; no contract change without the engineer -- and bringing one written proposal. The engineer: "yes". Decisions 1 to
+3 are recorded in DI-D-108; the proposal follows.
+
+## DI-23.10 proposal (not decided; for the engineer's review)
+
+The assistant's, 2026-10-24. Each item is a default with its reason; **CALL** marks the ones that change the contract or
+reverse an answer, which wait for the engineer. The rest are the assistant's to settle in DI-23.12 unless marked otherwise.
+
+1. **Failures are bounded by derivation, not declared. CALL: reverses "4: yes".** Every observed failure is the answer of one
+   part of one seal -- a file's flush or a served domain's request -- and a part is issued only for that seal's named
+   writes (`providers::name` names a domain only for the domains of a named write's file), a write being named to exactly
+   one seal. So each observed failure suspects at least one write named to its part, which holds a place until the failure
+   is resolved (DI-D-100). A write's parts are at most one plus the served domains, so unresolved observed failures are at
+   most `operations` times one plus the served domains -- the flush pairs' bound -- and imported ones at most `imports`.
+   The storage is sized from those, as the flush pairs are, and nothing is refused. A declared `failures` would bound the
+   same storage while naming a refusal nothing can act on. Proof obligations, in DI-23.12: a provider answer for an ended
+   lineage, and a test filling the table to the bound.
+2. **The suspect set is the rule that made it, not a list.** A failure keeps its observation's cut (the next push
+   sequence), its reach and its `only`; a write record keeps the point at which it stopped being uncovered. A write is a
+   suspect when it was pushed before the cut, was uncovered at observation, is of the lineage named if any, and is on a
+   file the reach covers. A write record is kept while any unresolved failure could name it, which the places already
+   bound. The epochs a failure holds are read from the same records. This is DI-D-108's (c) as built.
+3. **The completion queue is sized by derivation.** A `Marked` is queued once per marked write and expanded at pop into
+   one entry per failure observed before the marking that suspects the write, in observation order, which is today's order.
+   The queue then holds completions (at most `operations`), markings (a bounded number per write), the failures' own
+   entries (three per failure at most), and per-lineage entries (`Durable` coalesced, DI-D-101). The exact sum is fixed in
+   DI-23.12 with a test filling it.
+4. **Abandoned epochs. CALL: a contract change.** Today every epoch an abandoned failure contained is kept for the life of
+   the lineage, for `epoch_state` and for refusing a write into an open abandoned epoch (DI-D-35). Abandoning cannot be
+   refused, and nothing bounds the set, so a fixed table needs one of: (a) **forget an abandoned epoch once the mark passes
+   it**: `epoch_state` reports an epoch at or below the mark as the mark means it -- durable or abandoned, as CONTRACT.md
+   already defines "durable through" -- and the consumer learned which from the `Abandoned` entry; or (b) keep them, the
+   one table that grows, against DI-D-97. Recommended: (a). Above the mark, an abandoned epoch holds a place of the window
+   until the mark passes it, so its storage is bounded and the refusal lands on a push. Abandoning frees a place for each
+   suspect write no other failure still holds and takes one per epoch; where another failure still holds the writes, it
+   takes without freeing, so the table's size beyond `operations` is a proof obligation in DI-23.12, not yet shown.
+   win-durable-ioring's README example asserting `Abandoned` below the mark changes with it.
+5. **The ordered tables.** Push-sequence tables (`writes`, `held`) and the lineage table become fixed slabs kept in
+   insertion order, which is sequence order since sequence numbers only increase. The per-epoch counts and `waiting`, and
+   `gated` with its ranges, become sorted fixed-capacity arrays reserved at construction for `operations`, shared across
+   lineages and keyed by lineage first, searched by binary search; an insert shifts within capacity and allocates nothing.
+   Safe code over a reserved `Vec`, in this crate; no new crate.
+6. **The shared handles** (DI-D-108). The slots for lineage handles and failure tokens are one array of atomics made when
+   the driver builds the instance and reached through the home the driver already supplies, so the core gains no
+   allocation; sized from `lineages` and the failure bound of item 1. A target's `Arc<[DomainId]>` becomes a range in a
+   fixed table sized from `targets` and `domains`.
+7. **`Mutex` without `std`.** The core takes no lock today; the lock is the driver's (`engine.rs`, `lock_watch.rs`, the
+   driver support module). Those move behind the `std` feature, and a driver without `std` brings its own lock.
+8. **`thread::panicking()`.** Behind `std`. Without it an inconsistency reports and panics unconditionally; a panic while
+   unwinding aborts, which for an inconsistency, already fatal (DI-D-46), is acceptable.
+9. **The report a refusal carrying a backend fault allocates. CALL: amends DI-D-54.** `Unusable` and `Unknown` wrap the
+   backend's fault in a shared report from the global allocator. Recommended: carry the refusal's cause beside the report
+   in `IoFault`, as its `ErrorCode` already is, and pass the backend's own report through, which allocates nothing; for
+   those two causes DI-D-54's downcast becomes a read of that field. The alternative, an allocator the driver supplies,
+   still allocates on that path, so DI-23.1 could not assert zero there.
+10. **A portable `ErrorKind`.** Not provided: the core does not need one. A working position, revisited if a stack generic
+    over backends asks for it.
+11. **The inconsistency panics of DI-D-46** stay out of scope, as assumed.
+
 ## Working positions and open questions (not decisions)
 
-- **The failure's slot.** How a failure's fixed storage holds its suspect set and markings, and how the events and the
-  inventory lend them out. The next design topic; it decides the failure paths' shape, as DI-D-103 decides the clean
-  paths'.
-- **The `Arc`-shared contract types** (`SuspectSet`, `LineageHandle`, `FailureToken`, a lineage's description) become
-  fixed storage, by index and generation or by borrow. Not chosen.
-- **The ordered tables.** The eight `BTreeMap` and `BTreeSet` tables are mostly keyed by an increasing sequence number
-  or epoch, so most are queues with out-of-order removal; the ones with ranged queries (`gated.range(...)` in the cycle
-  check) need a closer read before a structure is chosen. `HashMap::with_capacity` suffices where a `HashMap` is used.
-- **`Mutex` without `std`.** A lock the driver supplies, locking moved out of the core, or a lock crate. Not discussed.
-- **`thread::panicking()`** has no `core` equivalent. Not discussed.
-- **A portable `ErrorKind`.** Not needed by the core; offered for the case where the engineer's stack is generic over
-  backends. Not answered.
-- **The inconsistency panics of DI-D-46** are a different class from OOM; the assistant assumed them out of scope and
-  the engineer has not said otherwise.
+- **A portable `ErrorKind`** and **the inconsistency panics of DI-D-46**: as items 10 and 11 of the proposal above.

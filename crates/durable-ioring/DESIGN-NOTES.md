@@ -1858,9 +1858,9 @@ panic due to OOM in the middle of things." The session is
   made it ([DI-D-104](#di-d-104)).
 
 The capacity model is [DI-D-98](#di-d-98) to [DI-D-101](#di-d-101); the errors are [DI-D-105](#di-d-105); what the clean
-paths hand out is [DI-D-103](#di-d-103). Open, and not decided: the storage a failure holds and how events lend it out; the
-`Arc`-shared contract types; the ordered tables; `Mutex` and `thread::panicking()` without `std`; a portable `ErrorKind`.
-They are listed in the session.
+paths hand out is [DI-D-103](#di-d-103). A failure's storage and the shared handles are [DI-D-108](#di-d-108). Open, and
+proposed in the session for the engineer's review: how failures and abandoned epochs are bounded, the ordered tables,
+`Mutex` and `thread::panicking()` without `std`, a portable `ErrorKind`, and the report a refusal allocates.
 
 ## <a id="di-d-98"></a>DI-D-98: capacity is declared at construction; submit, mint and import may be refused for it, and a seal never is
 
@@ -2266,3 +2266,29 @@ notes when it is created.
 - **Three steps, not two**: DI-23.5.2.1 keeps a flush's places past its lineage, since the table bounds below depend on it;
   DI-23.5.2.2 declares, constructs fallibly and refuses; DI-23.5.2.3 moves the hashed tables, `targets`, `domains`,
   `per_target`, `in_flight`, `spans`, `window`, `flush_pairs` and `served_names`, onto `fixed-hash-table`.
+
+## <a id="di-d-108"></a>DI-D-108: a failure lends its records by borrow, and lineage handles and failure tokens are slots in storage made at construction
+
+**Decided, not yet implemented: scheduled as DI-23.12 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-24: "1: agreed. 2: slots in preallocated storage. 3: a.", over the assistant's options in [the session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#di-2310-a-failures-storage-the-shared-handles-and-the-tables-continued-2026-10-24). How the rest of DI-23.10 is settled is the session's proposal, which waits for the engineer's review.
+
+- **A failure has no storage of its own for its suspect set; it indexes the write records** (the engineer: "My immediate
+  response also was (c)"). The suspect set is frozen at observation (DI-D-12 (b)); the records it names are kept while it
+  could name them, which the places of [DI-D-100](#di-d-100) already bound.
+- **A failure's records are lent by a scoped borrow**, a call taking a closure that sees them for its duration, as
+  [DI-D-103](#di-d-103)'s visitors are. Events and the inventory carry its identity, token, cause and stamp. **The ring is
+  not paused** while a failure is unresolved: completions are the kernel's and keep arriving, and they are what make the
+  markings; the engine is reached from other threads -- a pool drain, a provider's answer, a handle's release -- so a
+  borrow held across the consumer's code would hold the engine's lock and deadlock a `resolve` made inside it; and failures
+  are scoped by reach and lineage, so a pause would stop lineages the contract says carry on. A resolved failure's records
+  are kept until its `Abandoned` or `Healed` entry is popped.
+- **A marking is kept once per write.** `mark` takes one clock reading and one kind for every failure suspecting the write,
+  so each failure's marking of it is the same.
+- **A lineage handle and a failure token are slots**: an index and a generation into storage made when the instance is
+  built, holding the handle's count of copies and the token's liveness flag as atomics, reached without the engine's lock
+  as the handle's home is today. Minting, cloning and dropping either allocates nothing; `mint_lineage` still refuses at
+  capacity. **DI-D-12's one live token per failure is kept** (option A, over dropping liveness, which would have changed
+  DI-D-12 (c), and over a token whose drop calls the core, which would lock the engine from `Drop`).
+- **A lineage's description is the consumer's own string, kept and lent as `&str`** by borrow, not copied into an
+  `Arc<str>` (the engineer: "a delegate/functor that is called with a borrow of the string").
+- **This is a breaking change to both crates**: `Failed`, `Abandoned` and `Healed`, `FailureInfo`, `SuspectSet`,
+  `LineageHandle`, `FailureToken` and `LineageInfo` change shape. It is made in DI-23.12.
