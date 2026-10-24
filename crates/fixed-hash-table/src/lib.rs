@@ -4,3 +4,17 @@
 // FHT-D-6: no unsafe code. A slot is an `Option`, so nothing here needs it.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+
+// Storage on the heap, allocated once (FHT-D-2, FHT-D-3).
+#[cfg(feature = "alloc")]
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
+
+mod hasher;
+mod map;
+
+pub use hasher::{FixedHasher, FixedState};
+pub use map::{FixedHashMap, Full, InlineMap, Slot};
+#[cfg(feature = "alloc")]
+pub use map::{HeapMap, ReserveError};

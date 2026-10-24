@@ -23,3 +23,12 @@ categories = ["no-std", "data-structures", "embedded"]
 alloc = []
 # The standard library's hasher, among others, for clients that have it.
 std = ["alloc"]
+
+[dev-dependencies]
+# The crate's own tests cover the heap storage too, as durable-ioring's do its `alloc-tags`. A
+# dev-dependency's features reach test builds only.
+fixed-hash-table = { path = ".", features = ["std"] }
+
+[package.metadata.docs.rs]
+# Document the heap storage too, which the `alloc` feature adds.
+all-features = true
