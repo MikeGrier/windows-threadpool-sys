@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Mike Grier
 
-use super::{AllocError, Allocator, Global};
+use super::{AllocError, Allocator, Global, Refusing};
 use alloc::format;
 use alloc::vec::Vec;
 use core::alloc::Layout;
@@ -119,17 +119,10 @@ fn global_is_usable_as_a_static_trait_object() {
     round_trip(allocator, layout(24, 8));
 }
 
-/// Always refuses.
-struct Refusing;
-
-// SAFETY: it returns no block, so it promises nothing about one.
-unsafe impl Allocator for Refusing {
-    fn allocate(&self, _: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        Err(AllocError)
-    }
-
-    unsafe fn deallocate(&self, _: NonNull<u8>, _: Layout) {
-        unreachable!("no block was handed out");
+#[test]
+fn the_refusing_allocator_refuses_every_layout() {
+    for (size, align) in [(0, 1), (1, 1), (64, 64), (4096, 8)] {
+        assert_eq!(Refusing.allocate(layout(size, align)), Err(AllocError));
     }
 }
 

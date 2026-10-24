@@ -59,6 +59,32 @@ pub unsafe trait Allocator {
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout);
 }
 
+/// An allocator that refuses every allocation: for exercising what a caller does when allocation
+/// fails, which a real allocator will not do on demand. It hands out no block, so it is never asked
+/// to free one.
+///
+/// ```
+/// use rc_errors::{AllocError, Refusing, SharedError, StaticError};
+///
+/// static NEVER: Refusing = Refusing;
+/// let (handed_back, cause) = SharedError::try_new_in(StaticError::new("kept"), &NEVER)
+///     .expect_err("refused");
+/// assert_eq!(cause, AllocError);
+/// assert_eq!(handed_back.message(), "kept");
+/// ```
+#[derive(Copy, Clone, Default, Debug)]
+pub struct Refusing;
+
+// SAFETY: it returns no block, so the promises about blocks hold vacuously, and `deallocate` is
+// never given a block of its own to free.
+unsafe impl Allocator for Refusing {
+    fn allocate(&self, _layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        Err(AllocError)
+    }
+
+    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
+}
+
 /// The global allocator, as an [`Allocator`].
 ///
 /// Mirrors the standard library's unstable `alloc::alloc::Global`. A failure is reported as an
