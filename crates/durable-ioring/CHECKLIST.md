@@ -49,9 +49,10 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.7** -- A seal that covers no writes makes no record, kept in a slot, evaluated in order, and overwritten by a later one whose pair ends Superseded. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-237)
 
-- [ ] **DI-23.8** -- **A failure holds its suspect writes' capacity until resolved** ([DI-D-100](DESIGN-NOTES.md#di-d-100)), and
-  [CONTRACT.md](CONTRACT.md) and the crate's documentation say so with worked examples of a consumer refused at submit and
-  resolving its failures to clear it.
+- [ ] **DI-23.8.1** -- **A write holds its place in the window until its last holder lets go** ([DI-D-100](DESIGN-NOTES.md#di-d-100),
+  [DI-D-107](DESIGN-NOTES.md#di-d-107)): the places are counted per write, the holders being the operation until its
+  completion is popped, the write while it is uncovered, and each unresolved failure suspecting it. The count refuses
+  nothing yet: it is checked against a census under `cfg(test)`, and `DI-23.5.2` compares it with `operations`.
 
 - [ ] **DI-23.9** -- **Coalesce `Durable`** ([DI-D-101](DESIGN-NOTES.md#di-d-101)): remove the older un-popped entry and append
   the new one at the tail; the oracle and the tests that expect one `Durable` per seal follow.
@@ -61,10 +62,15 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   observed-failure storage derived from them; a push, a mint, an import and an `add_target` refused at capacity, and a
   provider serving more domains than declared refused at construction; the core's keyed tables moved onto
   `fixed-hash-table`. Breaking for this crate and `win-durable-ioring`. Placed after `DI-23.9`: the commits in flight and
-  the flush pairs are sized by `DI-23.6`'s charge, an observed failure's storage by `DI-23.8`, and the queue per lineage by
+  the flush pairs are sized by `DI-23.6`'s charge, an observed failure's storage by `DI-23.8.1`, and the queue per lineage by
   `DI-23.7` and `DI-23.9`.
 
   > **CROSS-COMPONENT PREREQUISITE:** `crates/fixed-hash-table`' first milestone must land first.
+
+- [ ] **DI-23.8.2** -- **Say so in the contract and the documentation** ([DI-D-100](DESIGN-NOTES.md#di-d-100)):
+  [CONTRACT.md](CONTRACT.md) and the crate's documentation, with compiled worked examples of a consumer refused at submit
+  for capacity and resolving its failures to clear it. Placed after `DI-23.5.2`, which makes the refusal the examples
+  show.
 
 - [ ] **DI-23.10** -- **Settle the open designs with the engineer**, as the session lists them: the storage a failure holds and
   how events and the inventory lend out its suspect set and markings; the `Arc`-shared contract types; the ordered tables;

@@ -349,6 +349,16 @@ failure is resolved, as the consumer must do for 8 anyway; (b) keeping the overw
 holds, failures being bounded; or (c) deferring that slot to DI-23.8, where a failure's storage is designed. The
 engineer: "I choose a". Recorded in DI-D-99.
 
+## DI-23.8 split (continued 2026-10-23)
+
+Starting DI-23.8, the assistant found it cannot land whole before DI-23.5.2: its worked examples of a consumer refused at
+submit need the window and `PushRefusal::AtCapacity`, which DI-23.5.2 makes, while DI-23.5.2 waits on DI-23.8 to size an
+observed failure's storage. It also found nothing counts window places, and that a write has three holders in two places:
+the operation until its completion is popped, and, in the durability core, the write while uncovered and each unresolved
+failure suspecting it. Offered: (a) split it -- count places per write now, checked against a census and refusing nothing,
+and write the contract and documentation after DI-23.5.2; (b) fold it into DI-23.5.2; (c) leave it coarse until DI-23.10
+settles a failure's storage. The engineer: "take path a. then implement di-23.8.1". Recorded in DI-D-100.
+
 ## Working positions and open questions (not decisions)
 
 - **The failure's slot.** How a failure's fixed storage holds its suspect set and markings, and how the events and the

@@ -1933,7 +1933,7 @@ overwrites the earlier, whose values every release is satisfied by, and every ma
 
 ## <a id="di-d-100"></a>DI-D-100: a failure holds the capacity of the writes it puts at risk until it is resolved
 
-**Decided, not yet implemented: scheduled as DI-23.8 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "agreed. make this clear and the
+**Decided, not yet implemented: scheduled as DI-23.8.1 and DI-23.8.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "agreed. make this clear and the
 documentation must include examples of how to address."
 
 A suspect write's capacity is not released when its seal fails: it is held by the failure until the failure is healed or
@@ -1941,6 +1941,12 @@ abandoned. Otherwise a failure would outlive the reservations that bound its sus
 failures shrink the submit window**, and a consumer that leaves failures unresolved is refused at submit for capacity
 ([DI-D-98](#di-d-98)). The contract and the documentation say so plainly, with worked examples of a consumer meeting the
 refusal and resolving its failures to clear it.
+
+**Split in two** (the engineer, 2026-10-23: "take path a"): the places are counted first (DI-23.8.1), refusing nothing, so
+that DI-23.5.2 only compares the count with `operations`; the contract and the documentation, whose examples need the
+refusal to exist, follow DI-23.5.2 (DI-23.8.2). A write holds **one place however many holders it has**: the operation
+until its completion is popped, the write while it is uncovered ([DI-D-107](#di-d-107)), and each unresolved failure
+suspecting it. The count is per write, so a failure's suspect set and markings never exceed the places it holds.
 
 ## <a id="di-d-101"></a>DI-D-101: an un-popped `Durable` is replaced by a later one, which goes to the tail
 
