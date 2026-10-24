@@ -510,6 +510,21 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         self.durability.window_places()
     }
 
+    /// That no lineage has two un-popped `Durable` entries (DI-D-101).
+    #[cfg(test)]
+    fn check_durables(&self) {
+        let mut seen = alloc::collections::BTreeSet::new();
+        for entry in &self.queue {
+            if let Entry::Durable { through } = entry {
+                assert!(
+                    seen.insert(through.lineage.seq),
+                    "two un-popped Durable entries for lineage {}",
+                    through.lineage.seq
+                );
+            }
+        }
+    }
+
     /// Whether the places the core's tables account for are exactly those the window holds.
     #[cfg(test)]
     fn check_window(&self) {
@@ -849,7 +864,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         } = due;
         for event in events {
             match event.into_entry(self.instance) {
-                Ok(entry) => tagged(tag::IO_CORE_ACT_QUEUE, || self.queue.push_back(entry)),
+                Ok(entry) => self.enqueue(entry),
                 Err((op, abandoned)) => {
                     let abandoned = Epoch::new(self.name(abandoned.lineage), abandoned.epoch);
                     self.never_issued(op, abandoned);
@@ -888,12 +903,34 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             tagged(tag::IO_CORE_ACT_REQUEST, || requests.push(request));
         }
         #[cfg(test)]
-        self.check_window();
+        {
+            self.check_window();
+            self.check_durables();
+        }
         CoreActions {
             submit,
             requests,
             deliver: was_empty && !self.queue.is_empty(),
         }
+    }
+
+    /// Append `entry` to the queue. A lineage has at most one un-popped `Durable` (DI-D-101): a
+    /// later one removes the older and goes to the tail, never written over it in place, since the
+    /// contract has a `Healed` come before the `Durable` its heal lets through, and one updated in
+    /// place could stand ahead of a `Healed` queued between them. `Durable { through: n }` means the
+    /// mark has reached n, so an older value skipped breaks no promise: a consumer behind on
+    /// popping sees the mark later, never earlier.
+    fn enqueue(&mut self, entry: Entry<V<E, K>, B, C>) {
+        if let Entry::Durable { through } = &entry {
+            let lineage = through.lineage;
+            let older = self.queue.iter().position(
+                |queued| matches!(queued, Entry::Durable { through } if through.lineage == lineage),
+            );
+            if let Some(at) = older {
+                self.queue.remove(at);
+            }
+        }
+        tagged(tag::IO_CORE_ACT_QUEUE, || self.queue.push_back(entry));
     }
 
     /// A held operation will never be issued: its completion goes on the queue, with its buffer

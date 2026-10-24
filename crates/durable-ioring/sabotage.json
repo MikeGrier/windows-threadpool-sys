@@ -170,7 +170,7 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "Guarantee 4: every request is answered. The state still changes, so only the queue shows it; every seal and failure test waits for its entry and times out.",
-      "find": ["                Ok(entry) => tagged(tag::IO_CORE_ACT_QUEUE, || self.queue.push_back(entry)),"],
+      "find": ["                Ok(entry) => self.enqueue(entry),"],
       "replace": ["                Ok(entry) => drop::<Entry<V<E, K>, B, C>>(entry),"]
     },
     {
@@ -2506,6 +2506,38 @@
       "why": "The control. Letting go of the operation's hold with replace(.., false) is take(..) spelled another way; a test failing here would be asserting the implementation.",
       "find": ["            Holder::Operation => core::mem::take(&mut holds.operation),"],
       "replace": ["            Holder::Operation => core::mem::replace(&mut holds.operation, false),"]
+    },
+    {
+      "name": "DI-23.9: a later Durable does not remove the older",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "A lineage has at most one un-popped Durable (DI-D-101); without the removal a consumer that pops slowly finds one per seal, and the queue grows with the seals a consumer makes.",
+      "find": ["            if let Some(at) = older {"],
+      "replace": ["            if let Some(at) = older.filter(|_| false) {"]
+    },
+    {
+      "name": "DI-23.9: the later Durable is written over the older in place",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The later Durable goes to the tail and is never written in place: an entry queued between them -- a completion of a write the later one covers, or a Healed -- would then stand after a Durable that names it.",
+      "find": ["                self.queue.remove(at);"],
+      "replace": ["                self.queue[at] = entry;", "                return;"]
+    },
+    {
+      "name": "DI-23.9: a Durable replaces the un-popped Durable of any lineage",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "At most one un-popped Durable is kept for each lineage; replacing another lineage's drops an answer its consumer was owed.",
+      "find": ["                |queued| matches!(queued, Entry::Durable { through } if through.lineage == lineage),"],
+      "replace": ["                |queued| matches!(queued, Entry::Durable { .. }),"]
+    },
+    {
+      "name": "DI-23.9: the newest un-popped Durable is looked for rather than the first",
+      "file": "src/io_core.rs",
+      "expect": "survives",
+      "why": "The control. A lineage has at most one un-popped Durable, so the first match and the last are the same entry; looking from the back changes nothing a test could see.",
+      "find": ["            let older = self.queue.iter().position("],
+      "replace": ["            let older = self.queue.iter().rposition("]
     }
   ]
 }

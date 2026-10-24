@@ -78,10 +78,14 @@
 //!   contract promises is that the completion arrives, not that the I/O succeeded.
 //! - **Order between lineages**, which the contract leaves open (DI-D-18).
 //! - **A `Durable` repeated or below an earlier one** for the same lineage. It is never false --
-//!   the high-water mark did pass it -- and the contract promises an answer per request, not a
-//!   rising sequence.
+//!   the high-water mark did pass it -- and the contract promises that the mark's progress is
+//!   reported, not a rising sequence or an entry for each request: an un-popped `Durable` is
+//!   replaced by a later one (DI-D-101), so a consumer that pops slowly sees fewer. That a
+//!   lineage holds at most one un-popped `Durable` is a property of the queue, which the stream
+//!   of popped entries cannot show; the core's own tests check it.
 //! - **That every request is answered** (guarantee 4): a seal that stays pending is legal while a
-//!   provider has not answered, and the stream cannot show that a provider has not.
+//!   provider has not answered, and the stream cannot show that a provider has not; and one
+//!   answered by a later request's `Durable` has no entry of its own.
 //! - **Which writes a failure should have suspected.** That depends on the order the instance
 //!   observed things in and on the files' declared flush domains, neither of which the stream
 //!   carries; so the members are checked, not the set's extent.

@@ -118,13 +118,19 @@ Everything below either sharpens one word of that sentence or states a condition
    stalls a request silently; a request waiting on a provider that has not answered stays pending,
    and that wait is reported to the diagnostic sink the instance was given -- ETW, unless the
    consumer chose another, for the Windows driver ([DI-D-26](DESIGN-NOTES.md#di-d-26),
-   [DI-D-51](DESIGN-NOTES.md#di-d-51)). A request whose span holds no write, replaced before it is
-   answered by a later such request of its lineage, is answered by the later one's entry: a
-   `Durable { through: m }` with m above n says the mark has passed n too
-   ([DI-D-99](DESIGN-NOTES.md#di-d-99)).
+   [DI-D-51](DESIGN-NOTES.md#di-d-51)). A request's `Durable` may be named for a later epoch
+   than its own: a request whose span holds no write, replaced before it is answered by a later
+   such request of its lineage, is answered by the later one's entry
+   ([DI-D-99](DESIGN-NOTES.md#di-d-99)); and a `Durable` the consumer has not popped when a later
+   one for its lineage is queued is replaced by it ([DI-D-101](DESIGN-NOTES.md#di-d-101)). A
+   `Durable { through: m }` with m above n says the mark has passed n too.
 5. **Durable follows the writes it covers.** `Durable { through: n }` is delivered after the
    completion of every write of n's lineage tagged at or below n. Nothing further is promised about
-   order between lineages ([DI-D-18](DESIGN-NOTES.md#di-d-18)).
+   order between lineages ([DI-D-18](DESIGN-NOTES.md#di-d-18)). A lineage has at most one `Durable`
+   the consumer has not popped: a later one removes the older and is queued after every entry
+   already queued, never written over it in place, so a `Healed` queued between them still comes
+   before the `Durable` its heal lets through, and a consumer that pops slowly sees the mark at its
+   latest and never earlier than it was ([DI-D-101](DESIGN-NOTES.md#di-d-101)).
 6. **A late write is refused, not absorbed.** Once n is sealed, a write tagged at or below n in n's
    lineage is an API violation, refused before anything is reserved; nothing reaches the backend and
    the buffer is returned. Likewise, once an epoch is abandoned, a write tagged with it is refused,
@@ -455,7 +461,7 @@ synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-
 
 | Event | When |
 |---|---|
-| `Durable { through: n }` | the high-water mark has reached n |
+| `Durable { through: n }` | the high-water mark has reached n; at most one per lineage waits un-popped, a later replacing an older |
 | `Failed { failure, token, cause, suspect, observed }` | a durability failure was observed (a target's commit, or a provider's domain, failed; or an import) |
 | `Blocked { through: n, by: failure }` | a request's commits succeeded, but an unresolved failure at or below n prevents reporting it |
 | `Marked { failure, marking }` | a suspect write of an unresolved failure was nullified or covered |

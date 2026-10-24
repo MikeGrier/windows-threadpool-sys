@@ -4452,3 +4452,24 @@ preallocates; holding a write uncovered or suspected finds its place already mad
 entries were added to [sabotage.json](sabotage.json), eleven caught (one as a hang) and one surviving control; five
 existing entries whose lines moved were re-anchored to the same defect and swept, all caught or, for the one control,
 surviving as declared.
+
+## Moved 2026-10-24 00:06:01 -04:00 -- DI-23.9: coalescing Durable
+
+### <a id="di-239"></a>DI-23.9 -- A lineage has at most one un-popped Durable: a later one removes the older and goes to the tail. *(completed 2026-10-24 00:06:01 -04:00)*
+
+Per [DI-D-101](DESIGN-NOTES.md#di-d-101), whose "As built" records how. The item as it stood at completion:
+
+**Coalesce `Durable`** (DI-D-101): remove the older un-popped entry and append the new one at the tail; the oracle and the
+tests that expect one `Durable` per seal follow.
+
+What was done. [io_core.rs](src/io_core.rs)'s `enqueue`, the one place an event becomes a queue entry, removes an
+un-popped `Durable` of the same lineage before appending a new one, so a replacement stands after everything already
+queued and a `Healed` queued between two `Durable`s is never passed. A replacement does not raise the readiness signal
+again, the queue being non-empty before and after. Nothing allocates, so the allocation records did not move. The oracle
+already accepted fewer entries, since it never required one per request or a rising sequence; its documentation now says
+why, and that the queue's at-most-one is a property only the core's tests can check, which they do after every `act`.
+CONTRACT.md's guarantees 4 and 5 and its table of events say it. The tests that expected one `Durable` per seal follow:
+four in the core's `flush_failures` tests, and one in `win-durable-ioring` whose two seals are answered before it pops
+depending on timing, which now asserts what holds either way and ran forty times without a failure; before the change it
+failed in the sweep's baseline run. New tests are in [tests/coalescing.rs](src/io_core/tests/coalescing.rs). Sabotage:
+four entries added, three caught and one surviving control.

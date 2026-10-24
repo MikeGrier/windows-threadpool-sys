@@ -23,6 +23,7 @@ use crate::types::{
     Outcome, PushError, PushRefusal, ReadOptions, RemoveTargetError, SealError, WriteOptions,
 };
 
+mod coalescing;
 mod failures;
 mod flush_failures;
 mod gates;

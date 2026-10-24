@@ -1960,7 +1960,7 @@ failure suspects them, which is how a failure's suspect set and markings stay wi
 
 ## <a id="di-d-101"></a>DI-D-101: an un-popped `Durable` is replaced by a later one, which goes to the tail
 
-**Decided, not yet implemented: scheduled as DI-23.9 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "ok so coalescing Durable is approved!"
+**Implemented in DI-23.9.** The engineer, 2026-10-22: "ok so coalescing Durable is approved!"
 
 A seal's capacity is released when the high-water mark passes it, but its `Durable` entry waits for the consumer to pop it,
 so a consumer slow to pop could exhaust the completion queue. A lineage therefore has at most one un-popped `Durable`. A
@@ -1968,6 +1968,17 @@ later one **removes the older and is appended at the tail**, never written in pl
 the `Durable` a heal lets through, and an update in place could put a `Durable` ahead of a `Healed` queued between them.
 `Durable { through: n }` means the high-water mark has reached n, so an intermediate value skipped breaks no promise; a
 consumer behind on popping sees the mark later, never earlier.
+
+**As built** (DI-23.9, the assistant's, 2026-10-23): `DurableIoCore`'s `enqueue`, the one place an event becomes a queue
+entry, looks for an un-popped `Durable` of the same lineage and removes it before appending the new one. Nothing
+allocates, so the allocation records did not move. It scans the queue, which is bounded by what DI-23.5.2 declares; a
+per-lineage index of where the entry stands is the alternative if that scan ever shows up, and is not needed to be correct.
+The readiness signal is not raised again for a replacement: the queue held an entry before and holds one after. The
+consumers' tests that expected one `Durable` per seal follow: four in the core, and one in `win-durable-ioring` whose two
+seals are answered before it pops depending on timing, so it asserts what holds either way. The oracle already accepted
+it, since it never required an entry per request or a rising sequence; its documentation says so, and that the queue's
+at-most-one is a property the popped stream cannot show and the core's tests check. CONTRACT.md's guarantees 4 and 5 and its
+table of events say it.
 
 ## <a id="di-d-102"></a>DI-D-102: a fault's report is an associated type of the trait that reports it
 

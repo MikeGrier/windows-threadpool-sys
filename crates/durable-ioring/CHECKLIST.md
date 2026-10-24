@@ -51,8 +51,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.8.1** -- An operation holds its place in the window until its last holder lets go: its completion popped, the write covered, and each failure suspecting it resolved. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-2381)
 
-- [ ] **DI-23.9** -- **Coalesce `Durable`** ([DI-D-101](DESIGN-NOTES.md#di-d-101)): remove the older un-popped entry and append
-  the new one at the tail; the oracle and the tests that expect one `Durable` per seal follow.
+- [x] **DI-23.9** -- A lineage has at most one un-popped Durable: a later one removes the older and goes to the tail. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-239)
 
 - [ ] **DI-23.5.2** -- **Declare capacity and refuse past it** ([DI-D-107](DESIGN-NOTES.md#di-d-107)): `operations`,
   `lineages`, `imports`, `targets` and `domains`, given at construction, which becomes fallible; the queue and

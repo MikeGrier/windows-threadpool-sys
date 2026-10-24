@@ -195,12 +195,13 @@ fn a_healed_failure_is_passed_at_the_first_seal_after_the_heal() {
         }
         other => panic!("expected Healed before any Durable, got {other:?}"),
     }
-    for id in [1, 2] {
-        match next_entry(&mut rig) {
-            Entry::Durable { through } => assert_eq!(through, rig.epoch(id)),
-            other => panic!("expected Durable through {id}, got {other:?}"),
-        }
+    // Seals 1 and 2 were both answered before anything was popped, so one entry says the mark has
+    // reached 2, and the one through 1 was replaced (DI-D-101).
+    match next_entry(&mut rig) {
+        Entry::Durable { through } => assert_eq!(through, rig.epoch(2)),
+        other => panic!("expected Durable through 2, got {other:?}"),
     }
+    assert!(nothing_more(&mut rig), "no Durable through 1");
     assert!(rig.core.failures().is_empty());
     assert_eq!(state(&rig, 1), EpochState::Durable);
     finish(rig);
@@ -231,14 +232,12 @@ fn without_the_heal_a_later_seal_is_answered_blocked() {
         }
         other => panic!("expected Abandoned, got {other:?}"),
     }
-    let mut durable = Vec::new();
-    for _ in 0..2 {
-        match next_entry(&mut rig) {
-            Entry::Durable { through } => durable.push(through),
-            other => panic!("expected Durable, got {other:?}"),
-        }
+    // Both seals were answered before anything was popped: one entry, through 2 (DI-D-101).
+    match next_entry(&mut rig) {
+        Entry::Durable { through } => assert_eq!(through, rig.epoch(2)),
+        other => panic!("expected Durable through 2, got {other:?}"),
     }
-    assert_eq!(durable, [rig.epoch(1), rig.epoch(2)]);
+    assert!(nothing_more(&mut rig), "no Durable through 1");
     assert_eq!(state(&rig, 1), EpochState::Abandoned);
     assert_eq!(state(&rig, 2), EpochState::Durable);
     finish(rig);
@@ -433,11 +432,10 @@ fn a_failure_spanning_two_lineages_heals_in_each_at_its_own_seal() {
     resolve(&mut rig, vec![(failed.token, Resolution::Heal)]);
 
     assert_eq!(rig.seal(2), DurabilityRequest::Submitted);
-    for id in [1, 2] {
-        match next_entry(&mut rig) {
-            Entry::Durable { through } => assert_eq!(through, rig.epoch(id)),
-            other => panic!("expected Durable through {id}, got {other:?}"),
-        }
+    // One entry for the default lineage: the one through 1 was replaced by the one through 2.
+    match next_entry(&mut rig) {
+        Entry::Durable { through } => assert_eq!(through, rig.epoch(2)),
+        other => panic!("expected Durable through 2, got {other:?}"),
     }
     assert_eq!(rig.core.failures().len(), 1, "it still holds the other");
     assert_eq!(
@@ -503,11 +501,9 @@ fn a_heal_reports_its_record_with_the_markings_its_failure_gained() {
         }
         other => panic!("expected Healed, got {other:?}"),
     }
-    for id in [1, 2] {
-        match next_entry(&mut rig) {
-            Entry::Durable { through } => assert_eq!(through, rig.epoch(id)),
-            other => panic!("expected Durable through {id}, got {other:?}"),
-        }
+    match next_entry(&mut rig) {
+        Entry::Durable { through } => assert_eq!(through, rig.epoch(2)),
+        other => panic!("expected Durable through 2, got {other:?}"),
     }
     finish(rig);
 }
