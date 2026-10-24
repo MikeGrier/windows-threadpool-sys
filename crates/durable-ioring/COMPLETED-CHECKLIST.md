@@ -4565,3 +4565,12 @@ recorded in DI-D-107's "Split".
 [win-durable-ioring's README](../win-durable-ioring/README.md#worked-examples), compiled and run as doctests there.
 Documentation only, so no sabotage entry: the examples are the tests, and a change to the refusal or to the places a failure
 holds breaks them.
+
+## Moved 2026-10-24 14:52:05 -04:00 -- DI-23.10: the open designs settled
+
+### <a id="di-2310"></a>DI-23.10 -- The open designs are settled: a failure's storage and the shared handles (DI-D-108), and what arrives unasked bounded by derivation with the rest (DI-D-109). *(completed 2026-10-24 14:52:05 -04:00)*
+
+The item's text and the reasoning are in [DI-D-108](DESIGN-NOTES.md#di-d-108), [DI-D-109](DESIGN-NOTES.md#di-d-109) and
+[the design session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#di-2310-a-failures-storage-the-shared-handles-and-the-tables-continued-2026-10-24).
+The engineer decided the failure's storage, the handles and the token, then approved the assistant's proposal for the rest
+whole, which reversed a declared `failures` count once a derived bound was found.

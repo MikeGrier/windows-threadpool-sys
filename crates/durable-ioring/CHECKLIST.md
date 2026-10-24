@@ -60,19 +60,19 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.8.2** -- Capacity, its refusals, and the places unresolved failures hold are in the contract and the documentation, with compiled worked examples of a push refused at capacity and cleared by a seal and by resolving a failure. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-2382)
 
-- [ ] **DI-23.10** -- **Settle the open designs with the engineer**, as the session lists them: the storage a failure holds and
-  how events and the inventory lend out its suspect set and markings; the `Arc`-shared contract types; the ordered tables;
-  `Mutex` and `thread::panicking()` without `std`; whether a portable `ErrorKind` is wanted; and the shared report a refusal
-  carrying a backend fault allocates ([DI-D-105](DESIGN-NOTES.md#di-d-105)'s "what building it settled"). It also sizes
-  the completion queue and the failure storage, which `DI-23.5.2.3` leaves: a `Marked` entry is one per failure and
-  suspect write, which is more than the places held, so the bound is not the places and depends on how a failure's
-  storage is laid out.
+- [x] **DI-23.10** -- The open designs are settled: a failure's storage and the shared handles (DI-D-108), and what arrives unasked bounded by derivation with the rest (DI-D-109). -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-2310)
 
 - [ ] **DI-23.11** -- **The clean paths hand out no allocated collection** ([DI-D-103](DESIGN-NOTES.md#di-d-103)): visitors for
   provider requests, lineages and `close()`, and visitor queries behind `IoTargetBusy` and `LineageBusy`.
 
-- [ ] **DI-23.12** -- **Implement what `DI-23.10` settles**, until `DI-23.1` asserts zero allocations after construction in
-  every phase.
+- [ ] **DI-23.12** -- **Implement what `DI-23.10` settles** ([DI-D-108](DESIGN-NOTES.md#di-d-108),
+  [DI-D-109](DESIGN-NOTES.md#di-d-109)), until `DI-23.1` asserts zero allocations after construction in every phase. Breaking
+  changes to both crates, each said in CONTRACT.md and the documentation as it lands: failures lend their records by
+  borrow; handles and tokens are slots; an abandoned epoch at or below the mark is reported as the mark means it, and
+  win-durable-ioring's README example asserting `Abandoned` there changes; `Unusable` and `Unknown` pass the backend's
+  report through, amending DI-D-54. Its proof obligations: the failure bound, including a provider answer for an ended
+  lineage, and how far abandoned epochs above the mark can take their table past `operations`. Likely to want splitting
+  when it starts.
 
 - [ ] **DI-23.13** -- **Build without `std` in CI**: this crate with `--no-default-features` for a target that has no `std`.
 

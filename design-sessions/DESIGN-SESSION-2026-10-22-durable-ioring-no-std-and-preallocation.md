@@ -23,7 +23,9 @@ investigated and proposed. Decisions that resulted, all in
 - [DI-D-107](../crates/durable-ioring/DESIGN-NOTES.md#di-d-107) -- what capacity the consumer declares (continued
   2026-10-23).
 - [DI-D-108](../crates/durable-ioring/DESIGN-NOTES.md#di-d-108) -- a failure lends its records by borrow, and handles and
-  tokens are slots (continued 2026-10-24). The rest of DI-23.10 is a proposal awaiting review.
+  tokens are slots (continued 2026-10-24).
+- [DI-D-109](../crates/durable-ioring/DESIGN-NOTES.md#di-d-109) -- what arrives unasked is bounded by derivation, and the
+  rest of DI-23.10 (continued 2026-10-24).
 
 The work is queued as DI-M23 in [CHECKLIST.md](../crates/durable-ioring/CHECKLIST.md).
 
@@ -417,6 +419,9 @@ refused; no contract change without the engineer -- and bringing one written pro
 
 ## DI-23.10 proposal (not decided; for the engineer's review)
 
+**Approved whole, 2026-10-24**; recorded in DI-D-109. The engineer: "approve all, I don't see alternatives in the memory
+constrained space." The heading is kept as written, since DI-D-109 links to it.
+
 The assistant's, 2026-10-24. Each item is a default with its reason; **CALL** marks the ones that change the contract or
 reverse an answer, which wait for the engineer. The rest are the assistant's to settle in DI-23.12 unless marked otherwise.
 
@@ -473,4 +478,4 @@ reverse an answer, which wait for the engineer. The rest are the assistant's to 
 
 ## Working positions and open questions (not decisions)
 
-- **A portable `ErrorKind`** and **the inconsistency panics of DI-D-46**: as items 10 and 11 of the proposal above.
+- **A portable `ErrorKind`**: not provided (DI-D-109); revisited if a stack generic over backends asks for it.
