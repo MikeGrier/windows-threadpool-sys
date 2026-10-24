@@ -72,11 +72,12 @@ use crate::diagnostics::{
 use crate::domains::DomainId;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::types::{
-    Entry, Epoch, Failed, FailureCause, FailureInfo, FlushDomain, IoFault, IoTargetKey, Marking,
+    Epoch, Failed, FailureCause, FailureInfo, FlushDomain, IoFault, IoTargetKey, Marking,
     MarkingKind, Resolution, ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
 };
 
 mod empties;
+mod exchange;
 mod files;
 mod gates;
 mod lineages;
@@ -93,6 +94,7 @@ use spans::{Span, SpanFile, Spans};
 use tables::{Counts, Seals};
 use window::Window;
 
+pub(crate) use exchange::{DomainPart, Due, Event, Flush, ProviderCall, WriteEnd};
 pub(crate) use gates::GateState;
 #[cfg(test)]
 mod tests;
@@ -143,163 +145,6 @@ impl Reach {
             }
         }
     }
-}
-
-/// A flush now due: `lineage`'s seal `through`'s flush of `file`, through `target`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Flush<E, T> {
-    pub(crate) lineage: Key,
-    pub(crate) through: E,
-    pub(crate) file: IoTargetKey,
-    pub(crate) target: T,
-}
-
-/// An entry a change made due, in the core's terms.
-#[derive(Debug)]
-pub(crate) enum Event<E: EpochId + 'static, I: Instant> {
-    Durable {
-        lineage: Key,
-        through: E,
-    },
-    Blocked {
-        lineage: Key,
-        through: E,
-        by: FailureId,
-    },
-    Failed(Failed<V<E, I>>),
-    Abandoned {
-        failure: FailureId,
-        suspect: SuspectSet<V<E, I>>,
-        markings: Vec<Marking<V<E, I>>>,
-    },
-    Healed {
-        failure: FailureId,
-        suspect: SuspectSet<V<E, I>>,
-        markings: Vec<Marking<V<E, I>>>,
-    },
-    Marked {
-        failure: FailureId,
-        marking: Marking<V<E, I>>,
-    },
-    LineageEnded {
-        lineage: Key,
-        abandoned_through: Option<E>,
-    },
-    /// A held operation will never be issued: the epoch named was abandoned -- its gate, or its own
-    /// (DI-D-43).
-    NeverIssued {
-        op: OpId,
-        abandoned: Gate<E>,
-    },
-}
-
-/// An operation never issued, with the abandoned epoch that stopped it.
-pub(crate) type NeverIssued<E> = (OpId, Gate<E>);
-
-impl<E: EpochId + 'static, I: Instant> Event<E, I> {
-    /// The entry this event is, for `instance`'s queue -- or, for an operation never issued, the
-    /// operation and the abandoned epoch, which only the holder of the operation can make an entry
-    /// of.
-    pub(crate) fn into_entry<B, C>(
-        self,
-        instance: InstanceId,
-    ) -> Result<Entry<V<E, I>, B, C>, NeverIssued<E>> {
-        let name = |seq| Lineage { instance, seq };
-        Ok(match self {
-            Event::Durable { lineage, through } => Entry::Durable {
-                through: Epoch::new(name(lineage), through),
-            },
-            Event::Blocked {
-                lineage,
-                through,
-                by,
-            } => Entry::Blocked {
-                through: Epoch::new(name(lineage), through),
-                by,
-            },
-            Event::Failed(failed) => Entry::Failed(failed),
-            Event::Abandoned {
-                failure,
-                suspect,
-                markings,
-            } => Entry::Abandoned {
-                failure,
-                suspect,
-                markings,
-            },
-            Event::Healed {
-                failure,
-                suspect,
-                markings,
-            } => Entry::Healed {
-                failure,
-                suspect,
-                markings,
-            },
-            Event::Marked { failure, marking } => Entry::Marked { failure, marking },
-            Event::LineageEnded {
-                lineage,
-                abandoned_through,
-            } => Entry::LineageEnded {
-                lineage: name(lineage),
-                abandoned_through,
-            },
-            Event::NeverIssued { op, abandoned } => return Err((op, abandoned)),
-        })
-    }
-}
-
-/// How a write ended, as the core needs it. A target never completes a write short (DI-D-50), so a
-/// write either succeeded in full or failed.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum WriteEnd {
-    /// Completed in full.
-    Succeeded,
-    /// Completed with a fault, as the backend reported it.
-    Failed(IoFault),
-}
-
-/// What a change made due.
-#[derive(Debug)]
-pub(crate) struct Due<E: EpochId + 'static, T, I: Instant> {
-    /// Flushes to push.
-    pub(crate) flushes: Vec<Flush<E, T>>,
-    /// Entries to append, in the order they happened.
-    pub(crate) events: Vec<Event<E, I>>,
-    /// Held operations whose gates are now durable, to push, in the order they were released.
-    pub(crate) released: Vec<OpId>,
-    /// Requests for the consumer's provider, one per seal that needs it, in the order made.
-    pub(crate) calls: Vec<ProviderCall>,
-}
-
-impl<E: EpochId + 'static, T, I: Instant> Default for Due<E, T, I> {
-    fn default() -> Self {
-        Self {
-            flushes: Vec::new(),
-            events: Vec::new(),
-            released: Vec::new(),
-            calls: Vec::new(),
-        }
-    }
-}
-
-/// One seal's request for the consumer's provider (DI-D-27), in the core's terms: per domain the
-/// provider serves that the seal touched, each file's writes named for it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ProviderCall {
-    pub(crate) lineage: Key,
-    /// The seal's sequence number, which its answers name.
-    pub(crate) seal: u64,
-    /// By domain, ascending; within one, files in the order first written.
-    pub(crate) domains: Vec<DomainPart>,
-}
-
-/// One domain's part of a provider request.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DomainPart {
-    pub(crate) domain: DomainId,
-    /// Each file, with the writes named for this domain, in push order.
-    pub(crate) files: Vec<(IoTargetKey, Vec<OpId>)>,
 }
 
 /// An epoch's state as its lineage sees it.
