@@ -2103,3 +2103,40 @@ through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads wh
   allocator that makes a fallback reachable lives below ([RCE-D-3](../rc-errors/DESIGN-NOTES.md#rce-d-3)).
 - **`DI-23.4.2` and `DI-23.4.3` landed as one commit**: `win-durable-ioring` implements the traits whose signatures
   changed, so neither crate builds without the other.
+
+## <a id="di-d-106"></a>DI-D-106: the core's tables are fixed-capacity, preallocated, and refuse when full, from a new crate, `fixed-hash-table`
+
+**Decided, not yet implemented: scheduled as DI-23.5.1 and DI-23.5.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction), with the sequence-keyed tables at DI-23.10.** The engineer, 2026-10-23: "Seems like the collections need to move to closed hashing", then "yes fixed capacity preallocated tables".
+
+- **Why not `std`'s.** `std`'s `HashMap` is already closed hashing (hashbrown's SwissTable). What rules it out is that it grows
+  on insert past its capacity -- `try_reserve` at construction sizes it but does not stop a later insert growing it -- that it
+  exists only with `std`, and that its default hasher needs the OS for a seed. The `BTreeMap` and `BTreeSet` tables allocate a
+  node per insert whatever was reserved.
+- **What replaces them:** tables whose storage is fixed when they are made and which **refuse an insert when full** rather
+  than grow. The refusal is the at-capacity answer [DI-D-98](#di-d-98) wants; nothing allocates after construction.
+- **Built, not depended on, in a new crate, `fixed-hash-table`.** The engineer: "build, put it in a separate crate, call it
+  fixed-hash-table, it should support as much of the usual collection affordances as possible, trimmed towards no-std,
+  no-alloc, with generics to allow for clients who do want std and alloc." hashbrown was the alternative: an external
+  dependency that still grows unless every insert is guarded.
+- **The hasher is a type parameter.** The engineer: "ideally have a generic T which can provide a functor that does not vary by
+  instance and saves storage as well as allow for an instance which permits per collection functors. If that's hard, just
+  allow for the per-type functor." `core::hash::BuildHasher` already has that shape and is in `core`: a zero-sized one is the
+  per-type functor and costs no storage; one with state is per collection.
+- **Order.** The crate is made first (DI-23.5.1); the core's keyed tables move onto it with the capacity declaration
+  ([DI-D-107](#di-d-107), DI-23.5.2). The sequence-keyed tables -- most of the durability tables, queues with out-of-order
+  removal -- may want a slab or a ring rather than a hash table, which is settled at DI-23.10 as the session left it.
+
+The crate's own design -- its storage generics, its default hasher, which affordances it keeps -- is decided in its design
+notes when it is created.
+
+## <a id="di-d-107"></a>DI-D-107: what capacity the consumer declares
+
+**Decided, not yet implemented: scheduled as DI-23.5.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** Settles the shape [DI-D-98](#di-d-98) left open. The engineer, 2026-10-23, confirming the assistant's proposal ("4: yes", "5: a").
+
+- **Declared:** `operations`, the operations outstanding at once -- pushed and not yet popped as a completion, whether in
+  flight, held for a gate, or completed and queued -- with reads and writes sharing the one window; `lineages`, live lineages,
+  the default among them; `imports`, unresolved imported failures; and `targets`, the targets attached at once.
+- **Refused past it, as being at capacity:** a push, a mint, an import, and an `add_target`.
+- **Derived, not declared:** the completion queue's size and the storage an observed failure needs, from the declared ones:
+  every queued entry traces to an operation, a lineage or a failure, and an observed failure holds its suspect writes'
+  capacity ([DI-D-100](#di-d-100)).

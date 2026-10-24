@@ -18,6 +18,10 @@ investigated and proposed. Decisions that resulted, all in
   (continued 2026-10-23).
 - [DI-D-105](../crates/durable-ioring/DESIGN-NOTES.md#di-d-105) -- a fault's report is a static or a shared `dyn Error`,
   shared through a new crate, `rc-errors` (continued 2026-10-23).
+- [DI-D-106](../crates/durable-ioring/DESIGN-NOTES.md#di-d-106) -- the core's tables are fixed-capacity and preallocated,
+  from a new crate, `fixed-hash-table` (continued 2026-10-23).
+- [DI-D-107](../crates/durable-ioring/DESIGN-NOTES.md#di-d-107) -- what capacity the consumer declares (continued
+  2026-10-23).
 
 The work is queued as DI-M23 in [CHECKLIST.md](../crates/durable-ioring/CHECKLIST.md).
 
@@ -281,6 +285,25 @@ over io-buffers and over amending DI-D-4, proposing `durable-ioring-rc-errors-sy
 objection. If you think that it will be applicable more broadly, feel free to shorten it." The assistant objected to
 `-sys`, which marks a thin unsafe Win32 wrapper in this workspace, and shortened the name to `rc-errors`, free on
 crates.io. Recorded as DI-D-105.
+
+## Capacity and the tables (continued 2026-10-23)
+
+Starting DI-23.5, the assistant stopped to ask the shape of the capacity declaration DI-D-98 left open, finding that the
+core's growable state is `io_core`'s maps and `durability`'s tables, most of them B-trees. It proposed `operations`,
+`lineages` and `imports`, with the queue derived and reads sharing the window, and asked whether targets were declared, whether
+a default was wanted, and which signatures would break.
+
+The engineer: "Seems like the collections need to move to closed hashing." The assistant noted that `std`'s `HashMap` is
+already closed hashing (hashbrown's SwissTable), and that what rules it out is growth on insert past its capacity, being
+`std`-only with an OS-seeded hasher, and the B-trees allocating a node per insert; it read the point as fixed-capacity,
+preallocated tables that refuse when full. The engineer: "yes fixed capacity preallocated tables."
+
+On the follow-ups: "build, put it in a separate crate, call it fixed-hash-table, it should support as much of the usual
+collection affordances as possible, trimmed towards no-std, no-alloc, with generics to allow for clients who do want std and
+alloc"; the hasher a type parameter, "ideally have a generic T which can provide a functor that does not vary by instance and
+saves storage as well as allow for an instance which permits per collection functors" -- which `core::hash::BuildHasher`
+already does, a zero-sized one being per type -- the capacity declaration confirmed, and targets declared and refused past
+capacity ("5: a"). Recorded as DI-D-106 and DI-D-107; DI-23.5 is re-planned with the crate first.
 
 ## Working positions and open questions (not decisions)
 

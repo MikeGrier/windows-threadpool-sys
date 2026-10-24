@@ -15,7 +15,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 ## DI-M23 -- No `std`, and every allocation made at construction
 
 The engineer, 2026-10-22, for a no-std user-mode file-system driver stack: [DI-D-97](DESIGN-NOTES.md#di-d-97) to
-[DI-D-105](DESIGN-NOTES.md#di-d-105), from
+[DI-D-107](DESIGN-NOTES.md#di-d-107), from
 [DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md).
 Sharp through `DI-23.9`; the items after it are coarse on purpose, since the designs they depend on are open in the session
 and `DI-23.10` is where they are settled. **No allocation is analysed or removed before `DI-23.2` is done**: the engineer,
@@ -36,9 +36,25 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 - [x] **DI-23.4.3** -- win-durable-ioring reports through the report, landed with DI-23.4.2. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-2343)
 
 - [ ] **DI-23.5** -- **Capacity declared at construction, and construction fallible** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
-  [DI-D-98](DESIGN-NOTES.md#di-d-98)): the capacities the consumer declares, reserved with `try_reserve`, and the refusal at
-  capacity for a submit, a mint and an import. The containers that already take a capacity (`HashMap`, `VecDeque`, `Vec`)
-  are sized from it here.
+  [DI-D-98](DESIGN-NOTES.md#di-d-98)). Re-planned 2026-10-23: the tables are fixed-capacity and preallocated
+  ([DI-D-106](DESIGN-NOTES.md#di-d-106)), so the crate that provides them comes first.
+
+- [ ] **DI-23.5.1** -- **Create `crates/fixed-hash-table`**, `no_std` and allocation-free by default, with generics for clients
+  that want `std` and `alloc`: a workspace member registered for release and publication, with its own `COMPONENT.md`,
+  `DESIGN-NOTES.md`, `CHECKLIST.md` and `PLANS.md` row. Its first milestone, which this item writes, holds a fixed-capacity
+  open-addressed map that refuses an insert when full, with the hasher a `BuildHasher` type parameter, the usual collection
+  affordances, and their tests; its design notes settle the storage generics, the default hasher, and which affordances it
+  keeps.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/fixed-hash-table` -> its first milestone, written by
+  > this item. Control returns here at `DI-23.5.2`.
+
+- [ ] **DI-23.5.2** -- **Declare capacity and refuse past it** ([DI-D-107](DESIGN-NOTES.md#di-d-107)): `operations`,
+  `lineages`, `imports` and `targets`, given at construction, which becomes fallible; the queue and observed-failure storage
+  derived from them; a push, a mint, an import and an `add_target` refused at capacity; the core's keyed tables moved onto
+  `fixed-hash-table`. Breaking for this crate and `win-durable-ioring`.
+
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/fixed-hash-table`' first milestone must land first.
 
 - [ ] **DI-23.6** -- **Charge a seal's work to the (lineage, file, seal span)** ([DI-D-98](DESIGN-NOTES.md#di-d-98)): the
   first write to a file in its lineage's unsealed span pays for the flush, the flush pair and the provider's parts; the
