@@ -22,8 +22,8 @@ use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
 
 use durable_ioring::{
     AddTargetError, AtCapacity, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo,
-    ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftovers, LineageInfo, ReadOptions,
-    RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
+    Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover, LineageInfo,
+    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
     UnknownLineage, WriteOptions,
 };
 use durable_ioring::{
@@ -122,8 +122,14 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`DurableRing::remove_target`].
-    pub fn remove_target(&self, key: IoTargetKey) -> Result<D::Target, RemoveTargetError<D::Ids>> {
+    pub fn remove_target(&self, key: IoTargetKey) -> Result<D::Target, RemoveTargetError> {
         self.with(|ring| ring.remove_target(key))
+    }
+
+    /// [`DurableRing::target_holds`]. The visitor runs under the delivery's lock, and must not
+    /// call back into it.
+    pub fn target_holds(&self, key: IoTargetKey, visit: impl FnMut(Hold<D::Ids>)) {
+        self.with(|ring| ring.target_holds(key, visit));
     }
 
     /// [`DurableRing::default_lineage`].
@@ -140,9 +146,15 @@ impl<D: DurableRing> DeliveryHandle<D> {
         self.with(|ring| ring.mint_lineage(description))
     }
 
-    /// [`DurableRing::lineages`].
-    pub fn lineages(&self) -> Vec<LineageInfo<D::Ids>> {
-        self.with(|ring| ring.lineages())
+    /// [`DurableRing::lineages`]. The visitor runs under the delivery's lock, and must not call
+    /// back into it.
+    pub fn lineages(&self, visit: impl FnMut(LineageInfo<D::Ids>)) {
+        self.with(|ring| ring.lineages(visit));
+    }
+
+    /// [`DurableRing::lineage_holds`]. The visitor runs as [`lineages`](Self::lineages)'s does.
+    pub fn lineage_holds(&self, lineage: Lin<D>, visit: impl FnMut(Hold<D::Ids>)) {
+        self.with(|ring| ring.lineage_holds(lineage, visit));
     }
 
     /// [`DurableRing::end_lineage`].
@@ -529,10 +541,10 @@ impl<D: DurableRing<Readiness = Event> + Send + 'static> EntryDelivery<D> {
         self.inner.handle.take()
     }
 
-    /// Quiesce the delivery and end the instance with [`DurableRing::close`], handing back what is
-    /// left. Entries not yet delivered are discarded with it.
-    pub fn close(self) -> Leftovers<D::Ids, D::Buffer, D::Context> {
-        self.into_inner().close()
+    /// Quiesce the delivery and end the instance with [`DurableRing::close`], giving `visit` what
+    /// is left. Entries not yet delivered are discarded with it.
+    pub fn close(self, visit: impl FnMut(Leftover<D::Ids, D::Buffer, D::Context>)) {
+        self.into_inner().close(visit);
     }
 
     /// Disarm the wait, wait for a delivery in progress to finish, and release the wait and the

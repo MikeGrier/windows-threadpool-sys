@@ -244,9 +244,12 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
         Ok((answer, self.act(actions)))
     }
 
-    /// The provider requests made so far, in order, taken for the driver to make.
-    pub fn take_requests(&mut self) -> Vec<ProviderRequest<V<E, K>>> {
-        core::mem::take(&mut self.requests)
+    /// Give `visit` each provider request made so far, in order, by value, for the driver to make
+    /// (DI-D-103). The visitor runs while the engine is borrowed, and under the driver's lock if it
+    /// holds one, so a driver whose provider may answer inside its call moves each request out
+    /// and makes it once the lock is released.
+    pub fn drain_requests(&mut self, visit: impl FnMut(ProviderRequest<V<E, K>>)) {
+        self.requests.drain(..).for_each(visit);
     }
 }
 

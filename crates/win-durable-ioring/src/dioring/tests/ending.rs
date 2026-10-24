@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Mike Grier
 //! Ending (DI-3.2.7, DI-D-25, DI-D-45), against real files: removing a file, refused with every
-//! hold reported at once; and ending an instance, `close()` handing back what is left, and both it
-//! and drop waiting for the consumer's provider. Also an inconsistency the hub finds, which it
-//! panics on where it finds it (DI-D-46).
+//! hold counted at once and named by `target_holds`; and ending an instance, `close()` giving what
+//! is left to a visitor, and both it and drop waiting for the consumer's provider. Also an
+//! inconsistency the hub finds, which it panics on where it finds it (DI-D-46).
 
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,19 +13,21 @@ use windows_ioring_sys::RegisteredSpan;
 
 use super::gates::{expect_durable, read_gated, two, write_gated};
 use super::pushes::{ADDED, BOUND, GIVEN, Harness, Ring, given, instance, temp};
-use super::{FlushDomain, FlushRequest, V, domain, empty, file, keeper, setup};
+use super::{
+    FlushDomain, FlushRequest, V, closed, domain, empty, file, holds, keeper, listed, setup,
+};
 use crate::windows_backend::Win32FileTarget;
 use durable_ioring::backend::SubmissionData;
 use durable_ioring::driver::{Answer, DomainCall, Home};
 use durable_ioring::{DomainOutcome, DurabilityProvider};
 use durable_ioring::{
-    DurabilityRequest, Epoch, IoTargetBusy, IoTargetKey, OpKind, PushRefusal, ReadOptions,
+    DurabilityRequest, Epoch, Hold, IoTargetBusy, IoTargetKey, OpKind, PushRefusal, ReadOptions,
     RemoveTargetError, WriteOptions,
 };
 use durable_ioring::{DurableRing, RegisteredBufferRing};
 
 /// `key`'s refusal, which must be `Busy`.
-fn busy<K: crate::dioring::TimeBase>(ring: &mut Ring<K>, key: IoTargetKey) -> IoTargetBusy<V> {
+fn busy<K: crate::dioring::TimeBase>(ring: &mut Ring<K>, key: IoTargetKey) -> IoTargetBusy {
     match ring.remove_target(key) {
         Err(RemoveTargetError::Busy(busy)) => busy,
         Err(other) => panic!("expected Busy, got {other:?}"),
@@ -105,8 +107,12 @@ fn an_uncovered_write_holds_its_file_until_it_is_sealed() {
         (refused.in_flight, refused.held_for_gate, refused.uncovered),
         (0, 0, 2)
     );
-    assert_eq!(refused.uncovered_through, [harness.epoch(3)]);
-    assert!(refused.lowest_gates.is_empty() && refused.failures.is_empty());
+    assert_eq!(refused.failures, 0);
+    assert_eq!(
+        holds(&harness.ring, GIVEN),
+        [Hold::Uncovered(harness.epoch(3))],
+        "the highest uncovered epoch, nothing gated, and no failure"
+    );
     let text = refused.to_string();
     assert!(text.contains("2 write(s) not yet covered"), "{text}");
 
@@ -149,13 +155,13 @@ fn held_operations_hold_their_file_with_the_lowest_gate_in_each_lineage() {
     let refused = busy(&mut harness.ring, GIVEN);
     assert_eq!((refused.held_for_gate, refused.in_flight), (3, 0));
     assert_eq!(
-        refused.lowest_gates,
-        [three, minted_four],
+        holds(&harness.ring, GIVEN),
+        [Hold::Gate(three), Hold::Gate(minted_four)],
         "the lowest in each lineage gated on, in lineage order"
     );
     assert_eq!(refused.uncovered, 0, "a held write is not uncovered");
     assert!(refused.to_string().contains("3 held until"), "{refused}");
-    let left = harness.ring.close();
+    let left = closed(harness.ring);
     assert_eq!(left.held.len(), 3);
 }
 
@@ -228,7 +234,7 @@ fn closing_an_idle_instance_hands_back_its_live_lineages_with_their_marks() {
     harness.ring.end_lineage(gone).expect("end it");
     let default = harness.lineage();
 
-    let left = harness.ring.close();
+    let left = closed(harness.ring);
     assert!(left.held.is_empty() && left.failures.is_empty());
     let lineages: Vec<_> = left
         .lineages
@@ -272,7 +278,7 @@ fn closing_hands_back_held_operations_in_push_order_with_what_they_took() {
         )
         .expect("push a gated registered write");
 
-    let left = harness.ring.close();
+    let left = closed(harness.ring);
     let held: Vec<_> = left
         .held
         .iter()
@@ -328,7 +334,7 @@ fn end_waiting_for_an_answer(end: impl FnOnce(Harness)) -> bool {
 #[test]
 fn close_waits_for_a_provider_completion_answered_on_another_thread() {
     assert!(end_waiting_for_an_answer(|harness| {
-        let left = harness.ring.close();
+        let left = closed(harness.ring);
         assert_eq!(
             left.lineages[0].durable_through, None,
             "taken when the instance closed, before the answer"
@@ -377,10 +383,10 @@ fn ending_does_not_wait_for_completions_the_provider_keeps_in_itself() {
     harness.next();
     assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
 
-    let (closed, done) = mpsc::channel();
+    let (sent, done) = mpsc::channel();
     std::thread::spawn(move || {
-        let left = harness.ring.close();
-        let _ = closed.send(left.lineages.len());
+        let left = closed(harness.ring);
+        let _ = sent.send(left.lineages.len());
     });
     assert_eq!(
         done.recv_timeout(BOUND),
@@ -442,7 +448,7 @@ fn a_release_for_a_lineage_that_is_not_live_panics_naming_it() {
         "{text}"
     );
     // Reported with the engine's lock released: the instance is still usable.
-    assert_eq!(ring.lineages().len(), 1);
+    assert_eq!(listed(&ring).len(), 1);
     drop(ring);
 }
 
@@ -450,6 +456,6 @@ fn a_release_for_a_lineage_that_is_not_live_panics_naming_it() {
 fn a_release_for_the_default_lineage_is_ignored() {
     let ring = empty();
     Home::release(&*ring.hub, ring.default_lineage().lineage());
-    assert_eq!(ring.lineages().len(), 1);
+    assert_eq!(listed(&ring).len(), 1);
     drop(ring);
 }

@@ -16,9 +16,9 @@ use crate::io_target::IoTarget;
 use crate::key::{ReadKey, TargetKey, WriteKey};
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
-    ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftovers, LineageInfo, PushError,
-    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
-    UnknownLineage, WriteOptions,
+    Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover, LineageInfo,
+    PushError, ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
+    SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -131,10 +131,15 @@ pub trait DurableRing {
     /// become durable.
     ///
     /// [`IoTargetBusy`]: crate::IoTargetBusy
-    fn remove_target(
-        &mut self,
-        key: IoTargetKey,
-    ) -> Result<Self::Target, RemoveTargetError<Self::Ids>>;
+    fn remove_target(&mut self, key: IoTargetKey) -> Result<Self::Target, RemoveTargetError>;
+
+    /// Give `visit` what holds the target under `key` that an [`IoTargetBusy`](crate::IoTargetBusy)
+    /// counts without naming (DI-D-103): for each lineage gated on, in lineage order, the lowest
+    /// gate its operations to the target are held for; for each lineage with an uncovered write to
+    /// it, the highest epoch among them; and each unresolved failure suspecting a write to it, in
+    /// the order observed. Nothing for a key with no target. The visitor runs under the instance's
+    /// own lock, if it has one, and must not call back into the instance.
+    fn target_holds(&self, key: IoTargetKey, visit: impl FnMut(Hold<Self::Ids>));
 
     /// A handle to the lineage that always exists: a copy of the one construction returned. The
     /// instance holds a copy of its own, so the default lineage never ends while it lives.
@@ -149,8 +154,15 @@ pub trait DurableRing {
     /// and those ended and not yet retired among them (DI-D-107); nothing is minted.
     fn mint_lineage(&mut self, description: Option<String>) -> Result<HandleOf<Self>, AtCapacity>;
 
-    /// Every live lineage, the default among them.
-    fn lineages(&self) -> Vec<LineageInfo<Self::Ids>>;
+    /// Give `visit` each live lineage, the default among them, in minting order (DI-D-103). The
+    /// visitor runs under the instance's own lock, if it has one, and must not call back into the
+    /// instance.
+    fn lineages(&self, visit: impl FnMut(LineageInfo<Self::Ids>));
+
+    /// Give `visit` what holds `lineage` from being retired that a [`LineageBusy`](crate::LineageBusy) counts without
+    /// naming: each unresolved failure holding it, in the order observed. Nothing for a lineage
+    /// the instance cannot answer for. The visitor runs as [`lineages`](Self::lineages)'s does.
+    fn lineage_holds(&self, lineage: Lin<Self>, visit: impl FnMut(Hold<Self::Ids>));
 
     /// End a lineage through its last handle (DI-D-30): every epoch of it not yet durable is
     /// abandoned, reported by a `LineageEnded` entry, and the lineage is retired once its
@@ -357,12 +369,13 @@ pub trait DurableRing {
     /// and waiting for its seal.
     fn take_token(&mut self, failure: FailureIdOf<Self>) -> Option<TokenOf<Self>>;
 
-    /// End the instance and hand back what is left (DI-D-25): the gated operations the kernel never
-    /// saw, with their buffers and contexts, in push order; the unresolved failures; and every
-    /// lineage with its final high-water mark. Seals and flushes nothing. Returns once every
-    /// kernel operation and every durability-provider call in flight has completed, as drop does;
-    /// entries not yet popped are discarded, and nothing already reported is undone.
-    fn close(self) -> Leftovers<Self::Ids, Self::Buffer, Self::Context>
+    /// End the instance and give `visit` what is left (DI-D-25, DI-D-103), each by value: the gated
+    /// operations the kernel never saw, with their buffers and contexts, in push order; then the
+    /// unresolved failures; then every lineage with its final high-water mark. Seals and flushes
+    /// nothing. Returns once every kernel operation and every durability-provider call in flight
+    /// has completed, as drop does; entries not yet popped are discarded, and nothing already
+    /// reported is undone.
+    fn close(self, visit: impl FnMut(Leftover<Self::Ids, Self::Buffer, Self::Context>))
     where
         Self: Sized;
 }

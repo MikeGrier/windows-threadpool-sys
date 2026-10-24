@@ -19,8 +19,9 @@ use crate::oracle::ConformanceOracle;
 use crate::provider::ProviderRequest;
 use crate::test_support::Ticks;
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, FailureCause, FlushDomain, IoTargetKey, OpKind,
-    Outcome, PushError, PushRefusal, ReadOptions, RemoveTargetError, SealError, WriteOptions,
+    DurabilityRequest, Entry, Epoch, EpochState, FailureCause, FailureInfo, FlushDomain,
+    HeldOperation, Hold, IoTargetKey, Leftover, LineageInfo, OpKind, Outcome, PushError,
+    PushRefusal, ReadOptions, RemoveTargetError, SealError, WriteOptions,
 };
 
 mod capacity;
@@ -45,6 +46,61 @@ type Pushed = Result<OpId, PushError<V, Vec<u8>, &'static str>>;
 
 fn nz(n: u32) -> NonZeroU32 {
     NonZeroU32::new(n).expect("non-zero")
+}
+
+/// Each live lineage, as the visitor gives them.
+fn listed(core: &Core) -> Vec<LineageInfo<V>> {
+    let mut listed = Vec::new();
+    core.lineages(|info| listed.push(info));
+    listed
+}
+
+/// What holds the target under `key`, as the visitor names it.
+fn target_holds(core: &Core, key: IoTargetKey) -> Vec<Hold<V>> {
+    let mut holds = Vec::new();
+    core.target_holds(key, |hold| holds.push(hold));
+    holds
+}
+
+/// What holds `lineage` from being retired, as the visitor names it.
+fn lineage_holds(core: &Core, lineage: Lineage) -> Vec<Hold<V>> {
+    let mut holds = Vec::new();
+    core.lineage_holds(lineage, |hold| holds.push(hold));
+    holds
+}
+
+/// What `close` gave, by kind.
+struct Closed {
+    held: Vec<HeldOperation<V, Vec<u8>, &'static str>>,
+    failures: Vec<FailureInfo<V>>,
+    lineages: Vec<LineageInfo<V>>,
+}
+
+/// Close `core`, checking it gives the held operations, then the failures, then the lineages.
+fn closed(core: Core) -> Closed {
+    let mut closed = Closed {
+        held: Vec::new(),
+        failures: Vec::new(),
+        lineages: Vec::new(),
+    };
+    core.close(|leftover| match leftover {
+        Leftover::Held(held) => {
+            assert!(
+                closed.failures.is_empty() && closed.lineages.is_empty(),
+                "the held operations come first"
+            );
+            closed.held.push(held);
+        }
+        Leftover::Failure(failure) => {
+            assert!(
+                closed.lineages.is_empty(),
+                "the failures come before the lineages"
+            );
+            closed.failures.push(failure);
+        }
+        Leftover::Lineage(lineage) => closed.lineages.push(lineage),
+    });
+    closed
 }
 
 /// A core and a backend, with the driver's part played here.
@@ -799,7 +855,10 @@ fn a_target_is_busy_until_its_writes_are_covered() {
     };
     assert_eq!(busy.in_flight, 0);
     assert_eq!(busy.uncovered, 1);
-    assert_eq!(busy.uncovered_through, [rig.epoch(3)]);
+    assert_eq!(
+        target_holds(&rig.core, KEY),
+        [Hold::Uncovered(rig.epoch(3))]
+    );
     rig.seal(3);
     rig.run();
     let description = rig.core.remove_target(KEY).expect("covered");
@@ -825,7 +884,11 @@ fn a_target_is_busy_while_a_failure_suspects_its_writes() {
     let Err(RemoveTargetError::Busy(busy)) = rig.core.remove_target(KEY) else {
         panic!("busy");
     };
-    assert_eq!(busy.failures.len(), 1);
+    assert_eq!(busy.failures, 1);
+    assert!(matches!(
+        target_holds(&rig.core, KEY)[..],
+        [Hold::Failure(_)]
+    ));
 }
 
 #[test]

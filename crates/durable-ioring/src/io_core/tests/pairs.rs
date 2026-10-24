@@ -398,7 +398,7 @@ fn closing_the_core_ends_every_pair_still_open() {
         3
     );
     let Rig { core, .. } = rig;
-    drop(core.close());
+    core.close(drop);
     let lines = sink.lines();
     assert_eq!(
         lines

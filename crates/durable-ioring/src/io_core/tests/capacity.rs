@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use super::{Core, KEY, OTHER, Pushed, Rig, Ticks, V, domain, nz};
+use super::{Core, KEY, OTHER, Pushed, Rig, Ticks, V, domain, listed, nz};
 use crate::capacity::{AtCapacity, Capacity, ConstructionError, Limit};
 use crate::diagnostics::NoDiagnostics;
 use crate::ids::FailureToken;
@@ -96,7 +96,7 @@ fn a_capacity_with_no_lineage_is_refused_before_the_provider_is_looked_at() {
 #[test]
 fn a_core_declaring_only_the_default_lineage_is_accepted() {
     let mut core = core_with(declared(|c| c.lineages = 1));
-    assert_eq!(core.lineages().len(), 1);
+    assert_eq!(listed(&core).len(), 1);
     assert_eq!(
         core.mint_lineage(None).err(),
         Some(at(Limit::Lineages, 1)),
@@ -287,7 +287,7 @@ fn a_mint_past_the_lineages_declared_is_refused_and_a_retire_lifts_it() {
     let first = core.mint_lineage(None).expect("room");
     let second = core.mint_lineage(None).expect("room");
     assert_eq!(core.mint_lineage(None).err(), Some(at(Limit::Lineages, 3)));
-    assert_eq!(core.lineages().len(), 3, "nothing was minted");
+    assert_eq!(listed(&core).len(), 3, "nothing was minted");
     core.retire_lineage(second).expect("nothing holds it");
     let third = core.mint_lineage(None).expect("a place was let go");
     assert_ne!(third, first);

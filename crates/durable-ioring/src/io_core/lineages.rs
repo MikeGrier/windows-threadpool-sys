@@ -11,7 +11,7 @@ use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::durability::DEFAULT_LINEAGE;
 use crate::ids::Lineage;
-use crate::types::{EndLineageRefusal, LineageInfo, RetireLineageRefusal};
+use crate::types::{EndLineageRefusal, Hold, LineageInfo, RetireLineageRefusal};
 
 impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// Mint a lineage, described by `description`.
@@ -31,10 +31,19 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         Ok(self.name(seq))
     }
 
-    /// The live lineages, in minting order, the default first.
-    #[must_use]
-    pub fn lineages(&self) -> Vec<LineageInfo<V<E, K>>> {
-        self.durability.lineages()
+    /// Each live lineage, in minting order, the default first, given to `visit` (DI-D-103).
+    pub fn lineages(&self, visit: impl FnMut(LineageInfo<V<E, K>>)) {
+        self.durability.lineages(visit);
+    }
+
+    /// What holds `lineage` from being retired that a [`LineageBusy`](crate::LineageBusy) counts
+    /// without naming, given to `visit` (DI-D-103): each unresolved failure holding it, in the
+    /// order observed. Nothing for a lineage that is not this core's live one.
+    pub fn lineage_holds(&self, lineage: Lineage, mut visit: impl FnMut(Hold<V<E, K>>)) {
+        if self.is_live(lineage) {
+            self.durability
+                .lineage_failures(lineage.seq, |failure| visit(Hold::Failure(failure)));
+        }
     }
 
     /// End `lineage` (DI-D-30): every epoch of it not yet durable is abandoned, a `LineageEnded`

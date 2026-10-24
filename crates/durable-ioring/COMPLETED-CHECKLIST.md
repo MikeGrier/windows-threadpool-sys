@@ -4574,3 +4574,13 @@ The item's text and the reasoning are in [DI-D-108](DESIGN-NOTES.md#di-d-108), [
 [the design session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#di-2310-a-failures-storage-the-shared-handles-and-the-tables-continued-2026-10-24).
 The engineer decided the failure's storage, the handles and the token, then approved the assistant's proposal for the rest
 whole, which reversed a declared `failures` count once a derived bound was found.
+
+## Moved 2026-10-24 15:46:10 -04:00 -- DI-23.11: the clean paths hand out no allocated collection
+
+### <a id="di-2311"></a>DI-23.11 -- The clean paths hand out no allocated collection: provider requests, lineages and `close()` go to visitors, and the busy refusals count what `target_holds` and `lineage_holds` name. *(completed 2026-10-24 15:46:10 -04:00)*
+
+**The clean paths hand out no allocated collection** ([DI-D-103](DESIGN-NOTES.md#di-d-103)): visitors for provider
+requests, lineages and `close()`, and visitor queries behind `IoTargetBusy` and `LineageBusy`. What was built is DI-D-103's
+"As built". A breaking change to both crates, in one commit because the `DurableRing` trait couples them. Whether a
+failure suspects a write to a file, which the count and the visitor both ask, was made one method rather than left at two
+sites. Sabotage: fifteen entries re-anchored to where their behaviour now lives, and seven added.

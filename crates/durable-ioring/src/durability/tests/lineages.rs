@@ -32,21 +32,37 @@ fn recorded(lineage: &Lineage, key: Key) -> bool {
     lineage.0.lineages.contains_key(&key)
 }
 
-/// A refusal's busy report, by its counts and its failures' sequence numbers.
-fn busy(refusal: LineageBusy<super::Ids>) -> (usize, usize, usize, Vec<u64>) {
+/// Retire `key`, expecting the refusal `why` names, and report it by its counts and the sequence
+/// numbers of the failures the visitor names, checked against the count.
+fn busy(lineage: &mut Lineage, key: Key, why: &str) -> (usize, usize, usize, Vec<u64>) {
+    let refusal: LineageBusy<super::Ids> = lineage.retire(key).expect_err(why);
+    let mut failures = Vec::new();
+    lineage.lineage_failures(key, |failure| failures.push(failure.seq));
+    assert_eq!(
+        refusal.failures,
+        failures.len(),
+        "each failure counted is named"
+    );
     (
         refusal.in_flight,
         refusal.held_for_gate,
         refusal.uncovered,
-        refusal.failures.iter().map(|f| f.seq).collect(),
+        failures,
     )
+}
+
+/// The live lineages, as the visitor gives them.
+fn listed(lineage: &Lineage) -> Vec<crate::types::LineageInfo<super::Ids>> {
+    let mut listed = Vec::new();
+    lineage.lineages(|info| listed.push(info));
+    listed
 }
 
 #[test]
 fn a_minted_lineage_is_listed_with_its_description_beside_the_default() {
     let (lineage, minted) = two();
     assert_ne!(minted, DEFAULT_LINEAGE);
-    let listed = lineage.lineages();
+    let listed = listed(&lineage);
     assert_eq!(listed.len(), 2);
     assert!(listed[0].is_default && listed[0].description.is_none());
     assert_eq!(listed[1].lineage.seq, minted);
@@ -150,7 +166,7 @@ fn ending_abandons_everything_not_yet_durable_and_absorbs_its_flushes() {
     assert_eq!(lineage.0.sealed_through(minted), None);
     assert_eq!(lineage.0.durable_through(minted), None);
     assert_eq!(lineage.0.state(minted, 2), None);
-    assert_eq!(lineage.lineages().len(), 1);
+    assert_eq!(listed(&lineage).len(), 1);
 
     assert!(
         quiet(&lineage.0.flushed(minted, 2, A, Ok(()))),
@@ -324,14 +340,11 @@ fn retiring_is_refused_while_anything_holds_the_lineage() {
     let (mut lineage, minted) = two();
     let mut ops = Ops::new();
     let write = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
-    assert_eq!(
-        busy(lineage.retire(minted).expect_err("in flight")),
-        (1, 0, 0, vec![])
-    );
+    assert_eq!(busy(&mut lineage, minted, "in flight"), (1, 0, 0, vec![]));
     lineage.completed(write, FULL);
     let token = tokens(import(&mut lineage, None)).remove(0);
     assert_eq!(
-        busy(lineage.retire(minted).expect_err("uncovered, and held")),
+        busy(&mut lineage, minted, "uncovered, and held"),
         (0, 0, 1, vec![0])
     );
     assert!(lineage.is_live(minted), "a refusal changes nothing");
@@ -344,17 +357,14 @@ fn retiring_is_refused_while_anything_holds_the_lineage() {
             Seen::BlockedIn(minted, 1, 0)
         ]
     );
-    assert_eq!(
-        busy(lineage.retire(minted).expect_err("held")),
-        (0, 0, 0, vec![0])
-    );
+    assert_eq!(busy(&mut lineage, minted, "held"), (0, 0, 0, vec![0]));
     lineage
         .resolve(vec![(token, Resolution::Abandon)])
         .expect("abandon");
     lineage.retire(minted).expect("nothing holds it");
     assert!(!lineage.is_live(minted));
     assert!(!recorded(&lineage, minted));
-    assert_eq!(lineage.lineages().len(), 1);
+    assert_eq!(listed(&lineage).len(), 1);
 }
 
 #[test]

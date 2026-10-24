@@ -12,8 +12,8 @@ use crate::memory::MemoryTarget;
 use durable_ioring::driver::InstanceId;
 use durable_ioring::{
     AddTargetError, AtCapacity, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,
-    Epoch, EpochState, FailureInfo, ImportError, ImportScope, Imported, IoTargetKey, Leftovers,
-    LineageInfo, OpCompletion, OpKind, Outcome, ReadKey, ReadOptions, RemoveTargetError,
+    Epoch, EpochState, FailureInfo, Hold, ImportError, ImportScope, Imported, IoTargetKey,
+    Leftover, LineageInfo, OpCompletion, OpKind, Outcome, ReadKey, ReadOptions, RemoveTargetError,
     Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag, TargetKey,
     UnknownLineage, WriteKey, WriteOptions,
 };
@@ -130,9 +130,11 @@ impl DurableRing for Fake {
         Ok(())
     }
 
-    fn remove_target(&mut self, key: IoTargetKey) -> Result<MemoryTarget, RemoveTargetError<V>> {
+    fn remove_target(&mut self, key: IoTargetKey) -> Result<MemoryTarget, RemoveTargetError> {
         Err(RemoveTargetError::UnknownKey(key))
     }
+
+    fn target_holds(&self, _key: IoTargetKey, _visit: impl FnMut(Hold<V>)) {}
 
     fn default_lineage(&self) -> LineageHandle {
         self.default.clone()
@@ -142,9 +144,9 @@ impl DurableRing for Fake {
         unimplemented!("the fake has only its default lineage")
     }
 
-    fn lineages(&self) -> Vec<LineageInfo<V>> {
-        Vec::new()
-    }
+    fn lineages(&self, _visit: impl FnMut(LineageInfo<V>)) {}
+
+    fn lineage_holds(&self, _lineage: Lineage, _visit: impl FnMut(Hold<V>)) {}
 
     fn end_lineage(&mut self, handle: LineageHandle) -> Result<(), EndLineageError<V>> {
         Err(EndLineageError {
@@ -225,11 +227,5 @@ impl DurableRing for Fake {
         None
     }
 
-    fn close(self) -> Leftovers<V, Vec<u8>, u32> {
-        Leftovers {
-            held: Vec::new(),
-            failures: Vec::new(),
-            lineages: Vec::new(),
-        }
-    }
+    fn close(self, _visit: impl FnMut(Leftover<V, Vec<u8>, u32>)) {}
 }

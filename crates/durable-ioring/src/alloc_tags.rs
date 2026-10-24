@@ -132,12 +132,8 @@ pub(crate) mod tag {
     pub(crate) const IO_CORE_NEW_DOMAINS: Tag = Tag::new("io_core::new::domains");
     pub(crate) const IO_CORE_NEW_IN_FLIGHT: Tag = Tag::new("io_core::new::in_flight");
     pub(crate) const IO_CORE_NEW_PER_TARGET: Tag = Tag::new("io_core::new::per_target");
-    pub(crate) const IO_CORE_REMOVE_TARGET_LOWEST: Tag = Tag::new("io_core::remove_target::lowest");
-    pub(crate) const IO_CORE_REMOVE_TARGET_LOWEST_GATES: Tag =
-        Tag::new("io_core::remove_target::lowest_gates");
     pub(crate) const IO_CORE_COMPLETE_QUEUE: Tag = Tag::new("io_core::complete::queue");
     pub(crate) const IO_CORE_REFUSED_UNPUSHED: Tag = Tag::new("io_core::refused::unpushed");
-    pub(crate) const IO_CORE_CLOSE_HELD: Tag = Tag::new("io_core::close::held");
     pub(crate) const IO_CORE_EPOCHS: Tag = Tag::new("io_core::epochs");
     pub(crate) const IO_CORE_ISSUE_BACKEND_CHECK: Tag = Tag::new("io_core::issue::backend_check");
     pub(crate) const IO_CORE_ISSUE_HELD: Tag = Tag::new("io_core::issue::held");
@@ -233,16 +229,6 @@ pub(crate) mod tag {
         Tag::new("durability::gates::stop_held::stopped");
     pub(crate) const GATES_STOP_HELD_EVENT: Tag = Tag::new("durability::gates::stop_held::event");
 
-    // durability/files.rs
-    pub(crate) const FILES_FILE_HOLDS_SUSPECT: Tag =
-        Tag::new("durability::files::file_holds::suspect");
-    pub(crate) const FILES_FILE_HOLDS_FAILURE: Tag =
-        Tag::new("durability::files::file_holds::failure");
-    pub(crate) const FILES_FILE_HOLDS_THROUGH: Tag =
-        Tag::new("durability::files::file_holds::through");
-    pub(crate) const FILES_FILE_HOLDS_UNCOVERED_THROUGH: Tag =
-        Tag::new("durability::files::file_holds::uncovered_through");
-
     // durability/providers.rs
     pub(crate) const PROVIDERS_NAME_PART: Tag = Tag::new("durability::providers::name::part");
     pub(crate) const PROVIDERS_NAME_WRITE: Tag = Tag::new("durability::providers::name::write");
@@ -256,10 +242,7 @@ pub(crate) mod tag {
     pub(crate) const LINEAGES_MINT_DESCRIPTION: Tag =
         Tag::new("durability::lineages::mint::description");
     pub(crate) const LINEAGES_MINT_STATE: Tag = Tag::new("durability::lineages::mint::state");
-    pub(crate) const LINEAGES_LINEAGES: Tag = Tag::new("durability::lineages::lineages");
     pub(crate) const LINEAGES_END_EVENT: Tag = Tag::new("durability::lineages::end::event");
-    pub(crate) const LINEAGES_RETIRE_FAILURES: Tag =
-        Tag::new("durability::lineages::retire::failures");
 
     // io_core/provider.rs
     pub(crate) const IO_CORE_WITH_PROVIDER_NAMED: Tag = Tag::new("io_core::with_provider::named");

@@ -213,9 +213,12 @@ fn a_drain_keeps_provider_requests_for_the_driver() {
         .expect("the default lineage");
     oracle.sealed(at(&engine, 1));
     engine.drain();
-    let requests = engine.take_requests();
+    let mut requests = Vec::new();
+    engine.drain_requests(|request| requests.push(request));
     assert_eq!(requests.len(), 1, "the seal asked the provider once");
-    assert!(engine.take_requests().is_empty(), "taken once");
+    let mut again = 0;
+    engine.drain_requests(|_| again += 1);
+    assert_eq!(again, 0, "drained once");
     entries(&mut engine, &mut oracle);
     let request = &requests[0];
     let actions = engine.core.provided(

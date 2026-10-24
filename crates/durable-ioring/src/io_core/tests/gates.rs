@@ -2,12 +2,12 @@
 //! Gates (DI-D-23, DI-D-43): holding an operation until an epoch is durable, releasing it, and
 //! ending it as `NeverIssued`.
 
-use super::{KEY, Rig, V, shown};
+use super::{KEY, Rig, V, closed, shown, target_holds};
 use crate::backend::{IoBackend, RefusalCause};
 use crate::ids::OpId;
 use crate::types::{
-    Entry, Epoch, ImportScope, OpKind, Outcome, PushRefusal, ReadOptions, RemoveTargetError,
-    Resolution, WriteOptions,
+    Entry, Epoch, Hold, ImportScope, IoTargetKey, OpKind, Outcome, PushRefusal, ReadOptions,
+    RemoveTargetError, Resolution, WriteOptions,
 };
 
 fn gated(gate: Epoch<V>) -> WriteOptions<V> {
@@ -226,7 +226,53 @@ fn a_target_is_busy_while_an_operation_waits_for_a_gate() {
         panic!("busy");
     };
     assert_eq!(busy.held_for_gate, 2);
-    assert_eq!(busy.lowest_gates, [Epoch::new(lineage, 2)]);
+    assert_eq!(
+        target_holds(&rig.core, KEY),
+        [
+            Hold::Gate(Epoch::new(lineage, 2)),
+            Hold::Uncovered(rig.epoch(1))
+        ],
+        "the lowest gate of the two, and the uncovered write"
+    );
+}
+
+#[test]
+fn a_targets_gates_are_named_lowest_first_once_per_lineage_in_lineage_order() {
+    let mut rig = Rig::new();
+    let first = rig.core.mint_lineage(None).expect("room for a lineage");
+    let second = rig.core.mint_lineage(None).expect("room for a lineage");
+    for gate in [
+        Epoch::new(second, 7),
+        Epoch::new(first, 5),
+        Epoch::new(second, 3),
+        Epoch::new(first, 9),
+    ] {
+        rig.read_with(0, 1, ReadOptions::new().gate(gate))
+            .expect("held");
+    }
+    rig.read_with(0, 1, ReadOptions::new().gate(Epoch::new(first, 1)))
+        .expect("held");
+    rig.core
+        .add_target(
+            super::OTHER,
+            crate::io_target::IoTarget::describe(&crate::memory::MemoryTarget::new()),
+        )
+        .expect("a new key");
+    assert_eq!(
+        target_holds(&rig.core, KEY),
+        [
+            Hold::Gate(Epoch::new(first, 1)),
+            Hold::Gate(Epoch::new(second, 3))
+        ]
+    );
+    assert!(
+        target_holds(&rig.core, super::OTHER).is_empty(),
+        "a target nothing holds names nothing"
+    );
+    assert!(
+        target_holds(&rig.core, IoTargetKey(99)).is_empty(),
+        "a key with no target names nothing"
+    );
 }
 
 #[test]
@@ -240,7 +286,7 @@ fn close_hands_back_held_operations_in_push_order() {
     let second = rig
         .read_with(0, 2, ReadOptions::new().gate(gate))
         .expect("held");
-    let leftovers = rig.core.close();
+    let leftovers = closed(rig.core);
     let ids: Vec<OpId> = leftovers.held.iter().map(|held| held.id).collect();
     assert_eq!(ids, [first, second]);
     assert_eq!(leftovers.held[0].gate, gate);

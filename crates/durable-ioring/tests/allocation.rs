@@ -439,10 +439,17 @@ fn clean() -> Vec<Measured> {
     rig.phase("a lineage minted");
     rig.round(minted, 1);
     rig.run();
+    rig.drain();
+    rig.phase("the minted lineage written");
+    let core = &mut rig.core;
+    counted(|| core.retire_lineage(minted)).expect_err("uncovered writes");
+    let core = &rig.core;
+    counted(|| core.lineage_holds(minted, drop));
+    rig.phase("a busy lineage refused, and its holds named");
     rig.seal(minted, 1);
     rig.run();
     rig.drain();
-    rig.phase("the minted lineage written and sealed");
+    rig.phase("the minted lineage sealed");
     let core = &mut rig.core;
     let actions = counted(|| core.end_lineage(minted)).expect("a live lineage");
     rig.act(actions);
@@ -458,22 +465,29 @@ fn clean() -> Vec<Measured> {
     rig.phase("a target added");
     rig.write(ADDED, Epoch::new(default, 5), 0, WriteOptions::new());
     rig.run();
+    rig.drain();
+    rig.phase("the added target written");
+    let core = &mut rig.core;
+    counted(|| core.remove_target(ADDED)).expect_err("an uncovered write");
+    let core = &rig.core;
+    counted(|| core.target_holds(ADDED, drop));
+    rig.phase("a busy target refused, and its holds named");
     rig.seal(default, 5);
     rig.run();
     rig.drain();
-    rig.phase("the added target written and sealed");
+    rig.phase("the added target sealed");
     let core = &mut rig.core;
     counted(|| core.remove_target(ADDED)).expect("nothing holds it");
     rig.phase("the added target removed");
 
     let core = &rig.core;
-    drop(counted(|| core.lineages()));
+    counted(|| core.lineages(drop));
     rig.phase("lineages queried");
 
     let Rig {
         core, mut phases, ..
     } = rig;
-    drop(counted(|| core.close()));
+    counted(|| core.close(drop));
     phases.push(take("close"));
     phases
 }
@@ -572,13 +586,17 @@ const CLEAN: &[(&str, u64)] = &[
     ("the gate's epoch sealed, releasing the gated writes", 18),
     ("the gated writes sealed", 6),
     ("a lineage minted", 0),
-    ("the minted lineage written and sealed", 31),
+    ("the minted lineage written", 19),
+    ("a busy lineage refused, and its holds named", 0),
+    ("the minted lineage sealed", 11),
     ("the minted lineage ended", 2),
     ("a target added", 1),
-    ("the added target written and sealed", 7),
+    ("the added target written", 1),
+    ("a busy target refused, and its holds named", 0),
+    ("the added target sealed", 6),
     ("the added target removed", 0),
-    ("lineages queried", 1),
-    ("close", 1),
+    ("lineages queried", 0),
+    ("close", 0),
 ];
 
 /// As [`CLEAN`], for the failure paths.
@@ -757,48 +775,36 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         1,
     ),
     (
-        "the minted lineage written and sealed",
+        "the minted lineage written",
         "durability::pushed::in_flight_by_epoch",
         1,
     ),
+    ("the minted lineage written", "durability::pushed::write", 2),
     (
-        "the minted lineage written and sealed",
-        "durability::pushed::write",
-        2,
-    ),
-    (
-        "the minted lineage written and sealed",
+        "the minted lineage written",
         "durability::advance::live",
-        19,
+        16,
     ),
+    ("the minted lineage sealed", "durability::seal::record", 1),
+    ("the minted lineage sealed", "durability::advance::live", 3),
     (
-        "the minted lineage written and sealed",
-        "durability::seal::record",
-        1,
-    ),
-    (
-        "the minted lineage written and sealed",
+        "the minted lineage sealed",
         "durability::start_seals::flush",
         1,
     ),
     (
-        "the minted lineage written and sealed",
+        "the minted lineage sealed",
         "io_core::act::commit_submit",
         1,
     ),
     (
-        "the minted lineage written and sealed",
+        "the minted lineage sealed",
         "durability::providers::cover::ops",
         4,
     ),
     (
-        "the minted lineage written and sealed",
+        "the minted lineage sealed",
         "durability::advance_mark::durable",
-        1,
-    ),
-    (
-        "the minted lineage written and sealed",
-        "io_core::act::queue",
         1,
     ),
     (
@@ -808,33 +814,24 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
     ),
     ("the minted lineage ended", "durability::advance::live", 1),
     ("a target added", "domains::intern_all::shared", 1),
+    ("the added target written", "durability::advance::live", 1),
+    ("the added target sealed", "durability::advance::live", 2),
     (
-        "the added target written and sealed",
-        "durability::advance::live",
-        3,
-    ),
-    (
-        "the added target written and sealed",
+        "the added target sealed",
         "durability::start_seals::flush",
         1,
     ),
+    ("the added target sealed", "io_core::act::commit_submit", 1),
     (
-        "the added target written and sealed",
-        "io_core::act::commit_submit",
-        1,
-    ),
-    (
-        "the added target written and sealed",
+        "the added target sealed",
         "durability::providers::cover::ops",
         1,
     ),
     (
-        "the added target written and sealed",
+        "the added target sealed",
         "durability::advance_mark::durable",
         1,
     ),
-    ("lineages queried", "durability::lineages::lineages", 1),
-    ("close", "durability::lineages::lineages", 1),
 ];
 
 /// As [`CLEAN_TAGS`], for the failure paths.

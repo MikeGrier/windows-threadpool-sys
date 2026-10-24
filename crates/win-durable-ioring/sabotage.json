@@ -226,8 +226,8 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "DI-D-44: the provider may answer inside its call, and the answer takes the engine's lock. Calling it with the lock held -- reached through the slot pool delivery shares, the one path the borrow checker does not refuse -- deadlocks the synchronous answer test, which a timeout counts as caught.",
-      "find": ["        for request in requests {\n            provider.make_durable(request);\n"],
-      "replace": ["        let shared = self.delivery.as_ref().expect(\"live\").shared();\n        let _held = durable_ioring::driver::lock(&shared);\n        for request in requests {\n            provider.make_durable(request);\n"]
+      "find": ["        for request in made.drain(..) {\n            provider.make_durable(request);\n"],
+      "replace": ["        let shared = self.delivery.as_ref().expect(\"live\").shared();\n        let _held = durable_ioring::driver::lock(&shared);\n        for request in made.drain(..) {\n            provider.make_durable(request);\n"]
     },
     {
       "name": "DI-3.2.7: ending does not wait for the provider",
@@ -2237,6 +2237,14 @@
       "why": "The core's own refusal of the capacity or of the provider's domains reaches the consumer as it was made.",
       "find": ["                    reason: SetupRefusal::Construction(refused),"],
       "replace": ["                    reason: SetupRefusal::DuplicateProviderDomain(FlushDomain::new(Vec::new())),"]
+    },
+    {
+      "name": "DI-23.11: the driver makes no provider request it drained",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "Every request drained from the engine is made, once the lock is released (DI-D-44, DI-D-103).",
+      "find": ["        for request in made.drain(..) {\n"],
+      "replace": ["        for request in made.drain(..).take(0) {\n"]
     }
   ]
 }

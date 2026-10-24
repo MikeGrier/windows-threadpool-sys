@@ -58,8 +58,8 @@ use durable_ioring::driver::{Engine, EngineGuard};
 use durable_ioring::{
     Access, AddTargetCause, AddTargetError, AtCapacity, Capacity, ConstructionError,
     DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState, FailureInfo,
-    FlushDomain, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftovers, LineageInfo,
-    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
+    FlushDomain, Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover,
+    LineageInfo, ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
     RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 use durable_ioring::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle};
@@ -298,6 +298,9 @@ pub struct Dioring<
     pub(crate) delivery: Option<Delivery<E, B, C, K, R>>,
     pub(crate) hub: Arc<Hub<E, B, C, K, R>>,
     pub(crate) provider: Option<Box<dyn DurabilityProvider<WindowsIds<E>>>>,
+    /// The provider's requests, moved out of the engine and not yet made: kept across calls, so
+    /// moving them out allocates nothing once it has room for them (DI-D-103).
+    pub(crate) requests: Vec<FlushRequest<WindowsIds<E>>>,
     /// A copy of the default lineage's handle, so the default lineage lives as long as the
     /// instance does (DI-D-40).
     pub(crate) default: LineageHandle,
@@ -541,6 +544,7 @@ where
                 delivery: Some(delivery),
                 hub,
                 provider,
+                requests: Vec::new(),
                 default,
             },
             handle,
@@ -629,16 +633,17 @@ where
         Ok(())
     }
 
-    fn remove_target(
-        &mut self,
-        key: IoTargetKey,
-    ) -> Result<Win32FileTarget, RemoveTargetError<Self::Ids>> {
+    fn remove_target(&mut self, key: IoTargetKey) -> Result<Win32FileTarget, RemoveTargetError> {
         let mut engine = self.engine();
         engine.core.remove_target(key)?;
         Ok(engine
             .backend
             .detach(key)
             .expect("a target the core decided for is attached"))
+    }
+
+    fn target_holds(&self, key: IoTargetKey, visit: impl FnMut(Hold<Self::Ids>)) {
+        self.engine().core.target_holds(key, visit);
     }
 
     fn write_with<T: WriteKey>(
@@ -763,8 +768,12 @@ where
         Ok(LineageHandle::mint(lineage, home(&self.hub)))
     }
 
-    fn lineages(&self) -> Vec<LineageInfo<Self::Ids>> {
-        self.engine().core.lineages()
+    fn lineages(&self, visit: impl FnMut(LineageInfo<Self::Ids>)) {
+        self.engine().core.lineages(visit);
+    }
+
+    fn lineage_holds(&self, lineage: Lineage, visit: impl FnMut(Hold<Self::Ids>)) {
+        self.engine().core.lineage_holds(lineage, visit);
     }
 
     fn end_lineage(&mut self, handle: LineageHandle) -> Result<(), EndLineageError<Self::Ids>> {
@@ -870,13 +879,9 @@ where
         self.engine().core.take_token(failure)
     }
 
-    fn close(mut self) -> Leftovers<Self::Ids, B, C> {
+    fn close(mut self, visit: impl FnMut(Leftover<Self::Ids, B, C>)) {
         // `close` consumes the instance, so nothing has ended it before.
-        self.end().unwrap_or_else(|| Leftovers {
-            held: Vec::new(),
-            failures: Vec::new(),
-            lineages: Vec::new(),
-        })
+        self.end(visit);
     }
 }
 
@@ -1017,20 +1022,21 @@ where
     /// (DI-D-44). Every request is built before the first is made, so a panic in the provider drops
     /// the completions of those after it unanswered: each a failure of its domain, as DI-D-27 says.
     fn call_provider(&mut self) {
-        let requests = self.engine().take_requests();
-        if requests.is_empty() {
+        let home = answers(&self.hub);
+        let made = &mut self.requests;
+        self.delivery
+            .as_ref()
+            .expect("an instance is live until it ends")
+            .engine()
+            .drain_requests(|request| made.push(flush_request(request, &home)));
+        if made.is_empty() {
             return;
         }
-        let home = answers(&self.hub);
-        let requests: Vec<FlushRequest<WindowsIds<E>>> = requests
-            .into_iter()
-            .map(|request| flush_request(request, &home))
-            .collect();
         let provider = self
             .provider
             .as_mut()
             .expect("only a provider's domains make requests");
-        for request in requests {
+        for request in made.drain(..) {
             provider.make_durable(request);
         }
     }
@@ -1054,10 +1060,12 @@ impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Dioring<B, E
         handle.is_homed_at(&self.hub)
     }
 
-    /// End the instance, as the module's "Ending" says, returning what is left; `None` if it has
-    /// ended already.
-    pub(crate) fn end(&mut self) -> Option<Leftovers<DioringIds<E, K::Instant>, B, C>> {
-        let delivery = self.delivery.take()?;
+    /// End the instance, as the module's "Ending" says, giving `visit` what is left; nothing if it
+    /// has ended already.
+    pub(crate) fn end(&mut self, visit: impl FnMut(Leftover<DioringIds<E, K::Instant>, B, C>)) {
+        let Some(delivery) = self.delivery.take() else {
+            return;
+        };
         // Stops the wake, waiting for a drain in progress, and takes the engine out of its slot.
         let engine = delivery.into_engine();
         // Before the wait: a completion the provider keeps in itself is answered, as abandoned, by
@@ -1065,10 +1073,10 @@ impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Dioring<B, E
         self.provider = None;
         self.hub.wait_for_answers();
         let Engine { core, backend, .. } = engine;
-        let leftovers = core.close();
-        // The ring runs down every operation still in flight as it goes.
+        // The ring runs down every operation still in flight as it goes, before the consumer is
+        // given anything.
         drop(backend);
-        Some(leftovers)
+        core.close(visit);
     }
 }
 
@@ -1203,7 +1211,7 @@ impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Drop
         // Ends the instance on this thread, never inside one of delivery's own calls, where
         // stopping delivery would wait for itself. Nothing to do after `close()`, which has ended
         // it already; drop discards what it would have returned.
-        let _ = self.end();
+        self.end(drop);
     }
 }
 /// Register `files` with `ring`, in order, and wait for the registration to complete. `None` for

@@ -268,6 +268,11 @@ failure reports by the key the consumer gave it, so a report stays usable after 
   are what let go of room. A consumer that pushes writes and never seals them, or leaves failures
   unresolved, is refused at submit, and nothing but its own calls can clear that
   ("Capacity", below).
+- **A visitor does not call back into the instance.** What the instance lists on an I/O lifecycle
+  with no failure in it -- its lineages, what holds a target or a lineage, what `close()` leaves -- it
+  gives to a visitor the consumer passes, each item in turn, rather than handing out a collection it
+  would have to allocate ([DI-D-103](DESIGN-NOTES.md#di-d-103)). The visitor may run under the
+  instance's own lock, so it must not call the instance.
 - **Honest heals.** A heal is the consumer's assertion that it has re-issued, under higher tags,
   everything the failure put at risk that it needs. dioring cannot check it.
 - **Reporting outside failures it learns of**, through the import, for every target whose warranty
@@ -539,8 +544,9 @@ implementation of this contract and whoever waits on the signal, and the conform
 
 ## Ending an instance
 
-An instance ends by `close()` or by being dropped. Both end it the same way; `close()` also hands
-back what is left ([DI-D-25](DESIGN-NOTES.md#di-d-25)).
+An instance ends by `close()` or by being dropped. Both end it the same way; `close()` also gives
+what is left to the consumer's visitor, each item by value ([DI-D-25](DESIGN-NOTES.md#di-d-25),
+[DI-D-103](DESIGN-NOTES.md#di-d-103)).
 
 - **No implicit durability.** Ending issues no final seal and no commit. A write not already
   reported durable gets no promise.
@@ -554,8 +560,9 @@ back what is left ([DI-D-25](DESIGN-NOTES.md#di-d-25)).
   as abandoned rather than holding the end up; one kept anywhere else is waited for. Every answer
   given once ending has begun, and every operation that completes after it, is discarded
   unreported.
-- **What is left.** Gated operations the backend never saw, unresolved failures, and each lineage's
-  final high-water mark are returned by `close()` and discarded by a drop. Nothing reported is
+- **What is left.** Gated operations the backend never saw, in push order, then the unresolved
+  failures, then each lineage with its final high-water mark, are given to `close()`'s visitor once
+  the wait is over, and discarded by a drop. Nothing reported is
   undone: an epoch reported durable stays durable whether or not its event was popped.
 - **No callback after the end.** Under Model A (threadless dispatch), no delivery callback runs once
   ending has returned.
@@ -586,8 +593,10 @@ back -- while another copy is held ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
 - **The default lineage cannot be ended**; a consumer walking away from it ends the instance.
 
 **Retiring** a lineage, through its last handle, ends it without abandoning anything, so it is
-refused -- handing the handle back, with everything still holding the lineage -- unless nothing of
-it is in flight or uncovered and no unresolved failure holds it. A retired lineage is reported by no
+refused -- handing the handle back, with everything still holding the lineage counted, the failures
+among it named by a query -- unless nothing of it is in flight or uncovered and no unresolved
+failure holds it. Removing a target is refused the same way while anything holds it, the gates,
+uncovered epochs and failures holding it named by a query. A retired lineage is reported by no
 entry: nothing about it changed.
 
 ## Gates

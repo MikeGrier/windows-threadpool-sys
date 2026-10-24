@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use super::{Core, KEY, OTHER, Rig, V, nz};
+use super::{Core, KEY, OTHER, Rig, V, closed, nz, target_holds};
 use crate::backend::{IoBackend, RegisteredRegion, SubmissionData};
 use crate::diagnostics::NoDiagnostics;
 use crate::ids::{FailureId, FailureToken};
@@ -22,8 +22,8 @@ use crate::memory::{
 use crate::oracle::ConformanceOracle;
 use crate::test_support::{ManualClock, Ticks};
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, Failed, FailureCause, FlushDomain, MarkingKind,
-    OpKind, PushRefusal, RemoveTargetError, Resolution, ResolveRefusal, WriteOptions,
+    DurabilityRequest, Entry, Epoch, EpochState, Failed, FailureCause, FlushDomain, Hold,
+    MarkingKind, OpKind, PushRefusal, RemoveTargetError, Resolution, ResolveRefusal, WriteOptions,
 };
 
 const GIVEN: crate::types::IoTargetKey = KEY;
@@ -386,7 +386,8 @@ fn a_failure_suspecting_a_write_holds_its_file_until_it_is_resolved() {
         Err(other) => panic!("expected Busy, got {other:?}"),
         Ok(_) => panic!("expected Busy, and the file was removed"),
     };
-    assert_eq!(refused.failures, [failed.id]);
+    assert_eq!(refused.failures, 1);
+    assert_eq!(target_holds(&rig.core, GIVEN), [Hold::Failure(failed.id)]);
     assert_eq!(
         refused.uncovered, 0,
         "its suspect write is reported by the failure"
@@ -407,7 +408,7 @@ fn closing_hands_back_the_unresolved_failures() {
     next_op(&mut rig);
     rig.seal(1);
     let failed = next_failed(&mut rig);
-    let left = rig.core.close();
+    let left = closed(rig.core);
     let ids: Vec<_> = left.failures.iter().map(|f| f.id).collect();
     assert_eq!(ids, [failed.id]);
     assert_eq!(left.lineages[0].durable_through, None);

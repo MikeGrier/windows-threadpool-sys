@@ -118,15 +118,13 @@ fn a_suspect_set_is_shared_not_copied() {
     assert!(std::ptr::eq(set.writes(), copy.writes()));
 }
 
-fn busy() -> IoTargetBusy<V> {
+fn busy() -> IoTargetBusy {
     IoTargetBusy {
         target: IoTargetKey(9),
         in_flight: 0,
         held_for_gate: 0,
-        lowest_gates: Vec::new(),
         uncovered: 0,
-        uncovered_through: Vec::new(),
-        failures: Vec::new(),
+        failures: 0,
     }
 }
 
@@ -137,8 +135,6 @@ fn target_busy_names_the_target_and_nothing_it_was_not_given() {
 
 #[test]
 fn target_busy_says_what_clears_each_hold_it_reports() {
-    let instance = InstanceId::next();
-    let l = lineage(instance, 0);
     let in_flight = IoTargetBusy {
         in_flight: 2,
         ..busy()
@@ -148,46 +144,52 @@ fn target_busy_says_what_clears_each_hold_it_reports() {
         in_flight.contains("2 operation(s) in flight, wait for their completions"),
         "{in_flight}"
     );
+    assert!(
+        !in_flight.contains("target_holds"),
+        "the query names nothing in flight: {in_flight}"
+    );
 
     let gated = IoTargetBusy {
         held_for_gate: 3,
-        lowest_gates: vec![Epoch::new(l, 5)],
-        ..busy()
-    }
-    .to_string();
-    assert!(gated.contains("3 held until each of"), "{gated}");
-    assert!(gated.contains("is durable or abandoned"), "{gated}");
-
-    let uncovered = IoTargetBusy {
-        uncovered: 4,
-        uncovered_through: vec![Epoch::new(l, 6)],
         ..busy()
     }
     .to_string();
     assert!(
-        uncovered.contains("4 write(s) not yet covered, seal through each of"),
+        gated.contains("3 held until their gates are durable or abandoned"),
+        "{gated}"
+    );
+
+    let uncovered = IoTargetBusy {
+        uncovered: 4,
+        ..busy()
+    }
+    .to_string();
+    assert!(
+        uncovered.contains("4 write(s) not yet covered, seal them"),
         "{uncovered}"
     );
 
     let failed = IoTargetBusy {
-        failures: vec![crate::ids::FailureId { instance, seq: 1 }],
+        failures: 1,
         ..busy()
     }
     .to_string();
-    assert!(failed.contains("heal or abandon them"), "{failed}");
+    assert!(
+        failed.contains("1 unresolved failure(s), heal or abandon them"),
+        "{failed}"
+    );
+    for named in [gated, uncovered, failed] {
+        assert!(named.ends_with("`target_holds` names each"), "{named}");
+    }
 }
 
 #[test]
 fn file_busy_reports_every_hold_at_once() {
-    let instance = InstanceId::next();
-    let l = lineage(instance, 0);
     let all = IoTargetBusy {
         in_flight: 1,
         held_for_gate: 1,
-        lowest_gates: vec![Epoch::new(l, 1)],
         uncovered: 1,
-        uncovered_through: vec![Epoch::new(l, 2)],
-        failures: vec![crate::ids::FailureId { instance, seq: 1 }],
+        failures: 1,
         ..busy()
     }
     .to_string();
@@ -196,6 +198,7 @@ fn file_busy_reports_every_hold_at_once() {
         "held until",
         "not yet covered",
         "heal or abandon",
+        "target_holds",
     ] {
         assert!(all.contains(part), "missing {part:?} in {all}");
     }

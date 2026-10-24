@@ -17,6 +17,7 @@ use durable_ioring::Capacity;
 use durable_ioring::DurableRing;
 use durable_ioring::backend::IoBackend;
 use durable_ioring::{DurabilityProvider, FlushRequest};
+use durable_ioring::{FailureInfo, HeldOperation, Hold, Identities, Leftover, LineageInfo};
 use durable_ioring::{FlushDomain, IoTargetKey};
 use durable_ioring::{LineageHandle, StampClock};
 
@@ -58,6 +59,66 @@ mod diagnostics;
 
 type Ring = Dioring<Vec<u8>>;
 type V = crate::WindowsIds<u64>;
+
+/// Each live lineage `ring` gives its visitor.
+pub(crate) fn listed<D: DurableRing>(ring: &D) -> Vec<LineageInfo<D::Ids>> {
+    let mut listed = Vec::new();
+    ring.lineages(|info| listed.push(info));
+    listed
+}
+
+/// What holds the target under `key`, as `ring`'s visitor names it.
+pub(crate) fn holds<D: DurableRing>(ring: &D, key: IoTargetKey) -> Vec<Hold<D::Ids>> {
+    let mut holds = Vec::new();
+    ring.target_holds(key, |hold| holds.push(hold));
+    holds
+}
+
+/// What `close` gave, by kind.
+pub(crate) struct Closed<V: Identities, B, C> {
+    pub(crate) held: Vec<HeldOperation<V, B, C>>,
+    pub(crate) failures: Vec<FailureInfo<V>>,
+    pub(crate) lineages: Vec<LineageInfo<V>>,
+}
+
+impl<V: Identities, B, C> Closed<V, B, C> {
+    pub(crate) fn new() -> Self {
+        Self {
+            held: Vec::new(),
+            failures: Vec::new(),
+            lineages: Vec::new(),
+        }
+    }
+
+    /// Keep `leftover`, checking the held operations come first and the lineages last.
+    pub(crate) fn keep(&mut self, leftover: Leftover<V, B, C>) {
+        match leftover {
+            Leftover::Held(held) => {
+                assert!(
+                    self.failures.is_empty() && self.lineages.is_empty(),
+                    "the held operations come first"
+                );
+                self.held.push(held);
+            }
+            Leftover::Failure(failure) => {
+                assert!(
+                    self.lineages.is_empty(),
+                    "the failures come before the lineages"
+                );
+                self.failures.push(failure);
+            }
+            Leftover::Lineage(lineage) => self.lineages.push(lineage),
+            _ => panic!("a leftover these tests do not know"),
+        }
+    }
+}
+
+/// Close `ring`, keeping what it gives.
+pub(crate) fn closed<D: DurableRing>(ring: D) -> Closed<D::Ids, D::Buffer, D::Context> {
+    let mut closed = Closed::new();
+    ring.close(|leftover| closed.keep(leftover));
+    closed
+}
 
 /// Queue sizes for every instance these tests build. Small: nothing here pushes I/O.
 const QUEUE: u32 = 16;
@@ -256,7 +317,7 @@ fn an_instance_given_nothing_builds_empty() {
 #[test]
 fn an_instance_has_only_its_default_lineage_to_begin_with() {
     let ring = empty();
-    let lineages = ring.lineages();
+    let lineages = listed(&ring);
     assert_eq!(lineages.len(), 1);
     let default = &lineages[0];
     assert!(default.is_default);
@@ -407,7 +468,7 @@ fn an_instance_is_built_with_any_epoch_id_and_context_type() {
     })
     .expect("build")
     .0;
-    assert_eq!(ring.lineages().len(), 1);
+    assert_eq!(listed(&ring).len(), 1);
 }
 
 #[test]

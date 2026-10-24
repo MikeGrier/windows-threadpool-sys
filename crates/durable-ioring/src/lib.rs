@@ -79,10 +79,10 @@ pub use pump::Waitable;
 pub use router::{RoutedTwice, RouterBuilder, RoutingProvider};
 pub use types::{
     AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,
-    Epoch, EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportError,
-    ImportScope, Imported, IoFault, IoTargetBusy, IoTargetKey, Leftovers, LineageBusy, LineageInfo,
-    Marking, MarkingKind, OpCompletion, OpKind, Outcome, PushError, PushRefusal, ReadOptions,
-    RemoveTargetError, Resolution, ResolveError, ResolveRefusal, RetireLineageError,
+    Epoch, EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, Hold,
+    ImportError, ImportScope, Imported, IoFault, IoTargetBusy, IoTargetKey, Leftover, LineageBusy,
+    LineageInfo, Marking, MarkingKind, OpCompletion, OpKind, Outcome, PushError, PushRefusal,
+    ReadOptions, RemoveTargetError, Resolution, ResolveError, ResolveRefusal, RetireLineageError,
     RetireLineageRefusal, SealError, SuspectSet, SuspectWrite, Tag, UnknownLineage, WriteCaching,
     WriteOptions,
 };

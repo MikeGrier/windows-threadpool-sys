@@ -418,8 +418,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "The lookup is what ties a completion to the failures suspecting it; one that sees only the first write of each set loses the rest.",
-      "find": ["                .binary_search_by_key(&write.seq, |suspect| suspect.op.seq)\n                .is_ok_and(|at| failure.suspect.writes()[at].op == write);\n"],
-      "replace": ["                .first()\n                .is_some_and(|suspect| suspect.op == write);\n"]
+      "find": ["        writes\n            .binary_search_by_key(&write.seq, |suspect| suspect.op.seq)\n            .is_ok_and(|at| writes[at].op == write)\n"],
+      "replace": ["        writes\n            .first()\n            .is_some_and(|suspect| suspect.op == write)\n"]
     },
     {
       "name": "DI-3.2.4.2: a heal takes effect without its Healed entry",
@@ -538,7 +538,7 @@
       "file": "src/durability/lineages.rs",
       "expect": "caught",
       "why": "DI-D-30: retiring abandons nothing, so it must be refused while an unresolved failure holds the lineage, or that failure's epochs there would be dropped unresolved. Caught by the core test whose lineage is held by a failure alone.",
-      "find": ["        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || !failures.is_empty() {\n"],
+      "find": ["        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || failures > 0 {\n"],
       "replace": ["        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 {\n"]
     },
     {
@@ -546,8 +546,8 @@
       "file": "src/durability/lineages.rs",
       "expect": "caught",
       "why": "DI-D-30: a lineage with writes in flight is not empty; retiring it would forget writes whose completions are still to come. Caught by the core test that retires with a write in flight.",
-      "find": ["        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || !failures.is_empty() {\n"],
-      "replace": ["        if held_for_gate > 0 || uncovered > 0 || !failures.is_empty() {\n"]
+      "find": ["        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || failures > 0 {\n"],
+      "replace": ["        if held_for_gate > 0 || uncovered > 0 || failures > 0 {\n"]
     },
     {
       "name": "DI-3.2.5.1: a flush answering after its lineage ended is reported",
@@ -865,24 +865,24 @@
       "name": "DI-3.2.7: the lowest gate kept is the highest",
       "file": "src/io_core.rs",
       "expect": "caught",
-      "why": "IoTargetBusy.lowest_gates names the lowest gate in each lineage: the first a consumer must make durable.",
-      "find": ["                    if held.gate.id < low.id {\n"],
-      "replace": ["                    if held.gate.id > low.id {\n"]
+      "why": "target_holds names the lowest gate in each lineage: the first a consumer must make durable (DI-D-103).",
+      "find": ["                .min_by_key(|gate| gate.id);\n"],
+      "replace": ["                .max_by_key(|gate| gate.id);\n"]
     },
     {
       "name": "CONTROL: an equal gate replaces the lowest",
       "file": "src/io_core.rs",
       "expect": "survives",
-      "why": "The manifest checking itself. Two gates with the same id in one lineage are the same epoch, so replacing one with the other changes no report.",
-      "find": ["                    if held.gate.id < low.id {\n"],
-      "replace": ["                    if held.gate.id <= low.id {\n"]
+      "why": "The manifest checking itself. Two gates with the same id in one lineage are the same epoch, so which of them target_holds names changes no report: searched from the other end, the lowest is the same.",
+      "find": ["                .map(|held| held.gate)\n                .min_by_key(|gate| gate.id);\n"],
+      "replace": ["                .map(|held| held.gate)\n                .rev()\n                .min_by_key(|gate| gate.id);\n"]
     },
     {
       "name": "DI-3.2.7: a failure does not hold its file",
       "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "API.md section 8: every write in an unresolved failure's suspect set holds its file, since healing it re-issues writes there.",
-      "find": ["        self.uncovered == 0 && self.failures.is_empty()\n"],
+      "find": ["        self.uncovered == 0 && self.failures == 0\n"],
       "replace": ["        self.uncovered == 0\n"]
     },
     {
@@ -890,7 +890,7 @@
       "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "IoTargetBusy.uncovered is outside every failure's suspect set; a suspect write is reported through its failure, and counting it twice tells the consumer to seal what sealing cannot clear.",
-      "find": ["                && !suspect.contains(&write.op.seq)\n"],
+      "find": ["            && !self\n                .failures\n                .iter()\n                .any(|failure| failure.suspects(write.op))\n"],
       "replace": [""]
     },
     {
@@ -898,7 +898,7 @@
       "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "A write in flight is the I/O core's to count; counting it here too reports it twice.",
-      "find": ["                && write.stage != Stage::InFlight\n"],
+      "find": ["            && write.stage != Stage::InFlight\n"],
       "replace": [""]
     },
     {
@@ -906,16 +906,16 @@
       "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "IoTargetBusy.uncovered_through is what to seal through to clear every uncovered write; the lowest would clear only some.",
-      "find": ["                .and_modify(|highest| *highest = (*highest).max(write.epoch))\n"],
-      "replace": ["                .and_modify(|highest| *highest = (*highest).min(write.epoch))\n"]
+      "find": ["                .map(|write| write.epoch)\n                .max();\n"],
+      "replace": ["                .map(|write| write.epoch)\n                .min();\n"]
     },
     {
       "name": "DI-3.2.7: every failure is said to hold every file",
-      "file": "src/durability/files.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "A failure holds a file only when its suspect set names a write to it; reporting the rest asks the consumer to resolve failures that do not concern the file.",
-      "find": ["            for write in failure.suspect.writes().iter().filter(|w| w.target == file) {\n"],
-      "replace": ["            for write in failure.suspect.writes().iter() {\n"]
+      "find": ["            .any(|write| write.target == file)\n"],
+      "replace": ["            .any(|_| true)\n"]
     },
     {
       "name": "DI-3.2.7: a completion never clears its file's last operation",
@@ -930,16 +930,16 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-25: close() returns the gated operations the kernel never saw, with their buffers and contexts; dropping them loses the consumer's buffers.",
-      "find": ["        Leftovers {\n            held,\n"],
-      "replace": ["        Leftovers {\n            held: {\n                drop::<Vec<HeldOperation<V<E, K>, B, C>>>(held);\n                Vec::new()\n            },\n"]
+      "find": ["        for held in held.into_values() {\n"],
+      "replace": ["        for held in held.into_values().take(0) {\n"]
     },
     {
       "name": "DI-3.2.7: close hands back no failure",
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-25: close() returns the unresolved failures.",
-      "find": ["        let failures = self.durability.failures();\n        let lineages"],
-      "replace": ["        let failures = Vec::new();\n        let lineages"]
+      "find": ["        durability.failure_infos(|failure| visit(Leftover::Failure(failure)));\n"],
+      "replace": [""]
     },
     {
       "name": "DI-3.2.7: a completion is not counted when made",
@@ -1290,8 +1290,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-45: every hold refuses removal, operations held for a gate among them.",
-      "find": ["            held_for_gate += 1;\n"],
-      "replace": [""]
+      "find": ["        let held_for_gate = self.held.values().filter(|held| held.target == key).count();\n"],
+      "replace": ["        let held_for_gate = 0;\n"]
     },
     {
       "name": "DI-3.10.3.5.3: the default lineage can be ended",
@@ -2640,7 +2640,7 @@
       "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "The commit out for an ended lineage's write is the I/O core's to count against its file, as a write in flight is; counting the write too reports it twice.",
-      "find": ["                && self\n                    .lineages\n                    .get(&write.lineage)\n                    .is_some_and(|state| !state.ended)\n"],
+      "find": ["            && self\n                .lineages\n                .get(&write.lineage)\n                .is_some_and(|state| !state.ended)\n"],
       "replace": [""]
     },
     {
@@ -2882,6 +2882,54 @@
       "why": "The pairs a lineage ends are taken from the table, so the table does not keep what was reported ended.",
       "find": ["                    !ours\n"],
       "replace": ["                    true\n"]
+    },
+    {
+      "name": "DI-23.11: a target names one lowest gate for every lineage",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "target_holds names, for each lineage gated on, the lowest gate in that lineage (DI-D-103).",
+      "find": ["                .filter(|held| held.target == key && held.gate.lineage.seq == lineage)\n"],
+      "replace": ["                .filter(|held| held.target == key)\n"]
+    },
+    {
+      "name": "DI-23.11: close gives the lineages before the failures",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "close gives the held operations, then the failures, then the lineages (DI-D-103).",
+      "find": ["        durability.failure_infos(|failure| visit(Leftover::Failure(failure)));\n        durability.lineages(|lineage| visit(Leftover::Lineage(lineage)));\n"],
+      "replace": ["        durability.lineages(|lineage| visit(Leftover::Lineage(lineage)));\n        durability.failure_infos(|failure| visit(Leftover::Failure(failure)));\n"]
+    },
+    {
+      "name": "DI-23.11: an ended lineage still names its holds",
+      "file": "src/io_core/lineages.rs",
+      "expect": "caught",
+      "why": "lineage_holds names nothing for a lineage that is not the core's live one.",
+      "find": ["        if self.is_live(lineage) {\n"],
+      "replace": ["        if true {\n"]
+    },
+    {
+      "name": "DI-23.11: a lineage is held by every failure",
+      "file": "src/durability/files.rs",
+      "expect": "caught",
+      "why": "lineage_holds and retire_lineage count only the failures holding the lineage.",
+      "find": ["            if failure.holds(lineage).is_some() {\n"],
+      "replace": ["            if true {\n"]
+    },
+    {
+      "name": "DI-23.11: the engine gives no provider request",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "drain_requests gives each request made, by value, for the driver to make.",
+      "find": ["        self.requests.drain(..).for_each(visit);\n"],
+      "replace": ["        self.requests.drain(..).take(0).for_each(visit);\n"]
+    },
+    {
+      "name": "DI-23.11: a busy target always points at target_holds",
+      "file": "src/types.rs",
+      "expect": "caught",
+      "why": "IoTargetBusy points at target_holds only when it counts something the query names, which an operation in flight is not.",
+      "find": ["        if self.held_for_gate > 0 || self.uncovered > 0 || self.failures > 0 {\n"],
+      "replace": ["        if true {\n"]
     }
   ]
 }

@@ -4,7 +4,7 @@
 //! for a cause that is not retryable ends, as a completion with a `REFUSED` fault, rather than
 //! being emitted again.
 
-use super::{KEY, OTHER, Rig, V, shown};
+use super::{KEY, OTHER, Rig, V, closed, shown};
 use crate::backend::{IoBackend, REFUSED, RefusalCause, RegisteredRegion, SubmissionData};
 use crate::io_target::Geometry;
 use crate::memory::MemoryTarget;
@@ -77,7 +77,7 @@ fn a_gated_operation_the_backend_cannot_perform_is_refused_at_push() {
         .read_with(0, 1, ReadOptions::new().gate(gate))
         .expect("an owned read is held");
     assert_eq!(first.seq, 0);
-    let held = rig.core.close().held;
+    let held = closed(rig.core).held;
     assert_eq!(held.len(), 1, "only the owned read");
     assert_eq!(held[0].id, first);
 }
@@ -138,7 +138,7 @@ fn a_gated_operation_its_targets_access_does_not_cover_is_refused_at_push() {
         .read_with(0, 1, ReadOptions::new().gate(gate))
         .expect("a read of the read-write target is held");
     assert_eq!(first.seq, 0);
-    assert_eq!(rig.core.close().held.len(), 1);
+    assert_eq!(closed(rig.core).held.len(), 1);
 }
 
 #[test]

@@ -8,7 +8,7 @@
 use windows_ioring_sys::RegisteredSpan;
 
 use super::pushes::{ADDED, GIVEN, Harness, Ring, given, instance, read_only, temp};
-use super::{empty, file, keeper, setup};
+use super::{empty, file, keeper, listed, setup};
 use crate::windows_backend::Win32FileTarget;
 use durable_ioring::{Access, DurableRing, RegisteredBufferRing};
 use durable_ioring::{
@@ -40,7 +40,7 @@ fn a_seal_after_its_writes_completed_is_reported_durable() {
     assert_eq!(harness.durable(), Some(1));
     assert_eq!(harness.state(1), EpochState::Durable);
     assert_eq!(harness.state(2), EpochState::Open);
-    let lineages = harness.ring.lineages();
+    let lineages = listed(&harness.ring);
     assert_eq!(lineages.len(), 1);
     assert_eq!(
         (lineages[0].sealed_through, lineages[0].durable_through),

@@ -727,16 +727,19 @@ pub struct HeldOperation<V: Identities, B, C> {
     pub context: C,
 }
 
-/// What `close()` hands back once the instance has ended (DI-2.7). Dropping the instance discards
-/// the same things.
+/// One thing `close()` gives once the instance has ended (DI-2.7), each to the caller's visitor
+/// by value (DI-D-103): first the gated operations the kernel never saw, in push order; then the
+/// failures still unresolved, in the order observed; then every lineage, carrying its final
+/// high-water mark. Dropping the instance discards the same things.
 #[derive(Debug)]
-pub struct Leftovers<V: Identities, B, C> {
-    /// Gated operations the kernel never saw, in push order.
-    pub held: Vec<HeldOperation<V, B, C>>,
-    /// Failures still unresolved.
-    pub failures: Vec<FailureInfo<V>>,
-    /// Every lineage, carrying its final high-water mark.
-    pub lineages: Vec<LineageInfo<V>>,
+#[non_exhaustive]
+pub enum Leftover<V: Identities, B, C> {
+    /// A gated operation the kernel never saw.
+    Held(HeldOperation<V, B, C>),
+    /// A failure still unresolved.
+    Failure(FailureInfo<V>),
+    /// A lineage, carrying its final high-water mark.
+    Lineage(LineageInfo<V>),
 }
 
 /// Why an `add_target` was refused (DI-13.10).
@@ -783,11 +786,12 @@ pub struct AddTargetError<T> {
     pub cause: AddTargetCause,
 }
 
-/// Everything still holding a file that `remove_target` refused, and what clears each hold. Every
-/// field is reported, not only the first that applies, so one refusal says all a consumer has
-/// to do.
-#[derive(Debug)]
-pub struct IoTargetBusy<V: Identities> {
+/// Everything still holding a file that `remove_target` refused, counted. Every count is reported,
+/// not only the first that applies, so one refusal says all a consumer has to do; which gates,
+/// epochs and failures they are is read through `target_holds`, whose [`Hold`]s say what clears
+/// each (DI-D-103: a refusal is a value and carries no list).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IoTargetBusy {
     /// The target.
     pub target: IoTargetKey,
     /// Operations the kernel has not completed. Cleared as their completions arrive, which may be
@@ -796,21 +800,17 @@ pub struct IoTargetBusy<V: Identities> {
     /// Operations held until their gate epoch is durable. Cleared when the gates are released,
     /// or fail as `NeverIssued`.
     pub held_for_gate: usize,
-    /// The lowest gate in each lineage gated on.
-    pub lowest_gates: Vec<Epoch<V>>,
     /// Writes to the file not yet covered successfully -- named to a provider that answered
     /// success for every domain of the file -- outside any failure's suspect set. A file stays
     /// busy while any lineage has such a write. Cleared by `make_durable_through` at or above
     /// each.
     pub uncovered: usize,
-    /// The highest epoch among the uncovered writes, in each lineage that wrote the file.
-    pub uncovered_through: Vec<Epoch<V>>,
     /// Unresolved failures whose suspect sets include writes to the file. Cleared by resolving
     /// them: heal and seal again, or abandon.
-    pub failures: Vec<V::FailureId>,
+    pub failures: usize,
 }
 
-impl<V: Identities> fmt::Display for IoTargetBusy<V> {
+impl fmt::Display for IoTargetBusy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "target {:?} is still in use:", self.target)?;
         if self.in_flight > 0 {
@@ -820,38 +820,76 @@ impl<V: Identities> fmt::Display for IoTargetBusy<V> {
                 self.in_flight
             )?;
         }
-        if !self.lowest_gates.is_empty() {
+        if self.held_for_gate > 0 {
             write!(
                 f,
-                " {} held until each of {:?} is durable or abandoned;",
-                self.held_for_gate, self.lowest_gates
+                " {} held until their gates are durable or abandoned;",
+                self.held_for_gate
             )?;
         }
-        if !self.uncovered_through.is_empty() {
+        if self.uncovered > 0 {
             write!(
                 f,
-                " {} write(s) not yet covered, seal through each of {:?};",
-                self.uncovered, self.uncovered_through
+                " {} write(s) not yet covered, seal them;",
+                self.uncovered
             )?;
         }
-        if !self.failures.is_empty() {
+        if self.failures > 0 {
             write!(
                 f,
-                " writes suspect in unresolved failure(s) {:?}, heal or abandon them",
+                " writes suspect in {} unresolved failure(s), heal or abandon them;",
                 self.failures
             )?;
+        }
+        if self.held_for_gate > 0 || self.uncovered > 0 || self.failures > 0 {
+            f.write_str(" `target_holds` names each")?;
         }
         Ok(())
     }
 }
 
+/// One thing holding a target or a lineage, as `target_holds` and `lineage_holds` name it, with
+/// what clears it.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Hold<V: Identities> {
+    /// Operations held for gates in one lineage, the lowest of those gates named: cleared when the
+    /// gates are durable or abandoned.
+    Gate(Epoch<V>),
+    /// Uncovered writes in one lineage, the highest of their epochs named: cleared by sealing
+    /// through it.
+    Uncovered(Epoch<V>),
+    /// An unresolved failure: cleared by healing it and sealing again, or abandoning it.
+    Failure(V::FailureId),
+}
+
+impl<V: Identities> Clone for Hold<V> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<V: Identities> Copy for Hold<V> {}
+
+impl<V: Identities> PartialEq for Hold<V> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Gate(a), Self::Gate(b)) | (Self::Uncovered(a), Self::Uncovered(b)) => a == b,
+            (Self::Failure(a), Self::Failure(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl<V: Identities> Eq for Hold<V> {}
+
 /// Why `remove_target` was refused.
 #[derive(Debug)]
-pub enum RemoveTargetError<V: Identities> {
+pub enum RemoveTargetError {
     /// No file is present under this key.
     UnknownKey(IoTargetKey),
     /// The file is still held; see [`IoTargetBusy`].
-    Busy(IoTargetBusy<V>),
+    Busy(IoTargetBusy),
 }
 
 /// Everything still holding a lineage that `retire_lineage` refused, and what clears each hold.
@@ -867,8 +905,9 @@ pub struct LineageBusy<V: Identities> {
     pub held_for_gate: usize,
     /// Writes in the lineage not yet covered successfully. Cleared by sealing them.
     pub uncovered: usize,
-    /// Unresolved failures in the lineage. Cleared by healing or abandoning them.
-    pub failures: Vec<V::FailureId>,
+    /// Unresolved failures in the lineage, which `lineage_holds` names. Cleared by healing or
+    /// abandoning them.
+    pub failures: usize,
 }
 
 /// Why `end_lineage` was refused.

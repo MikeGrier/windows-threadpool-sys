@@ -44,21 +44,22 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         self.live(lineage).is_some()
     }
 
-    /// The live lineages, in minting order.
-    pub(crate) fn lineages(&self) -> Vec<LineageInfo<V<E, I>>> {
-        tagged(tag::LINEAGES_LINEAGES, || {
-            self.lineages
-                .iter()
-                .filter(|(_, state)| !state.ended)
-                .map(|(&key, state)| LineageInfo {
-                    lineage: self.name(key),
-                    description: state.description.clone(),
-                    is_default: key == DEFAULT_LINEAGE,
-                    durable_through: state.durable_through,
-                    sealed_through: state.sealed_through,
-                })
-                .collect()
-        })
+    /// Each lineage not yet retired, ended ones included, by key, in minting order.
+    pub(crate) fn each_lineage(&self, visit: impl FnMut(Key)) {
+        self.lineages.keys().copied().for_each(visit);
+    }
+
+    /// Each live lineage, in minting order.
+    pub(crate) fn lineages(&self, mut visit: impl FnMut(LineageInfo<V<E, I>>)) {
+        for (&key, state) in self.lineages.iter().filter(|(_, state)| !state.ended) {
+            visit(LineageInfo {
+                lineage: self.name(key),
+                description: state.description.clone(),
+                is_default: key == DEFAULT_LINEAGE,
+                durable_through: state.durable_through,
+                sealed_through: state.sealed_through,
+            });
+        }
     }
 
     /// End `lineage` (DI-D-30): abandon every epoch of it not yet durable, and stop answering for
@@ -142,15 +143,10 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             .values()
             .filter(|write| write.lineage == lineage && write.stage != Stage::InFlight)
             .count();
-        let failures: Vec<_> = tagged(tag::LINEAGES_RETIRE_FAILURES, || {
-            self.failures
-                .iter()
-                .filter(|failure| failure.holds(lineage).is_some())
-                .map(|failure| failure.id)
-                .collect()
-        });
+        let mut failures = 0;
+        self.lineage_failures(lineage, |_| failures += 1);
         let held_for_gate = self.held_for_gate(lineage);
-        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || !failures.is_empty() {
+        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || failures > 0 {
             return Err(LineageBusy {
                 lineage: self.name(lineage),
                 in_flight,

@@ -58,8 +58,9 @@ use crate::io_target::IoTargetDescription;
 use crate::provider::ProviderRequest;
 use crate::types::{
     AddTargetCause, AddTargetError, DurabilityRequest, Entry, Epoch, EpochState, FlushDomain,
-    HeldOperation, IoTargetBusy, IoTargetKey, Leftovers, OpCompletion, OpKind, Outcome, PushError,
-    PushRefusal, ReadOptions, RemoveTargetError, SealError, UnknownLineage, WriteOptions,
+    HeldOperation, Hold, IoTargetBusy, IoTargetKey, Leftover, OpCompletion, OpKind, Outcome,
+    PushError, PushRefusal, ReadOptions, RemoveTargetError, SealError, UnknownLineage,
+    WriteOptions,
 };
 
 mod failures;
@@ -357,26 +358,12 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     pub fn remove_target(
         &mut self,
         key: IoTargetKey,
-    ) -> Result<IoTargetDescription, RemoveTargetError<V<E, K>>> {
+    ) -> Result<IoTargetDescription, RemoveTargetError> {
         if !self.targets.contains_key(&key) {
             return Err(RemoveTargetError::UnknownKey(key));
         }
         let in_flight = self.per_target.get(&key).copied().unwrap_or(0);
-        let mut held_for_gate = 0;
-        let mut lowest: BTreeMap<u64, Epoch<V<E, K>>> = BTreeMap::new();
-        for held in self.held.values().filter(|held| held.target == key) {
-            held_for_gate += 1;
-            tagged(tag::IO_CORE_REMOVE_TARGET_LOWEST, || {
-                lowest
-                    .entry(held.gate.lineage.seq)
-                    .and_modify(|low| {
-                        if held.gate.id < low.id {
-                            *low = held.gate;
-                        }
-                    })
-                    .or_insert(held.gate);
-            });
-        }
+        let held_for_gate = self.held.values().filter(|held| held.target == key).count();
         let holds = self.durability.file_holds(key);
         if in_flight == 0 && held_for_gate == 0 && holds.is_empty() {
             let record = self.targets.remove(&key).expect("present, checked above");
@@ -386,13 +373,35 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             target: key,
             in_flight,
             held_for_gate,
-            lowest_gates: tagged(tag::IO_CORE_REMOVE_TARGET_LOWEST_GATES, || {
-                lowest.into_values().collect()
-            }),
             uncovered: holds.uncovered,
-            uncovered_through: holds.uncovered_through,
             failures: holds.failures,
         }))
+    }
+
+    /// What holds the target under `key` that an [`IoTargetBusy`] counts without naming, given to
+    /// `visit` (DI-D-103): for each lineage gated on, in lineage order, the lowest gate its
+    /// operations to the target are held for; for each lineage with an uncovered write to it, the
+    /// highest epoch among them; and each unresolved failure suspecting a write to it, in the
+    /// order observed. Nothing for a key with no target, or a target nothing holds.
+    pub fn target_holds(&self, key: IoTargetKey, mut visit: impl FnMut(Hold<V<E, K>>)) {
+        if !self.targets.contains_key(&key) {
+            return;
+        }
+        self.durability.each_lineage(|lineage| {
+            let lowest = self
+                .held
+                .values()
+                .filter(|held| held.target == key && held.gate.lineage.seq == lineage)
+                .map(|held| held.gate)
+                .min_by_key(|gate| gate.id);
+            if let Some(gate) = lowest {
+                visit(Hold::Gate(gate));
+            }
+        });
+        self.durability
+            .file_uncovered(key, |through| visit(Hold::Uncovered(through)));
+        self.durability
+            .file_failures(key, |failure| visit(Hold::Failure(failure)));
     }
 
     /// Write `data` to `target` at `offset`, tagged `epoch`: checked, then held for its gate, or
@@ -680,29 +689,25 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             .ok_or(UnknownLineage(epoch.lineage))
     }
 
-    /// End the core, handing back what it still holds: the operations held for their gates, which
-    /// were never issued, in push order; the unresolved failures; and every lineage with its final
-    /// high-water mark. What is in flight is the backend's to run down.
-    pub fn close(self) -> Leftovers<V<E, K>, B, C> {
-        let failures = self.durability.failures();
-        let lineages = self.durability.lineages();
-        let held = tagged(tag::IO_CORE_CLOSE_HELD, || {
-            self.held
-                .into_values()
-                .map(|held| HeldOperation {
-                    id: held.id,
-                    kind: held.kind,
-                    gate: held.gate,
-                    buffer: owned_op(held.op),
-                    context: held.context,
-                })
-                .collect()
-        });
-        Leftovers {
-            held,
-            failures,
-            lineages,
+    /// End the core, giving `visit` what it still holds (DI-D-103), each by value: the operations
+    /// held for their gates, which were never issued, in push order; then the unresolved failures,
+    /// in the order observed; then every live lineage with its final high-water mark. What is in
+    /// flight is the backend's to run down.
+    pub fn close(self, mut visit: impl FnMut(Leftover<V<E, K>, B, C>)) {
+        let Self {
+            held, durability, ..
+        } = self;
+        for held in held.into_values() {
+            visit(Leftover::Held(HeldOperation {
+                id: held.id,
+                kind: held.kind,
+                gate: held.gate,
+                buffer: owned_op(held.op),
+                context: held.context,
+            }));
         }
+        durability.failure_infos(|failure| visit(Leftover::Failure(failure)));
+        durability.lineages(|lineage| visit(Leftover::Lineage(lineage)));
     }
 
     /// A lineage key's `Lineage` name.

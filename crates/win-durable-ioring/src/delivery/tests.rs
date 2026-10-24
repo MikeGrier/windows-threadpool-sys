@@ -418,7 +418,8 @@ fn the_handle_reports_the_instances_lineages() {
     let temp = temp();
     let (delivery, _rx) = forwarding(instance(&temp, Vec::new()));
     let lineage = delivery.default_lineage().lineage();
-    let lineages = delivery.lineages();
+    let mut lineages = Vec::new();
+    delivery.lineages(|info| lineages.push(info));
     assert_eq!(lineages.len(), 1);
     assert_eq!(lineages[0].lineage, lineage);
     assert_eq!(delivery.into_inner().default_lineage().lineage(), lineage);
@@ -445,7 +446,8 @@ fn close_quiesces_delivery_and_hands_back_what_is_left() {
         )
         .expect("push a gated write");
 
-    let left = delivery.close();
+    let mut left = crate::dioring::tests::Closed::new();
+    delivery.close(|leftover| left.keep(leftover));
     assert_eq!(
         left.held.len(),
         1,

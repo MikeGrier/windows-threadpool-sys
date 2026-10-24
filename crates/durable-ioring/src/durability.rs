@@ -445,6 +445,22 @@ struct Failure<E: EpochId + 'static, I: Instant> {
 }
 
 impl<E: EpochId + 'static, I: Instant> Failure<E, I> {
+    /// Whether this failure's suspect set includes a write to `file`.
+    fn suspects_a_write_to(&self, file: IoTargetKey) -> bool {
+        self.suspect
+            .writes()
+            .iter()
+            .any(|write| write.target == file)
+    }
+
+    /// Whether `write` is in this failure's suspect set, which is in push order.
+    fn suspects(&self, write: OpId) -> bool {
+        let writes = self.suspect.writes();
+        writes
+            .binary_search_by_key(&write.seq, |suspect| suspect.op.seq)
+            .is_ok_and(|at| writes[at].op == write)
+    }
+
     /// The epochs of `lineage` this failure holds, if it holds the lineage at all.
     fn holds(&self, lineage: Key) -> Option<&BTreeSet<E>> {
         let epochs = self.epochs.get(&lineage)?;
@@ -1135,6 +1151,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let mut infos = tagged(tag::DURABILITY_FAILURES_INFOS, || {
             Vec::with_capacity(self.failures.len())
         });
+        self.failure_infos(|info| tagged(tag::DURABILITY_FAILURES_INFO, || infos.push(info)));
+        infos
+    }
+
+    /// Each unresolved failure, in observation order.
+    pub(crate) fn failure_infos(&self, mut visit: impl FnMut(FailureInfo<V<E, I>>)) {
         for failure in &self.failures {
             let cause = tagged(tag::DURABILITY_FAILURES_CAUSE, || failure.cause.clone());
             let markings = tagged(tag::DURABILITY_FAILURES_MARKINGS, || {
@@ -1151,9 +1173,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     Standing::Healing { .. } => true,
                 },
             };
-            tagged(tag::DURABILITY_FAILURES_INFO, || infos.push(info));
+            visit(info);
         }
-        infos
     }
 
     /// How many unresolved failures were imported: each counts from its import until it is
@@ -1246,12 +1267,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     fn mark(&mut self, write: OpId, kind: MarkingKind, due: &mut Due<E, T, I>) {
         let mut observed = None;
         for failure in &mut self.failures {
-            let suspects = failure
-                .suspect
-                .writes()
-                .binary_search_by_key(&write.seq, |suspect| suspect.op.seq)
-                .is_ok_and(|at| failure.suspect.writes()[at].op == write);
-            if !suspects {
+            if !failure.suspects(write) {
                 continue;
             }
             let marking = Marking {
