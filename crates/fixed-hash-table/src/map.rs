@@ -11,8 +11,14 @@ use core::mem;
 
 use crate::hasher::FixedState;
 
+mod entry;
+mod iter;
 #[cfg(test)]
 mod tests;
+mod traits;
+
+pub use entry::{Entry, OccupiedEntry, VacantEntry};
+pub use iter::{Drain, IntoIter, Iter, IterMut, Keys, Values, ValuesMut};
 
 /// One slot of a table's storage: empty, or an entry.
 pub type Slot<K, V> = Option<(K, V)>;
@@ -158,6 +164,41 @@ where
 impl<K, V, St, H> FixedHashMap<K, V, St, H>
 where
     K: Hash + Eq,
+    St: AsRef<[Slot<K, V>]>,
+    H: BuildHasher,
+{
+    /// The value under `key`.
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.get_key_value(key).map(|(_, value)| value)
+    }
+
+    /// The key held for `key`, and its value.
+    pub fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &V)>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        let i = self.find(self.hasher.hash_one(key), key).ok()?;
+        self.slots.as_ref()[i].as_ref().map(|(k, v)| (k, v))
+    }
+
+    /// Whether `key` is present.
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.find(self.hasher.hash_one(key), key).is_ok()
+    }
+}
+
+impl<K, V, St, H> FixedHashMap<K, V, St, H>
+where
+    K: Hash + Eq,
     St: AsRef<[Slot<K, V>]> + AsMut<[Slot<K, V>]>,
     H: BuildHasher,
 {
@@ -184,25 +225,6 @@ where
         }
     }
 
-    /// The value under `key`.
-    pub fn get<Q>(&self, key: &Q) -> Option<&V>
-    where
-        K: Borrow<Q>,
-        Q: ?Sized + Hash + Eq,
-    {
-        self.get_key_value(key).map(|(_, value)| value)
-    }
-
-    /// The key held for `key`, and its value.
-    pub fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &V)>
-    where
-        K: Borrow<Q>,
-        Q: ?Sized + Hash + Eq,
-    {
-        let i = self.find(self.hasher.hash_one(key), key).ok()?;
-        self.slots.as_ref()[i].as_ref().map(|(k, v)| (k, v))
-    }
-
     /// The value under `key`, mutably.
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
@@ -211,15 +233,6 @@ where
     {
         let i = self.find(self.hasher.hash_one(key), key).ok()?;
         self.slots.as_mut()[i].as_mut().map(|(_, value)| value)
-    }
-
-    /// Whether `key` is present.
-    pub fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: ?Sized + Hash + Eq,
-    {
-        self.find(self.hasher.hash_one(key), key).is_ok()
     }
 
     /// Remove `key`, returning its value.
@@ -238,8 +251,14 @@ where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let mut hole = self.find(self.hasher.hash_one(key), key).ok()?;
+        let at = self.find(self.hasher.hash_one(key), key).ok()?;
+        self.remove_at(at)
+    }
+
+    /// Remove the entry in slot `hole`, shifting the rest of its probe run back.
+    fn remove_at(&mut self, mut hole: usize) -> Slot<K, V> {
         let removed = self.slots.as_mut()[hole].take();
+        removed.as_ref()?;
         self.len -= 1;
         let mask = self.slots.as_ref().len() - 1;
         let mut next = hole;

@@ -15,6 +15,9 @@ mod hasher;
 mod map;
 
 pub use hasher::{FixedHasher, FixedState};
-pub use map::{FixedHashMap, Full, InlineMap, Slot};
+pub use map::{
+    Drain, Entry, FixedHashMap, Full, InlineMap, IntoIter, Iter, IterMut, Keys, OccupiedEntry,
+    Slot, VacantEntry, Values, ValuesMut,
+};
 #[cfg(feature = "alloc")]
 pub use map::{HeapMap, ReserveError};
