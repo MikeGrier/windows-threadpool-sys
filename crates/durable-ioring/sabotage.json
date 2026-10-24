@@ -890,16 +890,16 @@
       "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "IoTargetBusy.uncovered is outside every failure's suspect set; a suspect write is reported through its failure, and counting it twice tells the consumer to seal what sealing cannot clear.",
-      "find": ["            write.file == file && write.stage != Stage::InFlight && !suspect.contains(&write.op.seq)\n"],
-      "replace": ["            write.file == file && write.stage != Stage::InFlight\n"]
+      "find": ["                && !suspect.contains(&write.op.seq)\n"],
+      "replace": [""]
     },
     {
       "name": "DI-3.2.7: a write in flight is also counted as uncovered",
       "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "A write in flight is the I/O core's to count; counting it here too reports it twice.",
-      "find": ["            write.file == file && write.stage != Stage::InFlight && !suspect.contains(&write.op.seq)\n"],
-      "replace": ["            write.file == file && !suspect.contains(&write.op.seq)\n"]
+      "find": ["                && write.stage != Stage::InFlight\n"],
+      "replace": [""]
     },
     {
       "name": "DI-3.2.7: the epoch to seal through is the lowest, not the highest",
@@ -2336,8 +2336,8 @@
       "file": "src/durability/spans.rs",
       "expect": "survives",
       "why": "The control. Which lost write the inconsistency names, when several are lost in one let-go, changes no state and no outcome; a test failing here would be asserting the message's choice of example.",
-      "find": ["                lost.get_or_insert((what, write.op));"],
-      "replace": ["                lost = Some((what, write.op));"]
+      "find": ["            if let Some(what) = forget(&mut self.spans, &mut self.window, &write) {\n                lost.get_or_insert((what, write.op));"],
+      "replace": ["            if let Some(what) = forget(&mut self.spans, &mut self.window, &write) {\n                lost = Some((what, write.op));"]
     },
     {
       "name": "DI-23.7: every seal is recorded",
@@ -2538,6 +2538,118 @@
       "why": "The control. A lineage has at most one un-popped Durable, so the first match and the last are the same entry; looking from the back changes nothing a test could see.",
       "find": ["            let older = self.queue.iter().position("],
       "replace": ["            let older = self.queue.iter().rposition("]
+    },
+    {
+      "name": "DI-23.5.2.1: an ended lineage lets go a write whose flush is out",
+      "file": "src/durability/spans.rs",
+      "expect": "caught",
+      "why": "A write named to a seal whose commit is out keeps its place and its entry until the commit answers (DI-D-98); letting it go at the end leaves a commit in flight that nothing in the window accounts for.",
+      "find": ["                    .is_some_and(|entry| entry.flushed && !entry.answered)\n"],
+      "replace": ["                    .is_some_and(|_| false)\n"]
+    },
+    {
+      "name": "DI-23.5.2.1: an ended lineage keeps a write whose flush has answered",
+      "file": "src/durability/spans.rs",
+      "expect": "caught",
+      "why": "Only a flush still out keeps a write: one that has answered is the lineage's no longer, and keeping its write holds a place no answer will release.",
+      "find": ["                    .is_some_and(|entry| entry.flushed && !entry.answered)\n"],
+      "replace": ["                    .is_some_and(|entry| entry.flushed)\n"]
+    },
+    {
+      "name": "DI-23.5.2.1: an ended lineage keeps a write whose flush was never issued",
+      "file": "src/durability/spans.rs",
+      "expect": "caught",
+      "why": "A file only the provider answers for has no commit out; keeping its write holds a place no flush will release.",
+      "find": ["                    .is_some_and(|entry| entry.flushed && !entry.answered)\n"],
+      "replace": ["                    .is_some_and(|entry| !entry.answered)\n"]
+    },
+    {
+      "name": "DI-23.5.2.1: an ended lineage lets go the writes of every lineage",
+      "file": "src/durability/spans.rs",
+      "expect": "caught",
+      "why": "Ending a lineage lets go its own writes and no other's.",
+      "find": ["            if write.lineage != lineage || write.stage == Stage::InFlight {"],
+      "replace": ["            if write.stage == Stage::InFlight {"]
+    },
+    {
+      "name": "DI-23.5.2.1: an ended lineage lets go a write still in flight",
+      "file": "src/durability/spans.rs",
+      "expect": "caught",
+      "why": "A write in flight is let go as it completes, so that a failure observed meanwhile can still mark it.",
+      "find": ["            if write.lineage != lineage || write.stage == Stage::InFlight {"],
+      "replace": ["            if write.lineage != lineage {"]
+    },
+    {
+      "name": "DI-23.5.2.1: an ended lineage keeps every seal",
+      "file": "src/durability/lineages.rs",
+      "expect": "caught",
+      "why": "What an ended lineage keeps of its seals is those with a flush out, to find the writes the flush lets go; keeping the rest keeps the lineage unretired for ever.",
+      "find": ["                matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0)\n"],
+      "replace": ["                true\n"]
+    },
+    {
+      "name": "DI-23.5.2.1: a flush of an ended lineage lets go the writes of every lineage",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Seal numbers count a lineage's own seals, so two lineages' seals share one; the answer for an ended lineage lets go that lineage's writes alone.",
+      "find": ["                        write.lineage == lineage\n                            && write.file == file"],
+      "replace": ["                        write.file == file"]
+    },
+    {
+      "name": "DI-23.5.2.1: a flush of an ended lineage lets go the writes of every file",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Each file has a flush of its own, and the writes of the others stay until theirs answers.",
+      "find": ["                            && write.file == file\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.5.2.1: a flush of an ended lineage lets go the writes of every seal",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A flush answers for its own seal's writes; another seal's flush of the same file is still out.",
+      "find": ["                            && write.stage == Stage::Named(seq)\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.5.2.1: an ended lineage keeps its seals after their flushes answer",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "The seals of an ended lineage are dropped as their last flush answers, or the lineage is never retired.",
+      "find": ["                        state.seals.retain(|seal| {\n                            matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0)\n                        });"],
+      "replace": ["                        state.seals.retain(|_| true);"]
+    },
+    {
+      "name": "DI-23.5.2.1: an ended lineage is not retired as its last flush answers",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Retiring waits for the last flush out, and then happens: otherwise a lineage that has ended counts against the instance's lineages for ever.",
+      "find": ["                    self.retire_if_drained(lineage);\n                }\n                return self.advance(due);"],
+      "replace": ["                }\n                return self.advance(due);"]
+    },
+    {
+      "name": "DI-23.5.2.1: an ended lineage is retired with a flush still out",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "The answer for a flush is found through the lineage; retiring it with the flush out loses the writes the answer lets go.",
+      "find": ["            state.ended && state.in_flight_by_epoch.is_empty() && state.seals.is_empty()"],
+      "replace": ["            state.ended && state.in_flight_by_epoch.is_empty()"]
+    },
+    {
+      "name": "DI-23.5.2.1: a write kept for its flush out holds its file",
+      "file": "src/durability/files.rs",
+      "expect": "caught",
+      "why": "The commit out for an ended lineage's write is the I/O core's to count against its file, as a write in flight is; counting the write too reports it twice.",
+      "find": ["                && self\n                    .lineages\n                    .get(&write.lineage)\n                    .is_some_and(|state| !state.ended)\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.5.2.1: a lost write of an ended lineage is reported by the first rather than the last",
+      "file": "src/durability/spans.rs",
+      "expect": "survives",
+      "why": "The control. Which lost write the inconsistency names, when several are lost in one let-go, changes no state and no outcome.",
+      "find": ["                lost.get_or_insert((what, write.op));\n            }\n            false"],
+      "replace": ["                lost = Some((what, write.op));\n            }\n            false"]
     }
   ]
 }

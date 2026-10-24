@@ -466,7 +466,8 @@ struct LineageState<E> {
     next_seal: u64,
     /// Every epoch an abandoned failure contained.
     abandoned: BTreeSet<E>,
-    /// Ended (DI-D-30): it answers nothing more, and is retired once its writes in flight complete.
+    /// Ended (DI-D-30): it answers nothing more, and is retired once its writes in flight complete
+    /// and its flushes out have answered (DI-D-98).
     ended: bool,
     /// This lineage's held writes still waiting for their gates, by epoch and push order: the
     /// edges a cycle search follows (DI-D-43).
@@ -939,7 +940,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
 
     /// `lineage`'s seal `through`'s flush of `file` completed. Success covers the writes it was
     /// issued for; a failure is observed at once, and is the seal's answer. A flush of an ended
-    /// lineage reports nothing (DI-D-30).
+    /// lineage reports nothing (DI-D-30), and lets go the writes it was issued for (DI-D-98).
     pub(crate) fn flushed(
         &mut self,
         lineage: Key,
@@ -952,7 +953,25 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             Some(state) if !state.ended => {
                 state.answer(&mut self.spans, lineage, through, file, result.is_err())
             }
-            _ => return due,
+            Some(state) => {
+                let answered =
+                    state.answer(&mut self.spans, lineage, through, file, result.is_err());
+                if let Ok((seq, _)) = answered {
+                    self.let_go(|write| {
+                        write.lineage == lineage
+                            && write.file == file
+                            && write.stage == Stage::Named(seq)
+                    });
+                    if let Some(state) = self.lineages.get_mut(&lineage) {
+                        state.seals.retain(|seal| {
+                            matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0)
+                        });
+                    }
+                    self.retire_if_drained(lineage);
+                }
+                return self.advance(due);
+            }
+            None => return due,
         };
         let (seq, domains) = match answered {
             Ok(answered) => answered,
@@ -1443,13 +1462,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         }
     }
 
-    /// Retire an ended lineage whose writes in flight have all completed.
+    /// Retire an ended lineage whose writes in flight have all completed, and whose flushes out
+    /// have all answered.
     fn retire_if_drained(&mut self, lineage: Key) {
-        if self
-            .lineages
-            .get(&lineage)
-            .is_some_and(|state| state.ended && state.in_flight_by_epoch.is_empty())
-        {
+        if self.lineages.get(&lineage).is_some_and(|state| {
+            state.ended && state.in_flight_by_epoch.is_empty() && state.seals.is_empty()
+        }) {
             self.lineages.remove(&lineage);
         }
     }

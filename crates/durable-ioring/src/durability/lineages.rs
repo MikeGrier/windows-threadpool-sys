@@ -4,11 +4,14 @@
 //! An ended lineage is not live from the moment it ends: every query about it answers as for a
 //! lineage the instance does not have, and nothing new may join it. Its writes still in flight
 //! stay recorded until they complete -- a failure already suspecting one is marked by its end --
-//! and the lineage is retired once the last has.
+//! and so do the writes named to a seal whose commit of their file is out, until it answers
+//! (DI-D-98); the lineage is retired once the last has.
 
 use alloc::sync::Arc;
 
-use super::{DEFAULT_LINEAGE, Due, Durability, Event, Key, LineageState, Stage, Standing, V};
+use super::{
+    DEFAULT_LINEAGE, Due, Durability, Event, Key, LineageState, SealStage, Stage, Standing, V,
+};
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
@@ -53,8 +56,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     }
 
     /// End `lineage` (DI-D-30): abandon every epoch of it not yet durable, and stop answering for
-    /// it. Its flushes still out are absorbed when they answer; its writes in flight are let go as
-    /// they complete, and the lineage is retired with the last. A heal waiting on it no longer
+    /// it. Its flushes still out are absorbed when they answer, the writes they were issued for let go
+    /// with them; its writes in flight are let go as they complete, and the lineage is retired with
+    /// the last. A heal waiting on it no longer
     /// does, and an operation held by a gate on one of its epochs, or a held write of its own, is
     /// never issued (DI-D-43). The lineage must be live and not the default.
     pub(crate) fn end(&mut self, lineage: Key) -> Due<E, T, I> {
@@ -88,9 +92,17 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             .get_mut(&lineage)
             .expect("live, checked above");
         state.ended = true;
-        state.seals.clear();
         state.leading = None;
-        self.let_go(|write| write.lineage == lineage && write.stage != Stage::InFlight);
+        self.let_go_ended(lineage);
+        // What stays is a seal with a flush out, to find the writes it let go when it answers.
+        self.lineages
+            .get_mut(&lineage)
+            .expect("live, checked above")
+            .seals
+            .retain_mut(|seal| {
+                seal.trailing = None;
+                matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0)
+            });
         for failure in &mut self.failures {
             if let Standing::Healing { pending } = &mut failure.standing {
                 pending.remove(&lineage);

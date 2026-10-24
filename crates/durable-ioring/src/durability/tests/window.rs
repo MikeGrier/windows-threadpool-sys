@@ -176,6 +176,133 @@ fn ending_a_lineage_lets_go_of_its_completed_writes_and_a_write_in_flight_keeps_
 }
 
 #[test]
+fn an_ended_lineage_keeps_the_places_of_writes_a_flush_out_was_issued_for_until_it_answers() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let minted = lineage.mint(None);
+    let sealed = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    let unsealed = ops.push_to(&mut lineage, minted, 2, B, DEFAULT, &[]);
+    lineage.completed(sealed, FULL);
+    lineage.completed(unsealed, FULL);
+    submitted(lineage.0.seal(minted, 1));
+    lineage.end(minted);
+    assert_eq!(
+        lineage.window_places(),
+        1,
+        "the write the flush out is for; the unsealed one went with its lineage"
+    );
+    lineage.0.flushed(minted, 1, A, Ok(()));
+    assert_eq!(lineage.window_places(), 0);
+}
+
+#[test]
+fn a_flush_out_that_fails_lets_go_of_an_ended_lineages_places_all_the_same() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let minted = lineage.mint(None);
+    let write = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    lineage.completed(write, FULL);
+    submitted(lineage.0.seal(minted, 1));
+    lineage.end(minted);
+    assert_eq!(lineage.window_places(), 1);
+    let fault = super::fault(std::io::Error::from_raw_os_error(1117));
+    assert!(super::quiet(&lineage.0.flushed(minted, 1, A, Err(fault))));
+    assert_eq!(lineage.window_places(), 0);
+    assert!(
+        lineage.failures().is_empty(),
+        "an ended lineage reports nothing"
+    );
+}
+
+#[test]
+fn an_ended_lineage_lets_go_of_each_files_places_as_that_files_flush_answers() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let minted = lineage.mint(None);
+    for (epoch, file) in [(1, A), (1, A), (2, B)] {
+        let write = ops.push_to(&mut lineage, minted, epoch, file, DEFAULT, &[]);
+        lineage.completed(write, FULL);
+    }
+    submitted(lineage.0.seal(minted, 2));
+    lineage.end(minted);
+    assert_eq!(lineage.window_places(), 3);
+    lineage.0.flushed(minted, 2, A, Ok(()));
+    assert_eq!(lineage.window_places(), 1, "B's is out");
+    lineage.0.flushed(minted, 2, B, Ok(()));
+    assert_eq!(lineage.window_places(), 0);
+}
+
+#[test]
+fn a_write_seal_end_loop_holds_places_only_for_the_commits_still_out() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let mut out = Vec::new();
+    for round in 1..=8_usize {
+        let minted = lineage.mint(None);
+        let write = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+        lineage.completed(write, FULL);
+        submitted(lineage.0.seal(minted, 1));
+        lineage.end(minted);
+        out.push(minted);
+        assert_eq!(lineage.window_places(), round, "one per commit out");
+    }
+    for (answered, minted) in out.into_iter().enumerate() {
+        lineage.0.flushed(minted, 1, A, Ok(()));
+        assert_eq!(lineage.window_places(), 7 - answered);
+    }
+}
+
+#[test]
+fn an_ended_lineages_answer_lets_go_only_the_places_of_the_seal_it_answers() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let minted = lineage.mint(None);
+    for epoch in [1, 2] {
+        let write = ops.push_to(&mut lineage, minted, epoch, A, DEFAULT, &[]);
+        lineage.completed(write, FULL);
+        submitted(lineage.0.seal(minted, epoch));
+    }
+    lineage.end(minted);
+    assert_eq!(lineage.window_places(), 2, "two seals, one flush of A each");
+    lineage.0.flushed(minted, 1, A, Ok(()));
+    assert_eq!(lineage.window_places(), 1, "the second seal's is still out");
+    lineage.0.flushed(minted, 2, A, Ok(()));
+    assert_eq!(lineage.window_places(), 0);
+}
+
+#[test]
+fn an_ended_lineages_answer_lets_go_nothing_of_another_lineage() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let minted = lineage.mint(None);
+    let own = ops.push(&mut lineage, 1, A, DEFAULT);
+    let theirs = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    lineage.completed(own, FULL);
+    lineage.completed(theirs, FULL);
+    submitted(lineage.seal(1));
+    submitted(lineage.0.seal(minted, 1));
+    lineage.end(minted);
+    assert_eq!(lineage.window_places(), 2);
+    lineage.0.flushed(minted, 1, A, Ok(()));
+    assert_eq!(
+        lineage.window_places(),
+        1,
+        "the default's seal has the same number, and its flush is out"
+    );
+}
+
+#[test]
+fn ending_a_lineage_lets_go_nothing_of_another_lineage() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let minted = lineage.mint(None);
+    let own = ops.push(&mut lineage, 1, A, DEFAULT);
+    lineage.completed(own, FULL);
+    lineage.end(minted);
+    assert_eq!(lineage.window_places(), 1);
+}
+
+#[test]
 fn places_are_counted_across_lineages() {
     let mut lineage = lineage();
     let mut ops = Ops::new();

@@ -143,7 +143,10 @@ fn ending_abandons_everything_not_yet_durable_and_absorbs_its_flushes() {
         "through the highest epoch written, above the seal"
     );
     assert!(!lineage.is_live(minted));
-    assert!(!recorded(&lineage, minted), "nothing in flight: retired");
+    assert!(
+        recorded(&lineage, minted),
+        "nothing in flight, but the seal's flush is out"
+    );
     assert_eq!(lineage.0.sealed_through(minted), None);
     assert_eq!(lineage.0.durable_through(minted), None);
     assert_eq!(lineage.0.state(minted, 2), None);
@@ -153,6 +156,64 @@ fn ending_abandons_everything_not_yet_durable_and_absorbs_its_flushes() {
         quiet(&lineage.0.flushed(minted, 2, A, Ok(()))),
         "the seal's flush answers nothing"
     );
+    assert!(!recorded(&lineage, minted), "retired with the flush");
+}
+
+#[test]
+fn an_ended_lineage_is_retired_when_its_last_flush_out_answers() {
+    let (mut lineage, minted) = two();
+    let mut ops = Ops::new();
+    let on_a = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    let on_b = ops.push_to(&mut lineage, minted, 2, B, DEFAULT, &[]);
+    lineage.completed(on_a, FULL);
+    lineage.completed(on_b, FULL);
+    assert_eq!(
+        submitted(lineage.0.seal(minted, 2)).flushes,
+        [flush_of(minted, 2, A), flush_of(minted, 2, B)]
+    );
+    lineage.end(minted);
+    assert!(quiet(&lineage.0.flushed(minted, 2, A, Ok(()))));
+    assert!(recorded(&lineage, minted), "B's flush is still out");
+    assert!(quiet(&lineage.0.flushed(minted, 2, B, Ok(()))));
+    assert!(!recorded(&lineage, minted));
+}
+
+#[test]
+fn an_ended_lineage_with_no_flush_out_retires_at_once() {
+    let (mut lineage, minted) = two();
+    let mut ops = Ops::new();
+    let write = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    lineage.completed(write, FULL);
+    lineage.end(minted);
+    assert!(!recorded(&lineage, minted), "sealed nothing");
+}
+
+#[test]
+fn a_seal_whose_flushes_have_answered_is_not_a_flush_out() {
+    let (mut lineage, minted) = two();
+    let mut ops = Ops::new();
+    let write = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    lineage.completed(write, FULL);
+    submitted(lineage.0.seal(minted, 1));
+    assert_eq!(
+        seen(&lineage.0.flushed(minted, 1, A, Ok(()))),
+        [Seen::DurableIn(minted, 1)]
+    );
+    lineage.end(minted);
+    assert!(!recorded(&lineage, minted), "nothing is out");
+}
+
+#[test]
+fn a_seal_waiting_for_a_write_in_flight_is_not_a_flush_out() {
+    let (mut lineage, minted) = two();
+    let mut ops = Ops::new();
+    let done = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    let flying = ops.push_to(&mut lineage, minted, 2, B, DEFAULT, &[]);
+    lineage.completed(done, FULL);
+    assert!(quiet(&submitted(lineage.0.seal(minted, 2))), "it waits");
+    lineage.end(minted);
+    assert!(quiet(&lineage.completed(flying, FULL)));
+    assert!(!recorded(&lineage, minted), "no flush was ever out");
 }
 
 #[test]

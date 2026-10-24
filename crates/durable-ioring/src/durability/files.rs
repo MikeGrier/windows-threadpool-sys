@@ -34,7 +34,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     Durability<E, T, I, K>
 {
     /// What holds `file` here. A write in flight is the I/O core's to count, and a write of an ended
-    /// lineage is no longer recorded once it has completed.
+    /// lineage is not counted once it has completed: the commit out for it is the I/O core's to count
+    /// as well.
     pub(crate) fn file_holds(&self, file: IoTargetKey) -> FileHolds<E, I> {
         let mut suspect = BTreeSet::new();
         let mut failures = Vec::new();
@@ -53,7 +54,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let mut uncovered = 0;
         let mut through: BTreeMap<Key, E> = BTreeMap::new();
         for write in self.writes.values().filter(|write| {
-            write.file == file && write.stage != Stage::InFlight && !suspect.contains(&write.op.seq)
+            write.file == file
+                && write.stage != Stage::InFlight
+                && !suspect.contains(&write.op.seq)
+                && self
+                    .lineages
+                    .get(&write.lineage)
+                    .is_some_and(|state| !state.ended)
         }) {
             uncovered += 1;
             tagged(tag::FILES_FILE_HOLDS_THROUGH, || {

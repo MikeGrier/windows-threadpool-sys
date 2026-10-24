@@ -160,6 +160,62 @@ fn ending_a_lineage_releases_its_entries_but_a_write_in_flight_keeps_its_own() {
 }
 
 #[test]
+fn an_ended_lineage_keeps_the_entry_of_a_flush_out_until_it_answers() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let minted = lineage.mint(None);
+    let on_a = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    let on_b = ops.push_to(&mut lineage, minted, 2, B, DEFAULT, &[]);
+    lineage.completed(on_a, FULL);
+    lineage.completed(on_b, FULL);
+    submitted(lineage.0.seal(minted, 1));
+    assert_eq!(lineage.span_entries(), 2, "A's in the seal, B's unsealed");
+    lineage.end(minted);
+    assert_eq!(lineage.span_entries(), 1, "only the entry of A's flush out");
+    lineage.0.flushed(minted, 1, A, Ok(()));
+    assert_eq!(lineage.span_entries(), 0);
+}
+
+#[test]
+fn an_ended_lineage_lets_go_the_entry_of_a_flush_that_has_answered() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let minted = lineage.mint(None);
+    let on_a = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    let on_b = ops.push_to(&mut lineage, minted, 2, B, DEFAULT, &[]);
+    lineage.completed(on_a, FULL);
+    lineage.completed(on_b, FULL);
+    submitted(lineage.0.seal(minted, 2));
+    lineage.0.flushed(
+        minted,
+        2,
+        A,
+        Err(super::fault(io::Error::from_raw_os_error(1117))),
+    );
+    assert_eq!(lineage.span_entries(), 2, "the failure suspects A's write");
+    lineage.end(minted);
+    assert_eq!(lineage.span_entries(), 1, "A's flush answered; B's is out");
+}
+
+#[test]
+fn an_ended_lineage_lets_go_the_entry_of_a_file_no_flush_is_out_for() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    lineage.serve(
+        std::iter::once(DomainId(9)).collect(),
+        std::vec![crate::types::FlushDomain::new(b"d9".to_vec())],
+    );
+    let minted = lineage.mint(None);
+    let write = ops.push_to(&mut lineage, minted, 1, A, PROVIDER, &[9]);
+    lineage.completed(write, FULL);
+    let due = submitted(lineage.0.seal(minted, 1));
+    assert!(due.flushes.is_empty(), "the provider answers for it");
+    assert_eq!(lineage.span_entries(), 1);
+    lineage.end(minted);
+    assert_eq!(lineage.span_entries(), 0, "no commit of it is out");
+}
+
+#[test]
 fn a_file_only_the_provider_answers_for_has_an_entry_and_no_flush() {
     let mut lineage = lineage();
     let mut ops = Ops::new();

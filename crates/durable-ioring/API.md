@@ -368,7 +368,8 @@ it differs, the crates' rustdoc is the spelling. One difference matters here: `D
 *(DI-2.13, [DI-D-30](DESIGN-NOTES.md#di-d-30).)* `end_lineage(lineage)` is for a holder that will
 not finish a lineage. It abandons every epoch of the lineage not yet durable -- sealed ones whose
 flushes are still in flight included -- refuses the handle at once, and retires the lineage once
-its operations in flight have drained, so the consumer need not retry `retire_lineage`. It waits
+its operations in flight have drained and the commits out for its sealed writes have answered, so the
+consumer need not retry `retire_lineage`. It waits
 for nothing and cancels no I/O: operations in flight complete normally and come back through
 `pop`. Gated writes on its epochs, in any lineage, end as `NeverIssued`, and new gates on them are
 refused as `GateAbandoned`, as for any abandoned epoch. A failure shared with another lineage stays
@@ -490,7 +491,8 @@ pub trait DurableRing {
 
     /// End a lineage its holder will not finish (DI-2.13, DI-D-30): every epoch of it not yet
     /// durable is abandoned, its handle is refused at once, and it is retired once its operations
-    /// in flight have drained. Waits for nothing and cancels no I/O. The default lineage cannot be
+    /// in flight have drained and the commits out for its sealed writes have answered. Waits for
+    /// nothing and cancels no I/O. The default lineage cannot be
     /// ended.
     fn end_lineage(&mut self, lineage: Lin<Self>) -> Result<(), EndLineageError<Self::Ids>>;
 

@@ -115,6 +115,32 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         }
     }
 
+    /// Let go every uncovered write of `lineage`, which has ended, except those named to a seal whose
+    /// flush of their file is out: its commit is in flight, and its answer lets them go (DI-D-98).
+    pub(super) fn let_go_ended(&mut self, lineage: Key) {
+        let (spans, window) = (&mut self.spans, &mut self.window);
+        let mut lost = None;
+        self.writes.retain(|_, write| {
+            if write.lineage != lineage || write.stage == Stage::InFlight {
+                return true;
+            }
+            if let Stage::Named(seq) = write.stage
+                && spans
+                    .get(&(lineage, write.file, Span::Seal(seq)))
+                    .is_some_and(|entry| entry.flushed && !entry.answered)
+            {
+                return true;
+            }
+            if let Some(what) = forget(spans, window, write) {
+                lost.get_or_insert((what, write.op));
+            }
+            false
+        });
+        if let Some((what, op)) = lost {
+            self.inconsistent(what, format_args!("write {op:?}"));
+        }
+    }
+
     /// Let go the uncovered write pushed `seq`th, out of its span's entry.
     pub(super) fn let_go_one(&mut self, seq: u64) {
         let Some(write) = self.writes.remove(&seq) else {

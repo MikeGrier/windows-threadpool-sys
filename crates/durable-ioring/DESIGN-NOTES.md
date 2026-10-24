@@ -2220,7 +2220,11 @@ notes when it is created.
   loop of write, seal, end and mint could outgrow the window. [DI-D-98](#di-d-98) had said the charge is released "when the
   span empties or its flush completes"; the engineer, 2026-10-24, "1: a, yes, i think that is the obvious outcome", over a
   sixth declared count for commits in flight and over leaving that table growable: an ended lineage's writes named to a
-  seal whose flush is out keep their places, and the flush's answer lets them go (DI-23.5.2.1).
+  seal whose flush is out keep their places, and the flush's answer lets them go (DI-23.5.2.1). **As built** (DI-23.5.2.1):
+  the seal stays with the ended lineage until its last flush answers, and the lineage is retired then, so a lineage counts
+  until its commits have answered as well as its writes in flight; a write kept this way is not counted against its file,
+  since the commit out for it is the I/O core's to count; and only a flush out keeps a write, so a file only the provider
+  answers for, or a flush that has answered, does not.
 - **Derived, not declared:** the hashed tables' sizes, from the declared counts: `targets`, `domains`, `operations`, and for
   the flush pairs `operations` times one plus the served domains (DI-23.5.2.3).
 

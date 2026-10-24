@@ -4473,3 +4473,23 @@ four in the core's `flush_failures` tests, and one in `win-durable-ioring` whose
 depending on timing, which now asserts what holds either way and ran forty times without a failure; before the change it
 failed in the sweep's baseline run. New tests are in [tests/coalescing.rs](src/io_core/tests/coalescing.rs). Sabotage:
 four entries added, three caught and one surviving control.
+
+## Moved 2026-10-24 01:10:00 -04:00 -- DI-23.5.2.1: a flush's places outlive its lineage
+
+### <a id="di-23521"></a>DI-23.5.2.1 -- A flush's places outlive its lineage: ending a lineage keeps the writes named to a seal whose flush is out, with their span entries and places, until it answers. *(completed 2026-10-24 01:10:00 -04:00)*
+
+**A flush's places outlive its lineage** ([DI-D-98](DESIGN-NOTES.md#di-d-98), "released when the span empties or its flush
+completes"; the engineer, 2026-10-24: "a, yes, i think that is the obvious outcome"): ending a lineage no longer lets go of
+the writes named to a seal whose flush is still out, nor their span entries and window places; the flush's answer does, so
+the commits in flight are bounded by the window.
+
+What was done. [spans.rs](src/durability/spans.rs)'s `let_go_ended` lets go an ended lineage's uncovered writes except
+those named to a seal whose span entry for their file is flushed and not answered. [lineages.rs](src/durability/lineages.rs)'s
+`end` keeps, of the lineage's seals, only those with a flush out, and drops the empty-seal slots. `Durability::flushed`
+answers an ended lineage's flush through that seal, reports nothing, lets go the writes named to it on that file, drops
+the seal when its last flush has answered, and retires the lineage once nothing is out, which `retire_if_drained` now
+also waits for. A file's holds do not count an ended lineage's writes, as before, since the commit out for them is the
+I/O core's to count. Nothing allocates beyond what it did, so the allocation records did not move. CONTRACT.md and API.md
+say when an ended lineage is retired. New tests are in the durability `lineages`, `window`, `spans` and `files` tests and
+the core's `window` tests, among them a write, seal, end and mint loop whose places are one per commit still out.
+Sabotage: fourteen entries added, thirteen caught and one surviving control; three entries re-anchored.

@@ -528,8 +528,9 @@ back -- while another copy is held ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
   completions are delivered. There is no lifetime or durability dependency to wait for, unlike
   ending an instance.
 - **It answers nothing more.** No handle to it remains, and the instance answers its name as one it
-  cannot answer for. It is retired once its operations in flight have drained; their completions
-  are delivered, and a failure that already suspected one of them still gains its marking.
+  cannot answer for. It is retired once its operations in flight have drained and the commits out
+  for its sealed writes have answered; their completions are delivered, and a failure that already
+  suspected one of them still gains its marking.
 - **A failure shared with another lineage stays unresolved** for that lineage; ending one lineage
   resolves nothing on another's behalf. A heal waiting for the ended lineage's next seal no longer
   waits for it.

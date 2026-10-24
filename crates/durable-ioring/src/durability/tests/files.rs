@@ -175,3 +175,15 @@ fn an_ended_lineages_completed_writes_no_longer_hold_their_file() {
     lineage.end(minted);
     assert_eq!(holds(&lineage, A), none());
 }
+
+#[test]
+fn an_ended_lineages_write_kept_for_its_flush_out_does_not_hold_its_file() {
+    let mut lineage = lineage();
+    let minted = lineage.mint(None);
+    let write = Ops::new().push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    lineage.completed(write, FULL);
+    super::submitted(lineage.0.seal(minted, 1));
+    lineage.end(minted);
+    assert_eq!(lineage.window_places(), 1, "kept, for its commit");
+    assert_eq!(holds(&lineage, A), none());
+}

@@ -59,10 +59,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
   > **CROSS-COMPONENT PREREQUISITE:** `crates/fixed-hash-table`' first milestone must land first.
 
-- [ ] **DI-23.5.2.1** -- **A flush's places outlive its lineage** ([DI-D-98](DESIGN-NOTES.md#di-d-98), "released when the span
-  empties or its flush completes"; the engineer, 2026-10-24: "a, yes, i think that is the obvious outcome"): ending a
-  lineage no longer lets go of the writes named to a seal whose flush is still out, nor their span entries and window
-  places; the flush's answer does, so the commits in flight are bounded by the window.
+- [x] **DI-23.5.2.1** -- A flush's places outlive its lineage: ending a lineage keeps the writes named to a seal whose flush is out, with their span entries and places, until it answers. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23521)
 
 - [ ] **DI-23.5.2.2** -- **Declare capacity, construct fallibly, refuse past it**: a `Capacity` of `operations`, `lineages`,
   `imports`, `targets` and `domains`, which the library gives no default (the engineer: "agree no default in library"),

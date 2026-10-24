@@ -6,6 +6,7 @@
 
 use super::{KEY, Rig, V};
 use crate::ids::FailureToken;
+use crate::memory::{Fault, FaultScript, ScriptOp, When};
 use crate::types::{Entry, Epoch, ImportScope, PushRefusal, ReadOptions, Resolution, WriteOptions};
 
 /// The tokens of the failures in the queue, draining it.
@@ -21,6 +22,31 @@ fn tokens(rig: &mut Rig) -> Vec<FailureToken> {
 
 fn gated(gate: Epoch<V>) -> WriteOptions<V> {
     WriteOptions::new().gate(gate)
+}
+
+#[test]
+fn an_ended_lineages_write_keeps_its_place_until_the_commit_out_for_it_completes() {
+    let script = FaultScript::new().on(When::any().op(ScriptOp::Commit), Fault::Hold);
+    let mut rig = Rig::scripted(script);
+    let minted = rig.core.mint_lineage(None);
+    rig.write_with(KEY, Epoch::new(minted, 1), 0, b"x", Default::default())
+        .expect("accepted");
+    rig.run();
+    rig.entries();
+    rig.seal_in(minted, 1);
+    rig.run();
+    assert_eq!(rig.backend.held().len(), 1, "the commit is out");
+    let actions = rig.core.end_lineage(minted).expect("live, not the default");
+    rig.act(actions);
+    assert_eq!(
+        rig.core.window_places(),
+        1,
+        "the lineage ended, and its commit has not answered"
+    );
+    rig.backend.release_all();
+    rig.run();
+    rig.entries();
+    assert_eq!(rig.core.window_places(), 0, "the commit answered");
 }
 
 #[test]
