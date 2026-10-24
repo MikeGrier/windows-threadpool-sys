@@ -5,7 +5,7 @@ was decided in durable-ioring's [DI-D-106](../durable-ioring/DESIGN-NOTES.md#di-
 the conversation is the Tier 3 record,
 [DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#capacity-and-the-tables-continued-2026-10-23).
 This component keeps Tier 1 only, with the rationale folded into each decision. Decisions FHT-D-3 to FHT-D-8 are the
-assistant's, made when the crate was created, and raised with the engineer then.
+assistant's, made when the crate was created, and confirmed by the engineer, 2026-10-23, each with "yes".
 
 ## Decision index
 
