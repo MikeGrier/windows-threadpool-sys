@@ -41,6 +41,7 @@ fn instance(temp: &TempFile, buffers: Vec<Vec<u8>>) -> Ring {
         files: vec![TargetSetup::new(FILE, Win32FileTarget::new(temp.open()))],
         buffers,
         provider: None,
+        capacity: crate::dioring::tests::CAPACITY,
         diagnostics: None,
         delivery: DeliveryMode::Pool(None),
     })
@@ -431,7 +432,7 @@ fn close_quiesces_delivery_and_hands_back_what_is_left() {
     delivery.read(FILE, 0, vec![0; 4], 1).expect("push a read");
     assert_eq!(context(&rx.recv_timeout(BOUND).expect("the read")), 1);
     // In another lineage: a write at 1 gated on its own lineage's 9 would close a cycle.
-    let other = delivery.mint_lineage(None);
+    let other = delivery.mint_lineage(None).expect("room for a lineage");
     let gate = Epoch::new(other.lineage(), 9);
     let held = delivery
         .write_with(

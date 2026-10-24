@@ -23,6 +23,7 @@ use crate::types::{
     Outcome, PushError, PushRefusal, ReadOptions, RemoveTargetError, SealError, WriteOptions,
 };
 
+mod capacity;
 mod coalescing;
 mod failures;
 mod flush_failures;
@@ -61,7 +62,14 @@ impl Rig {
     }
 
     fn with_queues(submissions: u32, completions: u32) -> Self {
-        let mut rig = Self::over(Core::new(Ticks::default(), Arc::new(NoDiagnostics)));
+        let mut rig = Self::over(
+            Core::new(
+                Ticks::default(),
+                Arc::new(NoDiagnostics),
+                crate::test_support::CAPACITY,
+            )
+            .expect("a valid capacity"),
+        );
         rig.backend = MemoryBackend::new(nz(submissions), nz(completions));
         rig.attach(KEY, MemoryTarget::new());
         rig
@@ -69,7 +77,14 @@ impl Rig {
 
     /// A rig over a backend that does what `script` says, with the key attached.
     fn scripted(script: crate::memory::FaultScript) -> Self {
-        let mut rig = Self::over(Core::new(Ticks::default(), Arc::new(NoDiagnostics)));
+        let mut rig = Self::over(
+            Core::new(
+                Ticks::default(),
+                Arc::new(NoDiagnostics),
+                crate::test_support::CAPACITY,
+            )
+            .expect("a valid capacity"),
+        );
         rig.backend = MemoryBackend::new(nz(8), nz(16)).with_script(script);
         rig.attach(KEY, MemoryTarget::new());
         rig
@@ -385,7 +400,12 @@ fn a_write_at_or_below_the_seal_point_is_refused() {
 #[test]
 fn another_cores_lineage_is_refused() {
     let mut rig = Rig::new();
-    let other = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
+    let other = Core::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     let foreign = Epoch::new(other.default_lineage(), 1);
     let refused = rig
         .core
@@ -696,6 +716,7 @@ fn domains_are_interned_once_per_distinct_bytes() {
     let core = Core::with_provider(
         Ticks::default(),
         Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
         vec![domain("C"), domain("D")],
     )
     .expect("no repeats");
@@ -858,8 +879,18 @@ fn a_consumer_operation_handed_back_as_refused_is_panicked_on() {
 
 #[test]
 fn each_core_has_its_own_lineages() {
-    let a = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
-    let b = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
+    let a = Core::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
+    let b = Core::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     assert_ne!(a.default_lineage(), b.default_lineage());
     assert_eq!(a.durable_through(a.default_lineage()), Ok(None));
     assert_eq!(a.sealed_through(a.default_lineage()), Ok(None));

@@ -77,7 +77,7 @@ pub(super) fn expect_done(harness: &mut Harness, id: OpId) -> Outcome<V> {
 /// An instance with one file, and a lineage minted beside its default.
 pub(super) fn two(temp: &super::TempFile) -> (Harness, LineageHandle) {
     let mut harness = Harness::new(instance(vec![given(GIVEN, temp)], vec![vec![0; 16]]));
-    let minted = harness.ring.mint_lineage(None);
+    let minted = harness.ring.mint_lineage(None).expect("room for a lineage");
     (harness, minted)
 }
 

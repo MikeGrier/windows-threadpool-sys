@@ -6,6 +6,7 @@
 //! another core's or one already ended or retired, is refused as `Foreign`.
 
 use super::{Actions, DurableIoCore, V};
+use crate::capacity::{AtCapacity, Limit};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::durability::DEFAULT_LINEAGE;
@@ -14,9 +15,20 @@ use crate::types::{EndLineageRefusal, LineageInfo, RetireLineageRefusal};
 
 impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// Mint a lineage, described by `description`.
-    pub fn mint_lineage(&mut self, description: Option<String>) -> Lineage {
+    ///
+    /// # Errors
+    ///
+    /// [`AtCapacity`] when the core holds as many lineages as it was built for, the default and
+    /// those ended and not yet retired among them (DI-D-107); nothing is minted.
+    pub fn mint_lineage(&mut self, description: Option<String>) -> Result<Lineage, AtCapacity> {
+        if self.durability.lineage_count() >= self.capacity.lineages {
+            return Err(AtCapacity {
+                limit: Limit::Lineages,
+                declared: self.capacity.lineages,
+            });
+        }
         let seq = self.durability.mint(description);
-        self.name(seq)
+        Ok(self.name(seq))
     }
 
     /// The live lineages, in minting order, the default first.

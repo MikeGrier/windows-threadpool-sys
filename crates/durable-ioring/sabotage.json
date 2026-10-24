@@ -2650,6 +2650,142 @@
       "why": "The control. Which lost write the inconsistency names, when several are lost in one let-go, changes no state and no outcome.",
       "find": ["                lost.get_or_insert((what, write.op));\n            }\n            false"],
       "replace": ["                lost = Some((what, write.op));\n            }\n            false"]
+    },
+    {
+      "name": "DI-23.5.2.2: a core declaring no lineage is built",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The default lineage is one of the lineages declared, so a capacity declaring none is not one an instance can be built with; built anyway, its first mint is refused for a count that never admitted the default.",
+      "find": ["        if capacity.lineages == 0 {\n            return Err(ConstructionError::NoLineages);\n        }\n        let instance"],
+      "replace": ["        let instance"]
+    },
+    {
+      "name": "DI-23.5.2.2: a provider is looked at before the capacity is",
+      "file": "src/io_core/provider.rs",
+      "expect": "caught",
+      "why": "A capacity that declares no lineage is refused first, whatever the provider names, so the refusal does not depend on a provider's own faults.",
+      "find": ["        if capacity.lineages == 0 {\n            return Err(ConstructionError::NoLineages);\n        }\n        if let Some(repeat)"],
+      "replace": ["        if let Some(repeat)"]
+    },
+    {
+      "name": "DI-23.5.2.2: a provider serving exactly the domains declared is refused",
+      "file": "src/io_core/provider.rs",
+      "expect": "caught",
+      "why": "The domains declared are a ceiling, so a provider serving that many is accepted.",
+      "find": ["        if domains.len() > capacity.domains {"],
+      "replace": ["        if domains.len() >= capacity.domains {"]
+    },
+    {
+      "name": "DI-23.5.2.2: a provider serving more domains than declared is accepted",
+      "file": "src/io_core/provider.rs",
+      "expect": "caught",
+      "why": "The provider's domains count against the domains declared, so a provider serving more is refused at construction.",
+      "find": ["        if domains.len() > capacity.domains {"],
+      "replace": ["        if false {"]
+    },
+    {
+      "name": "DI-23.5.2.2: a push is refused with the window one short of full",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The operations declared are a ceiling: the push that takes the last place is accepted, and the next is refused.",
+      "find": ["        if self.durability.window_places() >= self.capacity.operations {"],
+      "replace": ["        if self.durability.window_places() > self.capacity.operations {"]
+    },
+    {
+      "name": "DI-23.5.2.2: a push is never refused for the window",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "Past the operations declared a push is refused whole, with its buffer and context handed back, and nothing reserved.",
+      "find": ["        if self.durability.window_places() >= self.capacity.operations {"],
+      "replace": ["        if false {"]
+    },
+    {
+      "name": "DI-23.5.2.2: a push refused for the window names another limit",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "A refusal names the count that was reached, so a consumer can tell which declaration to raise.",
+      "find": ["                    limit: Limit::Operations,"],
+      "replace": ["                    limit: Limit::Targets,"]
+    },
+    {
+      "name": "DI-23.5.2.2: a mint is refused with a lineage to spare",
+      "file": "src/io_core/lineages.rs",
+      "expect": "caught",
+      "why": "The lineages declared are a ceiling, the default among them: the mint that takes the last place is accepted, and the next is refused.",
+      "find": ["        if self.durability.lineage_count() >= self.capacity.lineages {"],
+      "replace": ["        if self.durability.lineage_count() + 1 >= self.capacity.lineages {"]
+    },
+    {
+      "name": "DI-23.5.2.2: a mint is accepted at the lineages declared",
+      "file": "src/io_core/lineages.rs",
+      "expect": "caught",
+      "why": "At the lineages declared a mint is refused, and nothing is minted.",
+      "find": ["        if self.durability.lineage_count() >= self.capacity.lineages {"],
+      "replace": ["        if self.durability.lineage_count() > self.capacity.lineages {"]
+    },
+    {
+      "name": "DI-23.5.2.2: an ended lineage is not counted until it is retired",
+      "file": "src/durability/lineages.rs",
+      "expect": "caught",
+      "why": "An ended lineage still draining holds what a live one does -- its writes' places and its commits -- so it counts until it is retired (DI-D-107).",
+      "find": ["        self.lineages.len()\n"],
+      "replace": ["        self.lineages.values().filter(|state| !state.ended).count()\n"]
+    },
+    {
+      "name": "DI-23.5.2.2: an import is accepted at the imports declared",
+      "file": "src/io_core/failures.rs",
+      "expect": "caught",
+      "why": "At the imports declared an import is refused, and nothing is recorded.",
+      "find": ["        if self.durability.imports() >= self.capacity.imports {"],
+      "replace": ["        if self.durability.imports() > self.capacity.imports {"]
+    },
+    {
+      "name": "DI-23.5.2.2: an import is refused with one to spare",
+      "file": "src/io_core/failures.rs",
+      "expect": "caught",
+      "why": "The imports declared are a ceiling: the import that takes the last place is accepted.",
+      "find": ["        if self.durability.imports() >= self.capacity.imports {"],
+      "replace": ["        if self.durability.imports() + 1 >= self.capacity.imports {"]
+    },
+    {
+      "name": "DI-23.5.2.2: every unresolved failure counts as an import",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Only an imported failure counts against the imports declared; a failure the core observed is the consumer's to resolve but not its to have declared.",
+      "find": ["            .filter(|failure| matches!(failure.cause, FailureCause::Imported { .. }))"],
+      "replace": ["            .filter(|_| true)"]
+    },
+    {
+      "name": "DI-23.5.2.2: a target is accepted at the targets declared",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "At the targets declared an add_target is refused, handing the description back.",
+      "find": ["        let limit = if self.targets.len() >= self.capacity.targets {"],
+      "replace": ["        let limit = if self.targets.len() > self.capacity.targets {"]
+    },
+    {
+      "name": "DI-23.5.2.2: a target taking the last domain is refused",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The domains declared are a ceiling: a target whose new domains fill it is accepted.",
+      "find": ["        } else if self.domains.len() + fresh > self.capacity.domains {"],
+      "replace": ["        } else if self.domains.len() + fresh >= self.capacity.domains {"]
+    },
+    {
+      "name": "DI-23.5.2.2: a domain the core knows counts again",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "A domain the core has been given is not new: a target reusing it takes no more of the domains declared.",
+      "find": ["                !self.domains.contains_key(*domain) && !declared[..*at].contains(domain)"],
+      "replace": ["                !declared[..*at].contains(domain)"]
+    },
+    {
+      "name": "DI-23.5.2.2: a domain a target repeats counts twice",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "A domain a description names twice is one domain.",
+      "find": ["                !self.domains.contains_key(*domain) && !declared[..*at].contains(domain)"],
+      "replace": ["                !self.domains.contains_key(*domain)"]
     }
   ]
 }

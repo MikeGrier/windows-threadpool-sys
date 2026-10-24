@@ -10,7 +10,9 @@ use windows_ioring_sys::IoRingErrorExt;
 use super::pushes::{ADDED, GIVEN, Harness, Ring, given, instance, temp};
 use super::{empty, file, setup};
 use durable_ioring::DurableRing;
-use durable_ioring::{DurabilityRequest, Entry, Failed, FailureCause, ImportScope, UnknownLineage};
+use durable_ioring::{
+    DurabilityRequest, Entry, Failed, FailureCause, ImportError, ImportScope, UnknownLineage,
+};
 
 /// `ERROR_IO_DEVICE`, the failure the seam is armed with.
 const IO_DEVICE: u32 = 1117;
@@ -87,7 +89,7 @@ fn an_import_suspects_what_its_scope_reaches() {
     let foreign = empty().default_lineage().lineage();
     assert_eq!(
         harness.ring.import_failure(ImportScope::Lineage(foreign)),
-        Err(UnknownLineage(foreign)),
+        Err(ImportError::UnknownLineage(UnknownLineage(foreign))),
         "a lineage the instance cannot answer for is refused, and nothing is recorded"
     );
     let disk_2 = super::domain("disk-2");

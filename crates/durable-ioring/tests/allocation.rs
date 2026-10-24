@@ -38,8 +38,9 @@ use durable_ioring::memory::{
     Fault, FaultScript, MemoryBackend, MemoryTarget, ScriptOp, When, scripted_fault,
 };
 use durable_ioring::{
-    CoreActions, DioringIds, DurabilityRequest, DurableIoCore, Entry, Epoch, ImportScope, IoTarget,
-    IoTargetKey, Lineage, NoDiagnostics, ReadOptions, Resolution, StampClock, WriteOptions,
+    Capacity, CoreActions, DioringIds, DurabilityRequest, DurableIoCore, Entry, Epoch, ImportScope,
+    IoTarget, IoTargetKey, Lineage, NoDiagnostics, ReadOptions, Resolution, StampClock,
+    WriteOptions,
 };
 
 thread_local! {
@@ -51,6 +52,15 @@ thread_local! {
 
 /// The most distinct tags one phase can count. Fixed, so counting never allocates.
 const SLOTS: usize = 256;
+
+/// What the core is built with: more than any phase here reaches.
+const CAPACITY: Capacity = Capacity {
+    operations: 64,
+    lineages: 8,
+    imports: 4,
+    targets: 4,
+    domains: 4,
+};
 
 /// One tag's count in a phase, and where it was seen.
 #[derive(Clone, Copy)]
@@ -254,7 +264,8 @@ impl Rig {
     /// Build the core over `backend`, with `KEY` and `OTHER` attached: the first phase.
     fn new(mut backend: MemoryBackend) -> Self {
         let diagnostics = Arc::new(NoDiagnostics);
-        let mut core = counted(|| Core::new(Ticks::default(), diagnostics));
+        let mut core = counted(|| Core::new(Ticks::default(), diagnostics, CAPACITY))
+            .expect("a valid capacity");
         for key in [KEY, OTHER] {
             let target = MemoryTarget::new();
             let description = target.describe();
@@ -424,7 +435,7 @@ fn clean() -> Vec<Measured> {
     rig.drain();
     rig.phase("the gated writes sealed");
 
-    let minted = counted(|| rig.core.mint_lineage(None));
+    let minted = counted(|| rig.core.mint_lineage(None)).expect("room for a lineage");
     rig.phase("a lineage minted");
     rig.round(minted, 1);
     rig.run();

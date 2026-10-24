@@ -52,8 +52,9 @@ Everything below either sharpens one word of that sentence or states a condition
   anything about when an event happened in the storage beneath.
 - **Lineage.** One independent durability sequence within an instance: its own epoch space, seal
   point, high-water mark and set of failures ([DI-D-19](DESIGN-NOTES.md#di-d-19)). An instance has
-  a default lineage and may mint more at any time. Every rule in this document about epochs, seals
-  and the high-water mark applies within one lineage.
+  a default lineage and may mint more while it holds fewer than the instance was built for
+  ([DI-D-107](DESIGN-NOTES.md#di-d-107)). Every rule in this document about epochs, seals and the
+  high-water mark applies within one lineage.
 - **Lineage handle.** What the consumer holds a lineage through ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
   Copies may be made freely; the lineage lives while any copy does, and releasing the last ends it.
   A write's tag and a seal each borrow one, so neither can name a lineage that has ended. The

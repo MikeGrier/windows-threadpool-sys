@@ -2213,6 +2213,30 @@
       "replace": [
         "        let mut open: Vec<CorrelationId> = self.open.keys().cloned().collect();"
       ]
+    },
+    {
+      "name": "DI-23.5.2.2: an add_target the core refuses for capacity is attached anyway",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A target the core refuses is neither decided for nor attached: attaching it leaves the backend running I/O for a target no push can name.",
+      "find": ["        if let Err(refused) = engine.core.add_target(key, target.describe()) {\n            return Err(AddTargetError {\n                key,\n                target,\n                cause: refused.cause,\n            });\n        }\n"],
+      "replace": ["        let _ = engine.core.add_target(key, target.describe());\n"]
+    },
+    {
+      "name": "DI-23.5.2.2: a target given at construction past the capacity is refused as another cause",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A construction refused for capacity says so, and hands every file back.",
+      "find": ["                    AddTargetCause::AtCapacity(at) => SetupRefusal::AtCapacity(at),"],
+      "replace": ["                    AddTargetCause::AtCapacity(_) => SetupRefusal::DuplicateKey(file.key),"]
+    },
+    {
+      "name": "DI-23.5.2.2: a construction the core refuses is reported as a repeated domain",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The core's own refusal of the capacity or of the provider's domains reaches the consumer as it was made.",
+      "find": ["                    reason: SetupRefusal::Construction(refused),"],
+      "replace": ["                    reason: SetupRefusal::DuplicateProviderDomain(FlushDomain::new(Vec::new())),"]
     }
   ]
 }

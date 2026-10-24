@@ -21,8 +21,8 @@ use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
 
 use durable_ioring::{
-    AddTargetError, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo,
-    ImportScope, Imported, IoFault, IoTargetKey, Leftovers, LineageInfo, ReadOptions,
+    AddTargetError, AtCapacity, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo,
+    ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftovers, LineageInfo, ReadOptions,
     RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
     UnknownLineage, WriteOptions,
 };
@@ -132,7 +132,11 @@ impl<D: DurableRing> DeliveryHandle<D> {
     }
 
     /// [`DurableRing::mint_lineage`].
-    pub fn mint_lineage(&self, description: Option<String>) -> HandleOf<D> {
+    ///
+    /// # Errors
+    ///
+    /// As [`DurableRing::mint_lineage`].
+    pub fn mint_lineage(&self, description: Option<String>) -> Result<HandleOf<D>, AtCapacity> {
         self.with(|ring| ring.mint_lineage(description))
     }
 
@@ -303,7 +307,7 @@ impl<D: DurableRing> DeliveryHandle<D> {
     pub fn import_failure(
         &self,
         scope: ImportScope<D::Ids>,
-    ) -> Result<Imported<D::Ids>, UnknownLineage<D::Ids>> {
+    ) -> Result<Imported<D::Ids>, ImportError<D::Ids>> {
         self.with(|ring| ring.import_failure(scope))
     }
 

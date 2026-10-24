@@ -50,7 +50,12 @@ fn plain(submissions: u32, completions: u32) -> Eng {
     engine(
         submissions,
         completions,
-        Core::new(Ticks::default(), Arc::new(NoDiagnostics)),
+        Core::new(
+            Ticks::default(),
+            Arc::new(NoDiagnostics),
+            crate::test_support::CAPACITY,
+        )
+        .expect("a valid capacity"),
     )
 }
 
@@ -196,6 +201,7 @@ fn a_drain_keeps_provider_requests_for_the_driver() {
     let core = Core::with_provider(
         Ticks::default(),
         Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
         vec![FlushDomain::new(b"log".as_slice())],
     )
     .expect("no repeats");

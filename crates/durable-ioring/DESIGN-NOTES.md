@@ -2205,6 +2205,17 @@ notes when it is created.
   in [`DurableRing`](src/contract.rs); `import_failure`'s error names an unknown lineage or being at capacity;
   `AddTargetError` gains being at capacity; construction takes the declaration and fails as too large or for a refused
   allocation. A lineage counts until it is retired, so an ended one not yet retired counts; an import until it is resolved.
+  **As built** (DI-23.5.2.2): one [`Capacity`](src/capacity.rs) of the five counts, with no default; the refusals share
+  one `AtCapacity { limit, declared }`, named by `PushRefusal::AtCapacity`, `AddTargetCause::AtCapacity`, the new
+  `ImportError::AtCapacity` (which `import_failure` now returns, beside `UnknownLineage`), and `mint_lineage`'s `Result`;
+  and construction fails as `ConstructionError`, which replaces `DuplicateDomain`, as `NoLineages` (the default is one
+  lineage), `DuplicateDomain`, or `TooManyDomains`, checked in that order. A refusal comes after the core's own checks of
+  the same call, and a push's before the backend's, so a refused push reserves nothing and spends no identity. An
+  `add_target` counts only the domains the core has not been given, each once, and interns none when it is refused.
+  Only an imported failure counts against `imports`; a failure the core observed does not. The driver's `Setup` carries
+  the declaration, and a construction refused for it hands every file back, as every other refusal does
+  (`SetupRefusal::Construction` and `SetupRefusal::AtCapacity`). "Too large or a refused allocation" waits for
+  DI-23.5.2.3, which makes the allocations.
 - **An operation holds its place in the window from its push, held for a gate included, until its completion is popped
   and, for a write, until it is no longer uncovered** -- covered by its seal, failed, or let go with its ended lineage. The
   engineer, 2026-10-23: "then (i) seems logical", over a separate declared count of uncovered writes. The core keeps a

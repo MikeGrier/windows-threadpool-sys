@@ -84,7 +84,7 @@ fn an_import_naming_unknown_domains_reports_them_unmatched() {
 #[test]
 fn an_import_confined_to_a_lineage_suspects_only_its_writes() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     uncovered(&mut rig, 1);
     rig.write_with(KEY, Epoch::new(lineage, 1), 0, b"y", Default::default())
         .expect("accepted");
@@ -106,7 +106,12 @@ fn an_import_confined_to_a_lineage_suspects_only_its_writes() {
 #[test]
 fn an_import_naming_a_lineage_not_live_is_refused() {
     let mut rig = Rig::new();
-    let other = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
+    let other = Core::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     assert!(
         rig.core
             .import_failure(ImportScope::Lineage(other.default_lineage()))

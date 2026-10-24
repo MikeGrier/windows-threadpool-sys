@@ -103,7 +103,12 @@ fn scripted(submissions: u32, completions: u32) -> Eng {
         rings: 0,
         pops_failed: 0,
     };
-    let core = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
+    let core = Core::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     let mut engine = Engine::new(core, backend);
     for key in [ONE, TWO] {
         let target = MemoryTarget::new().with_domains([FlushDomain::new(b"log".as_slice())]);

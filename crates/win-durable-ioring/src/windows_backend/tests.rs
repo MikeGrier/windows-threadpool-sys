@@ -1033,8 +1033,12 @@ fn the_core_writes_a_write_only_buffer_type_over_the_windows_backend() {
     backend
         .attach(ADDED, Win32FileTarget::new(added.open()))
         .expect("a new key");
-    let core: DurableIoCore<u64, Arc<[u8]>, u32, InterruptStamps> =
-        DurableIoCore::new(InterruptStamps, Arc::new(NoDiagnostics));
+    let core: DurableIoCore<u64, Arc<[u8]>, u32, InterruptStamps> = DurableIoCore::new(
+        InterruptStamps,
+        Arc::new(NoDiagnostics),
+        crate::dioring::tests::CAPACITY,
+    )
+    .expect("a valid capacity");
     let mut engine = Engine::new(core, backend);
     for key in [GIVEN, ADDED] {
         let description = engine.backend.target(key).expect("attached").describe();
@@ -1095,8 +1099,12 @@ fn the_core_runs_over_the_windows_backend_under_the_oracle() {
         TempFile::new("wb-core-added"),
     );
     let mut backend = backend(&given, &added);
-    let mut core: DurableIoCore<u64, Vec<u8>, u32, InterruptStamps> =
-        DurableIoCore::new(InterruptStamps, Arc::new(NoDiagnostics));
+    let mut core: DurableIoCore<u64, Vec<u8>, u32, InterruptStamps> = DurableIoCore::new(
+        InterruptStamps,
+        Arc::new(NoDiagnostics),
+        crate::dioring::tests::CAPACITY,
+    )
+    .expect("a valid capacity");
     let mut oracle: ConformanceOracle<V, u32> = ConformanceOracle::new();
     for key in [GIVEN, ADDED] {
         let description = backend.target(key).expect("attached").describe();

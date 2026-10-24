@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use win_durable_ioring::{
-    DeliveryMode, Dioring, EtwDiagnostics, NoDiagnostics, Setup, StderrDiagnostics,
+    Capacity, DeliveryMode, Dioring, EtwDiagnostics, NoDiagnostics, Setup, StderrDiagnostics,
 };
 
 type Ring = Dioring<Vec<u8>, u64, (), Vec<u8>>;
@@ -27,6 +27,13 @@ fn setup(
         files: Vec::new(),
         buffers: Vec::new(),
         provider: None,
+        capacity: Capacity {
+            operations: 64,
+            lineages: 4,
+            imports: 4,
+            targets: 4,
+            domains: 4,
+        },
         diagnostics,
         delivery: DeliveryMode::Pool(None),
     }

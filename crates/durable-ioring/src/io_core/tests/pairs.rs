@@ -83,11 +83,12 @@ fn domain(name: &str) -> FlushDomain {
 fn rig(sink: &Arc<Checked>, script: FaultScript, served: &[&str], declared: &[&str]) -> Rig {
     let sink: Arc<dyn DiagnosticSink> = Arc::clone(sink) as Arc<dyn DiagnosticSink>;
     let core = if served.is_empty() {
-        Core::new(Ticks::default(), sink)
+        Core::new(Ticks::default(), sink, crate::test_support::CAPACITY).expect("a valid capacity")
     } else {
         Core::with_provider(
             Ticks::default(),
             sink,
+            crate::test_support::CAPACITY,
             served.iter().map(|name| domain(name)).collect(),
         )
         .expect("no repeats")
@@ -312,7 +313,7 @@ fn ending_a_lineage_ends_its_open_seal_unanswered_and_its_open_flush_abandoned()
     let sink = Checked::pairs();
     let script = FaultScript::new().on(When::any().op(ScriptOp::Commit), Fault::Hold);
     let mut rig = rig(&sink, script, &[], &[]);
-    let minted = rig.core.mint_lineage(None);
+    let minted = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(KEY, Epoch::new(minted, 1), 0, b"x", Default::default())
         .expect("accepted");
     rig.run();
@@ -489,7 +490,7 @@ fn a_seal_with_a_file_and_a_domain_is_a_flush_pair_for_each_part() {
 fn a_minted_lineages_pairs_name_its_lineage() {
     let sink = Checked::pairs();
     let mut rig = plain(&sink);
-    let minted = rig.core.mint_lineage(None);
+    let minted = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(KEY, Epoch::new(minted, 3), 0, b"x", Default::default())
         .expect("accepted");
     rig.run();

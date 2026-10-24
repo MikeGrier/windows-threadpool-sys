@@ -33,6 +33,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         key
     }
 
+    /// How many lineages are not retired: the live ones, and the ended ones still draining
+    /// (DI-D-107).
+    pub(crate) fn lineage_count(&self) -> usize {
+        self.lineages.len()
+    }
+
     /// Whether `lineage` is live: minted, and neither ended nor retired.
     pub(crate) fn is_live(&self, lineage: Key) -> bool {
         self.live(lineage).is_some()

@@ -11,12 +11,13 @@ use core::hash::Hash;
 
 use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
 
+use crate::capacity::AtCapacity;
 use crate::io_target::IoTarget;
 use crate::key::{ReadKey, TargetKey, WriteKey};
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
-    ImportScope, Imported, IoFault, IoTargetKey, Leftovers, LineageInfo, PushError, ReadOptions,
-    RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
+    ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftovers, LineageInfo, PushError,
+    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
     UnknownLineage, WriteOptions,
 };
 
@@ -105,9 +106,11 @@ pub trait DurableRing {
     ///
     /// # Errors
     ///
-    /// An [`AddTargetError`] handing the target back, when one is already present under `key`, or
+    /// An [`AddTargetError`] handing the target back, when one is already present under `key`,
     /// when `key` is a [`Key<A>`](crate::Key) that declares more access than the target states
-    /// (DI-13.10); the error's `cause` says which. An untyped [`IoTargetKey`] declares nothing.
+    /// (DI-13.10), or when the instance holds as many targets as it was built for or the target's
+    /// flush domains would take it past the domains it was built for (DI-D-107); the error's
+    /// `cause` says which. An untyped [`IoTargetKey`] declares nothing.
     fn add_target<K: TargetKey>(
         &mut self,
         key: K,
@@ -139,7 +142,12 @@ pub trait DurableRing {
 
     /// A new lineage, with an optional description for the consumer's own reports (DI-D-19).
     /// Releasing the last copy of its handle ends it (DI-D-40).
-    fn mint_lineage(&mut self, description: Option<String>) -> HandleOf<Self>;
+    ///
+    /// # Errors
+    ///
+    /// [`AtCapacity`] when the instance holds as many lineages as it was built for, the default
+    /// and those ended and not yet retired among them (DI-D-107); nothing is minted.
+    fn mint_lineage(&mut self, description: Option<String>) -> Result<HandleOf<Self>, AtCapacity>;
 
     /// Every live lineage, the default among them.
     fn lineages(&self) -> Vec<LineageInfo<Self::Ids>>;
@@ -330,12 +338,13 @@ pub trait DurableRing {
     ///
     /// # Errors
     ///
-    /// [`UnknownLineage`] for a scope naming a lineage the instance cannot answer for; nothing is
-    /// recorded.
+    /// [`ImportError::UnknownLineage`] for a scope naming a lineage the instance cannot answer
+    /// for, and [`ImportError::AtCapacity`] when the instance holds as many unresolved imported
+    /// failures as it was built for (DI-D-107); nothing is recorded.
     fn import_failure(
         &mut self,
         scope: ImportScope<Self::Ids>,
-    ) -> Result<Imported<Self::Ids>, UnknownLineage<Self::Ids>>;
+    ) -> Result<Imported<Self::Ids>, ImportError<Self::Ids>>;
 
     /// The unresolved failures, in the order they were observed.
     fn failures(&self) -> Vec<FailureInfo<Self::Ids>>;

@@ -32,8 +32,8 @@ use std::time::{Duration, Instant};
 
 use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, Win32FileTarget};
 use win_durable_ioring::{
-    DeliveryMode, Dioring, DurableRing, Entry, IoTargetKey, LineageHandle, OpIdOf, PushError,
-    PushRefusal, PushResult, Setup, TargetSetup,
+    Capacity, DeliveryMode, Dioring, DurableRing, Entry, IoTargetKey, LineageHandle, OpIdOf,
+    PushError, PushRefusal, PushResult, Setup, TargetSetup,
 };
 
 #[cfg(test)]
@@ -199,6 +199,13 @@ pub fn build(delivery: Delivery, scratch: &Scratch, queue: u32) -> Ring {
         files: vec![scratch.target()],
         buffers: Vec::new(),
         provider: None,
+        capacity: Capacity {
+            operations: 256,
+            lineages: 4,
+            imports: 4,
+            targets: 4,
+            domains: 4,
+        },
         diagnostics: None,
         delivery: delivery.mode(),
     })

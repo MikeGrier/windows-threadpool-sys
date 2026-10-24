@@ -11,6 +11,7 @@ use rc_errors::ErrorReport;
 use crate::access::Access;
 use crate::alloc_tags::{tag, tagged};
 use crate::backend::RefusalCause;
+use crate::capacity::AtCapacity;
 use crate::contract::Identities;
 use crate::error_code::ErrorCode;
 
@@ -110,6 +111,33 @@ impl<V: Identities> fmt::Display for UnknownLineage<V> {
 }
 
 impl<V: Identities> core::error::Error for UnknownLineage<V> {}
+
+/// Why an `import_failure` was refused; nothing was recorded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImportError<V: Identities> {
+    /// The scope names a lineage the instance cannot answer for.
+    UnknownLineage(UnknownLineage<V>),
+    /// The instance holds as many unresolved imported failures as it was built for (DI-D-107);
+    /// resolving one lets the import be made again.
+    AtCapacity(AtCapacity),
+}
+
+impl<V: Identities> From<UnknownLineage<V>> for ImportError<V> {
+    fn from(unknown: UnknownLineage<V>) -> Self {
+        Self::UnknownLineage(unknown)
+    }
+}
+
+impl<V: Identities> fmt::Display for ImportError<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownLineage(unknown) => unknown.fmt(f),
+            Self::AtCapacity(at) => at.fmt(f),
+        }
+    }
+}
+
+impl<V: Identities> core::error::Error for ImportError<V> {}
 
 /// One lineage, as the enumeration reports it. Owned, so holding it borrows nothing.
 #[derive(Clone, Debug)]
@@ -493,6 +521,10 @@ pub enum PushRefusal<V: Identities> {
     },
     /// No target was given to the instance under this key.
     UnknownFile(IoTargetKey),
+    /// The instance holds as many operations as it was built for (DI-D-107). Nothing was
+    /// reserved: a completion popped, a write covered, or a failure resolved lets go of a place,
+    /// and the push can be made again.
+    AtCapacity(AtCapacity),
     /// The backend refused the push, naming why, so the caller can act on it (DI-D-52): among
     /// others, a registered-span operation on an instance built without registered buffers
     /// ([`RefusalCause::Unsupported`]), or a span the registration does not contain
@@ -721,6 +753,9 @@ pub enum AddTargetCause {
         /// What the target states.
         actual: Access,
     },
+    /// The instance holds as many targets as it was built for, or the target's flush domains
+    /// would take it past the domains it was built for (DI-D-107).
+    AtCapacity(AtCapacity),
 }
 
 impl fmt::Display for AddTargetCause {
@@ -731,6 +766,7 @@ impl fmt::Display for AddTargetCause {
                 f,
                 "the key declares {declared} access and the target states {actual}"
             ),
+            Self::AtCapacity(at) => at.fmt(f),
         }
     }
 }

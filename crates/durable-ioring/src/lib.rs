@@ -21,6 +21,7 @@ pub mod alloc_tags;
 #[cfg(not(feature = "alloc-tags"))]
 mod alloc_tags;
 pub mod backend;
+mod capacity;
 mod clock;
 mod contract;
 mod correlation;
@@ -48,6 +49,7 @@ mod types;
 pub use access::{
     Access, CanRead, CanWrite, DataAccess, HasData, NoData, ReadOnly, ReadWrite, WriteOnly,
 };
+pub use capacity::{AtCapacity, Capacity, ConstructionError, Limit};
 pub use clock::{Instant, StampClock};
 pub use contract::{
     DurableRing, EntryOf, EpochId, EpochIdOf, FailureIdOf, HandleOf, Identities, Lin, OpIdOf,
@@ -64,7 +66,7 @@ pub use error_code::ErrorCode;
 #[cfg(feature = "std")]
 pub use fault_report::report_io_error;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};
-pub use io_core::{CoreActions, DuplicateDomain, DurableIoCore};
+pub use io_core::{CoreActions, DurableIoCore};
 pub use io_target::{
     Capabilities, Geometry, GeometryError, IoTarget, IoTargetDescription, WarrantyClass,
 };
@@ -77,9 +79,9 @@ pub use pump::Waitable;
 pub use router::{RoutedTwice, RouterBuilder, RoutingProvider};
 pub use types::{
     AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,
-    Epoch, EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportScope,
-    Imported, IoFault, IoTargetBusy, IoTargetKey, Leftovers, LineageBusy, LineageInfo, Marking,
-    MarkingKind, OpCompletion, OpKind, Outcome, PushError, PushRefusal, ReadOptions,
+    Epoch, EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportError,
+    ImportScope, Imported, IoFault, IoTargetBusy, IoTargetKey, Leftovers, LineageBusy, LineageInfo,
+    Marking, MarkingKind, OpCompletion, OpKind, Outcome, PushError, PushRefusal, ReadOptions,
     RemoveTargetError, Resolution, ResolveError, ResolveRefusal, RetireLineageError,
     RetireLineageRefusal, SealError, SuspectSet, SuspectWrite, Tag, UnknownLineage, WriteCaching,
     WriteOptions,

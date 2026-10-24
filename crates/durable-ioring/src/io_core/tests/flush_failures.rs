@@ -47,7 +47,14 @@ fn rig_with(
     registered: Vec<Vec<u8>>,
     targets: &[(crate::types::IoTargetKey, &[&str])],
 ) -> Rig {
-    let mut rig = Rig::over(Core::new(Ticks::default(), Arc::new(NoDiagnostics)));
+    let mut rig = Rig::over(
+        Core::new(
+            Ticks::default(),
+            Arc::new(NoDiagnostics),
+            crate::test_support::CAPACITY,
+        )
+        .expect("a valid capacity"),
+    );
     rig.backend = MemoryBackend::new(nz(8), nz(16))
         .with_registered(registered)
         .with_script(first_flush_fails(fails));
@@ -411,7 +418,10 @@ fn closing_hands_back_the_unresolved_failures() {
 #[test]
 fn a_failure_spanning_two_lineages_heals_in_each_at_its_own_seal() {
     let mut rig = rig_with(GIVEN, Vec::new(), &[(GIVEN, &[]), (ADDED, &[])]);
-    let minted = rig.core.mint_lineage(Some("log".to_owned()));
+    let minted = rig
+        .core
+        .mint_lineage(Some("log".to_owned()))
+        .expect("room for a lineage");
     let own = rig.write_to(GIVEN, 1, 0, b"own").expect("accepted");
     let theirs = rig
         .write_with(
@@ -555,7 +565,12 @@ impl Clocked {
 fn an_instance_given_a_clock_stamps_a_failed_flush_with_its_reading_when_observed() {
     let clock = ManualClock::at(7_000);
     let mut rig = Clocked {
-        core: DurableIoCore::new(clock.clone(), Arc::new(NoDiagnostics)),
+        core: DurableIoCore::new(
+            clock.clone(),
+            Arc::new(NoDiagnostics),
+            crate::test_support::CAPACITY,
+        )
+        .expect("a valid capacity"),
         backend: MemoryBackend::new(nz(8), nz(16)).with_script(first_flush_fails(GIVEN)),
         oracle: ConformanceOracle::new(),
     };

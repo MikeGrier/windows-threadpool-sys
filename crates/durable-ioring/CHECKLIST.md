@@ -61,11 +61,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.5.2.1** -- A flush's places outlive its lineage: ending a lineage keeps the writes named to a seal whose flush is out, with their span entries and places, until it answers. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23521)
 
-- [ ] **DI-23.5.2.2** -- **Declare capacity, construct fallibly, refuse past it**: a `Capacity` of `operations`, `lineages`,
-  `imports`, `targets` and `domains`, which the library gives no default (the engineer: "agree no default in library"),
-  with examples in the documentation; construction in the core and in `Dioring` fallible; a push, a mint, an import and an
-  `add_target` refused at capacity, and a provider serving more domains than declared refused at construction. Breaking for
-  this crate and `win-durable-ioring`: `mint_lineage` returns a `Result` in the trait.
+- [x] **DI-23.5.2.2** -- A `Capacity` of five counts, with no library default, is declared at construction, and a push, a mint, an import and an `add_target` are refused past it. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23522)
 
 - [ ] **DI-23.5.2.3** -- **The core's keyed tables onto `fixed-hash-table`**: `targets`, `domains`, `per_target`,
   `in_flight`, `spans`, `window`, `flush_pairs` and `served_names`, each sized from the declared counts: `targets`,

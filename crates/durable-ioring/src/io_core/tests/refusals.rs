@@ -189,7 +189,7 @@ fn the_cores_own_checks_come_before_the_backends() {
 fn a_released_write_the_backend_refuses_for_good_completes_as_failed_and_is_nullified() {
     let mut rig = Rig::new();
     rig.attach(OTHER, MemoryTarget::new());
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     let gate = Epoch::new(lineage, 1);
     rig.write_with(OTHER, gate, 0, b"g", WriteOptions::new())
         .expect("accepted");

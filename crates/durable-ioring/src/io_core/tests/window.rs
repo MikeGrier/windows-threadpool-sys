@@ -28,7 +28,7 @@ fn gated(gate: Epoch<V>) -> WriteOptions<V> {
 fn an_ended_lineages_write_keeps_its_place_until_the_commit_out_for_it_completes() {
     let script = FaultScript::new().on(When::any().op(ScriptOp::Commit), Fault::Hold);
     let mut rig = Rig::scripted(script);
-    let minted = rig.core.mint_lineage(None);
+    let minted = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(KEY, Epoch::new(minted, 1), 0, b"x", Default::default())
         .expect("accepted");
     rig.run();

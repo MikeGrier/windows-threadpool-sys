@@ -48,7 +48,12 @@ fn nz(n: u32) -> NonZeroU32 {
 fn engine<Bk: IoBackend<Target = MemoryTarget, Buffer = Vec<u8>>>(
     backend: Bk,
 ) -> Engine<u64, Bk, u32, Ticks> {
-    let core = DurableIoCore::new(Ticks::default(), Arc::new(NoDiagnostics));
+    let core = DurableIoCore::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     let mut engine = Engine::new(core, backend);
     for key in [ONE, TWO] {
         let target = MemoryTarget::new().with_domains([FlushDomain::new(b"log".as_slice())]);

@@ -13,6 +13,7 @@ use wtf_string::Wtf16String;
 
 use super::{DeliveryMode, Dioring, Setup, SetupError, SetupRefusal, TargetSetup};
 use crate::windows_backend::{FileOptions, OpenedFile, Win32FileTarget};
+use durable_ioring::Capacity;
 use durable_ioring::DurableRing;
 use durable_ioring::backend::IoBackend;
 use durable_ioring::{DurabilityProvider, FlushRequest};
@@ -36,6 +37,7 @@ mod gates;
 // The consumer's durability provider: DI-3.2.6.
 mod providers;
 // Removing a file, and ending the instance: DI-3.2.7.
+mod capacity;
 mod construction;
 mod ending;
 mod pumped;
@@ -60,6 +62,16 @@ type V = crate::WindowsIds<u64>;
 /// Queue sizes for every instance these tests build. Small: nothing here pushes I/O.
 const QUEUE: u32 = 16;
 
+/// The small declaration the driver's tests build an instance with (DI-D-107): enough that a test
+/// not about capacity does not reach it.
+pub(crate) const CAPACITY: Capacity = Capacity {
+    operations: 64,
+    lineages: 16,
+    imports: 8,
+    targets: 8,
+    domains: 16,
+};
+
 fn setup(
     files: Vec<TargetSetup>,
     buffers: Vec<Vec<u8>>,
@@ -71,6 +83,7 @@ fn setup(
         files,
         buffers,
         provider,
+        capacity: CAPACITY,
         diagnostics: None,
         delivery: DeliveryMode::Pool(None),
     }
@@ -388,6 +401,7 @@ fn an_instance_is_built_with_any_epoch_id_and_context_type() {
         files: Vec::new(),
         buffers: Vec::new(),
         provider: None,
+        capacity: CAPACITY,
         diagnostics: None,
         delivery: DeliveryMode::Pool(None),
     })
@@ -416,6 +430,7 @@ fn an_instance_delivers_on_the_pool_its_environment_names() {
         files: vec![given(GIVEN, &file)],
         buffers: Vec::new(),
         provider: None,
+        capacity: CAPACITY,
         diagnostics: None,
         delivery: DeliveryMode::Pool(Some(&mut env)),
     })

@@ -93,6 +93,15 @@ let (ring, _default) = Dioring::<Vec<u8>>::new(Setup {
     files: Vec::new(),
     buffers: Vec::new(),
     provider: Some(Box::new(router)),
+    // What the instance holds at most of each thing it counts, and refuses past. The library gives it no
+    // default: a consumer states its own numbers. The router serves two domains.
+    capacity: Capacity {
+        operations: 256,
+        lineages: 4,
+        imports: 4,
+        targets: 4,
+        domains: 4,
+    },
     diagnostics: None,
     delivery: DeliveryMode::Pool(None),
 })
@@ -392,6 +401,7 @@ flush of a file report the error given whatever the device answered. Setting up 
 #     )],
 #     buffers: Vec::new(),
 #     provider: None,
+#     capacity: Capacity { operations: 256, lineages: 4, imports: 4, targets: 4, domains: 4 },
 #     diagnostics: None,
 #     delivery: DeliveryMode::Pool(None),
 # })
@@ -476,6 +486,7 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 #     )],
 #     buffers: Vec::new(),
 #     provider: None,
+#     capacity: Capacity { operations: 256, lineages: 4, imports: 4, targets: 4, domains: 4 },
 #     diagnostics: None,
 #     delivery: DeliveryMode::Pool(None),
 # })
@@ -565,6 +576,7 @@ fails as never issued.
 #     )],
 #     buffers: Vec::new(),
 #     provider: None,
+#     capacity: Capacity { operations: 256, lineages: 4, imports: 4, targets: 4, domains: 4 },
 #     diagnostics: None,
 #     delivery: DeliveryMode::Pool(None),
 # })

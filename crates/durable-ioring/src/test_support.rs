@@ -10,11 +10,22 @@ use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::capacity::Capacity;
 use crate::clock::StampClock;
 use crate::error_code::ErrorCode;
 use crate::types::IoFault;
 
 mod tests;
+
+/// The small declaration the crate's tests build a core with (DI-D-107): enough that no test not
+/// about capacity reaches it, and few enough that one about capacity can.
+pub(crate) const CAPACITY: Capacity = Capacity {
+    operations: 64,
+    lineages: 16,
+    imports: 8,
+    targets: 8,
+    domains: 16,
+};
 
 /// A clock that counts its readings: each one is a number higher than the last, so a core's
 /// stamps are plain numbers and a test can read them off in order. Clones share one count.

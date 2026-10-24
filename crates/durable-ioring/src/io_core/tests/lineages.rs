@@ -10,8 +10,11 @@ use crate::types::{EndLineageRefusal, Entry, Epoch, PushRefusal, RetireLineageRe
 #[test]
 fn a_minted_lineage_is_listed_after_the_default_with_its_description() {
     let mut rig = Rig::new();
-    let minted = rig.core.mint_lineage(Some("log".to_owned()));
-    let unnamed = rig.core.mint_lineage(None);
+    let minted = rig
+        .core
+        .mint_lineage(Some("log".to_owned()))
+        .expect("room for a lineage");
+    let unnamed = rig.core.mint_lineage(None).expect("room for a lineage");
     let listed = rig.core.lineages();
     assert_eq!(listed.len(), 3);
     assert!(listed[0].is_default);
@@ -26,7 +29,7 @@ fn a_minted_lineage_is_listed_after_the_default_with_its_description() {
 #[test]
 fn lineages_seal_independently() {
     let mut rig = Rig::new();
-    let other = rig.core.mint_lineage(None);
+    let other = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write(1, 0, b"default").expect("accepted");
     rig.write_with(KEY, Epoch::new(other, 9), 7, b"other", Default::default())
         .expect("accepted");
@@ -46,7 +49,7 @@ fn lineages_seal_independently() {
 #[test]
 fn ending_a_lineage_abandons_what_was_not_durable_and_reports_it() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(KEY, Epoch::new(lineage, 3), 0, b"x", Default::default())
         .expect("accepted");
     rig.run();
@@ -74,7 +77,7 @@ fn ending_a_lineage_abandons_what_was_not_durable_and_reports_it() {
 #[test]
 fn an_ended_lineage_is_no_longer_answered_for() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     let actions = rig.core.end_lineage(lineage).expect("live");
     rig.act(actions);
     let refused = rig
@@ -114,7 +117,12 @@ fn the_default_lineage_is_neither_ended_nor_retired() {
 #[test]
 fn another_cores_lineage_is_foreign() {
     let mut rig = Rig::new();
-    let other = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
+    let other = Core::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     let foreign = other.default_lineage();
     assert!(matches!(
         rig.core.end_lineage(foreign),
@@ -129,7 +137,7 @@ fn another_cores_lineage_is_foreign() {
 #[test]
 fn a_lineage_with_uncovered_writes_is_busy_until_they_are_covered() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(KEY, Epoch::new(lineage, 1), 0, b"x", Default::default())
         .expect("accepted");
     let Err(RetireLineageRefusal::Busy(busy)) = rig.core.retire_lineage(lineage) else {
@@ -151,7 +159,7 @@ fn a_lineage_with_uncovered_writes_is_busy_until_they_are_covered() {
 #[test]
 fn a_lineage_whose_epoch_gates_an_operation_is_busy() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(
         KEY,
         rig.epoch(1),
@@ -169,7 +177,7 @@ fn a_lineage_whose_epoch_gates_an_operation_is_busy() {
 #[test]
 fn ending_a_lineage_ends_what_waits_on_it() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(
         KEY,
         rig.epoch(1),

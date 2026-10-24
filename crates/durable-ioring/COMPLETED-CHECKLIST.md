@@ -4493,3 +4493,27 @@ I/O core's to count. Nothing allocates beyond what it did, so the allocation rec
 say when an ended lineage is retired. New tests are in the durability `lineages`, `window`, `spans` and `files` tests and
 the core's `window` tests, among them a write, seal, end and mint loop whose places are one per commit still out.
 Sabotage: fourteen entries added, thirteen caught and one surviving control; three entries re-anchored.
+
+## Moved 2026-10-24 06:50:34 -04:00 -- DI-23.5.2.2: capacity declared, and refused past
+
+### <a id="di-23522"></a>DI-23.5.2.2 -- A `Capacity` of five counts, with no library default, is declared at construction, and a push, a mint, an import and an `add_target` are refused past it. *(completed 2026-10-24 06:50:34 -04:00)*
+
+**Declare capacity, construct fallibly, refuse past it**: a `Capacity` of `operations`, `lineages`, `imports`, `targets` and
+`domains`, which the library gives no default (the engineer: "agree no default in library"), with examples in the
+documentation; construction in the core and in `Dioring` fallible; a push, a mint, an import and an `add_target` refused at
+capacity, and a provider serving more domains than declared refused at construction. Breaking for this crate and
+`win-durable-ioring`: `mint_lineage` returns a `Result` in the trait.
+
+What was done. [capacity.rs](src/capacity.rs) holds `Capacity`, `Limit`, `AtCapacity` and `ConstructionError`, which
+replaces `DuplicateDomain`. `DurableIoCore::new` and `with_provider` take the declaration and refuse as
+`NoLineages`, `DuplicateDomain` and `TooManyDomains`, in that order. A push is refused as `PushRefusal::AtCapacity` when the
+window holds as many places as `operations`, after the core's own checks and before the backend's, so it reserves nothing and
+spends no identity; `mint_lineage` returns `Result<_, AtCapacity>` in the core and in `DurableRing`; `import_failure`
+returns the new `ImportError`, which names an unknown lineage first and being at capacity second, counting only imported
+failures; `add_target` hands the description back with `AddTargetCause::AtCapacity`, counting only the domains the core has
+not been given and interning none when it refuses. The driver's `Setup` carries the declaration, and a construction
+refused for it hands every file back (`SetupRefusal::Construction`, `SetupRefusal::AtCapacity`); its `add_target` attaches
+nothing when the core refuses. Allocation records did not move. The tests build with a small named declaration; the README's
+examples and the blocking-push example state theirs. New tests are in the core's `capacity` tests and the driver's.
+Sabotage: twenty entries added, all caught. "Too large or a refused allocation" waits for DI-23.5.2.3, which makes the
+allocations; the contract's prose on the refusals is DI-23.8.2's.

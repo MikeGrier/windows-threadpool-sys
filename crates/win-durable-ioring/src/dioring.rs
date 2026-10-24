@@ -56,10 +56,11 @@ use durable_ioring::driver::first_repeat;
 use durable_ioring::driver::{Answer, DomainCall};
 use durable_ioring::driver::{Engine, EngineGuard};
 use durable_ioring::{
-    Access, AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal,
-    Epoch, EpochState, FailureInfo, FlushDomain, ImportScope, Imported, IoFault, IoTargetKey,
-    Leftovers, LineageInfo, ReadOptions, RemoveTargetError, Resolution, ResolveError,
-    RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
+    Access, AddTargetCause, AddTargetError, AtCapacity, Capacity, ConstructionError,
+    DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState, FailureInfo,
+    FlushDomain, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftovers, LineageInfo,
+    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
+    RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 use durable_ioring::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle};
 use durable_ioring::{
@@ -146,6 +147,10 @@ pub struct Setup<'env, 'pool, E: EpochId + 'static, R> {
     /// The consumer's durability provider, if any. `None` leaves every domain to the built-in
     /// default.
     pub provider: Option<Box<dyn DurabilityProvider<WindowsIds<E>>>>,
+    /// What the instance holds at most of each thing it counts, and refuses past (DI-D-107). The
+    /// library gives it no default. The targets given here count against it as targets added later
+    /// do, and so do the provider's domains and those the targets declare.
+    pub capacity: Capacity,
     /// Where the instance's diagnostics go (DI-D-51). `None` is the driver's default, [`EtwDiagnostics`]: the instance's begin and
     /// end events go to the ETW provider `durable-ioring-events`, for a session that is listening, and cost a test of whether one
     /// is when none is. Any sink can be given in its place, [`NoDiagnostics`](durable_ioring::NoDiagnostics) among them.
@@ -230,6 +235,12 @@ pub enum SetupRefusal {
     },
     /// The provider named a domain twice.
     DuplicateProviderDomain(FlushDomain),
+    /// The capacity is not one an instance can be built with: it declares no lineage, or fewer
+    /// domains than the provider serves (DI-D-107).
+    Construction(ConstructionError),
+    /// A target given at construction would take the instance past its capacity: past the targets
+    /// declared, or the domains (DI-D-107).
+    AtCapacity(AtCapacity),
     /// Creating the ring, making a registration, or wiring the ring's delivery failed.
     Ring(io::Error),
 }
@@ -352,6 +363,7 @@ where
             files,
             buffers,
             provider,
+            capacity,
             diagnostics,
             delivery,
         } = setup;
@@ -396,11 +408,26 @@ where
                 });
             }
         };
-        let mut core = if provider.is_some() {
-            DurableIoCore::with_provider(clock, Arc::clone(&diagnostics), provider_domains)
-                .expect("a domain named twice was refused above")
+        let built = if provider.is_some() {
+            DurableIoCore::with_provider(
+                clock,
+                Arc::clone(&diagnostics),
+                capacity,
+                provider_domains,
+            )
         } else {
-            DurableIoCore::new(clock, Arc::clone(&diagnostics))
+            DurableIoCore::new(clock, Arc::clone(&diagnostics), capacity)
+        };
+        let mut core = match built {
+            Ok(core) => core,
+            Err(refused) => {
+                return Err(SetupError {
+                    reason: SetupRefusal::Construction(refused),
+                    files,
+                    buffers: Some(buffers),
+                    provider,
+                });
+            }
         };
         let keys: Vec<IoTargetKey> = files.iter().map(|f| f.key).collect();
         // Kept so that a failed construction hands the files back as they were given.
@@ -409,8 +436,20 @@ where
             .filter_map(|f| f.declared.map(|declared| (f.key, declared)))
             .collect();
         for file in &files {
-            core.add_target(file.key, file.target.describe())
-                .expect("the keys were checked unique above");
+            if let Err(refused) = core.add_target(file.key, file.target.describe()) {
+                let reason = match refused.cause {
+                    AddTargetCause::AtCapacity(at) => SetupRefusal::AtCapacity(at),
+                    _ => {
+                        unreachable!("the keys were checked unique, and the access covered, above")
+                    }
+                };
+                return Err(SetupError {
+                    reason,
+                    files,
+                    buffers: Some(buffers),
+                    provider,
+                });
+            }
         }
         let targets = files
             .into_iter()
@@ -576,10 +615,13 @@ where
         if let Some(cause) = cause {
             return Err(AddTargetError { key, target, cause });
         }
-        engine
-            .core
-            .add_target(key, target.describe())
-            .expect("the key is free, checked above");
+        if let Err(refused) = engine.core.add_target(key, target.describe()) {
+            return Err(AddTargetError {
+                key,
+                target,
+                cause: refused.cause,
+            });
+        }
         engine
             .backend
             .attach(key, target)
@@ -716,9 +758,9 @@ where
         self.default.clone()
     }
 
-    fn mint_lineage(&mut self, description: Option<String>) -> LineageHandle {
-        let lineage = self.engine().core.mint_lineage(description);
-        LineageHandle::mint(lineage, home(&self.hub))
+    fn mint_lineage(&mut self, description: Option<String>) -> Result<LineageHandle, AtCapacity> {
+        let lineage = self.engine().core.mint_lineage(description)?;
+        Ok(LineageHandle::mint(lineage, home(&self.hub)))
     }
 
     fn lineages(&self) -> Vec<LineageInfo<Self::Ids>> {
@@ -807,7 +849,7 @@ where
     fn import_failure(
         &mut self,
         scope: ImportScope<Self::Ids>,
-    ) -> Result<Imported<Self::Ids>, UnknownLineage<Self::Ids>> {
+    ) -> Result<Imported<Self::Ids>, ImportError<Self::Ids>> {
         let imported = {
             let mut engine = self.engine();
             engine

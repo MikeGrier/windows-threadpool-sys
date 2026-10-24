@@ -1127,6 +1127,15 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         infos
     }
 
+    /// How many unresolved failures were imported: each counts from its import until it is
+    /// resolved, a heal waiting for its seal included (DI-D-107).
+    pub(crate) fn imports(&self) -> usize {
+        self.failures
+            .iter()
+            .filter(|failure| matches!(failure.cause, FailureCause::Imported { .. }))
+            .count()
+    }
+
     /// Record a failure: its suspect set is every held write of a live lineage -- of `only`, if
     /// named -- whose file its reach covers, in push order, frozen now (DI-D-12 (b)). The one
     /// transition every cause takes.

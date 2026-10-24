@@ -8,10 +8,10 @@
 //! answer inside its call, is the driver's.
 
 use alloc::sync::Arc;
-use core::fmt;
 
 use super::{Actions, DurableIoCore, V};
 use crate::alloc_tags::{tag, tagged};
+use crate::capacity::{Capacity, ConstructionError};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::diagnostics::DiagnosticSink;
@@ -21,18 +21,6 @@ use crate::ids::Lineage;
 use crate::provider::{DomainOutcome, IoTargetWrites, ProviderPart, ProviderRequest};
 use crate::types::FlushDomain;
 
-/// A provider named a domain twice: the domain.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DuplicateDomain(pub FlushDomain);
-
-impl fmt::Display for DuplicateDomain {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "the provider named the domain {:?} twice", self.0)
-    }
-}
-
-impl core::error::Error for DuplicateDomain {}
-
 impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// A core whose consumer's provider serves `domains`, read once, as [`new`](Self::new) builds
     /// one otherwise. A target declaring a domain it serves has that domain's part of each seal
@@ -41,16 +29,29 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     ///
     /// # Errors
     ///
-    /// [`DuplicateDomain`] for a domain named twice.
+    /// [`ConstructionError::NoLineages`] if `capacity` declares no lineage;
+    /// [`ConstructionError::DuplicateDomain`] for a domain named twice; and
+    /// [`ConstructionError::TooManyDomains`] if the provider serves more domains than `capacity`
+    /// declares (DI-D-107).
     pub fn with_provider(
         clock: K,
         diagnostics: Arc<dyn DiagnosticSink>,
+        capacity: Capacity,
         domains: Vec<FlushDomain>,
-    ) -> Result<Self, DuplicateDomain> {
-        if let Some(repeat) = first_repeat(domains.iter().cloned()) {
-            return Err(DuplicateDomain(repeat));
+    ) -> Result<Self, ConstructionError> {
+        if capacity.lineages == 0 {
+            return Err(ConstructionError::NoLineages);
         }
-        let mut core = Self::new(clock, diagnostics);
+        if let Some(repeat) = first_repeat(domains.iter().cloned()) {
+            return Err(ConstructionError::DuplicateDomain(repeat));
+        }
+        if domains.len() > capacity.domains {
+            return Err(ConstructionError::TooManyDomains {
+                served: domains.len(),
+                declared: capacity.domains,
+            });
+        }
+        let mut core = Self::new(clock, diagnostics, capacity)?;
         let served = intern_all(&mut core.domains, domains.iter().cloned());
         let mut named: Vec<_> = tagged(tag::IO_CORE_WITH_PROVIDER_NAMED, || {
             domains

@@ -3,16 +3,17 @@
 //! instance, and the inventory.
 
 use super::{Actions, DurableIoCore, V};
+use crate::capacity::{AtCapacity, Limit};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::domains::import_reach;
 use crate::ids::{FailureId, FailureToken};
 use crate::types::{
-    FailureCause, FailureInfo, ImportScope, Imported, Resolution, ResolveError, UnknownLineage,
+    FailureCause, FailureInfo, ImportError, ImportScope, Imported, Resolution, ResolveError,
 };
 
-/// What an import recorded and made due, or that the lineage it named is not this core's live one.
-type ImportAnswer<E, B, K> = Result<(Imported<V<E, K>>, Actions<E, B, K>), UnknownLineage<V<E, K>>>;
+/// What an import recorded and made due, or why it was refused.
+type ImportAnswer<E, B, K> = Result<(Imported<V<E, K>>, Actions<E, B, K>), ImportError<V<E, K>>>;
 
 impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// Resolve failures, validated whole and applied together: a refused call changes nothing and
@@ -35,10 +36,18 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     ///
     /// # Errors
     ///
-    /// [`UnknownLineage`] for an [`ImportScope::Lineage`] that is not this core's live one.
+    /// [`ImportError::UnknownLineage`] for an [`ImportScope::Lineage`] that is not this core's live
+    /// one, and [`ImportError::AtCapacity`] when the core holds as many unresolved imported
+    /// failures as it was built for (DI-D-107); nothing is recorded.
     pub fn import_failure(&mut self, scope: ImportScope<V<E, K>>) -> ImportAnswer<E, B, K> {
         let (reach, only, unmatched) =
             import_reach(&scope, &self.domains, |lineage| self.is_live(lineage))?;
+        if self.durability.imports() >= self.capacity.imports {
+            return Err(ImportError::AtCapacity(AtCapacity {
+                limit: Limit::Imports,
+                declared: self.capacity.imports,
+            }));
+        }
         let was_empty = self.queue.is_empty();
         let (failure, due) = self
             .durability

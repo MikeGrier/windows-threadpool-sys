@@ -220,8 +220,11 @@ fn closing_an_idle_instance_hands_back_its_live_lineages_with_their_marks() {
     assert_eq!(harness.seal(2), DurabilityRequest::Submitted);
     let two = harness.epoch(2);
     expect_durable(&mut harness, two);
-    let log = harness.ring.mint_lineage(Some("log".to_owned()));
-    let gone = harness.ring.mint_lineage(None);
+    let log = harness
+        .ring
+        .mint_lineage(Some("log".to_owned()))
+        .expect("room for a lineage");
+    let gone = harness.ring.mint_lineage(None).expect("room for a lineage");
     harness.ring.end_lineage(gone).expect("end it");
     let default = harness.lineage();
 
@@ -413,7 +416,7 @@ fn an_answer_for_a_completion_never_made_panics_naming_it() {
 
 /// A lineage minted on `ring` and ended through its last handle, so that it is no longer live.
 fn ended_lineage(ring: &mut super::Ring) -> durable_ioring::Lineage {
-    let handle = ring.mint_lineage(None);
+    let handle = ring.mint_lineage(None).expect("room for a lineage");
     let lineage = handle.lineage();
     ring.end_lineage(handle)
         .expect("end the minted lineage through its last handle");

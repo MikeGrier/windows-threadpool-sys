@@ -88,7 +88,9 @@ fn a_gate_in_another_core_is_refused() {
     let other = super::Core::new(
         super::Ticks::default(),
         std::sync::Arc::new(crate::NoDiagnostics),
-    );
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     let foreign = Epoch::new(other.default_lineage(), 1);
     let refused = rig
         .write_with(KEY, rig.epoch(1), 0, b"x", gated(foreign))
@@ -100,7 +102,7 @@ fn a_gate_in_another_core_is_refused() {
 #[test]
 fn a_gate_on_an_ended_lineage_is_refused() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     let actions = rig_end(&mut rig, lineage);
     rig.act(actions);
     let refused = rig
@@ -177,7 +179,7 @@ fn a_held_operation_whose_gate_is_abandoned_never_issues() {
 #[test]
 fn a_held_write_whose_own_lineage_ends_never_issues() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write(1, 0, b"x").expect("accepted");
     let gate = rig.epoch(1);
     rig.write_with(KEY, Epoch::new(lineage, 1), 0, b"mine", gated(gate))
@@ -196,8 +198,8 @@ fn a_held_write_whose_own_lineage_ends_never_issues() {
 #[test]
 fn a_write_closing_a_gate_cycle_is_refused() {
     let mut rig = Rig::new();
-    let a = rig.core.mint_lineage(None);
-    let b = rig.core.mint_lineage(None);
+    let a = rig.core.mint_lineage(None).expect("room for a lineage");
+    let b = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(KEY, Epoch::new(a, 1), 0, b"a", gated(Epoch::new(b, 5)))
         .expect("held");
     let refused = rig
@@ -213,7 +215,7 @@ fn a_write_closing_a_gate_cycle_is_refused() {
 #[test]
 fn a_target_is_busy_while_an_operation_waits_for_a_gate() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write(1, 0, b"x").expect("accepted");
     rig.run();
     for id in [4, 2] {
@@ -230,7 +232,7 @@ fn a_target_is_busy_while_an_operation_waits_for_a_gate() {
 #[test]
 fn close_hands_back_held_operations_in_push_order() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     let gate = Epoch::new(lineage, 1);
     let first = rig
         .write_with(KEY, rig.epoch(1), 0, b"one", gated(gate))
@@ -252,7 +254,7 @@ fn a_released_operation_the_backend_refuses_is_kept_and_emitted_again() {
     let mut rig = Rig::with_queues(1, 16);
     rig.seal(1);
     rig.entries();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(KEY, Epoch::new(lineage, 1), 0, b"g", WriteOptions::new())
         .expect("accepted");
     rig.backend.submit().expect("submit");

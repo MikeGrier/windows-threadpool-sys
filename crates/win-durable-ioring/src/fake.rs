@@ -11,10 +11,10 @@ use win_sync_sys::{Event, ResetMode};
 use crate::memory::MemoryTarget;
 use durable_ioring::driver::InstanceId;
 use durable_ioring::{
-    AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
-    EpochState, FailureInfo, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo,
-    OpCompletion, OpKind, Outcome, ReadKey, ReadOptions, RemoveTargetError, Resolution,
-    ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag, TargetKey,
+    AddTargetError, AtCapacity, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,
+    Epoch, EpochState, FailureInfo, ImportError, ImportScope, Imported, IoTargetKey, Leftovers,
+    LineageInfo, OpCompletion, OpKind, Outcome, ReadKey, ReadOptions, RemoveTargetError,
+    Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag, TargetKey,
     UnknownLineage, WriteKey, WriteOptions,
 };
 use durable_ioring::{DurableRing, EntryOf, ErrorReport, IoFault, PushResult, StaticError};
@@ -138,7 +138,7 @@ impl DurableRing for Fake {
         self.default.clone()
     }
 
-    fn mint_lineage(&mut self, _description: Option<String>) -> LineageHandle {
+    fn mint_lineage(&mut self, _description: Option<String>) -> Result<LineageHandle, AtCapacity> {
         unimplemented!("the fake has only its default lineage")
     }
 
@@ -213,7 +213,7 @@ impl DurableRing for Fake {
         unimplemented!("the fake observes no failures")
     }
 
-    fn import_failure(&mut self, _scope: ImportScope<V>) -> Result<Imported<V>, UnknownLineage<V>> {
+    fn import_failure(&mut self, _scope: ImportScope<V>) -> Result<Imported<V>, ImportError<V>> {
         unimplemented!("the fake observes no failures")
     }
 

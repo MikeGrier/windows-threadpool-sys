@@ -66,7 +66,7 @@ fn the_replacing_durable_goes_to_the_tail_not_into_the_olders_place() {
 #[test]
 fn each_lineage_keeps_its_own_un_popped_durable() {
     let mut rig = Rig::new();
-    let minted = rig.core.mint_lineage(None);
+    let minted = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.seal(1);
     rig.seal_in(minted, 1);
     rig.seal(2);

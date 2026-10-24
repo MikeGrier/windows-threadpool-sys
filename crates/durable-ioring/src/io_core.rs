@@ -41,9 +41,10 @@ use std::collections::HashMap;
 
 use crate::alloc_tags::{tag, tagged};
 use crate::backend::{
-    Completion, DuplicateTarget, IoBackend, Refused, Submission, SubmissionData, SubmissionOp,
-    SubmissionToken, refusal_fault,
+    Completion, IoBackend, Refused, Submission, SubmissionData, SubmissionOp, SubmissionToken,
+    refusal_fault,
 };
+use crate::capacity::{AtCapacity, Capacity, ConstructionError, Limit};
 use crate::clock::StampClock;
 use crate::contract::{EpochId, Identities};
 use crate::diagnostics::DiagnosticSink;
@@ -55,16 +56,14 @@ use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::io_target::IoTargetDescription;
 use crate::provider::ProviderRequest;
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, FlushDomain, HeldOperation, IoTargetBusy,
-    IoTargetKey, Leftovers, OpCompletion, OpKind, Outcome, PushError, PushRefusal, ReadOptions,
-    RemoveTargetError, SealError, UnknownLineage, WriteOptions,
+    AddTargetCause, AddTargetError, DurabilityRequest, Entry, Epoch, EpochState, FlushDomain,
+    HeldOperation, IoTargetBusy, IoTargetKey, Leftovers, OpCompletion, OpKind, Outcome, PushError,
+    PushRefusal, ReadOptions, RemoveTargetError, SealError, UnknownLineage, WriteOptions,
 };
 
 mod failures;
 mod lineages;
 mod provider;
-
-pub use provider::DuplicateDomain;
 
 #[cfg(test)]
 mod tests;
@@ -160,6 +159,8 @@ struct TargetRecord {
 /// the clock failures are stamped with.
 pub struct DurableIoCore<E: EpochId + 'static, B, C, K: StampClock> {
     instance: InstanceId,
+    /// What the consumer declared when the core was built, and what is refused past (DI-D-107).
+    capacity: Capacity,
     durability: Durability<E, IoTargetKey, K::Instant, K>,
     targets: HashMap<IoTargetKey, TargetRecord>,
     /// Every flush domain any target or the provider was declared with, interned.
@@ -185,11 +186,23 @@ pub struct DurableIoCore<E: EpochId + 'static, B, C, K: StampClock> {
 
 impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// A core with no targets, no provider, and only its default lineage, stamping failures with
-    /// `clock` and reporting to `diagnostics`.
-    pub fn new(clock: K, diagnostics: Arc<dyn DiagnosticSink>) -> Self {
+    /// `clock` and reporting to `diagnostics`, and refusing past `capacity` (DI-D-107).
+    ///
+    /// # Errors
+    ///
+    /// [`ConstructionError::NoLineages`] if `capacity` declares no lineage, the default being one.
+    pub fn new(
+        clock: K,
+        diagnostics: Arc<dyn DiagnosticSink>,
+        capacity: Capacity,
+    ) -> Result<Self, ConstructionError> {
+        if capacity.lineages == 0 {
+            return Err(ConstructionError::NoLineages);
+        }
         let instance = InstanceId::next();
-        Self {
+        Ok(Self {
             instance,
+            capacity,
             durability: Durability::new(instance, clock, diagnostics),
             targets: HashMap::new(),
             domains: HashMap::new(),
@@ -202,7 +215,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             unpushed: Vec::new(),
             next_op: 0,
             next_token: 0,
-        }
+        })
     }
 
     /// The default lineage, which every core has and which never ends.
@@ -216,17 +229,45 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     ///
     /// # Errors
     ///
-    /// [`DuplicateTarget`], handing the description back, if `key` is in use.
+    /// [`AddTargetError`], handing the description back, with [`AddTargetCause::KeyInUse`] if `key`
+    /// is in use, and with [`AddTargetCause::AtCapacity`] if the core holds as many targets as it
+    /// was built for, or the description's domains, those it has not been given before, would take
+    /// it past the domains it was built for (DI-D-107). A refusal changes nothing.
     pub fn add_target(
         &mut self,
         key: IoTargetKey,
         description: IoTargetDescription,
-    ) -> Result<(), DuplicateTarget<IoTargetDescription>> {
-        if self.targets.contains_key(&key) {
-            return Err(DuplicateTarget {
+    ) -> Result<(), AddTargetError<IoTargetDescription>> {
+        let refuse = |description, cause| {
+            Err(AddTargetError {
                 key,
                 target: description,
-            });
+                cause,
+            })
+        };
+        if self.targets.contains_key(&key) {
+            return refuse(description, AddTargetCause::KeyInUse);
+        }
+        let declared = &description.flush_domains;
+        let fresh = declared
+            .iter()
+            .enumerate()
+            .filter(|(at, domain)| {
+                !self.domains.contains_key(*domain) && !declared[..*at].contains(domain)
+            })
+            .count();
+        let limit = if self.targets.len() >= self.capacity.targets {
+            Some((Limit::Targets, self.capacity.targets))
+        } else if self.domains.len() + fresh > self.capacity.domains {
+            Some((Limit::Domains, self.capacity.domains))
+        } else {
+            None
+        };
+        if let Some((limit, declared)) = limit {
+            return refuse(
+                description,
+                AddTargetCause::AtCapacity(AtCapacity { limit, declared }),
+            );
         }
         let domains = intern_all(&mut self.domains, description.flush_domains.iter().cloned());
         let routing = routing(&domains, &self.served);
@@ -667,6 +708,16 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 });
             }
         };
+        if self.durability.window_places() >= self.capacity.operations {
+            return Err(PushError {
+                reason: PushRefusal::AtCapacity(AtCapacity {
+                    limit: Limit::Operations,
+                    declared: self.capacity.operations,
+                }),
+                buffer: owned_op(op),
+                context,
+            });
+        }
         if let (Some(at), Some(named)) = (waiting, gate) {
             if let Err(cause) = tagged(tag::IO_CORE_ISSUE_BACKEND_CHECK, || {
                 backend.check(target, &op)

@@ -8,7 +8,7 @@ use super::empty;
 use super::pushes::{ADDED, GIVEN, Harness, given, instance, temp};
 use durable_ioring::driver::Home;
 use durable_ioring::{
-    DurabilityRequest, EndLineageRefusal, Entry, Epoch, ImportScope, Resolution,
+    DurabilityRequest, EndLineageRefusal, Entry, Epoch, ImportError, ImportScope, Resolution,
     RetireLineageRefusal, UnknownLineage,
 };
 use durable_ioring::{DurableRing, Identities, Lin};
@@ -34,7 +34,10 @@ fn two(given_temp: &super::TempFile, added_temp: &super::TempFile) -> (Harness, 
         vec![given(GIVEN, given_temp), given(ADDED, added_temp)],
         Vec::new(),
     ));
-    let minted = harness.ring.mint_lineage(Some("log".to_owned()));
+    let minted = harness
+        .ring
+        .mint_lineage(Some("log".to_owned()))
+        .expect("room for a lineage");
     (harness, minted)
 }
 
@@ -110,7 +113,7 @@ fn releasing_the_last_handle_ends_the_lineage_and_a_copy_keeps_it() {
     );
     assert_eq!(
         harness.ring.import_failure(ImportScope::Lineage(lineage)),
-        Err(UnknownLineage(lineage))
+        Err(ImportError::UnknownLineage(UnknownLineage(lineage)))
     );
     harness.finish();
 }
@@ -137,7 +140,7 @@ fn end_lineage_ends_through_the_last_handle_and_hands_back_any_other() {
         "the refused copy, dropped, was not the last"
     );
 
-    let foreign = empty().mint_lineage(None);
+    let foreign = empty().mint_lineage(None).expect("room for a lineage");
     let error = harness.ring.end_lineage(foreign).expect_err("foreign");
     assert!(matches!(error.reason, EndLineageRefusal::Foreign(_)));
 
@@ -229,7 +232,7 @@ fn retire_lineage_is_refused_while_anything_holds_it_and_abandons_nothing() {
         .retire_lineage(harness.default.clone())
         .expect_err("the default");
     assert!(matches!(error.reason, RetireLineageRefusal::Default));
-    let foreign = empty().mint_lineage(None);
+    let foreign = empty().mint_lineage(None).expect("room for a lineage");
     let error = harness.ring.retire_lineage(foreign).expect_err("foreign");
     assert!(matches!(error.reason, RetireLineageRefusal::Foreign(_)));
 
@@ -280,7 +283,7 @@ fn a_handle_outliving_its_instance_releases_harmlessly() {
     let ring = instance(Vec::new(), Vec::new());
     let minted = {
         let mut ring = ring;
-        let minted = ring.mint_lineage(None);
+        let minted = ring.mint_lineage(None).expect("room for a lineage");
         drop(ring);
         minted
     };
