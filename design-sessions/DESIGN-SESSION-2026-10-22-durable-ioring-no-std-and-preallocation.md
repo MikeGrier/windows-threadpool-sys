@@ -324,6 +324,20 @@ maximum; (c) leave it growable until DI-23.10. The engineer: "2: a".
 The assistant also proposed the refusals' shapes and what counts against each limit; the engineer: "seem ok we'll work
 out any incongruities if needed". All three are recorded in DI-D-107, and DI-23.5.2 moves after DI-23.9.
 
+## The window holds uncovered writes (continued 2026-10-23)
+
+Starting DI-23.6, the assistant raised that a seal can divide a file's unsealed writes -- a write at epoch 3 and one at
+7, then a seal through 5 -- so one charge paid by the first write would back two entries, and offered charging per
+(lineage, file, epoch) instead. The engineer: "I don't understand the functional effect of (a)". There was none: the
+entries' storage is derived from `operations`, and an entry holds at least one write, so in the worst case either rule
+needs one entry per outstanding write. The assistant withdrew the choice.
+
+Tracing it found a real gap. DI-D-107 counted an operation until its completion was popped, but the core keeps a write's
+record until it is covered, to name it in a later failure's suspect set; a consumer pushing and popping without sealing
+would grow that record without bound. Offered: (i) a write holds its place in the window until it is no longer
+uncovered, or (ii) a separate declared count of uncovered writes. The engineer: "then (i) seems logical". Recorded in
+DI-D-107.
+
 ## Working positions and open questions (not decisions)
 
 - **The failure's slot.** How a failure's fixed storage holds its suspect set and markings, and how the events and the

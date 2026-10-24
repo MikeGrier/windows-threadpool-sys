@@ -2150,8 +2150,17 @@ notes when it is created.
   incongruities if needed"): a full window is `PushRefusal::AtCapacity`; `mint_lineage` returns a `Result`, in the core and
   in [`DurableRing`](src/contract.rs); `import_failure`'s error names an unknown lineage or being at capacity;
   `AddTargetError` gains being at capacity; construction takes the declaration and fails as too large or for a refused
-  allocation. An operation counts from its push, held for a gate included, until its completion is popped; a lineage until
-  it is retired, so an ended one not yet retired counts; an import until it is resolved.
+  allocation. A lineage counts until it is retired, so an ended one not yet retired counts; an import until it is resolved.
+- **An operation holds its place in the window from its push, held for a gate included, until its completion is popped
+  and, for a write, until it is no longer uncovered** -- covered by its seal, failed, or let go with its ended lineage. The
+  engineer, 2026-10-23: "then (i) seems logical", over a separate declared count of uncovered writes. The core keeps a
+  write's record until then, to name it in a later failure's suspect set, so counting only until the pop would leave a
+  consumer that pushes and pops without sealing growing that record without bound. The window therefore covers written but
+  unsealed data as well as I/O in flight, as unresolved failures already shrink it ([DI-D-100](#di-d-100)).
+- **Every per-seal record is bounded by the window.** A (lineage, file, seal span) entry exists only while a write is in
+  it, so there are never more entries than uncovered writes, however a seal divides an unsealed span; a commit in flight
+  and a file's flush pair each belong to one entry, and a seal's domain parts number at most the provider's domains. So
+  the storage these need is derived from `operations` and the provider's domains, and none of them is ever refused for.
 - **Derived, not declared:** the completion queue's size and the storage an observed failure needs, from the declared ones:
   every queued entry traces to an operation, a lineage or a failure, and an observed failure holds its suspect writes'
   capacity ([DI-D-100](#di-d-100)).
