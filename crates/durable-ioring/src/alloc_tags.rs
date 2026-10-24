@@ -155,6 +155,9 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_SERVED: Tag = Tag::new("durability::new::served");
     pub(crate) const DURABILITY_PUSHED_IN_FLIGHT_BY_EPOCH: Tag =
         Tag::new("durability::pushed::in_flight_by_epoch");
+    pub(crate) const DURABILITY_ADMIT_WINDOW: Tag = Tag::new("durability::admit::window");
+    pub(crate) const DURABILITY_PUSHED_WINDOW: Tag = Tag::new("durability::pushed::window");
+    pub(crate) const DURABILITY_OBSERVE_WINDOW: Tag = Tag::new("durability::observe::window");
     pub(crate) const DURABILITY_PUSHED_SPAN: Tag = Tag::new("durability::pushed::span");
     pub(crate) const DURABILITY_PUSHED_WRITE: Tag = Tag::new("durability::pushed::write");
     pub(crate) const DURABILITY_RESOLVE_ABANDONED: Tag = Tag::new("durability::resolve::abandoned");

@@ -31,6 +31,7 @@ mod pairs;
 mod provider;
 mod refusals;
 mod scripted;
+mod window;
 
 const KEY: IoTargetKey = IoTargetKey(1);
 const OTHER: IoTargetKey = IoTargetKey(2);

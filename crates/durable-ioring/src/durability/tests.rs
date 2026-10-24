@@ -45,6 +45,8 @@ mod files;
 mod spans;
 // Seals that cover no writes: DI-23.7.
 mod empties;
+// The submit window's places: DI-23.8.1.
+mod window;
 
 /// The core, answering for its default lineage: the one every test here exercises unless it mints
 /// another. Every other method is the core's own, through `Deref`.

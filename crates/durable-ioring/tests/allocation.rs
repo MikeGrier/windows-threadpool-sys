@@ -543,10 +543,10 @@ fn failures() -> Vec<Measured> {
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
     ("construction, with two targets", 6),
-    ("writes, first round", 13),
+    ("writes, first round", 17),
     ("write completions, first round", 19),
     ("pops, first round", 0),
-    ("writes, second round", 2),
+    ("writes, second round", 3),
     ("write completions, second round", 16),
     ("pops, second round", 0),
     ("reads", 0),
@@ -573,10 +573,10 @@ const CLEAN: &[(&str, u64)] = &[
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
     ("construction, with two targets", 6),
-    ("writes before the failure", 32),
+    ("writes before the failure", 36),
     ("a commit failure observed", 22),
     ("failures queried", 2),
-    ("writes re-issued", 19),
+    ("writes re-issued", 20),
     ("a heal resolved", 3),
     ("the heal taking effect at the next seal", 10),
     ("writes before the import", 18),
@@ -608,6 +608,7 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         1,
     ),
     ("writes, first round", "io_core::issue::backend_push", 3),
+    ("writes, first round", "durability::admit::window", 4),
     (
         "writes, first round",
         "durability::pushed::in_flight_by_epoch",
@@ -628,6 +629,7 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         16,
     ),
     ("writes, second round", "durability::pushed::write", 2),
+    ("writes, second round", "durability::admit::window", 1),
     (
         "write completions, second round",
         "durability::advance::live",
@@ -831,6 +833,7 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "io_core::issue::backend_push",
         3,
     ),
+    ("writes before the failure", "durability::admit::window", 4),
     (
         "writes before the failure",
         "durability::pushed::in_flight_by_epoch",
@@ -896,6 +899,7 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     ("failures queried", "durability::failures::infos", 1),
     ("failures queried", "durability::failures::markings", 1),
     ("writes re-issued", "durability::pushed::write", 3),
+    ("writes re-issued", "durability::admit::window", 1),
     ("writes re-issued", "durability::advance::live", 16),
     ("a heal resolved", "durability::resolve::heal_pending", 2),
     ("a heal resolved", "durability::advance::live", 1),

@@ -1948,6 +1948,16 @@ refusal to exist, follow DI-23.5.2 (DI-23.8.2). A write holds **one place howeve
 until its completion is popped, the write while it is uncovered ([DI-D-107](#di-d-107)), and each unresolved failure
 suspecting it. The count is per write, so a failure's suspect set and markings never exceed the places it holds.
 
+**As built** (DI-23.8.1, the assistant's, 2026-10-23): the places are in [durability/window.rs](src/durability/window.rs), one
+per operation sequence number, with a flag for the operation, a flag for the write while it is uncovered, and a count of
+the unresolved failures suspecting it; the place ends when none is left. The operation's hold begins when a push is
+accepted and ends when its completion is popped, for a read as for a write, and a held operation begins it when it is
+held. The write's begins where the core records it uncovered and ends where it leaves that record. A failure's begins when
+it is observed, for each write of its suspect set, and ends when it is abandoned or its heal takes effect. Nothing is
+refused yet: `DurableIoCore::window_places` reports the count, and DI-23.5.2 compares it with the declared `operations`.
+A completed write, a failed one and one whose lineage ended all stop holding as uncovered but keep their place while a
+failure suspects them, which is how a failure's suspect set and markings stay within the places it holds.
+
 ## <a id="di-d-101"></a>DI-D-101: an un-popped `Durable` is replaced by a later one, which goes to the tail
 
 **Decided, not yet implemented: scheduled as DI-23.9 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "ok so coalescing Durable is approved!"

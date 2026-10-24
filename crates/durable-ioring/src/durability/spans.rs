@@ -12,6 +12,7 @@
 use alloc::sync::Arc;
 use std::collections::HashMap;
 
+use super::window::{Holder, Window};
 use super::{Durability, Key, Stage, Write};
 use crate::clock::Instant;
 use crate::contract::EpochId;
@@ -83,23 +84,34 @@ pub(super) fn leave(spans: &mut Spans, key: SpanKey) -> bool {
     true
 }
 
+/// `write` is no longer uncovered: out of its span's entry, and its hold on its place released. What
+/// about that was inconsistent, if anything.
+fn forget<E, T>(
+    spans: &mut Spans,
+    window: &mut Window,
+    write: &Write<E, T>,
+) -> Option<&'static str> {
+    let mut lost = None;
+    if !leave(spans, (write.lineage, write.file, Span::of(write.stage))) {
+        lost = Some("an uncovered write was in no span");
+    }
+    if let Err(what) = window.release(write.op.seq, Holder::Uncovered) {
+        lost = lost.or(Some(what));
+    }
+    lost
+}
+
 impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// Let go every uncovered write `leaves` picks, each out of its span's entry.
     pub(super) fn let_go(&mut self, mut leaves: impl FnMut(&Write<E, T>) -> bool) {
         let mut lost = None;
         for (_, write) in self.writes.extract_if(.., |_, write| leaves(write)) {
-            if !leave(
-                &mut self.spans,
-                (write.lineage, write.file, Span::of(write.stage)),
-            ) {
-                lost = Some(write.op);
+            if let Some(what) = forget(&mut self.spans, &mut self.window, &write) {
+                lost.get_or_insert((what, write.op));
             }
         }
-        if let Some(op) = lost {
-            self.inconsistent(
-                "an uncovered write was in no span",
-                format_args!("write {op:?}"),
-            );
+        if let Some((what, op)) = lost {
+            self.inconsistent(what, format_args!("write {op:?}"));
         }
     }
 
@@ -108,14 +120,8 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         let Some(write) = self.writes.remove(&seq) else {
             return;
         };
-        if !leave(
-            &mut self.spans,
-            (write.lineage, write.file, Span::of(write.stage)),
-        ) {
-            self.inconsistent(
-                "an uncovered write was in no span",
-                format_args!("write {:?}", write.op),
-            );
+        if let Some(what) = forget(&mut self.spans, &mut self.window, &write) {
+            self.inconsistent(what, format_args!("write {:?}", write.op));
         }
     }
 

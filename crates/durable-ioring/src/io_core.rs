@@ -490,9 +490,46 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         }
     }
 
-    /// The next entry, if there is one.
+    /// The next entry, if there is one. Popping an operation's completion lets go of the place the
+    /// operation held in the submit window.
     pub fn pop(&mut self) -> Option<Entry<V<E, K>, B, C>> {
-        self.queue.pop_front()
+        let entry = self.queue.pop_front()?;
+        if let Entry::Op(done) = &entry {
+            self.durability.popped(done.id);
+        }
+        #[cfg(test)]
+        self.check_window();
+        Some(entry)
+    }
+
+    /// How many places of the submit window are held: each operation accepted and not yet popped,
+    /// each write still uncovered, and each write an unresolved failure suspects, counted once
+    /// however many of those hold it (DI-D-100).
+    #[must_use]
+    pub fn window_places(&self) -> usize {
+        self.durability.window_places()
+    }
+
+    /// Whether the places the core's tables account for are exactly those the window holds.
+    #[cfg(test)]
+    fn check_window(&self) {
+        let mut operations: alloc::collections::BTreeSet<u64> = alloc::collections::BTreeSet::new();
+        for flight in self.in_flight.values() {
+            if let InFlight::Op { id, .. } = flight {
+                operations.insert(id.seq);
+            }
+        }
+        operations.extend(self.held.keys().copied());
+        for entry in &self.queue {
+            if let Entry::Op(done) = entry {
+                operations.insert(done.id.seq);
+            }
+        }
+        assert_eq!(
+            operations,
+            self.durability.operation_holders(),
+            "the window's places disagree with the operations in flight, held and queued"
+        );
     }
 
     /// The lineage's high-water mark: the highest epoch reported durable, or `None` if none is.
@@ -626,6 +663,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 });
             }
             let id = self.op_id();
+            self.durability.admit(id);
             let accepted = epoch.map(|epoch| self.accepted(id, target, epoch));
             self.durability.hold(id, accepted, at);
             tagged(tag::IO_CORE_ISSUE_HELD, || {
@@ -641,6 +679,8 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                     },
                 )
             });
+            #[cfg(test)]
+            self.check_window();
             return Ok(id);
         }
         let token = self.token();
@@ -651,11 +691,14 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             return Err(handed_back(refused, context));
         }
         let id = self.op_id();
+        self.durability.admit(id);
         if let Some(epoch) = epoch {
             let accepted = self.accepted(id, target, epoch);
             self.durability.pushed(accepted);
         }
         self.issued(token, id, kind, target, context, false);
+        #[cfg(test)]
+        self.check_window();
         Ok(id)
     }
 
@@ -844,6 +887,8 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             let request = self.request(call);
             tagged(tag::IO_CORE_ACT_REQUEST, || requests.push(request));
         }
+        #[cfg(test)]
+        self.check_window();
         CoreActions {
             submit,
             requests,

@@ -426,8 +426,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal's final record is the one DI-D-36 found missing: the failure leaves the inventory, and with no entry its record is lost.",
-      "find": ["                let failure = self.failures.remove(at);", "                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {", "                    due.events.push(Event::Healed {", "                        failure: failure.id,", "                        suspect: failure.suspect,", "                        markings: failure.markings,", "                    });", "                });"],
-      "replace": ["                let failure = self.failures.remove(at);", "                drop(failure);"]
+      "find": ["                let failure = self.failures.remove(at);","                self.release_suspects(&failure.suspect);","                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {","                    due.events.push(Event::Healed {","                        failure: failure.id,","                        suspect: failure.suspect,","                        markings: failure.markings,","                    });","                });"],
+      "replace": ["                let failure = self.failures.remove(at);","                self.release_suspects(&failure.suspect);","                drop(failure);"]
     },
     {
       "name": "DI-3.2.4.2: the inventory reports no markings",
@@ -770,8 +770,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "Every accepted push gets its own identity, a held one included, or two operations share one: the second held operation would replace the first, and its completion could not be told apart. Caught by the ring tests that hold two operations, through the oracle's duplicate-identity rule.",
-      "find": ["            let id = self.op_id();\n            let accepted = epoch.map("],
-      "replace": ["            let id = OpId {\n                instance: self.instance,\n                seq: self.next_op,\n            };\n            let accepted = epoch.map("]
+      "find": ["            let id = self.op_id();\n            self.durability.admit(id);\n            let accepted = epoch.map("],
+      "replace": ["            let id = OpId {\n                instance: self.instance,\n                seq: self.next_op,\n            };\n            self.durability.admit(id);\n            let accepted = epoch.map("]
     },
     {
       "name": "DI-3.2.6: a provider's success covers nothing",
@@ -1146,8 +1146,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "Only an accepted push spends an id, so accepted pushes' ids are consecutive; a refused one is undone whole (DI-D-52).",
-      "find": ["            return Err(handed_back(refused, context));\n        }\n        let id = self.op_id();\n        if let Some(epoch) = epoch {\n"],
-      "replace": ["            self.next_op += 1;\n            return Err(handed_back(refused, context));\n        }\n        let id = self.op_id();\n        if let Some(epoch) = epoch {\n"]
+      "find": ["            return Err(handed_back(refused, context));\n        }\n        let id = self.op_id();\n        self.durability.admit(id);\n        if let Some(epoch) = epoch {\n"],
+      "replace": ["            self.next_op += 1;\n            return Err(handed_back(refused, context));\n        }\n        let id = self.op_id();\n        self.durability.admit(id);\n        if let Some(epoch) = epoch {\n"]
     },
     {
       "name": "DI-3.10.3.5.2: a refused commit is dropped",
@@ -2248,8 +2248,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "The allocation test (tests/allocation.rs) pins how many allocations each phase of the core makes, so an allocation added to a path is seen. Without it the measurement DI-M23 lowers would not notice a new one. DI-D-97.",
-      "find": ["        self.queue.pop_front()\n"],
-      "replace": ["        std::hint::black_box(Vec::<u8>::with_capacity(1));\n        self.queue.pop_front()\n"]
+      "find": ["        let entry = self.queue.pop_front()?;\n"],
+      "replace": ["        std::hint::black_box(Vec::<u8>::with_capacity(1));\n        let entry = self.queue.pop_front()?;\n"]
     },
     {
       "name": "DI-23.2: a tagged call sets no tag",
@@ -2336,8 +2336,8 @@
       "file": "src/durability/spans.rs",
       "expect": "survives",
       "why": "The control. Which lost write the inconsistency names, when several are lost in one let-go, changes no state and no outcome; a test failing here would be asserting the message's choice of example.",
-      "find": ["                lost = Some(write.op);"],
-      "replace": ["                lost.get_or_insert(write.op);"]
+      "find": ["                lost.get_or_insert((what, write.op));"],
+      "replace": ["                lost = Some((what, write.op));"]
     },
     {
       "name": "DI-23.7: every seal is recorded",
@@ -2410,6 +2410,102 @@
       "why": "The control. A seal not started has a write at or below it outstanding, so no empty seal after it is ready either; the break only stops looking. Continuing changes nothing a test could see.",
       "find": ["                // after it is ready either: this only stops looking.", "                break;"],
       "replace": ["                // after it is ready either: this only stops looking.", "                continue;"]
+    },
+    {
+      "name": "DI-23.8.1: a recorded write holds no place",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A write holds its place while uncovered (DI-D-107). Without the hold the uncovered writes outgrow the places counted, so a consumer that never seals is never refused; the census sees a write with no place.",
+      "find": ["        self.hold_uncovered(op);"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.8.1: a failure holds none of the places of the writes it suspects",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A failure holds the places of its suspect writes until resolved (DI-D-100), after the writes are covered or failed. Without it a failure outlives the places that bound its suspect set.",
+      "find": ["        self.hold_suspects(&suspect);"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.8.1: an abandoned failure keeps its places",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Resolving a failure lets go of the places it held; one that never does leaves them counted for ever and shrinks the window for good.",
+      "find": ["                    let failure = self.failures.remove(index);", "                    self.release_suspects(&failure.suspect);"],
+      "replace": ["                    let failure = self.failures.remove(index);"]
+    },
+    {
+      "name": "DI-23.8.1: a healed failure keeps its places",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A heal that takes effect resolves its failure as an abandon does; its places must go with it.",
+      "find": ["                let failure = self.failures.remove(at);", "                self.release_suspects(&failure.suspect);"],
+      "replace": ["                let failure = self.failures.remove(at);"]
+    },
+    {
+      "name": "DI-23.8.1: a write that is no longer uncovered keeps its place",
+      "file": "src/durability/spans.rs",
+      "expect": "caught",
+      "why": "A write covered, failed or let go with its lineage stops holding its place as an uncovered write; one that does not leaves the places counted past the writes.",
+      "find": ["    if let Err(what) = window.release(write.op.seq, Holder::Uncovered) {"],
+      "replace": ["    if let Err(what) = Ok::<(), &'static str>(()) {"]
+    },
+    {
+      "name": "DI-23.8.1: popping an operation's completion lets go of nothing",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "An operation holds its place until its completion is popped; popping must let it go, or a consumer that pops everything still fills the window.",
+      "find": ["            self.durability.popped(done.id);"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.8.1: a held operation takes no place",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "An operation held for its gate spends an operation id and holds its place from then (DI-D-107); one that takes none lets a consumer hold any number.",
+      "find": ["            let id = self.op_id();", "            self.durability.admit(id);"],
+      "replace": ["            let id = self.op_id();"]
+    },
+    {
+      "name": "DI-23.8.1: a pushed operation takes no place",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "An operation the backend took holds its place from its push; one that takes none, a read most of all since nothing else holds a read, is uncounted.",
+      "find": ["        let id = self.op_id();", "        self.durability.admit(id);"],
+      "replace": ["        let id = self.op_id();"]
+    },
+    {
+      "name": "DI-23.8.1: two failures hold a place once between them",
+      "file": "src/durability/window.rs",
+      "expect": "caught",
+      "why": "Each unresolved failure suspecting a write holds its place, so the place stays until every one is resolved; counting them as one frees the place when the first is.",
+      "find": ["                holds.suspected += 1;"],
+      "replace": ["                holds.suspected = 1;"]
+    },
+    {
+      "name": "DI-23.8.1: a place with only a failure holding it is let go",
+      "file": "src/durability/window.rs",
+      "expect": "caught",
+      "why": "A place ends only when no holder is left. A failure's hold alone must keep it: that is how a covered, failed or popped write stays counted while it is suspected.",
+      "find": ["        self.operation || self.uncovered || self.suspected > 0"],
+      "replace": ["        self.operation || self.uncovered"]
+    },
+    {
+      "name": "DI-23.8.1: an operation admitted twice is not reported",
+      "file": "src/durability/window.rs",
+      "expect": "caught",
+      "why": "Admitting an operation twice is the core's own bookkeeping gone wrong (DI-D-46) and must be reported, not absorbed into one place.",
+      "find": ["            Holder::Operation if holds.operation => Err(\"an operation was admitted twice\"),"],
+      "replace": ["            Holder::Operation if false => Err(\"an operation was admitted twice\"),"]
+    },
+    {
+      "name": "DI-23.8.1: taking a hold by mem::take rather than mem::replace",
+      "file": "src/durability/window.rs",
+      "expect": "survives",
+      "why": "The control. Letting go of the operation's hold with replace(.., false) is take(..) spelled another way; a test failing here would be asserting the implementation.",
+      "find": ["            Holder::Operation => core::mem::take(&mut holds.operation),"],
+      "replace": ["            Holder::Operation => core::mem::replace(&mut holds.operation, false),"]
     }
   ]
 }

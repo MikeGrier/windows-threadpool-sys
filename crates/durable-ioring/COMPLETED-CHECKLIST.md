@@ -4422,3 +4422,33 @@ answered. Before building it, the assistant found that DI-D-99's claim about mar
 epoch between two empty seals; the engineer accepted the delay ("I choose a"), and a test pins it. Tests are in
 [tests/empties.rs](src/durability/tests/empties.rs). Sabotage: nine entries added, eight caught and one surviving control;
 six existing entries whose lines moved into the new module re-anchored and swept, all caught.
+
+## Moved 2026-10-23 23:56:15 -04:00 -- DI-23.8.1: the window's places counted per operation
+
+### <a id="di-2381"></a>DI-23.8.1 -- An operation holds its place in the window until its last holder lets go: its completion popped, the write covered, and each failure suspecting it resolved. *(completed 2026-10-23 23:56:15 -04:00)*
+
+Per [DI-D-100](DESIGN-NOTES.md#di-d-100) and [DI-D-107](DESIGN-NOTES.md#di-d-107), after the split the engineer asked for
+("take path a"). The item as it stood at completion:
+
+**A write holds its place in the window until its last holder lets go** (DI-D-100, DI-D-107): the places are counted per
+write, the holders being the operation until its completion is popped, the write while it is uncovered, and each
+unresolved failure suspecting it. The count refuses nothing yet: it is checked against a census under `cfg(test)`, and
+`DI-23.5.2` compares it with `operations`.
+
+What was done. [window.rs](src/durability/window.rs) holds a place per operation, with three holders -- the operation, the
+write while uncovered, and one hold for each unresolved failure suspecting it -- and ends the place with the last. The
+operation's hold is taken when a push is accepted, held for a gate included, and let go when
+[`DurableIoCore::pop`](src/io_core.rs) returns its completion; the write's is taken where the core records the write
+uncovered and let go in the one place a write leaves that record (`let_go`, from DI-23.6); a failure's is taken when it
+suspects the write and let go when it is abandoned or its heal takes effect. `DurableIoCore::window_places` reports the
+count, the one public addition, which DI-23.5.2 compares with `operations`. Under `cfg(test)` the durability core checks
+after every advance that the places the writes and failures hold are exactly the uncovered writes and the failures'
+suspect sets, and the I/O core checks after every push, completion, pop and act that the operations it holds in flight,
+held and queued are exactly the ones whose place the operation holds, so the whole suite checks the census; 22 tests cover
+the holders directly, in [window/tests.rs](src/durability/window/tests.rs),
+[tests/window.rs](src/durability/tests/window.rs) and [io_core/tests/window.rs](src/io_core/tests/window.rs). The
+allocation test's records were remeasured: the window's table grows as operations are admitted, which is what DI-23.5.2
+preallocates; holding a write uncovered or suspected finds its place already made and allocates nothing. Twelve sabotage
+entries were added to [sabotage.json](sabotage.json), eleven caught (one as a hang) and one surviving control; five
+existing entries whose lines moved were re-anchored to the same defect and swept, all caught or, for the one control,
+surviving as declared.

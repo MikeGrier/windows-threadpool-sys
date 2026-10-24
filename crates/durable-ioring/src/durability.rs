@@ -81,9 +81,11 @@ mod gates;
 mod lineages;
 mod providers;
 mod spans;
+mod window;
 
 use empties::{Empty, release_heals};
 use spans::{Span, SpanFile, Spans};
+use window::Window;
 
 pub(crate) use gates::GateState;
 #[cfg(test)]
@@ -545,6 +547,8 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     writes: BTreeMap<u64, Write<E, T>>,
     /// What each (lineage, file, seal span) holding an uncovered write is charged (DI-D-98).
     spans: Spans,
+    /// The places of the submit window each operation holds, and who holds them (DI-D-100).
+    window: Window,
     /// The unresolved failures, in observation order.
     failures: Vec<Failure<E, I>>,
     next_failure: u64,
@@ -644,6 +648,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             next_lineage: DEFAULT_LINEAGE + 1,
             writes: BTreeMap::new(),
             spans: HashMap::new(),
+            window: Window::default(),
             failures: Vec::new(),
             next_failure: 0,
             held: BTreeMap::new(),
@@ -809,6 +814,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 .or_insert_with(|| SpanFile::new(shared))
                 .writes += 1;
         });
+        self.hold_uncovered(op);
         tagged(tag::DURABILITY_PUSHED_WRITE, || {
             self.writes.insert(
                 op.seq,
@@ -1021,6 +1027,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             match resolution {
                 Resolution::Abandon => {
                     let failure = self.failures.remove(index);
+                    self.release_suspects(&failure.suspect);
                     for (lineage, epochs) in &failure.epochs {
                         if let Some(state) = self.lineages.get_mut(lineage) {
                             tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {
@@ -1164,6 +1171,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         tagged(tag::DURABILITY_OBSERVE_FAILURE, || {
             self.failures.push(failure)
         });
+        self.hold_suspects(&suspect);
         tagged(tag::DURABILITY_OBSERVE_EVENT, || {
             due.events.push(Event::Failed(Failed {
                 id,
@@ -1216,6 +1224,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             if matches!(&self.failures[at].standing, Standing::Healing { pending } if pending.is_empty())
             {
                 let failure = self.failures.remove(at);
+                self.release_suspects(&failure.suspect);
                 tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {
                     due.events.push(Event::Healed {
                         failure: failure.id,
@@ -1274,6 +1283,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         assert!(
             self.spans_agree(),
             "the span entries disagree with the uncovered writes"
+        );
+        #[cfg(test)]
+        assert!(
+            self.window_agrees(),
+            "the window's places disagree with the uncovered writes and the failures"
         );
         due
     }
