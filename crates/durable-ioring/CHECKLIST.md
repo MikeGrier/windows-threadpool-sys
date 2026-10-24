@@ -65,13 +65,57 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 - [x] **DI-23.11** -- The clean paths hand out no allocated collection: provider requests, lineages and `close()` go to visitors, and the busy refusals count what `target_holds` and `lineage_holds` name. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-2311)
 
 - [ ] **DI-23.12** -- **Implement what `DI-23.10` settles** ([DI-D-108](DESIGN-NOTES.md#di-d-108),
-  [DI-D-109](DESIGN-NOTES.md#di-d-109)), until `DI-23.1` asserts zero allocations after construction in every phase. Breaking
-  changes to both crates, each said in CONTRACT.md and the documentation as it lands: failures lend their records by
-  borrow; handles and tokens are slots; an abandoned epoch at or below the mark is reported as the mark means it, and
-  win-durable-ioring's README example asserting `Abandoned` there changes; `Unusable` and `Unknown` pass the backend's
-  report through, amending DI-D-54. Its proof obligations: the failure bound, including a provider answer for an ended
-  lineage, and how far abandoned epochs above the mark can take their table past `operations`. Likely to want splitting
-  when it starts.
+  [DI-D-109](DESIGN-NOTES.md#di-d-109)), until `DI-23.1` asserts zero allocations after construction in every phase. Split
+  2026-10-24 into the steps below, in dependency order; each is said in CONTRACT.md and the documentation as it lands, and
+  each one's phases of the allocation test reach zero with it. Steps after the first are written at the resolution
+  available now and are expected to sharpen, or split again, when they start.
+
+- [ ] **DI-23.12.1** -- **The ordered tables onto fixed storage** ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s "ordered
+  tables"): the push-sequence tables (`writes`, both `held`) and the lineage table become slabs kept in insertion order;
+  the per-epoch counts (`in_flight_by_epoch`, `held_by_epoch`), `waiting` and `gated` become sorted fixed-capacity arrays
+  reserved at construction for `operations`, shared across lineages and keyed by lineage first; the seal queue and the
+  scratch the gate search and `advance` collect into go onto storage made at construction. Safe code in this crate, sized from the declared counts, refusing inside a proved bound only as an
+  inconsistency, as the hashed tables do. No contract change. Not `abandoned` (`DI-23.12.4`) nor the failure records
+  (`DI-23.12.2`).
+
+- [ ] **DI-23.12.2** -- **A failure's storage** ([DI-D-108](DESIGN-NOTES.md#di-d-108),
+  [DI-D-109](DESIGN-NOTES.md#di-d-109)): the suspect set as the rule that made it -- the cut, the reach, the lineage --
+  over write records that keep where they stopped being uncovered and are kept while a failure could name them; a marking
+  kept once per write; the failure's records lent by a scoped borrow, events and the inventory carrying its identity,
+  token, cause and stamp; a resolved failure's records kept until its `Abandoned` or `Healed` is popped; a `Marked` queued
+  once per marked write and expanded at pop; and the failure table and the completion queue sized from the derived
+  bounds. Proof obligations: unresolved observed failures within `operations` times one plus the served domains, a
+  provider's answer for an ended lineage included, and a test filling the table and the queue to their bounds. Breaking:
+  `Failed`, `Abandoned`, `Healed`, `Marked`, `FailureInfo` and `SuspectSet` change shape in both crates, and the oracle
+  follows.
+
+- [ ] **DI-23.12.3** -- **Handles, tokens, descriptions and domain lists as fixed storage**
+  ([DI-D-108](DESIGN-NOTES.md#di-d-108)): lineage handles and failure tokens become an index and a generation into an
+  array of atomics the driver makes at construction and reaches through the home it supplies, sized from `lineages` and
+  `DI-23.12.2`'s failure bound, keeping DI-D-12's one live token; a lineage's description is the consumer's string, kept
+  and lent as `&str`; a target's domains become a range in a fixed table sized from `targets` and `domains`. Breaking:
+  `LineageHandle`, `FailureToken` and `LineageInfo` change shape, and the `Home` trait grows.
+
+- [ ] **DI-23.12.4** -- **An abandoned epoch is forgotten once the mark passes it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)):
+  above the mark it holds a place of the window until the mark passes it; at or below the mark `epoch_state` reports it as
+  the mark means it. A contract change: CONTRACT.md's epoch states, and win-durable-ioring's README example asserting
+  `Abandoned` below the mark. Proof obligation: how far the table can be taken past `operations` where another failure
+  still holds the abandoned writes, and a test reaching it.
+
+- [ ] **DI-23.12.5** -- **A refusal carrying a backend fault passes the backend's report through**
+  ([DI-D-109](DESIGN-NOTES.md#di-d-109), amending [DI-D-54](DESIGN-NOTES.md#di-d-54)): the cause carried beside the report
+  in `IoFault`, as `ErrorCode` is, so `Unusable` and `Unknown` allocate nothing; their cause is read from that field rather
+  than downcast. Breaking for both crates where they downcast.
+
+- [ ] **DI-23.12.6** -- **The crate builds without `std`** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
+  [DI-D-109](DESIGN-NOTES.md#di-d-109)): `no_std` unless the `std` feature is on; the driver's locking (`engine.rs`,
+  `lock_watch.rs`) and the `thread::panicking()` guard behind `std`, an inconsistency without it panicking
+  unconditionally; and every other use of `std` the crate still has moved to `core` or `alloc`, or behind the feature.
+  Built here locally for a target without `std`; CI is `DI-23.13`.
+
+- [ ] **DI-23.12.7** -- **The allocation test asserts zero after construction in every phase** (`DI-23.1`): the recorded
+  tables become an assertion that every phase after construction allocates nothing, construction's allocations staying
+  recorded. Closes `DI-23.12`.
 
 - [ ] **DI-23.13** -- **Build without `std` in CI**: this crate with `--no-default-features` for a target that has no `std`.
 
