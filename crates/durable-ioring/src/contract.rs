@@ -8,7 +8,6 @@
 
 use core::fmt::Debug;
 use core::hash::Hash;
-use std::io;
 
 use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
 
@@ -16,7 +15,7 @@ use crate::io_target::IoTarget;
 use crate::key::{ReadKey, TargetKey, WriteKey};
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
-    ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo, PushError, ReadOptions,
+    ImportScope, Imported, IoFault, IoTargetKey, Leftovers, LineageInfo, PushError, ReadOptions,
     RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
     UnknownLineage, WriteOptions,
 };
@@ -96,8 +95,9 @@ pub trait DurableRing {
     ///
     /// # Errors
     ///
-    /// The error from making the value, where making it can fail.
-    fn readiness(&mut self) -> io::Result<Self::Readiness>;
+    /// The error from making the value, where making it can fail, as a fault naming the layer that
+    /// reported it (DI-D-105).
+    fn readiness(&mut self) -> Result<Self::Readiness, IoFault>;
 
     /// Give the instance a target after construction, under a key unique within the instance. What
     /// the target states -- its flush domains among it -- is read once, now (DI-2.10 point 3): to
@@ -258,7 +258,7 @@ pub trait DurableRing {
     /// again; and a ring it could not read the completions of, reported once (DI-D-58). Nothing
     /// retries unprompted, so a cause that stays is the consumer's to answer by dropping the
     /// instance.
-    fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>>;
+    fn pop(&mut self) -> Result<Option<EntryOf<Self>>, IoFault>;
 
     /// Seal every epoch of `through`'s lineage at or below its epoch, and ask for them to be made
     /// durable (DI-D-9). A new seal is answered on the queue (guarantee 4): by `Failed` if one of
@@ -372,7 +372,11 @@ pub trait RegisteredBufferRing: DurableRing {
     ///
     /// Refused while an operation is reading into it, for an index out of range, or on an
     /// instance built without registered buffers; `f` is not called.
-    fn with_registered_buffer<T>(&mut self, i: u32, f: impl FnOnce(&[u8]) -> T) -> io::Result<T>;
+    fn with_registered_buffer<T>(
+        &mut self,
+        i: u32,
+        f: impl FnOnce(&[u8]) -> T,
+    ) -> Result<T, IoFault>;
 
     /// As [`with_registered_buffer`](Self::with_registered_buffer), with the bytes lent mutably.
     ///
@@ -384,7 +388,7 @@ pub trait RegisteredBufferRing: DurableRing {
         &mut self,
         i: u32,
         f: impl FnOnce(&mut [u8]) -> T,
-    ) -> io::Result<T>;
+    ) -> Result<T, IoFault>;
 
     /// `write_registered_with` with default options.
     ///

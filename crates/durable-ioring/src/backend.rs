@@ -18,9 +18,9 @@
 //! submit, drain -- without probing for why. A backend that cannot tell says so with
 //! [`RefusalCause::Unknown`], carrying what it was told.
 
-use alloc::sync::Arc;
 use core::fmt;
-use std::io;
+
+use rc_errors::{Allocator, ErrorReport, Global, SharedError};
 
 use crate::alloc_tags::{tag, tagged};
 use crate::io_target::IoTarget;
@@ -177,7 +177,7 @@ impl fmt::Display for RefusalCause {
 impl core::error::Error for RefusalCause {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
-            Self::Unusable(fault) | Self::Unknown(fault) => Some(fault.error.as_ref()),
+            Self::Unusable(fault) | Self::Unknown(fault) => Some(&*fault.error),
             _ => None,
         }
     }
@@ -187,28 +187,56 @@ impl core::error::Error for RefusalCause {
 /// released, or a commit -- when the backend refuses it for a cause that is not retryable
 /// (DI-D-54). Its code is the backend's, where the cause carries one, and its error is the
 /// [`RefusalCause`] itself, recovered by downcasting.
+///
+/// A cause that carries nothing is reported by a `static` of itself, so the refusal allocates
+/// nothing (DI-D-105). [`Unusable`](RefusalCause::Unusable) and [`Unknown`](RefusalCause::Unknown)
+/// carry the backend's fault, so they are shared from the global allocator; when that allocation
+/// fails, the error is the backend's own report, which a downcast to `RefusalCause` does not find.
 pub const REFUSED: &str = "refused";
 
-/// The fault a submission refused for `cause` ends with: see [`REFUSED`].
-pub(crate) fn refusal_fault(cause: RefusalCause) -> IoFault {
-    let code = match &cause {
-        RefusalCause::Unusable(fault) | RefusalCause::Unknown(fault) => fault.code,
-        _ => None,
+/// The fault a submission refused for `cause` ends with: see [`REFUSED`]. A driver reports a
+/// refusal of its own -- a submit its `pop` rang for again and was refused again -- through this,
+/// so a consumer reads every refusal the same way.
+#[must_use]
+pub fn refusal_fault(cause: RefusalCause) -> IoFault {
+    refusal_fault_in(cause, &Global)
+}
+
+/// As [`refusal_fault`], sharing a cause that carries a fault from `allocator`: the seam a test
+/// reaches the fallback through.
+fn refusal_fault_in(cause: RefusalCause, allocator: &'static (dyn Allocator + Sync)) -> IoFault {
+    static SUBMIT_NEEDED: RefusalCause = RefusalCause::SubmitNeeded;
+    static DRAIN_NEEDED: RefusalCause = RefusalCause::DrainNeeded;
+    static SUBMIT_AND_DRAIN_NEEDED: RefusalCause = RefusalCause::SubmitAndDrainNeeded;
+    static BUSY: RefusalCause = RefusalCause::Busy;
+    static UNKNOWN_TARGET: RefusalCause = RefusalCause::UnknownTarget;
+    static UNSUPPORTED: RefusalCause = RefusalCause::Unsupported;
+    static INVALID: RefusalCause = RefusalCause::Invalid;
+    static ACCESS_DENIED: RefusalCause = RefusalCause::AccessDenied;
+
+    let named = |cause: &'static RefusalCause| (None, ErrorReport::from_static(cause));
+    let (code, error) = match cause {
+        RefusalCause::SubmitNeeded => named(&SUBMIT_NEEDED),
+        RefusalCause::DrainNeeded => named(&DRAIN_NEEDED),
+        RefusalCause::SubmitAndDrainNeeded => named(&SUBMIT_AND_DRAIN_NEEDED),
+        RefusalCause::Busy => named(&BUSY),
+        RefusalCause::UnknownTarget => named(&UNKNOWN_TARGET),
+        RefusalCause::Unsupported => named(&UNSUPPORTED),
+        RefusalCause::Invalid => named(&INVALID),
+        RefusalCause::AccessDenied => named(&ACCESS_DENIED),
+        RefusalCause::Unusable(ref fault) | RefusalCause::Unknown(ref fault) => {
+            let code = fault.code;
+            let backends = fault.error.clone();
+            let shared = tagged(tag::BACKEND_REFUSAL_FAULT_SHARED, || {
+                SharedError::try_new_in(cause, allocator)
+            });
+            (code, shared.map_or(backends, ErrorReport::Shared))
+        }
     };
-    let kind = match cause {
-        RefusalCause::Unsupported => io::ErrorKind::Unsupported,
-        RefusalCause::Invalid => io::ErrorKind::InvalidInput,
-        RefusalCause::UnknownTarget => io::ErrorKind::NotFound,
-        RefusalCause::AccessDenied => io::ErrorKind::PermissionDenied,
-        _ => io::ErrorKind::Other,
-    };
-    let error = tagged(tag::BACKEND_REFUSAL_FAULT_ERROR, || {
-        io::Error::new(kind, cause)
-    });
     IoFault {
         source: REFUSED,
         code,
-        error: tagged(tag::BACKEND_REFUSAL_FAULT_SHARED, || Arc::new(error)),
+        error,
     }
 }
 

@@ -30,6 +30,7 @@ pub mod driver;
 mod durability;
 mod engine;
 mod error_code;
+mod fault_report;
 mod ids;
 mod io_core;
 mod io_target;
@@ -60,6 +61,8 @@ pub use diagnostics::{
     LINE_PREFIX, NoDiagnostics, Pairing, SealOutcome,
 };
 pub use error_code::ErrorCode;
+#[cfg(feature = "std")]
+pub use fault_report::report_io_error;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};
 pub use io_core::{CoreActions, DuplicateDomain, DurableIoCore};
 pub use io_target::{
@@ -84,3 +87,5 @@ pub use types::{
 // The types the contract's signatures name from the crate it is built on, so a consumer needs no
 // direct dependency on it to call it.
 pub use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
+// A fault's report and what makes one (DI-D-105), for the same reason.
+pub use rc_errors::{AllocError, Allocator, ErrorReport, Global, SharedError, StaticError};

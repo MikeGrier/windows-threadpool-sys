@@ -28,11 +28,12 @@ fn device() -> InjectedFailure {
     InjectedFailure::Win32(1117)
 }
 
-/// The cause a failed `pop` reported, recovered from its error.
-fn cause_of(error: &std::io::Error) -> &RefusalCause {
-    error
-        .get_ref()
-        .and_then(|source| source.downcast_ref::<RefusalCause>())
+/// The cause a failed `pop` reported, recovered from its fault: a refusal, as the core reports one.
+fn cause_of(fault: &crate::IoFault) -> &RefusalCause {
+    assert_eq!(fault.source, durable_ioring::backend::REFUSED);
+    fault
+        .error
+        .downcast_ref::<RefusalCause>()
         .expect("a pop's failed submit is reported as its RefusalCause")
 }
 
@@ -200,14 +201,6 @@ fn a_seal_whose_commit_submit_fails_is_made_durable_once_submits_succeed() {
     harness.finish();
 }
 
-/// The fault a pop reported, recovered from its error.
-fn fault_of(error: &std::io::Error) -> &crate::IoFault {
-    error
-        .get_ref()
-        .and_then(|source| source.downcast_ref::<crate::IoFault>())
-        .expect("a pop's unreadable ring is reported as its IoFault")
-}
-
 /// Long enough for a wake's two drains to have run, one before the ring's wait is armed again and
 /// one after.
 const SETTLED: Duration = Duration::from_millis(250);
@@ -258,10 +251,7 @@ fn a_ring_that_cannot_be_read_sets_the_readiness_signal_and_the_pop_reports_it_o
         "the drain that could not read told the consumer"
     );
     let error = harness.ring.pop().expect_err("nothing to return, and why");
-    assert_eq!(
-        fault_of(&error).code.and_then(crate::win32_code_of),
-        Some(1117)
-    );
+    assert_eq!(error.code.and_then(crate::win32_code_of), Some(1117));
     assert!(
         harness.ring.pop().expect("nothing more to say").is_none(),
         "reported once"
@@ -291,10 +281,7 @@ fn a_pumped_instance_whose_ring_could_not_be_read_reads_it_at_the_next_pump() {
         .ring
         .pop()
         .expect_err("the unreadable ring, reported");
-    assert_eq!(
-        fault_of(&error).code.and_then(crate::win32_code_of),
-        Some(1117)
-    );
+    assert_eq!(error.code.and_then(crate::win32_code_of), Some(1117));
     let Entry::Op(done) = pumped_next(&mut harness) else {
         panic!("the write's completion");
     };

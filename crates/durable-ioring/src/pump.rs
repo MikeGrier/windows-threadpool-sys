@@ -14,7 +14,6 @@
 
 use alloc::sync::Arc;
 use core::time::Duration;
-use std::io;
 use std::sync::Mutex;
 
 use crate::alloc_tags::{tag, tagged};
@@ -40,8 +39,9 @@ pub trait Waitable {
     ///
     /// # Errors
     ///
-    /// The notification's own report, when it cannot be waited on.
-    fn wait(&mut self, timeout: Option<Duration>) -> io::Result<bool>;
+    /// The notification's own report, when it cannot be waited on, as a fault naming the layer
+    /// that made it (DI-D-105).
+    fn wait(&mut self, timeout: Option<Duration>) -> Result<bool, IoFault>;
 }
 
 /// What a pump did.
@@ -52,12 +52,12 @@ pub struct Pumped {
     /// How the wait went: whether it saw the notification raised, which is `false` when no wait
     /// was made because the first drain delivered. The drain after a wait happens whatever the
     /// wait's outcome: a delivery that cannot wait still delivers what has completed.
-    pub waited: io::Result<bool>,
+    pub waited: Result<bool, IoFault>,
 }
 
 /// A failed construction: why, and the engine it was given.
 pub type PumpedSetup<E, Bk, C, K> =
-    Result<PumpedDelivery<E, Bk, C, K>, (io::Error, Box<Engine<E, Bk, C, K>>)>;
+    Result<PumpedDelivery<E, Bk, C, K>, (IoFault, Box<Engine<E, Bk, C, K>>)>;
 
 /// The engine, drained by the consumer's own thread when it calls [`pump`](Self::pump).
 pub struct PumpedDelivery<E, Bk, C, K>
@@ -88,13 +88,10 @@ where
     pub fn new(engine: Engine<E, Bk, C, K>) -> PumpedSetup<E, Bk, C, K> {
         match tagged(tag::PUMP_NEW_NOTIFICATION, || engine.backend.notification()) {
             Ok(notification) => Ok(Self::with_notification(engine, notification)),
-            Err(fault) => {
-                let error = fault_error(fault);
-                Err((
-                    error,
-                    tagged(tag::PUMP_NEW_HANDED_BACK, || Box::new(engine)),
-                ))
-            }
+            Err(fault) => Err((
+                fault,
+                tagged(tag::PUMP_NEW_HANDED_BACK, || Box::new(engine)),
+            )),
         }
     }
 
@@ -175,15 +172,4 @@ where
             .take()
             .expect("only stopping delivery takes the engine")
     }
-}
-
-/// A backend's fault as the `io::Error` a construction reports: the backend's own report when
-/// nothing else holds it, and otherwise one of its kind and text.
-fn fault_error(fault: IoFault) -> io::Error {
-    Arc::try_unwrap(fault.error).unwrap_or_else(|shared| {
-        let text = tagged(tag::PUMP_FAULT_ERROR_TEXT, || shared.to_string());
-        tagged(tag::PUMP_FAULT_ERROR_ERROR, || {
-            io::Error::new(shared.kind(), text)
-        })
-    })
 }

@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use win_sync_sys::{WaitOutcome, wait_for_single_object};
 
-use durable_ioring::Waitable;
+use durable_ioring::{IoFault, Waitable};
+
+use crate::error_code::windows_fault;
 
 #[cfg(test)]
 mod tests;
@@ -62,8 +64,8 @@ impl AsHandle for CompletionEvent {
 /// **One waiter per ring** is the caller's to keep, as the ring crate states it: a second wait on
 /// the same event, or a duplicate of this handle waited on elsewhere, steals wakes.
 impl Waitable for CompletionEvent {
-    fn wait(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
-        match wait_for_single_object(&self.0, timeout)? {
+    fn wait(&mut self, timeout: Option<Duration>) -> Result<bool, IoFault> {
+        match wait_for_single_object(&self.0, timeout).map_err(windows_fault)? {
             WaitOutcome::Signalled => Ok(true),
             WaitOutcome::TimedOut => Ok(false),
             // An event is never abandoned, which only a mutex can be, and only an event is made
@@ -71,9 +73,9 @@ impl Waitable for CompletionEvent {
             // this crate forbids. `win-sync-sys`' tests reach the ending in the function this
             // calls. (A wait failing is reached, with a duplicate that has no `SYNCHRONIZE`
             // access.) The ending is reported, not taken for a signal.
-            other => Err(io::Error::other(format!(
+            other => Err(windows_fault(io::Error::other(format!(
                 "the notification's wait ended as {other:?}"
-            ))),
+            )))),
         }
     }
 }

@@ -5,7 +5,6 @@
 //! observable.
 
 use std::collections::VecDeque;
-use std::io;
 
 use win_sync_sys::{Event, ResetMode};
 
@@ -18,7 +17,20 @@ use durable_ioring::{
     ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag, TargetKey,
     UnknownLineage, WriteKey, WriteOptions,
 };
-use durable_ioring::{DurableRing, EntryOf, PushResult};
+use durable_ioring::{DurableRing, EntryOf, ErrorReport, IoFault, PushResult, StaticError};
+
+/// What the fake's told failures report: they need no storage.
+static NO_SIGNAL: StaticError = StaticError::new("the fake refuses to give its signal");
+static POP_FAILS: StaticError = StaticError::new("the fake's pop was told to fail");
+
+/// A fault the fake reports, as `source` "fake".
+fn fake_fault(error: &'static StaticError) -> IoFault {
+    IoFault {
+        source: "fake",
+        code: None,
+        error: ErrorReport::from_static(error),
+    }
+}
 use durable_ioring::{FailureId, FailureToken, Lineage, LineageHandle, OpId};
 
 type V = crate::WindowsIds<u64>;
@@ -103,9 +115,9 @@ impl DurableRing for Fake {
     type Readiness = Event;
     type Target = MemoryTarget;
 
-    fn readiness(&mut self) -> io::Result<Event> {
+    fn readiness(&mut self) -> Result<Event, IoFault> {
         if self.readiness_fails {
-            return Err(io::Error::other("the fake refuses to give its signal"));
+            return Err(fake_fault(&NO_SIGNAL));
         }
         Ok(self.signal.clone())
     }
@@ -171,9 +183,9 @@ impl DurableRing for Fake {
         unimplemented!("tests complete the fake's operations with complete_one")
     }
 
-    fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>> {
+    fn pop(&mut self) -> Result<Option<EntryOf<Self>>, IoFault> {
         if self.pop_fails {
-            return Err(io::Error::other("the fake's pop was told to fail"));
+            return Err(fake_fault(&POP_FAILS));
         }
         Ok(self.queue.pop_front())
     }

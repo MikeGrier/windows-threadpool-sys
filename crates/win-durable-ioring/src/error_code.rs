@@ -4,9 +4,8 @@
 //! reports with it (DI-D-50).
 
 use std::io;
-use std::sync::Arc;
 
-use durable_ioring::{ErrorCode, IoFault};
+use durable_ioring::{ErrorCode, IoFault, report_io_error};
 use win_error_codes::{HResult, Win32Error};
 use windows_ioring_sys::IoRingErrorExt;
 
@@ -16,12 +15,13 @@ mod tests;
 /// The source every fault the Windows path reports names: the I/O ring beneath it.
 pub(crate) const WINDOWS_IORING: &str = "windows-ioring";
 
-/// A fault the Windows path reports for `error`: the I/O ring's, with the code it carries.
+/// A fault the Windows path reports for `error`: the I/O ring's, with the code it carries, and
+/// `error` itself as its report, so a downcast finds it (durable-ioring's DI-D-105).
 pub(crate) fn windows_fault(error: io::Error) -> IoFault {
     IoFault {
         source: WINDOWS_IORING,
         code: error_code_of(&error),
-        error: Arc::new(error),
+        error: report_io_error(error),
     }
 }
 

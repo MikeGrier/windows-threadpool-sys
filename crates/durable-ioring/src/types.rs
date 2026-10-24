@@ -5,7 +5,8 @@
 use alloc::sync::Arc;
 use core::cmp::Ordering;
 use core::fmt;
-use std::io;
+
+use rc_errors::ErrorReport;
 
 use crate::access::Access;
 use crate::alloc_tags::{tag, tagged};
@@ -204,9 +205,9 @@ impl FlushDomain {
 /// A fault, as the layer that observed it reported it (DI-D-50): what failed an operation or a
 /// commit, relayed with where it came from.
 ///
-/// Two faults are equal when they name the same source and code and carry the same report -- the
-/// one shared `Arc`, as a marking and the completion it records share it -- since an `io::Error`
-/// has no equality of its own.
+/// Two faults are equal when they name the same source and code and carry the same report: an
+/// [`ErrorReport`] compares by identity, the static it names or the block it shares, as a marking
+/// and the completion it records share one (DI-D-105). Cloning a fault allocates nothing.
 #[derive(Clone, Debug)]
 pub struct IoFault {
     /// The layer that reported it: `"windows-ioring"` for dioring over Windows.
@@ -214,15 +215,14 @@ pub struct IoFault {
     /// The layer's code for it, where it gives one. Its meaning is the source's: an `HRESULT` from
     /// the Windows backend, which always gives one.
     pub code: Option<ErrorCode>,
-    /// The layer's own report.
-    pub error: Arc<io::Error>,
+    /// The layer's own report: a static error, or a shared one (DI-D-105). The core's own reports
+    /// are static; what a backend or provider reports is theirs to allocate or not.
+    pub error: ErrorReport,
 }
 
 impl PartialEq for IoFault {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source
-            && self.code == other.code
-            && Arc::ptr_eq(&self.error, &other.error)
+        self.source == other.source && self.code == other.code && self.error == other.error
     }
 }
 
@@ -234,8 +234,8 @@ impl fmt::Display for IoFault {
     }
 }
 
-/// So a driver can hand a fault to a consumer as the `source` of an [`io::Error`] that downcasts
-/// back to it, as a [`RefusalCause`] does.
+/// So a driver can hand a fault to a consumer as the `source` of an error of its own that downcasts
+/// back to it, as a [`RefusalCause`] does. Its source is the error its report holds.
 impl core::error::Error for IoFault {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&*self.error)
@@ -270,7 +270,7 @@ pub enum FailureCause<V: Identities> {
         domain: FlushDomain,
         /// The provider's own error, passed through as it gave it. Any code read from it is the
         /// provider's, not one dioring captured.
-        error: Arc<io::Error>,
+        error: ErrorReport,
     },
     /// The consumer's provider dropped `domain`'s completion without answering (DI-D-27): dioring
     /// observed the silence, so there is no error to report.

@@ -28,7 +28,6 @@
 use std::collections::HashMap;
 use std::io;
 use std::os::windows::io::OwnedHandle;
-use std::sync::Arc;
 use std::time::Duration;
 
 use win_handles_sys::{Access, duplicate_handle_with_access};
@@ -108,7 +107,7 @@ pub(crate) fn transfer(
                 Err(IoFault {
                     source: WINDOWS_IORING,
                     code: None,
-                    error: Arc::new(io::Error::other(format!(
+                    error: durable_ioring::report_io_error(io::Error::other(format!(
                         "the write completed short: {transferred} of {requested} bytes"
                     ))),
                 })

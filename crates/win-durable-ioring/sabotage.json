@@ -427,7 +427,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The accessor lends the registration's own bytes, and only when the registration admits it: refused, f is not called.",
-      "find": ["        self.engine().backend.registered_buffer(i).map(f)\n"],
+      "find": ["        self.engine()\n            .backend\n            .registered_buffer(i)\n            .map(f)\n            .map_err(windows_fault)\n"],
       "replace": ["        Ok(f(&[]))\n"]
     },
     {
@@ -435,7 +435,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "As for the shared accessor: refused while in use, out of range, or with no registration, f is not called.",
-      "find": ["        self.engine().backend.registered_buffer_mut(i).map(f)\n"],
+      "find": ["        self.engine()\n            .backend\n            .registered_buffer_mut(i)\n            .map(f)\n            .map_err(windows_fault)\n"],
       "replace": ["        Ok(f(&mut []))\n"]
     },
     {
@@ -459,7 +459,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "A failed submission is reported by the pop that finds no entry to return instead, with its cause, so the consumer is not left polling for work that was never issued. Reached through the ring crate's safe submit-fault responder registered for the instance's ring (its D-85 and M37.1), which fails the submits pool threads make as well as the consumer's. Caught by the test that pops while submits fail and recovers the cause from the error.",
-      "find": ["                    (None, Err(cause)) => Err(io::Error::other(cause)),\n"],
+      "find": ["                    (None, Err(cause)) => Err(refusal_fault(cause)),\n"],
       "replace": ["                    (None, Err(_)) => Ok(None),\n"]
     },
     {
@@ -651,7 +651,7 @@
       "file": "src/windows_backend/wait.rs",
       "expect": "caught",
       "why": "A notification that cannot be waited on stops an instance delivering, so the failure is the wait's error and not a timeout the caller retries for ever. This was a declared blind spot (DI-7.3) until win-sync-sys' duplicate_handle_with_access made a handle without SYNCHRONIZE access without unsafe.",
-      "find": ["        match wait_for_single_object(&self.0, timeout)? {"],
+      "find": ["        match wait_for_single_object(&self.0, timeout).map_err(windows_fault)? {"],
       "replace": ["        match wait_for_single_object(&self.0, timeout).unwrap_or(WaitOutcome::TimedOut) {"]
     },
     {
@@ -747,7 +747,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "A ring that cannot be read is told to the consumer by the pop that finds nothing to return, so the consumer is not left waiting for completions that cannot be read.",
-      "find": ["                    (Some(fault), _) => Err(io::Error::other(fault)),\n"],
+      "find": ["                    (Some(fault), _) => Err(fault),\n"],
       "replace": ["                    (Some(_), _) => Ok(None),\n"]
     },
     {
@@ -785,7 +785,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The pump says why the wait could not be made. This was a declared blind spot (DI-7.3) until the test gave an instance a notification that cannot be waited on, a duplicate of an event that may only set and reset. The delivery's reporting of a failed wait is also caught over the in-memory backend, in pump/tests.rs.",
-      "find": ["        pumped.waited.map(|_| pumped.ready)"],
+      "find": ["        pumped.waited.map(|_| pumped.ready).map_err(io::Error::from)"],
       "replace": ["        Ok(pumped.ready)"]
     },
     {
@@ -793,7 +793,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The delivery chosen at construction is the one the instance has: a pool drains an instance nothing is meant to drain.",
-      "find": ["            DeliveryMode::Pumped => PumpedDelivery::new(engine)\n                .map(|pumped| pumped.with_lock_watch(watch.clone()))\n                .map(Delivery::Pumped),"],
+      "find": ["            DeliveryMode::Pumped => PumpedDelivery::new(engine)\n                .map_err(|(fault, engine)| (io::Error::from(fault), engine))\n                .map(|pumped| pumped.with_lock_watch(watch.clone()))\n                .map(Delivery::Pumped),"],
       "replace": ["            DeliveryMode::Pumped => PoolDelivery::new(engine, on_ready, None, watch.clone()).map(Delivery::Pool),"]
     },
     {

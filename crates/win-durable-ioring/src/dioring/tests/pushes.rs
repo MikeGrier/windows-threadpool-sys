@@ -639,11 +639,19 @@ fn span_operations_on_an_instance_without_registered_buffers_are_refused() {
     let refused = ring
         .with_registered_buffer(0, |_| unreachable!("nothing is lent"))
         .expect_err("no registration to read");
-    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(kind_of(&refused), Some(std::io::ErrorKind::InvalidInput));
     let refused = ring
         .with_registered_buffer_mut(0, |_| unreachable!("nothing is lent"))
         .expect_err("no registration to fill");
-    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(kind_of(&refused), Some(std::io::ErrorKind::InvalidInput));
+}
+
+/// The kind of the `io::Error` a refused lending reports.
+fn kind_of(fault: &crate::IoFault) -> Option<std::io::ErrorKind> {
+    fault
+        .error
+        .downcast_ref::<std::io::Error>()
+        .map(std::io::Error::kind)
 }
 
 #[test]
@@ -698,10 +706,12 @@ fn a_span_the_registration_does_not_contain_is_refused_by_the_ring() {
     assert_eq!((error.buffer, error.context), (None, 8));
 
     assert_eq!(
-        ring.with_registered_buffer(1, |_| unreachable!("nothing is lent"))
-            .expect_err("out of range")
-            .kind(),
-        std::io::ErrorKind::InvalidInput
+        kind_of(
+            &ring
+                .with_registered_buffer(1, |_| unreachable!("nothing is lent"))
+                .expect_err("out of range")
+        ),
+        Some(std::io::ErrorKind::InvalidInput)
     );
     assert!(
         ring.pop().expect("pop").is_none(),

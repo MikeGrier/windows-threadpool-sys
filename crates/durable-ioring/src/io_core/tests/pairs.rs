@@ -268,7 +268,10 @@ fn a_failed_flush_ends_its_pair_failed_and_its_seals_failed_and_a_later_seal_end
 fn a_provider_domain_is_a_flush_pair_that_ends_as_the_provider_answers() {
     for (outcome, ends) in [
         (DomainOutcome::Succeeded, "succeeded"),
-        (DomainOutcome::Failed(std::io::Error::other("no")), "failed"),
+        (
+            DomainOutcome::Failed(crate::report_io_error(std::io::Error::other("no"))),
+            "failed",
+        ),
         (DomainOutcome::Abandoned, "abandoned"),
     ] {
         let sink = Checked::pairs();

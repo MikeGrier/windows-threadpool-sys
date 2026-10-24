@@ -540,7 +540,7 @@ fn a_failed_pop_is_reported_to_the_handler_once_and_delivery_goes_on() {
     // Setting the signal at the handover is the wake: the first pop fails.
     assert_eq!(
         rx.recv_timeout(BOUND).expect("the failure is reported"),
-        "failure: the fake's pop was told to fail"
+        "failure: fake reported: the fake's pop was told to fail"
     );
     assert!(
         rx.recv_timeout(Duration::from_millis(300)).is_err(),

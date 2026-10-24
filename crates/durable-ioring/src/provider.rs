@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Mike Grier
 //! The consumer's durability provider (DI-2.12, DI-D-27).
 
-use alloc::sync::{Arc, Weak};
+use alloc::sync::Weak;
 use core::fmt::{self, Debug};
-use std::io;
 
-use crate::alloc_tags::{tag, tagged};
+use rc_errors::ErrorReport;
+
 use crate::contract::Identities;
 use crate::ids::Lineage;
 use crate::types::{FailureCause, FlushDomain, IoTargetKey};
@@ -111,8 +111,10 @@ impl DomainCompletion {
         self.answer(DomainOutcome::Succeeded);
     }
 
-    /// The domain failed: `FailureCause::Provider`, with `error`.
-    pub fn fail(mut self, error: io::Error) {
+    /// The domain failed: `FailureCause::Provider`, with `error` (DI-D-105): a static report, or a
+    /// shared one the provider made, with an allocator it chose. Under `std`,
+    /// [`report_io_error`](crate::report_io_error) makes one from an `io::Error`.
+    pub fn fail(mut self, error: ErrorReport) {
         self.answer(DomainOutcome::Failed(error));
     }
 
@@ -157,7 +159,7 @@ pub enum DomainOutcome {
     /// Every write named for the domain is durable.
     Succeeded,
     /// The domain failed: `FailureCause::Provider`, with the error.
-    Failed(io::Error),
+    Failed(ErrorReport),
     /// The provider gave no answer and never will: `FailureCause::ProviderAbandoned`.
     Abandoned,
 }
@@ -169,7 +171,7 @@ impl DomainOutcome {
             DomainOutcome::Succeeded => Ok(()),
             DomainOutcome::Failed(error) => Err(FailureCause::Provider {
                 domain: domain.clone(),
-                error: tagged(tag::PROVIDER_INTO_RESULT_ERROR, || Arc::new(error)),
+                error,
             }),
             DomainOutcome::Abandoned => Err(FailureCause::ProviderAbandoned {
                 domain: domain.clone(),

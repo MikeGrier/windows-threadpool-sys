@@ -77,7 +77,10 @@ impl IoBackend for Scripted {
             return Err(IoFault {
                 source: "test",
                 code: None,
-                error: Arc::new(io::Error::other(format!("pop {}", self.pops_failed))),
+                error: crate::report_io_error(io::Error::other(format!(
+                    "pop {}",
+                    self.pops_failed
+                ))),
             });
         }
         self.inner.pop()

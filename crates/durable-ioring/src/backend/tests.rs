@@ -1,17 +1,18 @@
 // Copyright (c) 2026 Mike Grier
 //! What a refusal cause tells its caller to do.
 
-use std::io;
-use std::sync::Arc;
+use rc_errors::{ErrorReport, Refusing, StaticError};
 
 use super::RefusalCause;
 use crate::types::IoFault;
+
+static TOLD: StaticError = StaticError::new("told");
 
 fn fault() -> IoFault {
     IoFault {
         source: "test",
         code: None,
-        error: Arc::new(io::Error::other("told")),
+        error: ErrorReport::from_static(&TOLD),
     }
 }
 
@@ -73,38 +74,27 @@ fn a_refusal_fault_carries_its_cause_and_the_backends_code() {
     let coded = || IoFault {
         source: "test",
         code: Some(ErrorCode::from_hresult(1117)),
-        error: Arc::new(io::Error::other("told")),
+        error: ErrorReport::from_static(&TOLD),
     };
-    let cases = [
-        (RefusalCause::UnknownTarget, io::ErrorKind::NotFound, None),
-        (RefusalCause::Unsupported, io::ErrorKind::Unsupported, None),
-        (RefusalCause::Invalid, io::ErrorKind::InvalidInput, None),
-        (
-            RefusalCause::AccessDenied,
-            io::ErrorKind::PermissionDenied,
-            None,
-        ),
-        (RefusalCause::Busy, io::ErrorKind::Other, None),
-        (
-            RefusalCause::Unusable(coded()),
-            io::ErrorKind::Other,
-            Some(ErrorCode::from_hresult(1117)),
-        ),
-        (
-            RefusalCause::Unknown(coded()),
-            io::ErrorKind::Other,
-            Some(ErrorCode::from_hresult(1117)),
-        ),
-    ];
-    for (cause, kind, code) in cases {
+    let mut cases: Vec<(RefusalCause, Option<ErrorCode>)> = table()
+        .into_iter()
+        .map(|(cause, ..)| (cause, None))
+        .collect();
+    cases.push((
+        RefusalCause::Unusable(coded()),
+        Some(ErrorCode::from_hresult(1117)),
+    ));
+    cases.push((
+        RefusalCause::Unknown(coded()),
+        Some(ErrorCode::from_hresult(1117)),
+    ));
+    for (cause, code) in cases {
         let fault = refusal_fault(cause.clone());
         assert_eq!(fault.source, REFUSED);
         assert_eq!(fault.code, code, "{cause:?}");
-        assert_eq!(fault.error.kind(), kind, "{cause:?}");
         let carried = fault
             .error
-            .get_ref()
-            .and_then(|inner| inner.downcast_ref::<RefusalCause>())
+            .downcast_ref::<RefusalCause>()
             .expect("the cause is the error");
         assert_eq!(*carried, cause);
         // The backend's own report is the cause's source, where it gave one.
@@ -112,5 +102,42 @@ fn a_refusal_fault_carries_its_cause_and_the_backends_code() {
         let expected = matches!(cause, RefusalCause::Unusable(_) | RefusalCause::Unknown(_))
             .then(|| "told".to_owned());
         assert_eq!(told, expected, "{cause:?}");
+    }
+}
+
+#[test]
+fn a_cause_carrying_nothing_is_reported_by_a_static_and_one_carrying_a_fault_is_shared() {
+    use super::refusal_fault;
+
+    for (cause, ..) in table() {
+        let first = refusal_fault(cause.clone());
+        let second = refusal_fault(cause.clone());
+        let carries = matches!(cause, RefusalCause::Unusable(_) | RefusalCause::Unknown(_));
+        assert_eq!(
+            matches!(first.error, ErrorReport::Static(_)),
+            !carries,
+            "{cause:?}"
+        );
+        // A static is one error each time; a shared report is a new one each time.
+        assert_eq!(first == second, !carries, "{cause:?}");
+    }
+}
+
+#[test]
+fn a_cause_carrying_a_fault_falls_back_to_the_backends_report_when_sharing_it_fails() {
+    use super::refusal_fault_in;
+
+    static NEVER: Refusing = Refusing;
+    for cause in [
+        RefusalCause::Unusable(fault()),
+        RefusalCause::Unknown(fault()),
+    ] {
+        let refused = refusal_fault_in(cause.clone(), &NEVER);
+        assert_eq!(
+            refused.error,
+            fault().error,
+            "{cause:?}: the backend's own report"
+        );
+        assert!(refused.error.downcast_ref::<RefusalCause>().is_none());
     }
 }

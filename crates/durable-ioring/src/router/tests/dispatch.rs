@@ -41,7 +41,13 @@ impl Answer for Home {
     fn answer(&self, call: &DomainCall, outcome: DomainOutcome) {
         let seen = match outcome {
             DomainOutcome::Succeeded => Seen::Succeeded,
-            DomainOutcome::Failed(error) => Seen::Failed(error.kind(), error.to_string()),
+            DomainOutcome::Failed(error) => Seen::Failed(
+                error
+                    .downcast_ref::<io::Error>()
+                    .expect("the tests fail with an io::Error")
+                    .kind(),
+                error.to_string(),
+            ),
             DomainOutcome::Abandoned => Seen::Abandoned,
         };
         self.answers
@@ -150,9 +156,10 @@ impl DurabilityProvider<V> for Fake {
         for part in request.domains {
             match &self.act {
                 Act::Succeed => part.completion.succeed(),
-                Act::Fail => part
-                    .completion
-                    .fail(io::Error::new(io::ErrorKind::TimedOut, self.name)),
+                Act::Fail => part.completion.fail(crate::report_io_error(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    self.name,
+                ))),
                 Act::Drop => drop(part),
                 Act::Keep => self.kept.push(part.completion),
                 Act::Hand(sender) => sender.send(part.completion).expect("the test listens"),
@@ -307,7 +314,7 @@ fn a_late_answer_from_another_thread_reaches_the_instance_as_it_arrives() {
         .join()
         .expect("answered");
     assert_eq!(home.answers(), vec![(domain("b"), Seen::Succeeded)]);
-    thread::spawn(move || first.fail(io::Error::other("late")))
+    thread::spawn(move || first.fail(crate::report_io_error(io::Error::other("late"))))
         .join()
         .expect("answered");
     assert_eq!(

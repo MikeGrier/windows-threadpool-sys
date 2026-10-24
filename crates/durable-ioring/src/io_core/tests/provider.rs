@@ -142,7 +142,7 @@ fn a_provider_failure_is_a_failure_of_its_domain() {
         request.lineage,
         request.seal,
         &domain("log"),
-        DomainOutcome::Failed(io::Error::other("lost")),
+        DomainOutcome::Failed(crate::report_io_error(io::Error::other("lost"))),
     );
     rig.act(actions);
     let entries = rig.entries();

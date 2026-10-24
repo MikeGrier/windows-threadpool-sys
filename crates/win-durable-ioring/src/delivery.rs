@@ -22,8 +22,9 @@ use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
 
 use durable_ioring::{
     AddTargetError, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo,
-    ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo, ReadOptions, RemoveTargetError,
-    Resolution, ResolveError, RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
+    ImportScope, Imported, IoFault, IoTargetKey, Leftovers, LineageInfo, ReadOptions,
+    RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
+    UnknownLineage, WriteOptions,
 };
 use durable_ioring::{
     DurableRing, EntryOf, EpochIdOf, FailureIdOf, HandleOf, Lin, PushResult, RegisteredBufferRing,
@@ -45,9 +46,9 @@ mod tests;
 pub enum DeliveryEvent<E> {
     /// The next entry, in queue order.
     Entry(E),
-    /// The instance's `pop` failed. The error says why, and downcasts to the cause the instance
-    /// reported, as an instance's own `pop` error does.
-    Failure(io::Error),
+    /// The instance's `pop` failed: the fault it returned, as an instance's own `pop` reports it
+    /// (durable-ioring's DI-D-105).
+    Failure(IoFault),
 }
 
 /// The handler, as the deliverer holds it.
@@ -323,7 +324,11 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`RegisteredBufferRing::with_registered_buffer`].
-    pub fn with_registered_buffer<R>(&self, i: u32, f: impl FnOnce(&[u8]) -> R) -> io::Result<R> {
+    pub fn with_registered_buffer<R>(
+        &self,
+        i: u32,
+        f: impl FnOnce(&[u8]) -> R,
+    ) -> Result<R, IoFault> {
         self.with(|ring| ring.with_registered_buffer(i, f))
     }
 
@@ -336,7 +341,7 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
         &self,
         i: u32,
         f: impl FnOnce(&mut [u8]) -> R,
-    ) -> io::Result<R> {
+    ) -> Result<R, IoFault> {
         self.with(|ring| ring.with_registered_buffer_mut(i, f))
     }
 
@@ -475,9 +480,9 @@ impl<D: DurableRing<Readiness = Event> + Send + 'static> EntryDelivery<D> {
         let clones = ring.readiness().map(|signal| (signal.clone(), signal));
         let (signal, kick) = match clones {
             Ok(clones) => clones,
-            Err(error) => {
+            Err(fault) => {
                 return Err(DeliverySetupError {
-                    error,
+                    error: fault.into(),
                     ring,
                     on_entry,
                 });

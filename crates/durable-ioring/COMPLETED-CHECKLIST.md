@@ -4321,3 +4321,37 @@ DI-D-105 for the engineer's rulings rather than restating them. One is the assis
 [RCE-D-6](../rc-errors/DESIGN-NOTES.md#rce-d-6), a static error holding only a message, since `ErrorCode` is this crate's
 type and DI-D-105 already carries a refusal's code beside its report; DI-D-105's wording was corrected to match. Miri is
 parked as [RCE-inf.1](../rc-errors/PARKED.md#m-inf----the-horizon).
+
+## Moved 2026-10-23 20:17:36 -04:00 -- DI-23.4: a fault's report through rc-errors
+
+### <a id="di-234"></a>DI-23.4 -- A fault's report is a static or a shared dyn Error, shared through rc-errors, in three steps. *(completed 2026-10-23 20:17:36 -04:00)*
+
+Per [DI-D-105](DESIGN-NOTES.md#di-d-105). Re-planned on 2026-10-23 into DI-23.4.1 to DI-23.4.3, after
+[DI-D-102](DESIGN-NOTES.md#di-d-102)'s associated types were superseded before any code was written. Its steps are below
+and at [DI-23.4.1](#di-2341).
+
+### <a id="di-2342"></a>DI-23.4.2 -- The core's faults carry the report, and io::Error leaves the portable boundary. *(completed 2026-10-23 20:17:36 -04:00)*
+
+The item as it stood at completion: **The core's faults carry the report.** `IoFault`, `FailureCause::Provider`,
+`DomainCompletion` and `DomainOutcome`, the `DurableRing` trait, the notification and the pump's setup lose `io::Error`; the
+core's refusals are static descriptors; `std` interop is behind the feature. Breaking for this crate.
+
+What was done is recorded in DI-D-105's "what building it settled": `IoFault`'s error is an `ErrorReport`; the trait,
+`Waitable` and the pump report `IoFault`; a payload-free refusal is a `static` of its cause and a refusal carrying a fault is
+shared, falling back to the backend's report; `refusal_fault`, `report_io_error` and `From<IoFault> for io::Error` (keeping
+the kind) are public; the in-memory backend's own faults are statics. Each fallback is reached by a test through a seam
+taking the allocator, given `rc-errors`' new `Refusing`. Twelve sabotage entries across both crates' manifests that anchored
+on rewritten lines were re-anchored, two added, and all fourteen swept: each caught.
+
+### <a id="di-2343"></a>DI-23.4.3 -- win-durable-ioring reports through the report, landed with DI-23.4.2. *(completed 2026-10-23 20:17:36 -04:00)*
+
+The item as it stood at completion: **`win-durable-ioring` reports through it**: `windows_fault` makes the shared form from an
+`io::Error`, and its callers' downcasts to `RefusalCause` and `SharingViolation` go through `dyn Error`. Breaking for
+`win-durable-ioring`.
+
+**A checklist defect, named:** this item and DI-23.4.2 could not land apart, since `win-durable-ioring` implements the traits
+whose signatures DI-23.4.2 changed, so they are one commit. `windows_fault` reports its `io::Error` through
+`report_io_error`; the driver's `pop` returns the backend's fault as it is and a refused submit as `refusal_fault`; its
+`io::Error` APIs convert through `From`. `SharingViolation`'s downcasts are on the open path's own `io::Error`s, which do not
+cross the portable boundary, so they did not change. Running the suite found two things the compiler did not: a delivery's
+failure now displays as the fault does, and `Dioring::pump` lost its kind, which is why the `From` keeps it.

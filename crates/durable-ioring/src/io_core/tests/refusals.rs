@@ -28,8 +28,7 @@ fn refusal(fault: &IoFault) -> &RefusalCause {
     assert_eq!(fault.source, REFUSED);
     fault
         .error
-        .get_ref()
-        .and_then(|inner| inner.downcast_ref::<RefusalCause>())
+        .downcast_ref::<RefusalCause>()
         .expect("a REFUSED fault carries its cause")
 }
 
@@ -215,7 +214,10 @@ fn a_released_write_the_backend_refuses_for_good_completes_as_failed_and_is_null
         panic!("failed: {:?}", released.outcome);
     };
     assert_eq!(*refusal(fault), RefusalCause::UnknownTarget);
-    assert_eq!(fault.error.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        matches!(fault.error, rc_errors::ErrorReport::Static(_)),
+        "a cause carrying nothing is reported by a static"
+    );
     assert_eq!(fault.code, None, "the cause carries no code of its own");
     assert_eq!(released.buffer.as_deref(), Some(b"held".as_slice()));
     assert_eq!(released.context, "write");

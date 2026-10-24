@@ -310,18 +310,12 @@ pub(crate) mod tag {
     pub(crate) const PUMP_NEW_HANDED_BACK: Tag = Tag::new("pump::new::handed_back");
     pub(crate) const PUMP_WITH_NOTIFICATION_SLOT: Tag = Tag::new("pump::with_notification::slot");
     pub(crate) const PUMP_PUMP_WAIT: Tag = Tag::new("pump::pump::wait");
-    pub(crate) const PUMP_FAULT_ERROR_TEXT: Tag = Tag::new("pump::fault_error::text");
-    pub(crate) const PUMP_FAULT_ERROR_ERROR: Tag = Tag::new("pump::fault_error::error");
-
-    // provider.rs
-    pub(crate) const PROVIDER_INTO_RESULT_ERROR: Tag = Tag::new("provider::into_result::error");
 
     // ids.rs
     pub(crate) const IDS_LINEAGE_HANDLE_MINT: Tag = Tag::new("ids::lineage_handle::mint");
     pub(crate) const IDS_FAILURE_TOKEN_MINT: Tag = Tag::new("ids::failure_token::mint");
 
     // backend.rs
-    pub(crate) const BACKEND_REFUSAL_FAULT_ERROR: Tag = Tag::new("backend::refusal_fault::error");
     pub(crate) const BACKEND_REFUSAL_FAULT_SHARED: Tag = Tag::new("backend::refusal_fault::shared");
 
     // types.rs

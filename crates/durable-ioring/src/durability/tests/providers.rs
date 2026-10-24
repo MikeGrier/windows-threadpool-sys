@@ -4,7 +4,6 @@
 //! consistent with any request.
 
 use std::io;
-use std::sync::Arc;
 
 use super::Stamp;
 use super::{
@@ -59,7 +58,7 @@ fn succeeded(lineage: &mut Lineage, seal: u64, domain: u32) -> Due<u64, &'static
 fn provider_failure(domain: u32) -> FailureCause<V<u64, Stamp>> {
     FailureCause::Provider {
         domain: FlushDomain::new(domain.to_le_bytes()),
-        error: Arc::new(io::Error::from_raw_os_error(1117)),
+        error: crate::report_io_error(io::Error::from_raw_os_error(1117)),
     }
 }
 

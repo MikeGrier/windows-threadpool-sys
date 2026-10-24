@@ -2,7 +2,7 @@
 //! The oracle's marking rules (DI-3.2.4.2), each refused when broken and accepted when kept.
 
 use std::io;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use super::{LEN, Oracle, TestEntry, V, completion, op, write_kind};
 use crate::IoTargetKey;
@@ -23,7 +23,7 @@ fn fault(code: u32) -> IoFault {
     IoFault {
         source: crate::test_support::SOURCE,
         code: Some(ErrorCode::from_hresult(code.cast_signed())),
-        error: Arc::new(io::Error::from_raw_os_error(code.cast_signed())),
+        error: crate::report_io_error(io::Error::from_raw_os_error(code.cast_signed())),
     }
 }
 

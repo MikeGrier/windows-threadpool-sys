@@ -37,6 +37,7 @@ use windows_ioring_sys::{
 };
 use windows_threadpool_sys::callback_env::CallbackEnviron;
 
+use crate::error_code::windows_fault;
 use crate::windows_backend::pool::{PoolDelivery, PoolEngine};
 use crate::windows_backend::signalled::SignalledDelivery;
 use crate::windows_backend::{
@@ -47,7 +48,7 @@ use durable_ioring::DiagnosticSink;
 use durable_ioring::DurableIoCore;
 use durable_ioring::IoTarget;
 use durable_ioring::StampClock;
-use durable_ioring::backend::{IoBackend, RegisteredRegion, SubmissionData};
+use durable_ioring::backend::{IoBackend, RegisteredRegion, SubmissionData, refusal_fault};
 use durable_ioring::driver::Home;
 use durable_ioring::driver::LockWatch;
 use durable_ioring::driver::PumpedDelivery;
@@ -56,9 +57,9 @@ use durable_ioring::driver::{Answer, DomainCall};
 use durable_ioring::driver::{Engine, EngineGuard};
 use durable_ioring::{
     Access, AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal,
-    Epoch, EpochState, FailureInfo, FlushDomain, ImportScope, Imported, IoTargetKey, Leftovers,
-    LineageInfo, ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
-    RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
+    Epoch, EpochState, FailureInfo, FlushDomain, ImportScope, Imported, IoFault, IoTargetKey,
+    Leftovers, LineageInfo, ReadOptions, RemoveTargetError, Resolution, ResolveError,
+    RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 use durable_ioring::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle};
 use durable_ioring::{
@@ -458,6 +459,7 @@ where
             // Nothing sets the signal the pool's wake would: entries are made poppable by the
             // pump, which sets the readiness event itself, as every other path does.
             DeliveryMode::Pumped => PumpedDelivery::new(engine)
+                .map_err(|(fault, engine)| (io::Error::from(fault), engine))
                 .map(|pumped| pumped.with_lock_watch(watch.clone()))
                 .map(Delivery::Pumped),
             DeliveryMode::Signalled(environment) => {
@@ -555,8 +557,8 @@ where
     type Readiness = Event;
     type Target = Win32FileTarget;
 
-    fn readiness(&mut self) -> io::Result<Event> {
-        self.hub.readiness()
+    fn readiness(&mut self) -> Result<Event, IoFault> {
+        self.hub.readiness().map_err(windows_fault)
     }
 
     fn add_target<T: TargetKey>(
@@ -654,7 +656,7 @@ where
         pushed
     }
 
-    fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>> {
+    fn pop(&mut self) -> Result<Option<EntryOf<Self>>, IoFault> {
         // A push is submitted as it is made, by the engine's doorbell, so what is left to submit
         // here is what a failed one left queued, and the driver told the consumer so (DI-7+.2). It
         // is reported only when there is no entry to return instead: an entry is progress, and
@@ -674,8 +676,8 @@ where
             match engine.core.pop() {
                 Some(entry) => Ok(Some(entry)),
                 None => match (engine.take_fault(), submitted) {
-                    (Some(fault), _) => Err(io::Error::other(fault)),
-                    (None, Err(cause)) => Err(io::Error::other(cause)),
+                    (Some(fault), _) => Err(fault),
+                    (None, Err(cause)) => Err(refusal_fault(cause)),
                     (None, Ok(())) => Ok(None),
                 },
             }
@@ -885,7 +887,7 @@ where
             ));
         };
         self.settled(pumped.ready);
-        pumped.waited.map(|_| pumped.ready)
+        pumped.waited.map(|_| pumped.ready).map_err(io::Error::from)
     }
 
     /// A clone of the event the thread pool sets whenever completions may be waiting, for the
@@ -1091,16 +1093,28 @@ where
 {
     type Registered = R;
 
-    fn with_registered_buffer<T>(&mut self, i: u32, f: impl FnOnce(&[u8]) -> T) -> io::Result<T> {
-        self.engine().backend.registered_buffer(i).map(f)
+    fn with_registered_buffer<T>(
+        &mut self,
+        i: u32,
+        f: impl FnOnce(&[u8]) -> T,
+    ) -> Result<T, IoFault> {
+        self.engine()
+            .backend
+            .registered_buffer(i)
+            .map(f)
+            .map_err(windows_fault)
     }
 
     fn with_registered_buffer_mut<T>(
         &mut self,
         i: u32,
         f: impl FnOnce(&mut [u8]) -> T,
-    ) -> io::Result<T> {
-        self.engine().backend.registered_buffer_mut(i).map(f)
+    ) -> Result<T, IoFault> {
+        self.engine()
+            .backend
+            .registered_buffer_mut(i)
+            .map(f)
+            .map_err(windows_fault)
     }
 
     fn write_registered_with<T: WriteKey>(

@@ -296,13 +296,20 @@ fn a_provider_failure_is_reported_with_its_domain_and_error_and_holds_the_seal()
         .domains
         .remove(0)
         .completion
-        .fail(std::io::Error::from_raw_os_error(IO_DEVICE));
+        .fail(durable_ioring::report_io_error(
+            std::io::Error::from_raw_os_error(IO_DEVICE),
+        ));
 
     let failed = next_failed(&mut harness);
     match &failed.cause {
         FailureCause::Provider { domain, error } => {
             assert_eq!(domain.bytes(), b"log");
-            assert_eq!(error.raw_os_error(), Some(IO_DEVICE));
+            assert_eq!(
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::raw_os_error),
+                Some(IO_DEVICE)
+            );
         }
         other => panic!("expected a provider failure, got {other:?}"),
     }
@@ -478,13 +485,20 @@ fn one_routed_provider_failing_fails_only_the_files_in_its_domains() {
     log.domains
         .remove(0)
         .completion
-        .fail(std::io::Error::from_raw_os_error(IO_DEVICE));
+        .fail(durable_ioring::report_io_error(
+            std::io::Error::from_raw_os_error(IO_DEVICE),
+        ));
 
     let failed = next_failed(&mut harness);
     match &failed.cause {
         FailureCause::Provider { domain, error } => {
             assert_eq!(domain.bytes(), b"log");
-            assert_eq!(error.raw_os_error(), Some(IO_DEVICE));
+            assert_eq!(
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::raw_os_error),
+                Some(IO_DEVICE)
+            );
         }
         other => panic!("expected the log provider's failure, got {other:?}"),
     }
@@ -511,7 +525,9 @@ fn a_file_whose_domains_span_routed_providers_fails_when_either_fails() {
     disk.domains
         .remove(0)
         .completion
-        .fail(std::io::Error::from_raw_os_error(IO_DEVICE));
+        .fail(durable_ioring::report_io_error(
+            std::io::Error::from_raw_os_error(IO_DEVICE),
+        ));
 
     let failed = next_failed(&mut harness);
     assert!(

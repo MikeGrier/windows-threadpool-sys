@@ -27,25 +27,13 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.3** -- Every std path with a core or alloc equivalent is named by it, here and in io-buffers, and StderrDiagnostics is behind a default std feature. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-233)
 
-- [ ] **DI-23.4** -- **A fault's report is a static or a shared `dyn Error`, shared through `rc-errors`**
-  ([DI-D-105](DESIGN-NOTES.md#di-d-105)). Re-planned 2026-10-23: [DI-D-102](DESIGN-NOTES.md#di-d-102)'s associated types were
-  superseded before any code was written, and the pointer needs `unsafe`, which this crate forbids.
+- [x] **DI-23.4** -- A fault's report is a static or a shared dyn Error, shared through rc-errors, in three steps. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-234)
 
 - [x] **DI-23.4.1** -- The rc-errors crate is created, registered, and given its decisions and its first milestone. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-2341)
 
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/rc-errors` -> `RCE-M1` -> `RCE-1.1` (the allocator
-  > interface). See [CHECKLIST.md](../rc-errors/CHECKLIST.md). Control returns here at `DI-23.4.2`.
+- [x] **DI-23.4.2** -- The core's faults carry the report, and io::Error leaves the portable boundary. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-2342)
 
-- [ ] **DI-23.4.2** -- **The core's faults carry the report.** `IoFault`, `FailureCause::Provider`, `DomainCompletion` and
-  `DomainOutcome`, the `DurableRing` trait, the notification and the pump's setup lose `io::Error`; the core's refusals are
-  static descriptors; `std` interop is behind the feature. Breaking for this crate.
-
-  > **CROSS-COMPONENT PREREQUISITE (met 2026-10-23):** `crates/rc-errors`' first milestone must land first; it is
-  > [RCE-M1](../rc-errors/COMPLETED-CHECKLIST.md#rce-m1-complete).
-
-- [ ] **DI-23.4.3** -- **`win-durable-ioring` reports through it**: `windows_fault` makes the shared form from an
-  `io::Error`, and its callers' downcasts to `RefusalCause` and `SharingViolation` go through `dyn Error`. Breaking for
-  `win-durable-ioring`.
+- [x] **DI-23.4.3** -- win-durable-ioring reports through the report, landed with DI-23.4.2. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-2343)
 
 - [ ] **DI-23.5** -- **Capacity declared at construction, and construction fallible** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
   [DI-D-98](DESIGN-NOTES.md#di-d-98)): the capacities the consumer declares, reserved with `try_reserve`, and the refusal at
@@ -69,7 +57,8 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [ ] **DI-23.10** -- **Settle the open designs with the engineer**, as the session lists them: the storage a failure holds and
   how events and the inventory lend out its suspect set and markings; the `Arc`-shared contract types; the ordered tables;
-  `Mutex` and `thread::panicking()` without `std`; and whether a portable `ErrorKind` is wanted.
+  `Mutex` and `thread::panicking()` without `std`; whether a portable `ErrorKind` is wanted; and the shared report a refusal
+  carrying a backend fault allocates ([DI-D-105](DESIGN-NOTES.md#di-d-105)'s "what building it settled").
 
 - [ ] **DI-23.11** -- **The clean paths hand out no allocated collection** ([DI-D-103](DESIGN-NOTES.md#di-d-103)): visitors for
   provider requests, lineages and `close()`, and visitor queries behind `IoTargetBusy` and `LineageBusy`.

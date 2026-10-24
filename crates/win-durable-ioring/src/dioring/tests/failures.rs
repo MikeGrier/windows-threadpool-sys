@@ -56,7 +56,8 @@ fn a_failed_flush_is_reported_with_the_rings_cause() {
             assert_eq!(fault.source, "windows-ioring", "relayed from the ring");
             let code = fault
                 .error
-                .as_ioring_error()
+                .downcast_ref::<std::io::Error>()
+                .and_then(|error| error.as_ioring_error())
                 .expect("the ring's error, passed through")
                 .code();
             assert_eq!(code.cast_unsigned() & 0xFFFF, IO_DEVICE);

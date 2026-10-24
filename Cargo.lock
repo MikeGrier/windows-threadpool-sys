@@ -8,6 +8,7 @@ version = "0.3.0"
 dependencies = [
  "durable-ioring",
  "io-buffers",
+ "rc-errors",
 ]
 
 [[package]]

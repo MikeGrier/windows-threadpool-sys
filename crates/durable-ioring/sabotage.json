@@ -1551,17 +1551,17 @@
       "name": "DI-3.10.3.5.6.2.1: a refusal fault does not carry its cause",
       "file": "src/backend.rs",
       "expect": "caught",
-      "why": "The REFUSED fault's error is the RefusalCause itself, so a consumer can recover it by downcasting rather than parsing a message.",
-      "find": ["        io::Error::new(kind, cause)"],
-      "replace": ["        io::Error::new(kind, cause.to_string())"]
+      "why": "The REFUSED fault's error is the RefusalCause itself -- a static of it for a cause that carries nothing (DI-D-105) -- so a consumer recovers it by downcasting rather than parsing a message. Naming another cause's static reports the wrong one.",
+      "find": ["        RefusalCause::UnknownTarget => named(&UNKNOWN_TARGET),"],
+      "replace": ["        RefusalCause::UnknownTarget => named(&BUSY),"]
     },
     {
       "name": "DI-3.10.3.5.6.2.1: a refusal fault drops the backend's code",
       "file": "src/backend.rs",
       "expect": "caught",
       "why": "A cause carrying the backend's report keeps its code on the fault, as every fault the backend reports itself does.",
-      "find": ["        RefusalCause::Unusable(fault) | RefusalCause::Unknown(fault) => fault.code,\n"],
-      "replace": ["        RefusalCause::Unusable(_) | RefusalCause::Unknown(_) => None,\n"]
+      "find": ["            let code = fault.code;"],
+      "replace": ["            let code = None;"]
     },
     {
       "name": "DI-3.10.3.5.6.2.1: the engine does not act on what a refusal makes due",
@@ -1636,20 +1636,20 @@
       "replace": ["        Arc::new(Mutex::new(None))"]
     },
     {
-      "name": "DI-7.3: a fault the backend does not keep loses its report",
+      "name": "DI-7.3: a construction's failure is not the backend's fault",
       "file": "src/pump.rs",
       "expect": "caught",
-      "why": "A construction that fails names why: the backend's own report, whole, when nothing else holds it.",
-      "find": ["    Arc::try_unwrap(fault.error)"],
-      "replace": ["    Arc::try_unwrap(Arc::new(io::Error::other(fault.source)))"]
+      "why": "A construction that fails names why: the backend's own fault, as it reported it, since a fault is cloned without allocating (DI-D-105).",
+      "find": ["            Err(fault) => Err((\n                fault,"],
+      "replace": ["            Err(fault) => Err((\n                IoFault { source: \"lost\", ..fault },"]
     },
     {
-      "name": "DI-7.3: a fault the backend keeps loses its kind",
-      "file": "src/pump.rs",
+      "name": "DI-23.4.2: a fault made an io::Error loses its kind",
+      "file": "src/fault_report.rs",
       "expect": "caught",
-      "why": "A report that cannot be taken whole is reproduced by its kind and its text, so a caller that matches on the kind still can.",
-      "find": ["            io::Error::new(shared.kind(), text)"],
-      "replace": ["            io::Error::other(text)"]
+      "why": "A fault converted to an io::Error keeps the kind of the io::Error its report holds, so a caller that matches on the kind still can, as it could when the pump's construction reported an io::Error.",
+      "find": ["            .map_or(std::io::ErrorKind::Other, std::io::Error::kind);"],
+      "replace": ["            .map_or(std::io::ErrorKind::Other, |_| std::io::ErrorKind::Other);"]
     },
     {
       "name": "DI-7.3: a memory notification forgets what its wait saw",
@@ -1732,12 +1732,12 @@
       "replace": ["            access: Access::ReadWrite,\n"]
     },
     {
-      "name": "DI-13.9: a refusal for access ends an operation with some other kind of error",
+      "name": "DI-13.9: a refusal for access ends an operation with some other cause",
       "file": "src/backend.rs",
       "expect": "caught",
-      "why": "The fault a refused operation of the core's own ends with names the cause as the error's kind, and a refusal for access is permission denied.",
-      "find": ["        RefusalCause::AccessDenied => io::ErrorKind::PermissionDenied,\n"],
-      "replace": ["        RefusalCause::AccessDenied => io::ErrorKind::Other,\n"]
+      "why": "The fault a refused operation of the core's own ends with carries the cause, and a refusal for access is AccessDenied, not another cause the downcast would find.",
+      "find": ["        RefusalCause::AccessDenied => named(&ACCESS_DENIED),"],
+      "replace": ["        RefusalCause::AccessDenied => named(&INVALID),"]
     },
     {
       "name": "DI-13.9: the in-memory backend lets a write through to a target that cannot write",
@@ -2274,6 +2274,22 @@
       "why": "A control, and a limit stated: the allocation test pins only the tags its scenarios reach. A gate cycle the search found and the trace did not is never reached, so its tag's name is seen by nothing. The rules hold for the paths exercised; the static pass is what covers the rest.",
       "find": ["Tag::new(\"durability::gates::trace::unfound\")"],
       "replace": ["Tag::new(\"durability::gates::trace::unfound_renamed\")"]
+    },
+    {
+      "name": "DI-23.4.2: a refusal carrying a fault reports the backend's report and not its cause",
+      "file": "src/backend.rs",
+      "expect": "caught",
+      "why": "Unusable and Unknown carry the backend's fault, so their cause is shared rather than static (DI-D-105); the backend's own report is only the fallback when that allocation fails. Reporting it always loses the downcast to RefusalCause that DI-D-54 promises.",
+      "find": ["            (code, shared.map_or(backends, ErrorReport::Shared))"],
+      "replace": ["            (code, { drop(shared); backends })"]
+    },
+    {
+      "name": "DI-23.4.2: a shared report ignores the allocator it was given",
+      "file": "src/fault_report.rs",
+      "expect": "caught",
+      "why": "The seam a test reaches the fallback through is the allocator; sharing from the global one regardless never reaches the fallback a failed allocation must take.",
+      "find": ["    SharedError::try_new_in(error, allocator)"],
+      "replace": ["    SharedError::try_new({ let _ = allocator; error })"]
     }
   ]
 }

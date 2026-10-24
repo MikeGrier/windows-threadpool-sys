@@ -17,6 +17,10 @@ readme = "COMPONENT.md"
 # portable, so this crate has no platform dependency (DI-D-50). The version is the one io-buffers'
 # first release is fixed to (`Release-As: 0.1.0`), so it is not a guess.
 io-buffers = { version = "0.1.0", path = "../io-buffers" }
+# A fault's report, a static or a shared `dyn Error` (DI-D-105): the shared form needs `unsafe`, which
+# this crate forbids, so it lives below. release-please's workspace plugin moves this version with
+# rc-errors' first release.
+rc-errors = { version = "0.0.1", path = "../rc-errors" }
 
 [features]
 default = ["std"]

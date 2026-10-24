@@ -90,7 +90,12 @@ fn a_failed_flushs_code_reads_without_the_ring_crate() {
                 .expect("a commit the ring answered carries a code");
             assert_eq!(crate::win32_code_of(code), Some(IO_DEVICE));
             assert_eq!(
-                crate::error_code_of(&fault.error),
+                crate::error_code_of(
+                    fault
+                        .error
+                        .downcast_ref::<std::io::Error>()
+                        .expect("the ring's io::Error")
+                ),
                 Some(code),
                 "read again from the report"
             );

@@ -18,14 +18,16 @@ use alloc::sync::Arc;
 use core::num::NonZeroU32;
 use core::time::Duration;
 use std::collections::HashMap;
-use std::io;
 use std::sync::{Condvar, Mutex, PoisonError};
+
+use rc_errors::{ErrorReport, StaticError};
 
 use crate::access::Access;
 use crate::backend::{
     Completion, DuplicateTarget, IoBackend, RefusalCause, Refused, RegisteredRegion, Submission,
     SubmissionData, SubmissionOp, SubmissionToken,
 };
+use crate::fault_report::shared_or;
 use crate::io_target::{Capabilities, Geometry, IoTarget, WarrantyClass};
 use crate::pump::Waitable;
 use crate::types::{FlushDomain, IoFault, IoTargetKey};
@@ -40,20 +42,29 @@ use script::{Point, Probe, ScriptState};
 /// The source every fault the in-memory backend reports names.
 pub const MEMORY: &str = "memory";
 
-fn memory_fault(message: &str) -> IoFault {
+/// The backend's own faults, which need no storage (DI-D-105).
+static DETACHED: StaticError = StaticError::new("the target was detached");
+static COULD_NOT_GROW: StaticError =
+    StaticError::new("the target could not grow to hold the write");
+/// A scripted fault whose shared report could not be allocated.
+static SCRIPTED_UNSHARED: StaticError =
+    StaticError::new("a scripted fault, which could not be reported: allocating its report failed");
+
+fn memory_fault(error: ErrorReport) -> IoFault {
     IoFault {
         source: MEMORY,
         code: None,
-        error: Arc::new(io::Error::other(message.to_owned())),
+        error,
     }
 }
 
 /// A fault from the in-memory backend with this message and no code, for a [`FaultScript`] to fail
 /// an operation with: the same kind of fault the backend reports for its own failures, whose source
-/// is [`MEMORY`].
+/// is [`MEMORY`]. Its report is shared from the global allocator, so two scripted faults are two
+/// faults even with one message; should that allocation fail, it is a static report saying so.
 #[must_use]
-pub fn scripted_fault(message: &str) -> IoFault {
-    memory_fault(message)
+pub fn scripted_fault(message: &'static str) -> IoFault {
+    memory_fault(shared_or(StaticError::new(message), &SCRIPTED_UNSHARED))
 }
 
 /// A target whose bytes are held in memory: what was written, and what the last successful commit
@@ -238,7 +249,7 @@ impl MemoryNotification {
 }
 
 impl Waitable for MemoryNotification {
-    fn wait(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
+    fn wait(&mut self, timeout: Option<Duration>) -> Result<bool, IoFault> {
         let count = self.count_past(self.seen, timeout);
         let raised = count > self.seen;
         self.seen = count;
@@ -528,7 +539,7 @@ impl MemoryBackend {
         let Some(target) = self.targets.get_mut(&target) else {
             return Completion {
                 token,
-                result: Err(memory_fault("the target was detached")),
+                result: Err(memory_fault(ErrorReport::from_static(&DETACHED))),
                 buffer: owned_buffer(op),
             };
         };
@@ -588,7 +599,7 @@ impl MemoryBackend {
 fn could_not_grow(token: SubmissionToken, buffer: Option<Vec<u8>>) -> Completion<Vec<u8>> {
     Completion {
         token,
-        result: Err(memory_fault("the target could not grow to hold the write")),
+        result: Err(memory_fault(ErrorReport::from_static(&COULD_NOT_GROW))),
         buffer,
     }
 }

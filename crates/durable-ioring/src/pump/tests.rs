@@ -26,6 +26,10 @@ use crate::memory::{MemoryBackend, MemoryNotification, MemoryTarget};
 use crate::oracle::PairingChecker;
 use crate::test_support::Ticks;
 use crate::types::{Entry, Epoch, FlushDomain, IoFault, IoTargetKey, Outcome, WriteOptions};
+use rc_errors::{ErrorReport, StaticError};
+
+static WAIT_FAILED: StaticError = StaticError::new("the wait failed");
+static NO_NOTIFICATION: StaticError = StaticError::new("no notification");
 
 const ONE: IoTargetKey = IoTargetKey(1);
 const TWO: IoTargetKey = IoTargetKey(2);
@@ -345,7 +349,7 @@ struct Scripted {
     notification_fails: bool,
     /// A fault the backend keeps a hold of, so the one it reports is shared and cannot be taken
     /// whole.
-    kept_fault: Option<Arc<io::Error>>,
+    kept_fault: Option<ErrorReport>,
     wait_fails: bool,
     /// A notification that never reports a raising, sleeping out its timeout instead.
     starve: bool,
@@ -361,12 +365,16 @@ struct ScriptedNotification {
 }
 
 impl Waitable for ScriptedNotification {
-    fn wait(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
+    fn wait(&mut self, timeout: Option<Duration>) -> Result<bool, IoFault> {
         if let Some(on_wait) = &self.on_wait {
             on_wait();
         }
         if self.fails {
-            return Err(io::Error::other("the wait failed"));
+            return Err(IoFault {
+                source: "test",
+                code: None,
+                error: ErrorReport::from_static(&WAIT_FAILED),
+            });
         }
         if self.starve {
             std::thread::sleep(timeout.unwrap_or(BOUND));
@@ -415,12 +423,10 @@ impl IoBackend for Scripted {
 
     fn notification(&self) -> Result<ScriptedNotification, IoFault> {
         if self.notification_fails {
-            let error = self.kept_fault.clone().unwrap_or_else(|| {
-                Arc::new(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "no notification",
-                ))
-            });
+            let error = self
+                .kept_fault
+                .clone()
+                .unwrap_or_else(|| ErrorReport::from_static(&NO_NOTIFICATION));
             return Err(IoFault {
                 source: "test",
                 code: None,
@@ -453,7 +459,11 @@ fn a_notification_that_cannot_be_made_hands_the_engine_back() {
     let Err((error, mut engine)) = refused else {
         panic!("the notification could not be made");
     };
-    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        error.source, "test",
+        "the backend's fault, as it reported it"
+    );
+    assert_eq!(error.error, ErrorReport::from_static(&NO_NOTIFICATION));
     assert!(error.to_string().contains("no notification"), "{error}");
     assert!(
         engine.backend.inner.target(ONE).is_some() && engine.core.target(TWO).is_some(),
@@ -463,16 +473,14 @@ fn a_notification_that_cannot_be_made_hands_the_engine_back() {
 }
 
 #[test]
-fn a_notification_fault_the_backend_keeps_is_reported_by_its_kind_and_text() {
+fn a_notification_fault_the_backend_keeps_is_the_same_report_it_kept() {
     let mut backend = scripted(true, false);
-    backend.kept_fault = Some(Arc::new(io::Error::new(
-        io::ErrorKind::NotFound,
-        "a kept report",
-    )));
+    let kept = crate::report_io_error(io::Error::new(io::ErrorKind::NotFound, "a kept report"));
+    backend.kept_fault = Some(kept.clone());
     let Err((error, engine)) = PumpedDelivery::new(engine(backend)) else {
         panic!("the notification could not be made");
     };
-    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    assert_eq!(error.error, kept, "one report, shared, not copied");
     assert!(error.to_string().contains("a kept report"), "{error}");
     assert!(
         engine.backend.kept_fault.is_some(),
