@@ -26,6 +26,8 @@ investigated and proposed. Decisions that resulted, all in
   tokens are slots (continued 2026-10-24).
 - [DI-D-109](../crates/durable-ioring/DESIGN-NOTES.md#di-d-109) -- what arrives unasked is bounded by derivation, and the
   rest of DI-23.10 (continued 2026-10-24).
+- [DI-D-110](../crates/durable-ioring/DESIGN-NOTES.md#di-d-110) -- a recorded seal holds the place of a write it covers
+  until the mark passes it (continued 2026-10-24).
 
 The work is queued as DI-M23 in [CHECKLIST.md](../crates/durable-ioring/CHECKLIST.md). The prior art behind these
 decisions is in [DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md](DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md).
@@ -476,6 +478,37 @@ reverse an answer, which wait for the engineer. The rest are the assistant's to 
 10. **A portable `ErrorKind`.** Not provided: the core does not need one. A working position, revisited if a stack generic
     over backends asks for it.
 11. **The inconsistency panics of DI-D-46** stay out of scope, as assumed.
+
+## DI-23.12.1.2: what bounds a finished seal the mark has not passed (continued 2026-10-24)
+
+Found while moving the ordered tables (DI-23.12.1.1): the seal queue was the one ordered table with no bound. A recorded
+seal stays queued until the mark passes it, and DI-D-107's argument bounds only seals with flushes out. Behind an
+unresolved failure that holds the mark, a consumer that keeps writing, sealing and getting its flushes answered finishes
+one seal after another; each is answered `Blocked`, none can leave, and nothing holds a place for any of them, so both
+the queue and the `Blocked` entries grow without a bound any declared count gives.
+
+The assistant brought two options, each a contract change:
+
+- **(a) A finished seal the mark has not passed holds a place of the window**, as an abandoned epoch above the mark does
+  (DI-D-109). Recommended: the bound is the window the consumer already declares, and the refusal lands where the consumer
+  is already refused for capacity, at a push.
+- **(b) Consecutive finished seals coalesce into the latest**, as `Durable` entries do (DI-D-101): a bound per lineage,
+  beside the window, that no declared count names.
+
+The engineer answered "implement di-23.12.1.2". The assistant took that as accepting the recommendation rather than as a
+choice made between the two, and says so in DI-D-110 so it can be revisited.
+
+Working it out in the code refined (a) in two ways:
+
+- **Which place.** A seal holds no place of its own. It holds the place of the earliest pushed write in its span, which
+  the write already holds, so the count does not grow; spans are disjoint, so no two seals hold the same write's place.
+  That gives recorded seals at most the places, at most `operations`.
+- **When the hold starts.** Holding from the seal's finish would leave a seal whose writes all failed before it started
+  with nothing to hold -- the write lets go of its place when it fails and no failure suspects it -- and the same loop
+  could then run on failing writes. Holding from when the seal is made closes that, and costs nothing, since the place is
+  the write's.
+
+The seal queue then moved onto one table for every lineage, keyed by lineage and seal number, made for `operations`.
 
 ## Working positions and open questions (not decisions)
 

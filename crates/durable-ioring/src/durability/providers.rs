@@ -87,13 +87,16 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         outcome: Result<(), FailureCause<V<E, I>>>,
     ) -> Due<E, T, I> {
         let mut due = Due::default();
-        let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {
+        if !self
+            .lineages
+            .get(&lineage)
+            .is_some_and(|state| !state.ended)
+        {
             return due;
-        };
-        let answered = state
+        }
+        let answered = self
             .seals
-            .iter_mut()
-            .find(|candidate| candidate.seq == seal)
+            .get_mut(&(lineage, seal))
             .ok_or("a provider answered for a seal that does not exist")
             .and_then(|candidate| {
                 let SealStage::Flushing {
@@ -146,11 +149,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// its file's flush, if the default answers for it, and each of its file's domains the
     /// provider serves. Each is marked covered in every failure suspecting it (DI-D-36).
     pub(super) fn cover(&mut self, lineage: Key, seal: u64, due: &mut Due<E, T, I>) {
-        let Some(found) = self
-            .lineages
-            .get(&lineage)
-            .and_then(|state| state.seals.iter().find(|candidate| candidate.seq == seal))
-        else {
+        let Some(found) = self.seals.get(&(lineage, seal)) else {
             return;
         };
         let SealStage::Flushing { domains, .. } = &found.stage else {

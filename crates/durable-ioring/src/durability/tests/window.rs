@@ -1,8 +1,9 @@
 // Copyright (c) 2026 Mike Grier
 //! The submit window's places, as the durability core holds them (DI-D-100, DI-D-107): a write
 //! holds its place while it is uncovered, and each unresolved failure suspecting it holds the place
-//! until the failure is resolved. Every change here is also checked, inside the core, against a
-//! census of the uncovered writes and the failures (`window_agrees`).
+//! until the failure is resolved, and a recorded seal holds the place of the first write it covers
+//! until the mark passes it (DI-D-110). Every change here is also checked, inside the core, against
+//! a census of the uncovered writes, the failures and the seals (`window_agrees`).
 
 use super::{A, B, DEFAULT, FULL, Ops, failed, lineage, submitted, tokens};
 use crate::durability::Reach;
@@ -227,9 +228,53 @@ fn an_ended_lineage_lets_go_of_each_files_places_as_that_files_flush_answers() {
     lineage.end(minted);
     assert_eq!(lineage.window_places(), 3);
     lineage.0.flushed(minted, 2, A, Ok(()));
-    assert_eq!(lineage.window_places(), 1, "B's is out");
+    assert_eq!(
+        lineage.window_places(),
+        2,
+        "B's is out, and the seal still out holds the place of the A write it pins (DI-D-110)"
+    );
     lineage.0.flushed(minted, 2, B, Ok(()));
     assert_eq!(lineage.window_places(), 0);
+}
+
+#[test]
+fn a_seal_keeps_the_place_of_the_write_it_pinned_when_that_write_fails_before_it_starts() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let first = ops.push(&mut lineage, 1, A, DEFAULT);
+    let second = ops.push(&mut lineage, 1, B, DEFAULT);
+    submitted(lineage.seal(1));
+    assert_eq!(
+        lineage.window_places(),
+        2,
+        "the seal pins the first write's place, and adds none"
+    );
+    lineage.completed(first, failed());
+    assert_eq!(
+        lineage.window_places(),
+        2,
+        "the write let go, and the seal it was pinned by keeps the place (DI-D-110)"
+    );
+    lineage.completed(second, FULL);
+    lineage.flushed(1, B, Ok(()));
+    assert_eq!(lineage.window_places(), 0, "the mark passed the seal");
+}
+
+#[test]
+fn ending_a_lineage_lets_go_of_the_place_a_seal_it_drops_had_pinned() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let minted = lineage.mint(None);
+    let write = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    submitted(lineage.0.seal(minted, 1));
+    assert_eq!(lineage.window_places(), 1);
+    lineage.end(minted);
+    lineage.completed(write, FULL);
+    assert_eq!(
+        lineage.window_places(),
+        0,
+        "the seal had not started, so the end dropped it and its pin"
+    );
 }
 
 #[test]

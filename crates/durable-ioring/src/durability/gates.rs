@@ -139,7 +139,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             .filter(|seal| seal.lineage == target.lineage)
             .map(|seal| (state.next_seal, seal.epoch));
         let seals = state
-            .seal_points()
+            .seal_points(&self.seals, target.lineage)
             .map(|seal| (seal.seq, seal.through))
             .chain(considered);
         let mut extent = target.epoch;

@@ -148,6 +148,7 @@ pub(crate) mod tag {
     // durability.rs
     pub(crate) const DURABILITY_NEW_LINEAGES: Tag = Tag::new("durability::new::lineages");
     pub(crate) const DURABILITY_NEW_WRITES: Tag = Tag::new("durability::new::writes");
+    pub(crate) const DURABILITY_NEW_SEALS: Tag = Tag::new("durability::new::seals");
     pub(crate) const DURABILITY_NEW_IN_FLIGHT_BY_EPOCH: Tag =
         Tag::new("durability::new::in_flight_by_epoch");
     pub(crate) const DURABILITY_NEW_HELD_BY_EPOCH: Tag = Tag::new("durability::new::held_by_epoch");
@@ -188,7 +189,6 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_START_SEALS_DOMAINS: Tag =
         Tag::new("durability::start_seals::domains");
     pub(crate) const DURABILITY_START_SEALS_CALL: Tag = Tag::new("durability::start_seals::call");
-    pub(crate) const DURABILITY_SEAL_RECORD: Tag = Tag::new("durability::seal::record");
     pub(crate) const DURABILITY_END_PAIRS_FLUSHES: Tag = Tag::new("durability::end_pairs::flushes");
     pub(crate) const DURABILITY_END_SEAL_REPORT: Tag = Tag::new("durability::end_seal::report");
     pub(crate) const DURABILITY_END_FLUSH_REPORT: Tag = Tag::new("durability::end_flush::report");

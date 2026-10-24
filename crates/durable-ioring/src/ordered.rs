@@ -172,6 +172,20 @@ impl<K: Ord, V> Ordered<K, V> {
         Present(self.entries[start..end].iter())
     }
 
+    /// As [`between`](Self::between), the values mutably.
+    pub(crate) fn between_mut(
+        &mut self,
+        before: impl Fn(&K) -> bool,
+        upto: impl Fn(&K) -> bool,
+    ) -> PresentMut<'_, K, V> {
+        let start = self.entries.partition_point(|(key, _)| before(key));
+        let end = self
+            .entries
+            .partition_point(|(key, _)| upto(key))
+            .max(start);
+        PresentMut(self.entries[start..end].iter_mut())
+    }
+
     /// Keep only the entries `keep` says to, in key order.
     pub(crate) fn retain(&mut self, mut keep: impl FnMut(&K, &mut V) -> bool) {
         for (key, slot) in &mut self.entries {

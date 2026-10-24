@@ -41,7 +41,8 @@ pub struct Capacity {
     /// The operations outstanding at once: pushed and not yet popped as a completion, whether in
     /// flight, held for a gate, or completed and queued, reads and writes alike. A write also
     /// holds its place while it is uncovered, and while any unresolved failure suspects it, so the
-    /// window covers written but unsealed data as well as I/O in flight (DI-D-100).
+    /// window covers written but unsealed data as well as I/O in flight (DI-D-100). A seal the
+    /// high-water mark has not passed keeps the place of the first write it covers (DI-D-110).
     pub operations: usize,
     /// The lineages the instance has not retired, the default among them, so at least one. An
     /// ended lineage counts until it is retired.

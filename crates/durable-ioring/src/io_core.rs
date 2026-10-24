@@ -615,8 +615,9 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     }
 
     /// How many places of the submit window are held: each operation accepted and not yet popped,
-    /// each write still uncovered, and each write an unresolved failure suspects, counted once
-    /// however many of those hold it (DI-D-100).
+    /// each write still uncovered, each write an unresolved failure suspects, and the write each
+    /// seal the mark has not passed holds, counted once however many of those hold it (DI-D-100,
+    /// DI-D-110).
     #[must_use]
     pub fn window_places(&self) -> usize {
         self.durability.window_places()

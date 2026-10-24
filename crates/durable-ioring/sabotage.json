@@ -130,7 +130,7 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal takes effect at the first seal after it that finishes successfully (DI-D-12 (c)); a seal whose own flush failed has re-issued nothing safely. Caught by the unit test whose second seal fails after a heal.",
-      "find": ["            *failed = true;\n"],
+      "find": ["        *failed = true;\n"],
       "replace": [""]
     },
     {
@@ -138,8 +138,8 @@
       "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "The prefix property (guarantee 2): Durable through 2 covers 1, so it must wait for 1. Caught by the I/O test whose first seal a provider holds, and by the unit tests.",
-      "find": ["            } else if let Some(seal) = state.seals.front() {"],
-      "replace": ["            } else if let Some(seal) = state.seals.back() {"]
+      "find": ["            } else if let Some((_, seal)) = tables::seals_of(&self.seals, lineage).next() {"],
+      "replace": ["            } else if let Some((_, seal)) = tables::seals_of(&self.seals, lineage).next_back() {"]
     },
     {
       "name": "DI-3.2.3: a write a provider serves does not hold its seal",
@@ -523,7 +523,7 @@
       "expect": "caught",
       "why": "DI-D-30: an ended lineage answers nothing more, and a failure belongs to every lineage it suspects -- one that has ended could never resolve its part. Caught by the core test that observes a failure after the end, and the oracle's rule.",
       "find": ["            .filter(|write| lineages.get(&write.lineage).is_some_and(|s| !s.ended))\n"],
-      "replace": ["            .filter(|write| lineages.contains_key(&write.lineage))\n"]
+      "replace": ["            .filter(|write| lineages.get(&write.lineage).is_some())\n"]
     },
     {
       "name": "DI-3.2.5.1: an import scoped to a lineage is not confined to it",
@@ -554,8 +554,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-30: a flush that finishes after the end reports nothing. Answered, it finds the ended lineage's seals cleared and records an inconsistency. Caught by the core test whose flush answers while the lineage drains a write in flight.",
-      "find": ["            Some(state) if !state.ended => {"],
-      "replace": ["            Some(state) => {"]
+      "find": ["            Some(state) if !state.ended => answer("],
+      "replace": ["            Some(_) => answer("]
     },
     {
       "name": "DI-3.2.5.1: a lineage key is reused",
@@ -802,8 +802,8 @@
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "DI-D-42 and DI-D-44: an ended lineage is not live, and a late answer for it reports nothing. Applying it observes a failure for a lineage the instance no longer answers for.",
-      "find": ["        let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {\n"],
-      "replace": ["        let Some(state) = self.lineages.get_mut(&lineage) else {\n"]
+      "find": ["            .is_some_and(|state| !state.ended)\n        {\n            return due;"],
+      "replace": ["            .is_some()\n        {\n            return due;"]
     },
     {
       "name": "DI-3.2.6: a second answer for a domain is applied",
@@ -2128,8 +2128,8 @@
       "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "Blocked is an answer, so it ends the seal's pair; left open, the pair would end later as durable, saying the wrong answer.",
-      "find": ["            let pair = state.answer_at(place);"],
-      "replace": ["            let pair: Option<CorrelationId> = state.answer_at(place).filter(|_| false);"]
+      "find": ["            let pair = state.answer_at(&mut self.seals, lineage, place);"],
+      "replace": ["            let pair: Option<CorrelationId> = state.answer_at(&mut self.seals, lineage, place).filter(|_| false);"]
     },
     {
       "name": "DI-19.2.2: a seal whose flush failed ends as durable",
@@ -2320,8 +2320,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Each issued flush answers once; a second answer for the same file is the driver or the kernel breaking its contract (DI-D-46), and must be refused as inconsistent rather than counted again.",
-      "find": ["            .filter(|entry| entry.flushed && !entry.answered)"],
-      "replace": ["            .filter(|entry| entry.flushed)"]
+      "find": ["        .filter(|entry| entry.flushed && !entry.answered)"],
+      "replace": ["        .filter(|entry| entry.flushed)"]
     },
     {
       "name": "DI-23.6: a write is covered whether or not its file's flush succeeded",
@@ -2344,32 +2344,32 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A seal covering no writes makes no record (DI-D-99); recording it keeps one record per seal, which a consumer sealing ever-higher empty epochs grows without bound, and answers every one it would have overwritten.",
-      "find": ["        let empty = self.covers_no_writes(lineage, through);"],
-      "replace": ["        let empty = false;"]
+      "find": ["        let Some(op) = pin else {","            self.record_empty(lineage, Empty::new(seq, through, pair));"],
+      "replace": ["        let Some(op) = pin else {","            let _ = self.seals.insert((lineage, seq), Seal { seq, through, stage: SealStage::Waiting, answered: false, pair, trailing: None, pin: None });"]
     },
     {
       "name": "DI-23.7: a seal with a write in its span is taken as empty",
       "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "A seal over a write must be recorded, or no seal names the write and nothing flushes its file.",
-      "find": ["            write.lineage == lineage && core::ops::RangeBounds::contains(&span, &write.epoch)"],
-      "replace": ["            false && write.lineage == lineage"]
+      "find": ["            .find(|(_, write)| covers(write.lineage, &write.epoch))"],
+      "replace": ["            .find(|(_, write)| false && covers(write.lineage, &write.epoch))"]
     },
     {
       "name": "DI-23.7: a held write in the span does not make the seal a record",
       "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "A write held for its gate is outstanding as one in flight is (guarantee 5): a seal over it must wait for it and name it, so the seal is not empty.",
-      "find": ["        }) && tables::of(&self.held_by_epoch, lineage, span)\n            .next()\n"],
-      "replace": ["        }) && Option::<()>::None\n"]
+      "find": ["                    .is_some_and(|write| covers(write.lineage, &write.epoch))"],
+      "replace": ["                    .is_some_and(|write| false && covers(write.lineage, &write.epoch))"]
     },
     {
       "name": "DI-23.7: an overwritten empty seal's pair is left open",
       "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "Every begin is ended (DI-D-96): the empty seal a later one overwrites ends its pair at once, as Superseded, since nothing will answer it.",
-      "find": ["        if let Some(old) = state.place(empty) {"],
-      "replace": ["        if let Some(old) = state.place(empty).filter(|_| false) {"]
+      "find": ["        if let Some(old) = state.place(&mut self.seals, lineage, empty) {"],
+      "replace": ["        if let Some(old) = state.place(&mut self.seals, lineage, empty).filter(|_| false) {"]
     },
     {
       "name": "DI-23.7: the empty seal trailing a recorded one is lost when the mark passes it",
@@ -2401,7 +2401,7 @@
       "expect": "caught",
       "why": "A heal is released by a seal made after it, known by its sequence number; an empty seal that took none would share the next seal's, so one made before a heal would release it.",
       "find": ["        state.next_seal += 1;"],
-      "replace": ["        state.next_seal += u64::from(!empty);"]
+      "replace": ["        state.next_seal += u64::from(pin.is_some());"]
     },
     {
       "name": "DI-23.7: finishing empty seals looks past a seal not started",
@@ -2584,8 +2584,8 @@
       "file": "src/durability/lineages.rs",
       "expect": "caught",
       "why": "What an ended lineage keeps of its seals is those with a flush out, to find the writes the flush lets go; keeping the rest keeps the lineage unretired for ever.",
-      "find": ["                matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0)\n"],
-      "replace": ["                true\n"]
+      "find": ["            let keep =\n                matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0);\n"],
+      "replace": ["            let keep = true;\n"]
     },
     {
       "name": "DI-23.5.2.1: a flush of an ended lineage lets go the writes of every lineage",
@@ -2616,8 +2616,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "The seals of an ended lineage are dropped as their last flush answers, or the lineage is never retired.",
-      "find": ["                        state.seals.retain(|seal| {\n                            matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0)\n                        });"],
-      "replace": ["                        state.seals.retain(|_| true);"]
+      "find": ["                        let keep = key.0 != lineage\n                            || matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0);\n"],
+      "replace": ["                        let keep = key.0 != lineage || true;\n"]
     },
     {
       "name": "DI-23.5.2.1: an ended lineage is not retired as its last flush answers",
@@ -2632,8 +2632,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "The answer for a flush is found through the lineage; retiring it with the flush out loses the writes the answer lets go.",
-      "find": ["            .is_some_and(|state| state.ended && !in_flight && state.seals.is_empty())\n"],
-      "replace": ["            .is_some_and(|state| state.ended && !in_flight)\n"]
+      "find": ["            .is_some_and(|state| state.ended && !in_flight && !sealing)\n"],
+      "replace": ["            .is_some_and(|state| state.ended && !in_flight && (!sealing || true))\n"]
     },
     {
       "name": "DI-23.5.2.1: a write kept for its flush out holds its file",
@@ -2968,8 +2968,8 @@
       "file": "src/ordered.rs",
       "expect": "caught",
       "why": "A range whose end is before its start names no entry.",
-      "find": ["            .partition_point(|(key, _)| upto(key))\n            .max(start);\n"],
-      "replace": ["            .partition_point(|(key, _)| upto(key));\n"]
+      "find": ["            .partition_point(|(key, _)| upto(key))\n            .max(start);\n        Present(self.entries[start..end].iter())"],
+      "replace": ["            .partition_point(|(key, _)| upto(key));\n        Present(self.entries[start..end].iter())"]
     },
     {
       "name": "DI-23.12.1: an epoch counted down to nothing stays counted",
@@ -3010,6 +3010,62 @@
       "why": "A held write that ends as never issued is no longer an edge the cycle search follows (DI-D-43).",
       "find": ["                    gated.remove(&(write.lineage, write.epoch, seq));\n"],
       "replace": [""]
+    },
+    {
+      "name": "DI-23.12.1.2: a recorded seal holds no place",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A recorded seal holds the place of the first write it covers until the mark passes it (DI-D-110); without the hold, seals behind a mark a failure holds grow with nothing refusing them.",
+      "find": ["            self.hold_for_seal(op);\n"],
+      "replace": ["            let _ = op;\n"]
+    },
+    {
+      "name": "DI-23.12.1.2: the mark passing a seal keeps its place",
+      "file": "src/durability/empties.rs",
+      "expect": "caught",
+      "why": "The mark passing a seal is what lets go of the place it holds; one kept leaves the window full after the failure is resolved.",
+      "find": ["                unpinned = window::unpin(&mut self.window, popped.pin);\n"],
+      "replace": ["                let _ = popped.pin;\n"]
+    },
+    {
+      "name": "DI-23.12.1.2: an ended lineage's answered seal keeps its place",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A seal an ended lineage drops as its last flush answers lets go of its place; one kept is a place no answer will release.",
+      "find": ["                        if !keep && let Err(what) = window::unpin(window, seal.pin) {\n"],
+      "replace": ["                        if !keep && let Err(what) = Ok::<(), &str>(()) {\n"]
+    },
+    {
+      "name": "DI-23.12.1.2: a seal an ending lineage drops keeps its place",
+      "file": "src/durability/lineages.rs",
+      "expect": "caught",
+      "why": "Ending a lineage drops its seals with no flush out, and each lets go of the place it held.",
+      "find": ["            if !keep && let Err(what) = window::unpin(window, seal.pin) {\n"],
+      "replace": ["            if !keep && let Err(what) = Ok::<(), &str>(()) {\n"]
+    },
+    {
+      "name": "DI-23.12.1.2: the seal table is made one short of the operations",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Recorded seals reach the operations declared when a failure holds the mark, so the table is made for exactly that many.",
+      "find": ["            ordered(\"the recorded seals\", operations)\n"],
+      "replace": ["            ordered(\"the recorded seals\", operations.map(|n| n.saturating_sub(1)))\n"]
+    },
+    {
+      "name": "DI-23.12.1.2: a lineage's seals include the next lineage's",
+      "file": "src/durability/tables.rs",
+      "expect": "caught",
+      "why": "A lineage's seals are its own: the mark, the start of a seal and an ending each walk one lineage's.",
+      "find": ["    seals.between_mut(|key| key.0 < lineage, |key| key.0 <= lineage)\n"],
+      "replace": ["    seals.between_mut(|key| key.0 < lineage, |key| key.0 <= lineage + 1)\n"]
+    },
+    {
+      "name": "DI-23.12.1.2: an inverted mutable range of keys is not empty",
+      "file": "src/ordered.rs",
+      "expect": "caught",
+      "why": "A range whose end is before its start names no entry, mutably as well.",
+      "find": ["            .partition_point(|(key, _)| upto(key))\n            .max(start);\n        PresentMut("],
+      "replace": ["            .partition_point(|(key, _)| upto(key));\n        PresentMut("]
     }
   ]
 }

@@ -488,11 +488,17 @@ capacity declares no lineage or fewer domains than the provider serves.
   - **the write**, while it is uncovered: until a seal covers it successfully, it fails, or its lineage
     ends. The instance keeps a write's record until then, to name it in a later failure's suspect set,
     so popping a write's completion does not let go of its place;
-  - **each unresolved failure suspecting it**, until the failure is healed or abandoned.
+  - **each unresolved failure suspecting it**, until the failure is healed or abandoned;
+  - **a seal the high-water mark has not passed**, which holds the place of the first write it covers
+    ([DI-D-110](DESIGN-NOTES.md#di-d-110)) from when it is made until the mark passes it or its lineage
+    ends. The place is one the write already holds, so a seal adds none; it keeps the place after the
+    write is covered or fails.
 
   **Unresolved failures therefore shrink the submit window**: a consumer that leaves failures unresolved
   is refused at submit for capacity, however many completions it has popped, until it heals or abandons
-  them. The same is true of writes it never seals.
+  them. The same is true of writes it never seals, and of seals behind a mark that a failure holds:
+  each finishes and is answered `Blocked`, and keeps its place until the failure is resolved and the mark
+  passes it.
 - **What counts until it is let go.** A lineage counts until it is retired, so an ended one counts until
   its operations in flight have completed and the commits out for its sealed writes have answered; an
   imported failure counts until it is resolved, a heal waiting for its seal included; a flush domain

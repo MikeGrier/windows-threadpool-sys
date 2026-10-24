@@ -2,12 +2,15 @@
 //! The submit window's places (DI-D-100, DI-D-107): one per operation, held until its last holder
 //! lets go.
 //!
-//! An operation has up to three holders. **The operation** holds its place from its push, held for
+//! An operation has up to four holders. **The operation** holds its place from its push, held for
 //! a gate included, until its completion entry is popped. **The write** holds it while it is
 //! uncovered: the core keeps its record until a seal covers it, it fails, or its lineage ends.
 //! **Each unresolved failure suspecting it** holds it until the failure is healed or abandoned,
-//! which is what keeps a failure's suspect set and markings within the places it holds. A place
-//! is one, however many holders it has, so the count is of operations and not of holds.
+//! which is what keeps a failure's suspect set and markings within the places it holds. **A
+//! recorded seal** holds the place of one write it covers, from when it is made until the mark
+//! passes it or its lineage ends (DI-D-110), which is what bounds the seals behind a mark an
+//! unresolved failure holds. A place is one, however many holders it has, so the count is of
+//! operations and not of holds.
 //!
 //! Nothing here refuses: the count is what [`Durability::window_places`] reports, and the capacity
 //! it is compared with is declared at construction (DI-23.5.2). The table is made at that capacity,
@@ -34,6 +37,8 @@ pub(super) enum Holder {
     Uncovered,
     /// An unresolved failure suspecting the write: one hold for each such failure.
     Suspect,
+    /// A recorded seal covering the write, until the mark passes the seal.
+    Seal,
 }
 
 /// What holds one operation's place.
@@ -43,11 +48,14 @@ struct Holds {
     uncovered: bool,
     /// How many unresolved failures suspect the write.
     suspected: u32,
+    /// A recorded seal covering the write holds it: a seal holds one write's place, and no two
+    /// seals cover the same write.
+    sealed: bool,
 }
 
 impl Holds {
     fn is_held(&self) -> bool {
-        self.operation || self.uncovered || self.suspected > 0
+        self.operation || self.uncovered || self.suspected > 0 || self.sealed
     }
 }
 
@@ -97,6 +105,11 @@ impl Window {
                 holds.suspected += 1;
                 Ok(())
             }
+            Holder::Seal if holds.sealed => Err("two seals held one write's place"),
+            Holder::Seal => {
+                holds.sealed = true;
+                Ok(())
+            }
         }
     }
 
@@ -119,6 +132,7 @@ impl Window {
                 }
                 None => false,
             },
+            Holder::Seal => core::mem::take(&mut holds.sealed),
         };
         if !held {
             return Err("a place was released by a holder that did not hold it");
@@ -139,6 +153,7 @@ impl Window {
                     Holder::Operation => u32::from(holds.operation),
                     Holder::Uncovered => u32::from(holds.uncovered),
                     Holder::Suspect => holds.suspected,
+                    Holder::Seal => u32::from(holds.sealed),
                 };
                 (count > 0).then_some((op, count))
             })
@@ -146,10 +161,19 @@ impl Window {
     }
 }
 
+/// A seal leaves the queue: let go of the place it `pin`s, if it pins one.
+///
+/// # Errors
+///
+/// What about the release is inconsistent, as [`Window::release`] says.
+pub(super) fn unpin(window: &mut Window, pin: Option<u64>) -> Result<(), &'static str> {
+    pin.map_or(Ok(()), |op| window.release(op, Holder::Seal))
+}
+
 impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// How many places of the submit window are held: the operations that have been admitted and
     /// whose completion has not been popped, plus the writes still uncovered, plus the writes an
-    /// unresolved failure suspects, each counted once.
+    /// unresolved failure suspects, plus the write each recorded seal holds, each counted once.
     pub(crate) fn window_places(&self) -> usize {
         self.window.places()
     }
@@ -190,6 +214,13 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         }
     }
 
+    /// A recorded seal holds the place of write `op`, one it covers, until the mark passes it.
+    pub(super) fn hold_for_seal(&mut self, op: u64) {
+        if let Err(what) = self.window.hold(op, Holder::Seal) {
+            self.inconsistent(what, format_args!("a seal's write, operation {op}"));
+        }
+    }
+
     /// Report a hold or a release that was not consistent with what the window held, which is a
     /// defect in the bookkeeping (DI-D-46).
     fn window_inconsistent(&self, result: Result<(), &'static str>, op: OpId) {
@@ -198,8 +229,9 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         }
     }
 
-    /// Whether the places the writes and the failures hold are exactly the uncovered writes, and
-    /// each write once for every unresolved failure suspecting it.
+    /// Whether the places the writes, the failures and the seals hold are exactly the uncovered
+    /// writes, each write once for every unresolved failure suspecting it, and the write each
+    /// recorded seal pins.
     #[cfg(test)]
     pub(super) fn window_agrees(&self) -> bool {
         let uncovered = self.writes.keys().map(|&op| (op, 1)).collect();
@@ -209,8 +241,15 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
                 *suspected.entry(write.op.seq).or_insert(0) += 1;
             }
         }
+        let pinned = self
+            .seals
+            .values()
+            .filter_map(|seal| seal.pin)
+            .map(|op| (op, 1))
+            .collect();
         self.window.held_by(Holder::Uncovered) == uncovered
             && self.window.held_by(Holder::Suspect) == suspected
+            && self.window.held_by(Holder::Seal) == pinned
     }
 
     /// The operations whose place the operation itself holds.

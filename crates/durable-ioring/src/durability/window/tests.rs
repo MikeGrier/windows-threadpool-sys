@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-//! The window's places, held and released by their three holders, without a core around it.
+//! The window's places, held and released by their four holders, without a core around it.
 
 use super::{Holder, Window};
 
@@ -29,18 +29,39 @@ fn holders_of_one_operation_share_its_one_place() {
     window.hold(7, Holder::Operation).expect("a new hold");
     window.hold(7, Holder::Uncovered).expect("a new hold");
     window.hold(7, Holder::Suspect).expect("a new hold");
+    window.hold(7, Holder::Seal).expect("a new hold");
     assert_eq!(window.places(), 1, "one operation, one place");
 }
 
 #[test]
 fn a_place_ends_only_when_every_holder_has_let_go_in_any_order() {
     for order in [
-        [Holder::Operation, Holder::Uncovered, Holder::Suspect],
-        [Holder::Suspect, Holder::Operation, Holder::Uncovered],
-        [Holder::Uncovered, Holder::Suspect, Holder::Operation],
+        [
+            Holder::Operation,
+            Holder::Uncovered,
+            Holder::Suspect,
+            Holder::Seal,
+        ],
+        [
+            Holder::Seal,
+            Holder::Suspect,
+            Holder::Operation,
+            Holder::Uncovered,
+        ],
+        [
+            Holder::Uncovered,
+            Holder::Seal,
+            Holder::Suspect,
+            Holder::Operation,
+        ],
     ] {
         let mut window = window();
-        for holder in [Holder::Operation, Holder::Uncovered, Holder::Suspect] {
+        for holder in [
+            Holder::Operation,
+            Holder::Uncovered,
+            Holder::Suspect,
+            Holder::Seal,
+        ] {
             window.hold(3, holder).expect("a new hold");
         }
         for (done, holder) in order.into_iter().enumerate() {
@@ -101,6 +122,18 @@ fn a_write_recorded_uncovered_twice_is_inconsistent() {
 }
 
 #[test]
+fn two_seals_holding_one_place_is_inconsistent() {
+    let mut window = window();
+    window.hold(2, Holder::Seal).expect("a new hold");
+    assert_eq!(
+        window.hold(2, Holder::Seal),
+        Err("two seals held one write's place")
+    );
+    window.release(2, Holder::Seal).expect("held once");
+    assert_eq!(window.places(), 0, "one release ends the one hold");
+}
+
+#[test]
 fn releasing_a_place_no_one_holds_is_inconsistent() {
     let mut window = window();
     assert_eq!(
@@ -113,7 +146,7 @@ fn releasing_a_place_no_one_holds_is_inconsistent() {
 fn releasing_by_a_holder_that_did_not_hold_is_inconsistent_and_changes_nothing() {
     let mut window = window();
     window.hold(4, Holder::Operation).expect("a new hold");
-    for holder in [Holder::Uncovered, Holder::Suspect] {
+    for holder in [Holder::Uncovered, Holder::Suspect, Holder::Seal] {
         assert_eq!(
             window.release(4, holder),
             Err("a place was released by a holder that did not hold it"),
@@ -136,7 +169,9 @@ fn what_each_holder_holds_is_reported_with_the_failures_counted() {
     window.hold(1, Holder::Suspect).expect("a new hold");
     window.hold(1, Holder::Suspect).expect("a new hold");
     window.hold(2, Holder::Uncovered).expect("a new hold");
+    window.hold(3, Holder::Seal).expect("a new hold");
     assert_eq!(window.held_by(Holder::Operation), [(1, 1)].into());
     assert_eq!(window.held_by(Holder::Uncovered), [(2, 1)].into());
     assert_eq!(window.held_by(Holder::Suspect), [(1, 2)].into());
+    assert_eq!(window.held_by(Holder::Seal), [(3, 1)].into());
 }

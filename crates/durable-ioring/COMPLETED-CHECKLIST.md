@@ -4596,3 +4596,28 @@ path's writes, gates and holds none for these tables. Sabotage: six entries re-a
 which showed nothing checked that a held write ended as never issued lets go of its edge in the gate table, and a test
 filling the held tables after such writes now does. The seal queue was
 left for `DI-23.12.1.2`, which waits for the engineer.
+
+## Moved 2026-10-24 17:36:24 -04:00 -- DI-23.12.1.2 and DI-23.12.1: the seal queue bounded and on fixed storage
+
+### <a id="di-231212"></a>DI-23.12.1.2 -- A recorded seal holds the place of the first write it covers until the mark passes it, and the seal queue is one fixed table for every lineage. *(completed 2026-10-24 17:36:24 -04:00)*
+
+**The seal queue onto fixed storage**, once the engineer decides what bounds a finished seal the mark has not passed:
+blocked behind an unresolved failure, such seals accumulate with nothing holding a place for them, and each queues a
+`Blocked` entry, so `DI-23.12.3`'s completion-queue bound depends on the answer too. Options brought with
+`DI-23.12.1.1`: a finished seal the mark has not passed holds a place of the window, as an abandoned epoch above the mark
+does ([DI-D-109](DESIGN-NOTES.md#di-d-109)); or consecutive finished seals coalesce into the latest, as `Durable` entries
+do (DI-D-101). Either is a contract change.
+
+What was decided and built is [DI-D-110](DESIGN-NOTES.md#di-d-110): the first option, taken from the engineer's
+"implement di-23.12.1.2" as accepting the assistant's recommendation, with the hold starting when the seal is made. The
+window gained a fourth holder; the seal queue moved from a per-lineage `VecDeque` onto one `Ordered` table keyed by
+lineage and seal number, made for `operations`, so construction makes one more allocation and a recorded seal none.
+[CONTRACT.md](CONTRACT.md#capacity) names the new holder and the refusal it causes behind a held mark. Tests: the write,
+seal and flush loop behind a failed commit refused at capacity and lifted by resolving it, which fills the seal table
+exactly; a seal keeping its pinned write's place when that write fails before the seal starts; an ending lineage letting
+go of a dropped seal's place; the holder in the window's own tests. Sabotage: fifteen entries re-anchored, seven added.
+
+### <a id="di-23121"></a>DI-23.12.1 -- The ordered tables, the seal queue among them, are on fixed storage of the crate's own, and a recorded seal holds a place of the window until the mark passes it (DI-D-110). *(completed 2026-10-24 17:36:24 -04:00)*
+
+The parent of [DI-23.12.1.1](#di-231211) and [DI-23.12.1.2](#di-231212); what was built is
+[DI-D-109](DESIGN-NOTES.md#di-d-109)'s "As built (DI-23.12.1)" and [DI-D-110](DESIGN-NOTES.md#di-d-110).

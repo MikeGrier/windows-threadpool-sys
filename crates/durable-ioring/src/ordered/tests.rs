@@ -162,6 +162,37 @@ fn between_covers_the_keys_its_predicates_bound_and_skips_removed_entries() {
 }
 
 #[test]
+fn between_mut_changes_only_the_present_entries_its_predicates_bound() {
+    let mut t: Ordered<u64, u32> = Ordered::with_capacity(8).expect("a small table");
+    for key in 1..=6 {
+        t.insert(key, 0).expect("room");
+    }
+    t.remove(&3);
+    for (_, value) in t.between_mut(|key| *key < 2, |key| *key <= 4) {
+        *value += 1;
+    }
+    let values: Vec<(u64, u32)> = t.iter().map(|(key, value)| (*key, *value)).collect();
+    assert_eq!(values, [(1, 0), (2, 1), (4, 1), (5, 0), (6, 0)]);
+    assert_eq!(
+        t.between_mut(|key| *key < 2, |key| *key <= 5)
+            .next_back()
+            .map(|(key, _)| *key),
+        Some(5)
+    );
+    assert!(
+        t.between_mut(|key| *key < 3, |key| *key <= 3)
+            .next()
+            .is_none()
+    );
+    assert!(
+        t.between_mut(|key| *key < 5, |key| *key <= 2)
+            .next()
+            .is_none(),
+        "an inverted range is empty"
+    );
+}
+
+#[test]
 fn values_change_through_a_mutable_range_and_iteration() {
     let mut t: Ordered<u64, u32> = Ordered::with_capacity(4).expect("a small table");
     for key in [1, 2, 3, 4] {

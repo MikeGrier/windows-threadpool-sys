@@ -567,7 +567,7 @@ fn failures() -> Vec<Measured> {
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
-    ("construction, with two targets", 19),
+    ("construction, with two targets", 20),
     ("writes, first round", 3),
     ("write completions, first round", 19),
     ("pops, first round", 0),
@@ -576,7 +576,7 @@ const CLEAN: &[(&str, u64)] = &[
     ("pops, second round", 0),
     ("reads", 0),
     ("read completions and pops", 0),
-    ("a seal covering writes", 4),
+    ("a seal covering writes", 3),
     ("commit completions", 9),
     ("pops after the seal", 0),
     ("a seal covering no writes", 2),
@@ -588,7 +588,7 @@ const CLEAN: &[(&str, u64)] = &[
     ("a lineage minted", 0),
     ("the minted lineage written", 16),
     ("a busy lineage refused, and its holds named", 0),
-    ("the minted lineage sealed", 11),
+    ("the minted lineage sealed", 10),
     ("the minted lineage ended", 2),
     ("a target added", 1),
     ("the added target written", 1),
@@ -601,9 +601,9 @@ const CLEAN: &[(&str, u64)] = &[
 
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
-    ("construction, with two targets", 19),
+    ("construction, with two targets", 20),
     ("writes before the failure", 22),
-    ("a commit failure observed", 21),
+    ("a commit failure observed", 20),
     ("failures queried", 2),
     ("writes re-issued", 16),
     ("a heal resolved", 3),
@@ -623,6 +623,11 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
     (
         "construction, with two targets",
         "durability::new::writes",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::seals",
         1,
     ),
     (
@@ -701,7 +706,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "durability::advance::live",
         16,
     ),
-    ("a seal covering writes", "durability::seal::record", 1),
     ("a seal covering writes", "durability::advance::live", 1),
     (
         "a seal covering writes",
@@ -778,7 +782,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "durability::advance::live",
         16,
     ),
-    ("the minted lineage sealed", "durability::seal::record", 1),
     ("the minted lineage sealed", "durability::advance::live", 3),
     (
         "the minted lineage sealed",
@@ -837,6 +840,11 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     (
         "construction, with two targets",
         "durability::new::writes",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::seals",
         1,
     ),
     (
@@ -906,7 +914,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     ),
     ("writes before the failure", "io_core::complete::queue", 3),
     ("writes before the failure", "durability::advance::live", 16),
-    ("a commit failure observed", "durability::seal::record", 1),
     ("a commit failure observed", "durability::advance::live", 3),
     (
         "a commit failure observed",

@@ -11,7 +11,7 @@ use alloc::sync::Arc;
 
 use super::{
     DEFAULT_LINEAGE, Due, Durability, Event, Key, LineageState, SealStage, Stage, Standing, V,
-    tables,
+    tables, window,
 };
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
@@ -111,14 +111,23 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         state.leading = None;
         self.let_go_ended(lineage);
         // What stays is a seal with a flush out, to find the writes it let go when it answers.
-        self.lineages
-            .get_mut(&lineage)
-            .expect("live, checked above")
-            .seals
-            .retain_mut(|seal| {
-                seal.trailing = None;
-                matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0)
-            });
+        let window = &mut self.window;
+        let mut lost = None;
+        self.seals.retain(|key, seal| {
+            if key.0 != lineage {
+                return true;
+            }
+            seal.trailing = None;
+            let keep =
+                matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0);
+            if !keep && let Err(what) = window::unpin(window, seal.pin) {
+                lost.get_or_insert(what);
+            }
+            keep
+        });
+        if let Some(what) = lost {
+            self.inconsistent(what, format_args!("lineage {lineage}, ending"));
+        }
         for failure in &mut self.failures {
             if let Standing::Healing { pending } = &mut failure.standing {
                 pending.remove(&lineage);

@@ -281,6 +281,60 @@ fn a_seal_is_never_refused_for_capacity() {
     assert_eq!(rig.core.window_places(), 1, "only the completion is queued");
 }
 
+/// The first commit fails and its failure stays unresolved, holding the mark: each seal after it
+/// finishes and is not answered, and keeps the place of the write it covers (DI-D-110), so the
+/// write / seal loop runs into the operations declared rather than growing the seal queue. Its four
+/// recorded seals fill the seal table, made for the operations declared, exactly.
+#[test]
+fn seals_behind_a_mark_held_by_a_failure_keep_their_places_until_it_is_resolved() {
+    let script = FaultScript::new().on(
+        When::any().op(ScriptOp::Commit).nth(1),
+        Fault::Fail(crate::memory::scripted_fault("the flush failed")),
+    );
+    let mut rig = scripted_rig(declared(|c| c.operations = 4), script);
+    rig.write(1, 0, b"x").expect("room");
+    rig.seal(1);
+    rig.run();
+    let mut made = tokens(&mut rig);
+    assert_eq!(made.len(), 1, "the first commit failed");
+    assert_eq!(
+        rig.core.window_places(),
+        1,
+        "the failure suspects the write"
+    );
+    for epoch in 2..=4 {
+        rig.write(epoch, 0, b"y").expect("room");
+        rig.seal(epoch);
+        rig.run();
+        rig.entries();
+        assert_eq!(
+            rig.core.window_places(),
+            epoch as usize,
+            "the seal finished, and holds its write's place behind the mark"
+        );
+    }
+    assert!(matches!(
+        refusal(rig.write(5, 0, b"z")),
+        PushRefusal::AtCapacity(AtCapacity {
+            limit: Limit::Operations,
+            declared: 4
+        })
+    ));
+    let actions = rig
+        .core
+        .resolve(vec![(made.remove(0), Resolution::Abandon)])
+        .expect("resolved");
+    rig.act(actions);
+    rig.run();
+    rig.entries();
+    assert_eq!(
+        rig.core.window_places(),
+        0,
+        "the mark passed every seal, and each let go of its place"
+    );
+    rig.write(5, 0, b"z").expect("room again");
+}
+
 #[test]
 fn a_mint_past_the_lineages_declared_is_refused_and_a_retire_lifts_it() {
     let mut core = core_with(declared(|c| c.lineages = 3));

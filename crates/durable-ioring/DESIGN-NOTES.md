@@ -2244,7 +2244,8 @@ notes when it is created.
   engineer, 2026-10-23: "then (i) seems logical", over a separate declared count of uncovered writes. The core keeps a
   write's record until then, to name it in a later failure's suspect set, so counting only until the pop would leave a
   consumer that pushes and pops without sealing growing that record without bound. The window therefore covers written but
-  unsealed data as well as I/O in flight, as unresolved failures already shrink it ([DI-D-100](#di-d-100)).
+  unsealed data as well as I/O in flight, as unresolved failures already shrink it ([DI-D-100](#di-d-100)). A seal the
+  mark has not passed also keeps the place of the first write it covers ([DI-D-110](#di-d-110)).
 - **Every per-seal record is bounded by the window, provided a flush's places outlive its lineage.** A (lineage, file,
   seal span) entry exists only while a write is in it, so there are never more entries than uncovered writes, however a
   seal divides an unsealed span; a commit in flight and a file's flush pair each belong to one entry, and a seal's domain
@@ -2342,7 +2343,7 @@ notes when it is created.
   inconsistency, and [io_core/tests/tables.rs](src/io_core/tests/tables.rs) fills each to it. **Not moved: the seal
   queue.** A recorded seal stays queued until the mark passes it, so behind an unresolved failure holding the mark,
   finished seals whose writes were covered accumulate with nothing bounding them -- the bound DI-D-107 gives covers seals
-  with flushes out only. It waits for the engineer's decision (DI-23.12.1.2).
+  with flushes out only. **Settled by [DI-D-110](#di-d-110)**, which bounds it, and the queue moved in DI-23.12.1.2.
 - **The slots of DI-D-108** are one array of atomics made when the driver builds the instance, reached through the home it
   supplies; a target's domains are a range in a fixed table.
 - **Without `std`**: the driver's locking (`engine.rs`, `lock_watch.rs`) and the `thread::panicking()` guard on an
@@ -2353,3 +2354,34 @@ notes when it is created.
   inconsistency panics of [DI-D-46](#di-d-46) stay out of scope.
 - **Prior art** for this decision and the ones it builds on, with what each source says, is in
   [DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md](../../design-sessions/DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md).
+
+## <a id="di-d-110"></a>DI-D-110: a recorded seal holds the place of a write it covers until the mark passes it
+
+**Decided and built in DI-23.12.1.2.** The assistant recommended this, option (a) of the two brought with DI-23.12.1.1, over
+consecutive finished seals coalescing into the latest as `Durable` entries do ([DI-D-101](#di-d-101)); the engineer's
+answer was "implement di-23.12.1.2", taken as accepting the recommendation, not as a choice made between the two. The
+refinement of when the hold starts is the assistant's. The options and the reasoning are in
+[the session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#di-231212-what-bounds-a-finished-seal-the-mark-has-not-passed-continued-2026-10-24).
+
+- **The defect it closes:** a recorded seal stays queued until the mark passes it. Behind an unresolved failure holding the
+  mark, a loop of write, seal and flush finishes seal after seal whose writes were covered, each queueing a `Blocked`
+  entry, with nothing holding a place for any of them -- [DI-D-107](#di-d-107)'s bound covers seals with flushes out only.
+- **The rule:** a recorded seal holds the place of the earliest pushed write in its span -- in flight, completed, or held
+  for its gate -- from when the seal is made until the mark passes it, or until the seal is dropped as its lineage ends.
+  Seals' spans are disjoint, so no two seals hold the same write's place, and a write's own hold is beside the seal's, not
+  added to the count: the place is one the write already held. Recorded seals are therefore at most the places, which are
+  at most `operations`, and the seal queue and the `Blocked` entries are bounded by that.
+- **The hold starts when the seal is made, not when it finishes.** Taken at the finish, a seal whose writes all failed
+  before it started would find nothing to hold, and the loop above could run with failing writes instead of covered ones.
+  Holding from the start costs nothing extra, since the place is already held by the write.
+- **A contract change:** a seal, never itself refused, now keeps a place a push could otherwise take, so a mark held by an
+  unresolved failure is refused for at a push as `PushRefusal::AtCapacity`, and resolving the failure lifts it. Stated in
+  [CONTRACT.md](CONTRACT.md#capacity).
+- **Not taken, coalescing:** it bounds the finished seals behind a held mark by merging each run of them into one, a bound
+  per lineage that sits beside the window and that no declared count names. Holding a place keeps the one bound the
+  consumer already declares, and refuses where the consumer is already refused for it, at a push.
+- **As built:** the seal queue is one table for every lineage, [durability/tables.rs](src/durability/tables.rs)'s `Seals`,
+  keyed by lineage and the lineage's seal number and made for `operations`; a seal recorded past it is an inconsistency.
+  The window keeps the hold as its own holder, `Holder::Seal`, so the census in `window_agrees` checks it against the
+  seals' pins; the three places a recorded seal leaves -- the mark passing it, an ended lineage's flush answering, the
+  lineage ending -- each let its place go.
