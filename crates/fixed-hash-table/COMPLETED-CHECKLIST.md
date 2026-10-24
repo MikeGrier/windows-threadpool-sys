@@ -41,3 +41,21 @@ removal shifts an entry into it. [traits.rs](src/map/traits.rs) holds `Debug`, `
 `Eq`, `Index`, `Clone` for inline maps, `try_clone` for heap maps, and `try_extend`. The read-only lookups moved to an `impl`
 needing only `AsRef`, so equality can compare against any storage. A sabotage of `retain`'s re-examination (stepping past the
 slot after a removal) failed the wrapping-run test and was reverted; the manifest entry is FHT-1.4's.
+
+## Moved 2026-10-23 21:28:45 -04:00 -- FHT-1.3: the set
+
+### <a id="fht-13"></a>FHT-1.3 -- The set, over the map: refusal past capacity, lookup and removal, iteration, and the set operations that need no growth. *(completed 2026-10-23 21:28:45 -04:00)*
+
+Per [FHT-D-8](DESIGN-NOTES.md#fht-d-8), which now records how the set was built. The item as it stood at completion:
+
+**The set**, over the map: insert refusing past capacity, `contains`, `remove`, iteration, and the set operations that need
+no growth.
+
+What was done. [set.rs](src/set.rs) holds `FixedHashSet`, a map of the values to `()`, with `InlineSet` and `HeapSet`;
+`insert`, `replace`, `contains`, `get`, `remove`, `take`, `retain` and `clear`. [set/iter.rs](src/set/iter.rs) holds the
+iterators and the set operations: `difference`, `intersection`, `symmetric_difference` and `union` as lazy iterators, and
+`is_disjoint`, `is_subset` and `is_superset`, each over a second set of any storage and hasher.
+[set/traits.rs](src/set/traits.rs) holds `Debug`, `PartialEq` and `Eq`, `Clone` for inline sets, `try_clone` for heap sets,
+and `try_extend`. The map's `clear` moved to an `impl` needing only mutable storage, since it hashes nothing; the set could
+not call it otherwise. A sabotage of `Difference` (dropping its negation) failed two tests and was reverted; the manifest
+entries are FHT-1.4's.

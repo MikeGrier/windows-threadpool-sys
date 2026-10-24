@@ -13,6 +13,7 @@ extern crate std;
 
 mod hasher;
 mod map;
+mod set;
 
 pub use hasher::{FixedHasher, FixedState};
 pub use map::{
@@ -21,3 +22,9 @@ pub use map::{
 };
 #[cfg(feature = "alloc")]
 pub use map::{HeapMap, ReserveError};
+#[cfg(feature = "alloc")]
+pub use set::HeapSet;
+pub use set::{
+    Difference, FixedHashSet, InlineSet, Intersection, SetDrain, SetIntoIter, SetIter,
+    SymmetricDifference, Union,
+};

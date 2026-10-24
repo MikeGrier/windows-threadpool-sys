@@ -13,8 +13,9 @@ use crate::hasher::FixedState;
 
 mod entry;
 mod iter;
+// The set's tests share its test hashers.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod traits;
 
 pub use entry::{Entry, OccupiedEntry, VacantEntry};
@@ -278,7 +279,12 @@ where
         }
         removed
     }
+}
 
+impl<K, V, St, H> FixedHashMap<K, V, St, H>
+where
+    St: AsMut<[Slot<K, V>]>,
+{
     /// Remove every entry. Its storage is kept.
     pub fn clear(&mut self) {
         for slot in self.slots.as_mut() {

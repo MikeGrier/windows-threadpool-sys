@@ -9,9 +9,9 @@ use std::vec::Vec;
 
 /// Every key hashes to the one value it holds: total collision, from a stateful hasher.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Collide(pub(super) u64);
+pub(crate) struct Collide(pub(crate) u64);
 
-pub(super) struct Constant(u64);
+pub(crate) struct Constant(u64);
 
 impl Hasher for Constant {
     fn write(&mut self, _: &[u8]) {}
@@ -31,9 +31,9 @@ impl BuildHasher for Collide {
 
 /// A keyed hasher: the seed is the per-table state FHT-D-5 allows.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Seeded(pub(super) u64);
+pub(crate) struct Seeded(pub(crate) u64);
 
-pub(super) struct SeededHasher(u64);
+pub(crate) struct SeededHasher(u64);
 
 impl Hasher for SeededHasher {
     fn write(&mut self, bytes: &[u8]) {
@@ -77,7 +77,7 @@ impl Hash for Tagged {
 }
 
 /// The hash whose home is the last of sixteen slots.
-pub(super) const LAST_OF_SIXTEEN: u64 = 15 << 60;
+pub(crate) const LAST_OF_SIXTEEN: u64 = 15 << 60;
 
 #[test]
 fn a_new_map_is_empty_and_holds_seven_eighths_of_its_slots() {
