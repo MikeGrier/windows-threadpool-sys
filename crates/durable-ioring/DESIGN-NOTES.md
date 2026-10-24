@@ -1864,7 +1864,7 @@ They are listed in the session.
 
 ## <a id="di-d-98"></a>DI-D-98: capacity is declared at construction; submit, mint and import may be refused for it, and a seal never is
 
-**Decided, not yet implemented: scheduled as DI-23.5 and DI-23.6 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22.
+**Decided; the charge is implemented (DI-23.6), the declaration and refusals are scheduled as DI-23.5.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22.
 
 - **Growth the consumer starts is refused at admission when it would exceed capacity:** a submit, minting a lineage, and
   importing a failure. A refusal is backpressure, reported as being at capacity and distinct from the contract's own
@@ -1881,6 +1881,14 @@ They are listed in the session.
   cacophany of memory allocations." The charge belongs to the span's entry for the file, not to the write that made it: it
   stays while any write to the file remains in the span, and is released when the span empties or its flush completes.
 - **What a lineage pays at mint:** its state, its handle, and the slot [DI-D-99](#di-d-99) keeps for empty seals.
+
+**As built** (DI-23.6, the assistant's, 2026-10-23): the entries are in
+[durability/spans.rs](src/durability/spans.rs), keyed (lineage, file, span), the span being the lineage's unsealed span or
+one seal's. A push joins the unsealed entry; a seal moves each write it names to its own span's entry, dividing the
+unsealed entry when it names some of a file's writes and not the rest. A seal's flush of a file, and its answer, are held
+in the file's entry. Every write leaving the uncovered writes goes through one let-go, which releases its entry with its
+last write. That a division needs a second entry is why the window, and not a count of first writes, bounds them
+([DI-D-107](#di-d-107)).
 
 ## <a id="di-d-99"></a>DI-D-99: a seal that covers no writes makes no record, and a superseded one's pair is ended
 

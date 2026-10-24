@@ -4375,3 +4375,30 @@ code is [FHT-M1](../fixed-hash-table/CHECKLIST.md). Its decisions are
 FHT-D-3 to FHT-D-8 are the assistant's, raised with the engineer -- storage a type parameter (inline, or boxed under `alloc`),
 linear probing with backward-shift deletion and capacity distinct from slots, the default a zero-sized seedless hasher, no
 `unsafe`, a full table handing the entry back, and the affordances kept and left out.
+
+## Moved 2026-10-23 22:50:03 -04:00 -- DI-23.6: a seal's work charged to span entries
+
+### <a id="di-236"></a>DI-23.6 -- A seal's work on a file is charged to a (lineage, file, seal span) entry, made at push and released with its last uncovered write. *(completed 2026-10-23 22:50:03 -04:00)*
+
+Per [DI-D-98](DESIGN-NOTES.md#di-d-98) and [DI-D-107](DESIGN-NOTES.md#di-d-107). The item as it stood at completion:
+
+**Charge a seal's work to the (lineage, file, seal span)**: the first write to a file in its lineage's unsealed span pays
+for the flush, the flush pair and the provider's parts; the charge stays with the span's entry while any write to the file
+remains in it.
+
+What was done. [spans.rs](src/durability/spans.rs) holds the entries: one per (lineage, file, span) with an uncovered write
+in it, the span being the lineage's unsealed span or one seal's. A push joins the unsealed entry, made by the file's first
+write; a seal moves each write it names to an entry of its own, so a seal naming some of a file's writes and not the rest
+divides the entry. The seal's flush of a file, and whether it answered and succeeded, are recorded in the file's entry,
+replacing the list of files a seal built when it started; coverage reads it there. Every place a write leaves the uncovered
+writes now goes through one let-go, which takes it out of its entry and releases the entry with its last write. The flush
+pairs and the provider's domain parts stay in their per-seal tables: one pair per entry or per served domain, which
+DI-D-107 now records as bounded by the window and the provider's domains, so DI-23.5.2 sizes them. Under `cfg(test)` the
+core checks after every push and every advance that the entries are exactly the uncovered writes' spans, so the whole
+suite checks the census, and [tests/spans.rs](src/durability/tests/spans.rs) covers the entries directly. The allocation test's records were remeasured:
+the span table's first growth on push, and one allocation fewer per seal for the file list it no longer builds. Six
+sabotage entries were added to [sabotage.json](sabotage.json), five caught and one surviving control; the answered-twice
+entry first survived, because the test answered with success, which releases the entry before the second answer arrives,
+and a test whose first answer fails now catches it. Five existing entries whose lines the change rewrote (DI-3.2.3,
+DI-3.2.4, DI-3.2.4.2 and DI-3.2.5.1) were re-anchored to the same defect in the new code and swept: all caught, the
+provider-hold one as a hang.

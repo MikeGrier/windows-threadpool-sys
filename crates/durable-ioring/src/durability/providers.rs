@@ -12,7 +12,7 @@
 use alloc::sync::Arc;
 
 use super::{
-    DomainPart, Due, Durability, Key, MarkingKind, Part, Reach, SealStage, Stage, V, Write,
+    DomainPart, Due, Durability, Key, MarkingKind, Part, Reach, SealStage, Span, Stage, V, Write,
 };
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
@@ -146,15 +146,18 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         else {
             return;
         };
-        let SealStage::Flushing { files, domains, .. } = &found.stage else {
+        let SealStage::Flushing { domains, .. } = &found.stage else {
             return;
         };
         let served = &self.served;
+        let spans = &self.spans;
         let covered = |write: &Write<E, T>| {
             write.lineage == lineage
                 && write.stage == Stage::Named(seal)
                 && (!write.routing.default
-                    || files.iter().any(|file| file.file == write.file && file.ok))
+                    || spans
+                        .get(&(lineage, write.file, Span::Seal(seal)))
+                        .is_some_and(|entry| entry.ok))
                 && write
                     .domains
                     .iter()
@@ -179,7 +182,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         if ops.is_empty() {
             return;
         }
-        self.writes.retain(|_, write| !covered(write));
+        // `ops` is in push order, as the writes are kept.
+        self.let_go(|write| {
+            ops.binary_search_by_key(&write.op.seq, |(op, _)| op.seq)
+                .is_ok()
+        });
         for (op, kind) in ops {
             self.mark(op, kind, due);
         }

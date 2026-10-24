@@ -543,7 +543,7 @@ fn failures() -> Vec<Measured> {
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
     ("construction, with two targets", 6),
-    ("writes, first round", 12),
+    ("writes, first round", 13),
     ("write completions, first round", 19),
     ("pops, first round", 0),
     ("writes, second round", 2),
@@ -558,13 +558,13 @@ const CLEAN: &[(&str, u64)] = &[
     ("completions and pops after the empty seal", 0),
     ("gated writes", 13),
     ("the gate's epoch written", 18),
-    ("the gate's epoch sealed, releasing the gated writes", 19),
-    ("the gated writes sealed", 7),
+    ("the gate's epoch sealed, releasing the gated writes", 18),
+    ("the gated writes sealed", 6),
     ("a lineage minted", 0),
-    ("the minted lineage written and sealed", 32),
+    ("the minted lineage written and sealed", 31),
     ("the minted lineage ended", 2),
     ("a target added", 1),
-    ("the added target written and sealed", 8),
+    ("the added target written and sealed", 7),
     ("the added target removed", 0),
     ("lineages queried", 1),
     ("close", 1),
@@ -573,12 +573,12 @@ const CLEAN: &[(&str, u64)] = &[
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
     ("construction, with two targets", 6),
-    ("writes before the failure", 31),
+    ("writes before the failure", 32),
     ("a commit failure observed", 22),
     ("failures queried", 2),
     ("writes re-issued", 19),
     ("a heal resolved", 3),
-    ("the heal taking effect at the next seal", 11),
+    ("the heal taking effect at the next seal", 10),
     ("writes before the import", 18),
     ("a failure imported", 9),
     ("an abandon resolved", 3),
@@ -613,6 +613,7 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "durability::pushed::in_flight_by_epoch",
         1,
     ),
+    ("writes, first round", "durability::pushed::span", 1),
     ("writes, first round", "durability::pushed::write", 3),
     ("writes, first round", "io_core::issued::in_flight", 4),
     ("writes, first round", "io_core::issued::per_target", 1),
@@ -634,12 +635,12 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
     ),
     ("a seal covering writes", "durability::seal::record", 1),
     ("a seal covering writes", "durability::advance::live", 1),
-    ("a seal covering writes", "durability::start_seals::file", 1),
     (
         "a seal covering writes",
         "durability::start_seals::flush",
         1,
     ),
+    ("a seal covering writes", "durability::start_seals::span", 1),
     ("a seal covering writes", "io_core::act::commit_submit", 1),
     ("commit completions", "durability::providers::cover::ops", 6),
     ("commit completions", "durability::advance::live", 2),
@@ -663,11 +664,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "the gate's epoch sealed, releasing the gated writes",
         "durability::advance::live",
         7,
-    ),
-    (
-        "the gate's epoch sealed, releasing the gated writes",
-        "durability::start_seals::file",
-        1,
     ),
     (
         "the gate's epoch sealed, releasing the gated writes",
@@ -712,11 +708,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
     ("the gated writes sealed", "durability::advance::live", 2),
     (
         "the gated writes sealed",
-        "durability::start_seals::file",
-        1,
-    ),
-    (
-        "the gated writes sealed",
         "durability::start_seals::flush",
         1,
     ),
@@ -749,11 +740,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
     (
         "the minted lineage written and sealed",
         "durability::seal::record",
-        1,
-    ),
-    (
-        "the minted lineage written and sealed",
-        "durability::start_seals::file",
         1,
     ),
     (
@@ -792,11 +778,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "the added target written and sealed",
         "durability::advance::live",
         3,
-    ),
-    (
-        "the added target written and sealed",
-        "durability::start_seals::file",
-        1,
     ),
     (
         "the added target written and sealed",
@@ -855,6 +836,7 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "durability::pushed::in_flight_by_epoch",
         1,
     ),
+    ("writes before the failure", "durability::pushed::span", 1),
     ("writes before the failure", "durability::pushed::write", 3),
     ("writes before the failure", "io_core::issued::in_flight", 4),
     (
@@ -868,12 +850,12 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     ("a commit failure observed", "durability::advance::live", 3),
     (
         "a commit failure observed",
-        "durability::start_seals::file",
+        "durability::start_seals::flush",
         1,
     ),
     (
         "a commit failure observed",
-        "durability::start_seals::flush",
+        "durability::start_seals::span",
         1,
     ),
     (
@@ -921,11 +903,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "the heal taking effect at the next seal",
         "durability::advance::live",
         3,
-    ),
-    (
-        "the heal taking effect at the next seal",
-        "durability::start_seals::file",
-        1,
     ),
     (
         "the heal taking effect at the next seal",

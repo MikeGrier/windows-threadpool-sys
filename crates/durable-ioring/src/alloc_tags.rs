@@ -155,6 +155,7 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_SERVED: Tag = Tag::new("durability::new::served");
     pub(crate) const DURABILITY_PUSHED_IN_FLIGHT_BY_EPOCH: Tag =
         Tag::new("durability::pushed::in_flight_by_epoch");
+    pub(crate) const DURABILITY_PUSHED_SPAN: Tag = Tag::new("durability::pushed::span");
     pub(crate) const DURABILITY_PUSHED_WRITE: Tag = Tag::new("durability::pushed::write");
     pub(crate) const DURABILITY_RESOLVE_ABANDONED: Tag = Tag::new("durability::resolve::abandoned");
     pub(crate) const DURABILITY_RESOLVE_ABANDONED_EVENT: Tag =
@@ -182,7 +183,7 @@ pub(crate) mod tag {
         Tag::new("durability::advance_mark::durable");
     pub(crate) const DURABILITY_ADVANCE_MARK_BLOCKED: Tag =
         Tag::new("durability::advance_mark::blocked");
-    pub(crate) const DURABILITY_START_SEALS_FILE: Tag = Tag::new("durability::start_seals::file");
+    pub(crate) const DURABILITY_START_SEALS_SPAN: Tag = Tag::new("durability::start_seals::span");
     pub(crate) const DURABILITY_START_SEALS_FLUSH: Tag = Tag::new("durability::start_seals::flush");
     pub(crate) const DURABILITY_START_SEALS_DOMAINS: Tag =
         Tag::new("durability::start_seals::domains");

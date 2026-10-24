@@ -122,8 +122,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Durable means on stable media (guarantee 1); a seal that flushes nothing reports durability the device was never asked for. No I/O test can see a flush that was not issued, which is why the rule lives in the I/O-free core and is tested there.",
-      "find": ["                if write.routing.default && !files.iter().any(|f| f.file == write.file) {\n"],
-      "replace": ["                if false && !files.iter().any(|f| f.file == write.file) {\n"]
+      "find": ["                if write.routing.default && !entry.flushed {"],
+      "replace": ["                if false && !entry.flushed {"]
     },
     {
       "name": "DI-3.2.4: a seal whose flush failed counts as successful",
@@ -146,8 +146,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-27: such a write is durable only when the provider says so. A seal that finishes on its flushes alone reports durable what nobody checked; the provider tests see Durable before any answer.",
-      "find": ["            if files.iter().any(|f| !f.answered) || domains.iter().any(|d| !d.answered) {\n"],
-      "replace": ["            if files.iter().any(|f| !f.answered) {\n"]
+      "find": ["            if *unanswered > 0 || domains.iter().any(|d| !d.answered) {"],
+      "replace": ["            if *unanswered > 0 {"]
     },
     {
       "name": "DI-3.2.3: an epoch below the high-water mark is not reported durable",
@@ -226,7 +226,7 @@
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "Guarantee 3: a later failure never reaches back past a write covered successfully. Caught by the finality unit test.",
-      "find": ["        self.writes.retain(|_, write| !covered(write));\n"],
+      "find": ["        // `ops` is in push order, as the writes are kept.\n        self.let_go(|write| {\n            ops.binary_search_by_key(&write.op.seq, |(op, _)| op.seq)\n                .is_ok()\n        });"],
       "replace": [""]
     },
     {
@@ -378,8 +378,8 @@
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "Coverage is per file (DI-D-39): a seal that failed on one file has not committed that file's writes, so marking them covered -- and dropping them as covered -- is a wrong answer about what is on the device.",
-      "find": ["                    || files.iter().any(|file| file.file == write.file && file.ok))\n"],
-      "replace": ["                    || files.iter().any(|file| file.ok))\n"]
+      "find": ["                    || spans\n                        .get(&(lineage, write.file, Span::Seal(seal)))\n                        .is_some_and(|entry| entry.ok))"],
+      "replace": ["                    || spans\n                        .iter()\n                        .any(|(&(at, _, span), entry)| at == lineage && span == Span::Seal(seal) && entry.ok))"]
     },
     {
       "name": "DI-3.9.2: a covered marking cites the flush and the provider the wrong way round",
@@ -554,8 +554,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-30: a flush that finishes after the end reports nothing. Answered, it finds the ended lineage's seals cleared and records an inconsistency. Caught by the core test whose flush answers while the lineage drains a write in flight.",
-      "find": ["            Some(state) if !state.ended => state.answer(through, file, result.is_err()),\n"],
-      "replace": ["            Some(state) => state.answer(through, file, result.is_err()),\n"]
+      "find": ["            Some(state) if !state.ended => {"],
+      "replace": ["            Some(state) => {"]
     },
     {
       "name": "DI-3.2.5.1: a lineage key is reused",
@@ -2290,6 +2290,54 @@
       "why": "The seam a test reaches the fallback through is the allocator; sharing from the global one regardless never reaches the fallback a failed allocation must take.",
       "find": ["    SharedError::try_new_in(error, allocator)"],
       "replace": ["    SharedError::try_new({ let _ = allocator; error })"]
+    },
+    {
+      "name": "DI-23.6: a write named to a seal stays in the unsealed span",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Naming a write moves it from its lineage's unsealed span to the seal's. Leaving it charged to the unsealed entry too counts it twice, so that entry outlives its last write; the core's census of the uncovered writes sees an entry no write is in.",
+      "find": ["                if !spans::leave(&mut self.spans, (lineage, write.file, Span::Unsealed)) {"],
+      "replace": ["                if false {"]
+    },
+    {
+      "name": "DI-23.6: a span entry is never released",
+      "file": "src/durability/spans.rs",
+      "expect": "caught",
+      "why": "An entry is released with its last write, or entries outgrow the uncovered writes and the window no longer bounds them (DI-D-107). The census sees an entry with no write.",
+      "find": ["    if entry.writes == 0 {"],
+      "replace": ["    if entry.writes == usize::MAX {"]
+    },
+    {
+      "name": "DI-23.6: a seal flushes a file once per write",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A seal's flush of a file is charged once, to the file's entry in the seal's span; issuing it for every write named issues the same flush again for each.",
+      "find": ["                if write.routing.default && !entry.flushed {"],
+      "replace": ["                if write.routing.default {"]
+    },
+    {
+      "name": "DI-23.6: a file's flush may be answered twice",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Each issued flush answers once; a second answer for the same file is the driver or the kernel breaking its contract (DI-D-46), and must be refused as inconsistent rather than counted again.",
+      "find": ["            .filter(|entry| entry.flushed && !entry.answered)"],
+      "replace": ["            .filter(|entry| entry.flushed)"]
+    },
+    {
+      "name": "DI-23.6: a write is covered whether or not its file's flush succeeded",
+      "file": "src/durability/providers.rs",
+      "expect": "caught",
+      "why": "Coverage needs the flush of the write's own file, in its seal's span, to have succeeded. Accepting any entry covers a file whose flush failed when another file of the same seal succeeds.",
+      "find": ["                        .is_some_and(|entry| entry.ok))"],
+      "replace": ["                        .is_some())"]
+    },
+    {
+      "name": "DI-23.6: a lost write is reported by the first rather than the last",
+      "file": "src/durability/spans.rs",
+      "expect": "survives",
+      "why": "The control. Which lost write the inconsistency names, when several are lost in one let-go, changes no state and no outcome; a test failing here would be asserting the message's choice of example.",
+      "find": ["                lost = Some(write.op);"],
+      "replace": ["                lost.get_or_insert(write.op);"]
     }
   ]
 }

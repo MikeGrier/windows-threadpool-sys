@@ -79,6 +79,9 @@ mod files;
 mod gates;
 mod lineages;
 mod providers;
+mod spans;
+
+use spans::{Span, SpanFile, Spans};
 
 pub(crate) use gates::GateState;
 #[cfg(test)]
@@ -360,15 +363,6 @@ struct Write<E, T> {
     stage: Stage,
 }
 
-/// One file a seal flushes.
-struct SealFile {
-    file: IoTargetKey,
-    domains: Arc<[DomainId]>,
-    answered: bool,
-    /// Answered with success.
-    ok: bool,
-}
-
 /// One domain a seal asked the consumer's provider about.
 struct SealDomain {
     domain: DomainId,
@@ -380,10 +374,11 @@ struct SealDomain {
 enum SealStage {
     /// A write at or below the seal is still in flight.
     Waiting,
-    /// Its flushes, and its request to the consumer's provider, are out. `failed` once one part
-    /// failed.
+    /// Its flushes, and its request to the consumer's provider, are out: `unanswered` counts the
+    /// flushes of its files not yet answered, each recorded in its file's span entry. `failed` once
+    /// one part failed.
     Flushing {
-        files: Vec<SealFile>,
+        unanswered: usize,
         domains: Vec<SealDomain>,
         failed: bool,
     },
@@ -500,6 +495,8 @@ impl<E: EpochId> LineageState<E> {
     /// sequence number and the file's domains, or what about the answer is inconsistent.
     fn answer(
         &mut self,
+        spans: &mut Spans,
+        lineage: Key,
         through: E,
         file: IoTargetKey,
         failed_now: bool,
@@ -509,15 +506,19 @@ impl<E: EpochId> LineageState<E> {
             .iter_mut()
             .find(|seal| seal.through == through)
             .ok_or("a flush completed for a seal that does not exist")?;
-        let SealStage::Flushing { files, failed, .. } = &mut seal.stage else {
+        let SealStage::Flushing {
+            unanswered, failed, ..
+        } = &mut seal.stage
+        else {
             return Err("a flush completed for a seal not flushing");
         };
-        let entry = files
-            .iter_mut()
-            .find(|f| f.file == file && !f.answered)
+        let entry = spans
+            .get_mut(&(lineage, file, Span::Seal(seal.seq)))
+            .filter(|entry| entry.flushed && !entry.answered)
             .ok_or("a flush completed that the seal did not issue")?;
         entry.answered = true;
         entry.ok = !failed_now;
+        *unanswered -= 1;
         let domains = Arc::clone(&entry.domains);
         if failed_now {
             *failed = true;
@@ -535,6 +536,8 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     next_lineage: Key,
     /// The writes not yet covered, keyed by push order.
     writes: BTreeMap<u64, Write<E, T>>,
+    /// What each (lineage, file, seal span) holding an uncovered write is charged (DI-D-98).
+    spans: Spans,
     /// The unresolved failures, in observation order.
     failures: Vec<Failure<E, I>>,
     next_failure: u64,
@@ -633,6 +636,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             lineages,
             next_lineage: DEFAULT_LINEAGE + 1,
             writes: BTreeMap::new(),
+            spans: HashMap::new(),
             failures: Vec::new(),
             next_failure: 0,
             held: BTreeMap::new(),
@@ -758,6 +762,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// A write was accepted by the ring.
     pub(crate) fn pushed(&mut self, write: Accepted<E, T>) {
         self.in_flight(write, false);
+        #[cfg(test)]
+        assert!(
+            self.spans_agree(),
+            "the span entries disagree with the uncovered writes"
+        );
     }
 
     /// Record `write` as in flight. One that was held may be at or below a seal made while it was
@@ -787,6 +796,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             *state.in_flight_by_epoch.entry(epoch).or_insert(0) += 1;
         });
         state.pushed_through = state.pushed_through.max(Some(epoch));
+        let shared = Arc::clone(&domains);
+        tagged(tag::DURABILITY_PUSHED_SPAN, || {
+            self.spans
+                .entry((lineage, file, Span::Unsealed))
+                .or_insert_with(|| SpanFile::new(shared))
+                .writes += 1;
+        });
         tagged(tag::DURABILITY_PUSHED_WRITE, || {
             self.writes.insert(
                 op.seq,
@@ -835,11 +851,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             WriteEnd::Succeeded => {
                 write.stage = Stage::Completed;
                 if ended {
-                    self.writes.remove(&op.seq);
+                    self.let_go_one(op.seq);
                 }
             }
             WriteEnd::Failed(fault) => {
-                self.writes.remove(&op.seq);
+                self.let_go_one(op.seq);
                 self.mark(op, MarkingKind::Nullified { fault }, &mut due);
             }
         }
@@ -915,7 +931,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     ) -> Due<E, T, I> {
         let mut due = Due::default();
         let answered = match self.lineages.get_mut(&lineage) {
-            Some(state) if !state.ended => state.answer(through, file, result.is_err()),
+            Some(state) if !state.ended => {
+                state.answer(&mut self.spans, lineage, through, file, result.is_err())
+            }
             _ => return due,
         };
         let (seq, domains) = match answered {
@@ -1239,6 +1257,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         for &lineage in &live {
             self.advance_mark(lineage, &mut due);
         }
+        #[cfg(test)]
+        assert!(
+            self.spans_agree(),
+            "the span entries disagree with the uncovered writes"
+        );
         due
     }
 
@@ -1265,8 +1288,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             );
             // Only writes whose flush failed are left at or below a finished seal; once the mark
             // passes them, no later failure can reach back to them (guarantee 3).
-            self.writes
-                .retain(|_, write| write.lineage != lineage || write.epoch > through);
+            self.let_go(|write| write.lineage == lineage && write.epoch <= through);
             tagged(tag::DURABILITY_ADVANCE_MARK_DURABLE, || {
                 due.events.push(Event::Durable { lineage, through });
             });
@@ -1313,6 +1335,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
+        let mut lost = None;
         for index in 0..state.seals.len() {
             if !matches!(state.seals[index].stage, SealStage::Waiting) {
                 continue;
@@ -1323,7 +1346,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 break;
             }
             let seq = state.seals[index].seq;
-            let mut files: Vec<SealFile> = Vec::new();
+            // This seal's flushes are the ones pushed from here on, one per file it names.
+            let first_flush = due.flushes.len();
+            let mut unanswered = 0;
             let mut parts: Vec<DomainPart> = Vec::new();
             for write in self.writes.values_mut() {
                 if write.lineage != lineage
@@ -1331,6 +1356,10 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     || write.epoch > through
                 {
                     continue;
+                }
+                // The write moves from its lineage's unsealed span to the seal's.
+                if !spans::leave(&mut self.spans, (lineage, write.file, Span::Unsealed)) {
+                    lost.get_or_insert(write.op);
                 }
                 write.stage = Stage::Named(seq);
                 if write.routing.provider {
@@ -1342,15 +1371,16 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                         write.op,
                     );
                 }
-                if write.routing.default && !files.iter().any(|f| f.file == write.file) {
-                    tagged(tag::DURABILITY_START_SEALS_FILE, || {
-                        files.push(SealFile {
-                            file: write.file,
-                            domains: Arc::clone(&write.domains),
-                            answered: false,
-                            ok: false,
-                        });
-                    });
+                let shared = Arc::clone(&write.domains);
+                let entry = tagged(tag::DURABILITY_START_SEALS_SPAN, || {
+                    self.spans
+                        .entry((lineage, write.file, Span::Seal(seq)))
+                        .or_insert_with(|| SpanFile::new(shared))
+                });
+                entry.writes += 1;
+                if write.routing.default && !entry.flushed {
+                    entry.flushed = true;
+                    unanswered += 1;
                     let target = write.target.clone();
                     tagged(tag::DURABILITY_START_SEALS_FLUSH, || {
                         due.flushes.push(Flush {
@@ -1373,9 +1403,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     })
                     .collect()
             });
-            let issued = files
+            let issued = due.flushes[first_flush..]
                 .iter()
-                .map(|file| Part::File(file.file))
+                .map(|flush| Part::File(flush.file))
                 .chain(parts.iter().map(|part| Part::Domain(part.domain)));
             for part in issued {
                 let Some(id) = CorrelationId::for_pair(&*self.diagnostics, DiagnosticKind::Flush)
@@ -1409,10 +1439,16 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 });
             }
             state.seals[index].stage = SealStage::Flushing {
-                files,
+                unanswered,
                 domains,
                 failed: false,
             };
+        }
+        if let Some(op) = lost {
+            self.inconsistent(
+                "a write named to a seal was in no unsealed span",
+                format_args!("write {op:?}, lineage {lineage}"),
+            );
         }
     }
 
@@ -1425,14 +1461,14 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         };
         for seal in &mut state.seals {
             let SealStage::Flushing {
-                files,
+                unanswered,
                 domains,
                 failed,
             } = &seal.stage
             else {
                 continue;
             };
-            if files.iter().any(|f| !f.answered) || domains.iter().any(|d| !d.answered) {
+            if *unanswered > 0 || domains.iter().any(|d| !d.answered) {
                 continue;
             }
             let succeeded = !*failed;

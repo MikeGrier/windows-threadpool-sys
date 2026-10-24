@@ -45,9 +45,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/fixed-hash-table` -> `FHT-M1` -> `FHT-1.1` (the map's
   > core). See [CHECKLIST.md](../fixed-hash-table/CHECKLIST.md). Control returns here at `DI-23.6`.
 
-- [ ] **DI-23.6** -- **Charge a seal's work to the (lineage, file, seal span)** ([DI-D-98](DESIGN-NOTES.md#di-d-98)): the
-  first write to a file in its lineage's unsealed span pays for the flush, the flush pair and the provider's parts; the
-  charge stays with the span's entry while any write to the file remains in it.
+- [x] **DI-23.6** -- A seal's work on a file is charged to a (lineage, file, seal span) entry, made at push and released with its last uncovered write. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-236)
 
 - [ ] **DI-23.7** -- **A seal that covers no writes makes no record** ([DI-D-99](DESIGN-NOTES.md#di-d-99)), held in the
   trailing field and the per-lineage slot, releasing heals and the mark in order, with an overwritten one's pair ended as
