@@ -203,7 +203,9 @@ pub trait DurableRing {
     ///
     /// A [`PushError`] handing back the buffer and the context, for a file the instance was not
     /// given, a lineage -- the write's or the gate's -- it cannot answer for, a gate already
-    /// abandoned, a gate that would close a cycle (DI-D-23), or a ring that refused the push.
+    /// abandoned, a gate that would close a cycle (DI-D-23), the instance being at the operations
+    /// it was built for ([`PushRefusal::AtCapacity`](crate::PushRefusal::AtCapacity): see
+    /// "Capacity" in the contract), or a ring that refused the push.
     fn write_with<K: WriteKey>(
         &mut self,
         file: K,
@@ -242,8 +244,9 @@ pub trait DurableRing {
     /// # Errors
     ///
     /// A [`PushError`] handing back the buffer and the context, for a file the instance was not
-    /// given, a gate's lineage it cannot answer for, a gate already abandoned, or a ring that
-    /// refused the push.
+    /// given, a gate's lineage it cannot answer for, a gate already abandoned, the instance being
+    /// at the operations it was built for ([`PushRefusal::AtCapacity`](crate::PushRefusal::AtCapacity)),
+    /// or a ring that refused the push.
     fn read_with<K: ReadKey>(
         &mut self,
         file: K,

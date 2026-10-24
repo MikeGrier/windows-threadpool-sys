@@ -263,6 +263,11 @@ failure reports by the key the consumer gave it, so a report stays usable after 
   at all uses a separate instance** ([DI-D-19](DESIGN-NOTES.md#di-d-19)).
 - **Ordering of overlapping writes**, as above.
 - **Resolving failures.** Heal, abandon, or close each one; the high-water mark waits until it does.
+- **Making room when refused for capacity.** An instance is built for a declared capacity and refuses
+  growth past it; the consumer pops completions, seals what it writes, and resolves its failures, which
+  are what let go of room. A consumer that pushes writes and never seals them, or leaves failures
+  unresolved, is refused at submit, and nothing but its own calls can clear that
+  ("Capacity", below).
 - **Honest heals.** A heal is the consumer's assertion that it has re-issued, under higher tags,
   everything the failure put at risk that it needs. dioring cannot check it.
 - **Reporting outside failures it learns of**, through the import, for every target whose warranty
@@ -454,6 +459,49 @@ import answers "writes not yet durable may already have been lost"; it never say
 durable were not", and it cannot retract a `Durable` already reported. It is only as useful as how
 promptly the consumer learns.
 
+## Capacity
+
+An instance is built for a **declared capacity** ([DI-D-98](DESIGN-NOTES.md#di-d-98),
+[DI-D-107](DESIGN-NOTES.md#di-d-107)), which the library gives no default, so every consumer states its
+own. It counts five things: the **operations** outstanding at once, the **lineages** not yet retired, the
+unresolved **imported failures**, the **targets** attached, and the distinct flush **domains** the instance
+has been given. Its tables are made when it is built, at sizes those counts bound, and never grow;
+construction is refused if a count is more than a table can be or the allocator can provide, or if the
+capacity declares no lineage or fewer domains than the provider serves.
+
+- **What is refused.** Growth the consumer starts: a push, as `PushRefusal::AtCapacity`; minting a
+  lineage; importing a failure; and adding a target, which is also refused when its flush domains would
+  take the instance past the domains it was built for. A refusal is backpressure: it names the count
+  that was reached, hands back what the call was given, changes nothing, and spends no identity, and it
+  is distinct from the contract's own refusals -- a sealed epoch, a lineage the instance cannot answer
+  for, a gate that cannot be released. The core's own refusals for a call come first.
+- **A seal is never refused for capacity** ([DI-D-98](DESIGN-NOTES.md#di-d-98)). Its cost is fixed by
+  writes already admitted, and a seal is what lets go of them.
+- **What holds a place of the submit window**, one place for each operation however many hold it
+  ([DI-D-100](DESIGN-NOTES.md#di-d-100)):
+  - **the operation**, from its push, a gated one included, until its completion is popped;
+  - **the write**, while it is uncovered: until a seal covers it successfully, it fails, or its lineage
+    ends. The instance keeps a write's record until then, to name it in a later failure's suspect set,
+    so popping a write's completion does not let go of its place;
+  - **each unresolved failure suspecting it**, until the failure is healed or abandoned.
+
+  **Unresolved failures therefore shrink the submit window**: a consumer that leaves failures unresolved
+  is refused at submit for capacity, however many completions it has popped, until it heals or abandons
+  them. The same is true of writes it never seals.
+- **What counts until it is let go.** A lineage counts until it is retired, so an ended one counts until
+  its operations in flight have completed and the commits out for its sealed writes have answered; an
+  imported failure counts until it is resolved, a heal waiting for its seal included; a flush domain
+  counts for the life of the instance, a removed target's included.
+- **Clearing a refusal for operations**, in the order a consumer usually has them to hand: pop
+  completions; seal what it has written, so the writes are covered; resolve its failures, healing or
+  abandoning. The worked examples show
+  [a push refused at capacity and cleared by a seal](../win-durable-ioring/README.md#refused-at-capacity-and-cleared-by-a-seal),
+  and
+  [another cleared by resolving a failure](../win-durable-ioring/README.md#refused-at-capacity-and-cleared-by-resolving-a-failure).
+- **Not declared:** the completion queue and the storage a failure holds. Both follow from the
+  operations, lineages and failures above and are not counted separately; how they are laid out is
+  not part of this contract.
+
 ## The completion queue
 
 The consumer pops **dioring's** completion queue, not the backend's. It holds every completion
@@ -583,4 +631,5 @@ Nothing is left unspecified at the contract's level. The concrete types are spec
 They run the Windows driver, so they are in
 [win-durable-ioring's README](../win-durable-ioring/README.md#worked-examples), compiled and run as
 doctests there: a change that breaks one breaks that crate's build. This crate has no driver of
-its own to run them against.
+its own to run them against. They include a push refused at capacity and cleared by a seal, and
+another cleared by resolving a failure ("Capacity", above).

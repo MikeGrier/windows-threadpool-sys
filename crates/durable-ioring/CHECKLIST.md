@@ -58,10 +58,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.5.2.3** -- The core's keyed tables are `fixed-hash-table` tables made when it is built, each sized from the declared counts, so nothing hashed allocates after construction. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23523)
 
-- [ ] **DI-23.8.2** -- **Say so in the contract and the documentation** ([DI-D-100](DESIGN-NOTES.md#di-d-100)):
-  [CONTRACT.md](CONTRACT.md) and the crate's documentation, with compiled worked examples of a consumer refused at submit
-  for capacity and resolving its failures to clear it. Placed after `DI-23.5.2`, which makes the refusal the examples
-  show.
+- [x] **DI-23.8.2** -- Capacity, its refusals, and the places unresolved failures hold are in the contract and the documentation, with compiled worked examples of a push refused at capacity and cleared by a seal and by resolving a failure. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-2382)
 
 - [ ] **DI-23.10** -- **Settle the open designs with the engineer**, as the session lists them: the storage a failure holds and
   how events and the inventory lend out its suspect set and markings; the `Arc`-shared contract types; the ordered tables;

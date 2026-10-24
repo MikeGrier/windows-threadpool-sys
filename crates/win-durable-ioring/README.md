@@ -613,3 +613,166 @@ assert_eq!(ring.epoch_state(epoch(43)), Ok(EpochState::Abandoned));
 # std::fs::remove_file(&path)?;
 # Ok::<(), std::io::Error>(())
 ```
+
+### Refused at capacity, and cleared by a seal
+
+An instance is built for a declared `Capacity`, and a push that would take it past `operations` is
+refused at submit with `PushRefusal::AtCapacity`: nothing was queued, and the call's buffer and context
+come back. A write holds its place until its completion is popped **and** a seal has covered it, so
+popping alone does not clear the refusal. This instance is built for two operations.
+
+```rust
+# use std::time::{Duration, Instant};
+# use win_durable_ioring::*;
+# type Ring = Dioring<Vec<u8>>;
+# const FILE: IoTargetKey = IoTargetKey(1);
+# fn pop_until(ring: &mut Ring, stop: impl Fn(&EntryOf<Ring>) -> bool) -> EntryOf<Ring> {
+#     let started = Instant::now();
+#     loop {
+#         match ring.pop().expect("pop") {
+#             Some(entry) if stop(&entry) => return entry,
+#             Some(_) => {}
+#             None => {
+#                 assert!(started.elapsed() < Duration::from_secs(10), "nothing arrived");
+#                 std::thread::sleep(Duration::from_millis(1));
+#             }
+#         }
+#     }
+# }
+# let path = std::env::temp_dir().join(format!("durable-ioring-room-{}", std::process::id()));
+# std::fs::write(&path, [0u8; 64])?;
+# let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
+#     win_durable_ioring::Wtf16String::from_os_str(path.as_os_str()),
+#     windows_backend::FileOptions::new().read().write(),
+# )?;
+let (mut ring, lineage) = Ring::new(Setup {
+#     submission_queue_size: 64,
+#     completion_queue_size: 64,
+#     files: vec![TargetSetup::new(
+#         FILE,
+#         windows_backend::Win32FileTarget::new(file),
+#     )],
+#     buffers: Vec::new(),
+#     provider: None,
+    capacity: Capacity { operations: 2, lineages: 4, imports: 4, targets: 4, domains: 4 },
+#     diagnostics: None,
+#     delivery: DeliveryMode::Pool(None),
+})
+.expect("an instance");
+let tag = |n: u64| lineage.at(n);
+let epoch = |n: u64| Epoch::new(lineage.lineage(), n);
+
+// -> write(tag 1, A) ; write(tag 1, B)        // both places taken
+ring.write(FILE, 0, vec![1; 8], tag(1), ()).expect("room");
+ring.write(FILE, 8, vec![1; 8], tag(1), ()).expect("room");
+// -> write(tag 1, C)                          // refused: the instance is at its two operations
+let refused = ring.write(FILE, 16, vec![1; 8], tag(1), ()).expect_err("full");
+assert!(matches!(
+    refused.reason,
+    PushRefusal::AtCapacity(AtCapacity { limit: Limit::Operations, declared: 2 })
+));
+// <- WriteDone(A) ; WriteDone(B)              // popped, and the places are still held: uncovered
+let mut done = 0;
+while done < 2 {
+    if matches!(pop_until(&mut ring, |_| true), Entry::Op(_)) {
+        done += 1;
+    }
+}
+let refused = ring.write(FILE, 16, vec![1; 8], tag(1), ()).expect_err("still full");
+assert!(matches!(refused.reason, PushRefusal::AtCapacity(_)));
+// -> make_durable_through(1)                  // a seal is never refused for capacity
+ring.make_durable_through(tag(1)).expect("a seal");
+// <- Durable { through: 1 }                   // A and B covered: both places let go
+pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == epoch(1)));
+// -> write(tag 2, C)                          // accepted now
+ring.write(FILE, 16, vec![2; 8], tag(2), ()).expect("room again");
+# drop(ring);
+# std::fs::remove_file(&path)?;
+# Ok::<(), std::io::Error>(())
+```
+
+A consumer that writes and never seals is refused for the same reason, however fast it pops.
+
+### Refused at capacity, and cleared by resolving a failure
+
+An unresolved failure keeps the place of every write it suspects, so a consumer that leaves failures
+unresolved finds the submit window shrinking, popped completions or not. Here a seal's commit fails
+with two writes suspected, in an instance built for three operations: one more write is accepted, and
+the next is refused until the failure is resolved. Healing frees the places the same way, once the
+seal after it takes effect.
+
+```rust
+# use std::time::{Duration, Instant};
+# use win_durable_ioring::*;
+# type Ring = Dioring<Vec<u8>>;
+# const FILE: IoTargetKey = IoTargetKey(1);
+# fn pop_until(ring: &mut Ring, stop: impl Fn(&EntryOf<Ring>) -> bool) -> EntryOf<Ring> {
+#     let started = Instant::now();
+#     loop {
+#         match ring.pop().expect("pop") {
+#             Some(entry) if stop(&entry) => return entry,
+#             Some(_) => {}
+#             None => {
+#                 assert!(started.elapsed() < Duration::from_secs(10), "nothing arrived");
+#                 std::thread::sleep(Duration::from_millis(1));
+#             }
+#         }
+#     }
+# }
+# let path = std::env::temp_dir().join(format!("durable-ioring-unresolved-{}", std::process::id()));
+# std::fs::write(&path, [0u8; 64])?;
+# let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
+#     win_durable_ioring::Wtf16String::from_os_str(path.as_os_str()),
+#     windows_backend::FileOptions::new().read().write(),
+# )?;
+let (mut ring, lineage) = Ring::new(Setup {
+#     submission_queue_size: 64,
+#     completion_queue_size: 64,
+#     files: vec![TargetSetup::new(
+#         FILE,
+#         windows_backend::Win32FileTarget::new(file),
+#     )],
+#     buffers: Vec::new(),
+#     provider: None,
+    capacity: Capacity { operations: 3, lineages: 4, imports: 4, targets: 4, domains: 4 },
+#     diagnostics: None,
+#     delivery: DeliveryMode::Pool(None),
+})
+.expect("an instance");
+let tag = |n: u64| lineage.at(n);
+
+// -> write(tag 41, A) ; write(tag 41, B)
+ring.write(FILE, 0, vec![1; 8], tag(41), ()).expect("room");
+ring.write(FILE, 8, vec![1; 8], tag(41), ()).expect("room");
+ring.fail_next_flush(FILE, 1117); // ERROR_IO_DEVICE, for the flush the seal issues
+// -> make_durable_through(41)
+ring.make_durable_through(tag(41)).expect("a seal");
+// <- WriteDone(A) ; WriteDone(B)
+// <- Failed { failure: F1, cause: Commit, suspect: [A@41, B@41] }
+let (mut done, mut failure) = (0, None);
+while done < 2 || failure.is_none() {
+    match pop_until(&mut ring, |_| true) {
+        Entry::Op(_) => done += 1,
+        Entry::Failed(f) => failure = Some(f),
+        _ => {}
+    }
+}
+let f1 = failure.expect("the failure");
+// -> write(tag 42, C)                         // A and B still hold two places: one is left
+ring.write(FILE, 16, vec![2; 8], tag(42), ()).expect("the third place");
+// -> write(tag 42, D)                         // refused: F1 is unresolved
+let refused = ring.write(FILE, 24, vec![2; 8], tag(42), ()).expect_err("full");
+assert!(matches!(
+    refused.reason,
+    PushRefusal::AtCapacity(AtCapacity { limit: Limit::Operations, declared: 3 })
+));
+// -> abandon(F1)                              // resolving it lets go of A's and B's places
+ring.resolve(vec![(f1.token, Resolution::Abandon)]).expect("abandon");
+// <- Abandoned { failure: F1, suspect: [A@41, B@41] }
+pop_until(&mut ring, |e| matches!(e, Entry::Abandoned { .. }));
+// -> write(tag 42, D)                         // accepted now
+ring.write(FILE, 24, vec![2; 8], tag(42), ()).expect("room again");
+# drop(ring);
+# std::fs::remove_file(&path)?;
+# Ok::<(), std::io::Error>(())
+```

@@ -4555,3 +4555,13 @@ engineer's approval ("4: split approved") after the findings in DI-D-107's "Spli
 ([DI-D-107](DESIGN-NOTES.md#di-d-107)'s "Order"): `DI-23.5.2` follows `DI-23.9`, whose work bounds three of its sizes. What
 remains of what it named -- the queue's size and the failure storage's -- is `DI-23.10`'s and `DI-23.12`'s, by the rulings
 recorded in DI-D-107's "Split".
+
+## Moved 2026-10-24 09:53:12 -04:00 -- DI-23.8.2: capacity and the unresolved-failure window in the contract and the documentation
+
+### <a id="di-2382"></a>DI-23.8.2 -- Capacity, its refusals, and the places unresolved failures hold are in the contract and the documentation, with compiled worked examples of a push refused at capacity and cleared by a seal and by resolving a failure. *(completed 2026-10-24 09:53:12 -04:00)*
+
+**Say so in the contract and the documentation** ([DI-D-100](DESIGN-NOTES.md#di-d-100)): [CONTRACT.md](CONTRACT.md)'s
+"Capacity" section and consumer-requirements bullet, the trait documentation of the pushes, and two worked examples in
+[win-durable-ioring's README](../win-durable-ioring/README.md#worked-examples), compiled and run as doctests there.
+Documentation only, so no sabotage entry: the examples are the tests, and a change to the refusal or to the places a failure
+holds breaks them.

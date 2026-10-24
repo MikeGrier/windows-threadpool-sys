@@ -1933,7 +1933,7 @@ overwrites the earlier, whose values every release is satisfied by, and every ma
 
 ## <a id="di-d-100"></a>DI-D-100: a failure holds the capacity of the writes it puts at risk until it is resolved
 
-**Decided, not yet implemented: scheduled as DI-23.8.1 and DI-23.8.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22: "agreed. make this clear and the
+**Decided and implemented (DI-23.8.1 and DI-23.8.2).** The engineer, 2026-10-22: "agreed. make this clear and the
 documentation must include examples of how to address."
 
 A suspect write's capacity is not released when its seal fails: it is held by the failure until the failure is healed or
@@ -1957,6 +1957,12 @@ it is observed, for each write of its suspect set, and ends when it is abandoned
 refused yet: `DurableIoCore::window_places` reports the count, and DI-23.5.2 compares it with the declared `operations`.
 A completed write, a failed one and one whose lineage ended all stop holding as uncovered but keep their place while a
 failure suspects them, which is how a failure's suspect set and markings stay within the places it holds.
+
+**As built** (DI-23.8.2, the assistant's, 2026-10-24): [CONTRACT.md](CONTRACT.md)'s "Capacity" section states the declaration,
+what is refused, what holds a place and that unresolved failures shrink the submit window; the consumer-requirements list
+carries it as "Making room when refused for capacity". The two worked examples, in
+[win-durable-ioring's README](../win-durable-ioring/README.md#refused-at-capacity-and-cleared-by-a-seal), are a push refused
+at capacity and cleared by a seal, and one cleared by abandoning the failure that suspects two writes.
 
 ## <a id="di-d-101"></a>DI-D-101: an un-popped `Durable` is replaced by a later one, which goes to the tail
 
