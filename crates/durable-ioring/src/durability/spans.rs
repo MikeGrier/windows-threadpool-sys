@@ -107,11 +107,15 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// Let go every uncovered write `leaves` picks, each out of its span's entry.
     pub(super) fn let_go(&mut self, mut leaves: impl FnMut(&Write<E, T>) -> bool) {
         let mut lost = None;
-        for (_, write) in self.writes.extract_if(.., |_, write| leaves(write)) {
-            if let Some(what) = forget(&mut self.spans, &mut self.window, &write) {
-                lost.get_or_insert((what, write.op));
-            }
-        }
+        let (spans, window) = (&mut self.spans, &mut self.window);
+        self.writes.take_where(
+            |_, write| leaves(write),
+            |_, write| {
+                if let Some(what) = forget(spans, window, &write) {
+                    lost.get_or_insert((what, write.op));
+                }
+            },
+        );
         if let Some((what, op)) = lost {
             self.inconsistent(what, format_args!("write {op:?}"));
         }

@@ -62,7 +62,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use fixed_hash_table::HeapMap;
 
 use crate::alloc_tags::{tag, tagged};
-use crate::capacity::{Capacity, ConstructionError, table};
+use crate::capacity::{Capacity, ConstructionError, ordered, table};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::correlation::CorrelationId;
@@ -82,10 +82,13 @@ mod gates;
 mod lineages;
 mod providers;
 mod spans;
+mod tables;
 mod window;
 
+use crate::ordered::Ordered;
 use empties::{Empty, release_heals};
 use spans::{Span, SpanFile, Spans};
+use tables::Counts;
 use window::Window;
 
 pub(crate) use gates::GateState;
@@ -476,7 +479,6 @@ struct LineageState<E> {
     description: Option<Arc<str>>,
     sealed_through: Option<E>,
     durable_through: Option<E>,
-    in_flight_by_epoch: BTreeMap<E, usize>,
     seals: VecDeque<Seal<E>>,
     /// The latest empty seal made with no recorded seal queued before it (DI-D-99).
     leading: Option<Empty<E>>,
@@ -486,14 +488,6 @@ struct LineageState<E> {
     /// Ended (DI-D-30): it answers nothing more, and is retired once its writes in flight complete
     /// and its flushes out have answered (DI-D-98).
     ended: bool,
-    /// This lineage's held writes still waiting for their gates, by epoch and push order: the
-    /// edges a cycle search follows (DI-D-43).
-    gated: BTreeMap<(E, u64), Gate<E>>,
-    /// The operations waiting for one of this lineage's epochs, by that epoch and push order.
-    waiting: BTreeSet<(E, u64)>,
-    /// This lineage's held writes, ready or not, by epoch: a seal waits for them as it does for
-    /// writes in flight (guarantee 5).
-    held_by_epoch: BTreeMap<E, usize>,
     /// The highest epoch of any write pushed in this lineage, held or not: where a heal's
     /// [`Release`] must reach.
     pushed_through: Option<E>,
@@ -505,15 +499,11 @@ impl<E: EpochId> LineageState<E> {
             description,
             sealed_through: None,
             durable_through: None,
-            in_flight_by_epoch: BTreeMap::new(),
             seals: VecDeque::new(),
             leading: None,
             next_seal: 0,
             abandoned: BTreeSet::new(),
             ended: false,
-            gated: BTreeMap::new(),
-            waiting: BTreeSet::new(),
-            held_by_epoch: BTreeMap::new(),
             pushed_through: None,
         }
     }
@@ -559,10 +549,18 @@ impl<E: EpochId> LineageState<E> {
 pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     instance: InstanceId,
     /// Every lineage not yet retired, by key.
-    lineages: BTreeMap<Key, LineageState<E>>,
+    lineages: Ordered<Key, LineageState<E>>,
     next_lineage: Key,
     /// The writes not yet covered, keyed by push order.
-    writes: BTreeMap<u64, Write<E, T>>,
+    writes: Ordered<u64, Write<E, T>>,
+    /// Each lineage's writes in flight, by epoch.
+    in_flight_by_epoch: Counts<E>,
+    /// Each lineage's held writes, ready or not, by epoch: a seal waits for them as it does for
+    /// writes in flight (guarantee 5).
+    held_by_epoch: Counts<E>,
+    /// Each lineage's held writes still waiting for their gates, by epoch and push order: the edges
+    /// a cycle search follows (DI-D-43).
+    gated: Ordered<(Key, E, u64), Gate<E>>,
     /// What each (lineage, file, seal span) holding an uncovered write is charged (DI-D-98).
     spans: Spans,
     /// The places of the submit window each operation holds, and who holds them (DI-D-100).
@@ -571,7 +569,7 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     failures: Vec<Failure<E, I>>,
     next_failure: u64,
     /// The operations held for their gates, by push order.
-    held: BTreeMap<u64, HeldOp<E, T>>,
+    held: Ordered<u64, HeldOp<E, T>>,
     /// The domains the consumer's provider serves, sorted; empty without one.
     served: Arc<[DomainId]>,
     clock: K,
@@ -664,10 +662,31 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         capacity: &Capacity,
         served: usize,
     ) -> Result<Self, ConstructionError> {
-        let mut lineages = BTreeMap::new();
-        tagged(tag::DURABILITY_NEW_DEFAULT_LINEAGE, || {
-            lineages.insert(DEFAULT_LINEAGE, LineageState::new(None))
-        });
+        let operations = Some(capacity.operations);
+        let mut lineages = tagged(tag::DURABILITY_NEW_LINEAGES, || {
+            ordered("the lineages", Some(capacity.lineages))
+        })?;
+        if lineages
+            .insert(DEFAULT_LINEAGE, LineageState::new(None))
+            .is_err()
+        {
+            return Err(ConstructionError::NoLineages);
+        }
+        let writes = tagged(tag::DURABILITY_NEW_WRITES, || {
+            ordered("the uncovered writes", operations)
+        })?;
+        let in_flight_by_epoch = tagged(tag::DURABILITY_NEW_IN_FLIGHT_BY_EPOCH, || {
+            ordered("the writes in flight by epoch", operations)
+        })?;
+        let held_by_epoch = tagged(tag::DURABILITY_NEW_HELD_BY_EPOCH, || {
+            ordered("the held writes by epoch", operations)
+        })?;
+        let gated = tagged(tag::DURABILITY_NEW_GATED, || {
+            ordered("the held writes by gate", operations)
+        })?;
+        let held = tagged(tag::DURABILITY_NEW_HELD, || {
+            ordered("the operations held for their gates", operations)
+        })?;
         let spans = tagged(tag::DURABILITY_NEW_SPANS, || {
             table("the span entries", Some(capacity.operations))
         })?;
@@ -684,12 +703,15 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             instance,
             lineages,
             next_lineage: DEFAULT_LINEAGE + 1,
-            writes: BTreeMap::new(),
+            writes,
+            in_flight_by_epoch,
+            held_by_epoch,
+            gated,
             spans,
             window,
             failures: Vec::new(),
             next_failure: 0,
-            held: BTreeMap::new(),
+            held,
             served: tagged(tag::DURABILITY_NEW_SERVED, || Arc::from([])),
             clock,
             diagnostics,
@@ -841,10 +863,14 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             was_held || state.sealed_through.is_none_or(|sealed| epoch > sealed),
             "a write at or below the seal"
         );
-        tagged(tag::DURABILITY_PUSHED_IN_FLIGHT_BY_EPOCH, || {
-            *state.in_flight_by_epoch.entry(epoch).or_insert(0) += 1;
-        });
         state.pushed_through = state.pushed_through.max(Some(epoch));
+        if tables::count_up(&mut self.in_flight_by_epoch, lineage, epoch).is_err() {
+            self.inconsistent(
+                "an epoch in flight was counted past the operations declared",
+                format_args!("write {op:?} to {file:?}, lineage {lineage}, epoch {epoch:?}"),
+            );
+            return;
+        }
         let shared = Arc::clone(&domains);
         match self
             .spans
@@ -861,21 +887,22 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             }
         }
         self.hold_uncovered(op);
-        tagged(tag::DURABILITY_PUSHED_WRITE, || {
-            self.writes.insert(
-                op.seq,
-                Write {
-                    op,
-                    lineage,
-                    epoch,
-                    file,
-                    target,
-                    routing,
-                    domains,
-                    stage: Stage::InFlight,
-                },
-            )
-        });
+        let write = Write {
+            op,
+            lineage,
+            epoch,
+            file,
+            target,
+            routing,
+            domains,
+            stage: Stage::InFlight,
+        };
+        if self.writes.insert(op.seq, write).is_err() {
+            self.inconsistent(
+                "an uncovered write was recorded past the operations declared",
+                format_args!("write {op:?} to {file:?}, lineage {lineage}, epoch {epoch:?}"),
+            );
+        }
     }
 
     /// A write completed. One that failed is reported on its own completion and is neither named
@@ -917,14 +944,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 self.mark(op, MarkingKind::Nullified { fault }, &mut due);
             }
         }
-        if let Some(state) = self.lineages.get_mut(&lineage)
-            && let Some(count) = state.in_flight_by_epoch.get_mut(&epoch)
-        {
-            *count -= 1;
-            if *count == 0 {
-                state.in_flight_by_epoch.remove(&epoch);
-            }
-        }
+        tables::count_down(&mut self.in_flight_by_epoch, lineage, epoch);
         if ended {
             self.retire_if_drained(lineage);
         }
@@ -1366,11 +1386,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     }
 
     fn start_seals(&mut self, lineage: Key, due: &mut Due<E, T, I>) {
+        // A held write is outstanding as one in flight is: the seal waits for it (guarantee 5).
+        let oldest_in_flight = self.oldest_outstanding(lineage);
         let Some(state) = self.lineages.get_mut(&lineage) else {
             return;
         };
-        // A held write is outstanding as one in flight is: the seal waits for it (guarantee 5).
-        let oldest_in_flight = state.oldest_outstanding();
         let mut lost = None;
         let mut full = None;
         let mut pairs_full = false;
@@ -1539,9 +1559,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// Retire an ended lineage whose writes in flight have all completed, and whose flushes out
     /// have all answered.
     fn retire_if_drained(&mut self, lineage: Key) {
-        if self.lineages.get(&lineage).is_some_and(|state| {
-            state.ended && state.in_flight_by_epoch.is_empty() && state.seals.is_empty()
-        }) {
+        let in_flight = tables::lowest(&self.in_flight_by_epoch, lineage).is_some();
+        if self
+            .lineages
+            .get(&lineage)
+            .is_some_and(|state| state.ended && !in_flight && state.seals.is_empty())
+        {
             self.lineages.remove(&lineage);
         }
     }
@@ -1624,7 +1647,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
                 );
             }
         }
-        for (&lineage, state) in &mut self.lineages {
+        for (&lineage, state) in self.lineages.iter_mut() {
             if only.is_some_and(|only| only != lineage) {
                 continue;
             }

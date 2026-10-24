@@ -39,6 +39,7 @@ mod key;
 mod lock_watch;
 pub mod memory;
 pub mod oracle;
+mod ordered;
 mod provider;
 mod pump;
 mod router;

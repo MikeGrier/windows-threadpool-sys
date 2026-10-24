@@ -132,11 +132,11 @@ pub(crate) mod tag {
     pub(crate) const IO_CORE_NEW_DOMAINS: Tag = Tag::new("io_core::new::domains");
     pub(crate) const IO_CORE_NEW_IN_FLIGHT: Tag = Tag::new("io_core::new::in_flight");
     pub(crate) const IO_CORE_NEW_PER_TARGET: Tag = Tag::new("io_core::new::per_target");
+    pub(crate) const IO_CORE_NEW_HELD: Tag = Tag::new("io_core::new::held");
     pub(crate) const IO_CORE_COMPLETE_QUEUE: Tag = Tag::new("io_core::complete::queue");
     pub(crate) const IO_CORE_REFUSED_UNPUSHED: Tag = Tag::new("io_core::refused::unpushed");
     pub(crate) const IO_CORE_EPOCHS: Tag = Tag::new("io_core::epochs");
     pub(crate) const IO_CORE_ISSUE_BACKEND_CHECK: Tag = Tag::new("io_core::issue::backend_check");
-    pub(crate) const IO_CORE_ISSUE_HELD: Tag = Tag::new("io_core::issue::held");
     pub(crate) const IO_CORE_ISSUE_BACKEND_PUSH: Tag = Tag::new("io_core::issue::backend_push");
     pub(crate) const IO_CORE_ACT_QUEUE: Tag = Tag::new("io_core::act::queue");
     pub(crate) const IO_CORE_ACT_COMMIT_SUBMIT: Tag = Tag::new("io_core::act::commit_submit");
@@ -146,16 +146,18 @@ pub(crate) mod tag {
     pub(crate) const IO_CORE_RELEASE_SUBMIT: Tag = Tag::new("io_core::release::submit");
 
     // durability.rs
-    pub(crate) const DURABILITY_NEW_DEFAULT_LINEAGE: Tag =
-        Tag::new("durability::new::default_lineage");
+    pub(crate) const DURABILITY_NEW_LINEAGES: Tag = Tag::new("durability::new::lineages");
+    pub(crate) const DURABILITY_NEW_WRITES: Tag = Tag::new("durability::new::writes");
+    pub(crate) const DURABILITY_NEW_IN_FLIGHT_BY_EPOCH: Tag =
+        Tag::new("durability::new::in_flight_by_epoch");
+    pub(crate) const DURABILITY_NEW_HELD_BY_EPOCH: Tag = Tag::new("durability::new::held_by_epoch");
+    pub(crate) const DURABILITY_NEW_GATED: Tag = Tag::new("durability::new::gated");
+    pub(crate) const DURABILITY_NEW_HELD: Tag = Tag::new("durability::new::held");
     pub(crate) const DURABILITY_NEW_SERVED: Tag = Tag::new("durability::new::served");
     pub(crate) const DURABILITY_NEW_SPANS: Tag = Tag::new("durability::new::spans");
     pub(crate) const DURABILITY_NEW_WINDOW: Tag = Tag::new("durability::new::window");
     pub(crate) const DURABILITY_NEW_FLUSH_PAIRS: Tag = Tag::new("durability::new::flush_pairs");
     pub(crate) const DURABILITY_NEW_SERVED_NAMES: Tag = Tag::new("durability::new::served_names");
-    pub(crate) const DURABILITY_PUSHED_IN_FLIGHT_BY_EPOCH: Tag =
-        Tag::new("durability::pushed::in_flight_by_epoch");
-    pub(crate) const DURABILITY_PUSHED_WRITE: Tag = Tag::new("durability::pushed::write");
     pub(crate) const DURABILITY_RESOLVE_ABANDONED: Tag = Tag::new("durability::resolve::abandoned");
     pub(crate) const DURABILITY_RESOLVE_ABANDONED_EVENT: Tag =
         Tag::new("durability::resolve::abandoned_event");
@@ -213,20 +215,8 @@ pub(crate) mod tag {
         Tag::new("durability::gates::trace::cycle_write");
     pub(crate) const GATES_TRACE_STEP: Tag = Tag::new("durability::gates::trace::step");
     pub(crate) const GATES_TRACE_UNFOUND: Tag = Tag::new("durability::gates::trace::unfound");
-    pub(crate) const GATES_HOLD_GATED: Tag = Tag::new("durability::gates::hold::gated");
-    pub(crate) const GATES_HOLD_HELD_BY_EPOCH: Tag =
-        Tag::new("durability::gates::hold::held_by_epoch");
-    pub(crate) const GATES_HOLD_WAITING: Tag = Tag::new("durability::gates::hold::waiting");
-    pub(crate) const GATES_HOLD_HELD: Tag = Tag::new("durability::gates::hold::held");
-    pub(crate) const GATES_ISSUED_KEPT: Tag = Tag::new("durability::gates::issued::kept");
-    pub(crate) const GATES_RELEASE_THROUGH_REST: Tag =
-        Tag::new("durability::gates::release_through::rest");
-    pub(crate) const GATES_RELEASE_THROUGH_RELEASED: Tag =
-        Tag::new("durability::gates::release_through::released");
     pub(crate) const GATES_RELEASE_THROUGH_DUE: Tag =
         Tag::new("durability::gates::release_through::due");
-    pub(crate) const GATES_STOP_HELD_STOPPED: Tag =
-        Tag::new("durability::gates::stop_held::stopped");
     pub(crate) const GATES_STOP_HELD_EVENT: Tag = Tag::new("durability::gates::stop_held::event");
 
     // durability/providers.rs
@@ -241,7 +231,6 @@ pub(crate) mod tag {
     // durability/lineages.rs
     pub(crate) const LINEAGES_MINT_DESCRIPTION: Tag =
         Tag::new("durability::lineages::mint::description");
-    pub(crate) const LINEAGES_MINT_STATE: Tag = Tag::new("durability::lineages::mint::state");
     pub(crate) const LINEAGES_END_EVENT: Tag = Tag::new("durability::lineages::end::event");
 
     // io_core/provider.rs

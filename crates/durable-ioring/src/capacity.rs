@@ -9,6 +9,7 @@ use core::fmt;
 
 use fixed_hash_table::{HeapMap, ReserveError};
 
+use crate::ordered::Ordered;
 use crate::types::FlushDomain;
 
 #[cfg(test)]
@@ -80,6 +81,22 @@ pub(crate) fn table<K, V>(
     })?;
     HeapMap::try_with_capacity(entries)
         .map_err(|error| ConstructionError::Table { table: name, error })
+}
+
+/// An ordered table named `name` for `entries` entries (DI-D-109), or why it cannot be made; `None`
+/// is a size past what a `usize` holds.
+pub(crate) fn ordered<K: Ord, V>(
+    name: &'static str,
+    entries: Option<usize>,
+) -> Result<Ordered<K, V>, ConstructionError> {
+    let entries = entries.ok_or(ConstructionError::Table {
+        table: name,
+        error: ReserveError::TooLarge,
+    })?;
+    Ordered::with_capacity(entries).map_err(|error| ConstructionError::Table {
+        table: name,
+        error: ReserveError::Alloc(error),
+    })
 }
 
 /// Which of a [`Capacity`]'s counts was reached.

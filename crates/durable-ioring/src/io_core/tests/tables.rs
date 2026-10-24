@@ -173,7 +173,11 @@ fn operations_in_flight_fill_the_per_target_table_to_the_targets_declared() {
 #[test]
 fn a_declaration_too_large_for_a_table_is_refused_naming_the_table() {
     for (capacity, table) in [
-        (declared(|c| c.operations = usize::MAX), "the span entries"),
+        (
+            declared(|c| c.operations = usize::MAX),
+            "the uncovered writes",
+        ),
+        (declared(|c| c.lineages = usize::MAX), "the lineages"),
         (declared(|c| c.targets = usize::MAX), "the targets"),
         (declared(|c| c.domains = usize::MAX), "the flush domains"),
     ] {
@@ -183,4 +187,122 @@ fn a_declaration_too_large_for_a_table_is_refused_naming_the_table() {
             "{table}"
         );
     }
+}
+
+#[test]
+fn gated_writes_fill_the_held_tables_to_the_operations_declared_and_a_seal_releases_them() {
+    let mut rig = rig_over(core_with(tight(4)), FaultScript::new());
+    let gate_lineage = rig.core.mint_lineage(None).expect("room for a lineage");
+    let gate = Epoch::new(gate_lineage, 1);
+    for epoch in 1..=4 {
+        rig.write_with(
+            KEY,
+            rig.epoch(epoch),
+            epoch * 8,
+            b"x",
+            crate::types::WriteOptions::new().gate(gate),
+        )
+        .expect("held, and room");
+    }
+    assert_eq!(
+        rig.core.held.len(),
+        4,
+        "every operation held, each at its own epoch"
+    );
+    assert_eq!(rig.core.window_places(), 4);
+    assert!(matches!(
+        rig.write_with(
+            KEY,
+            rig.epoch(5),
+            40,
+            b"y",
+            crate::types::WriteOptions::new().gate(gate),
+        )
+        .expect_err("full")
+        .reason,
+        PushRefusal::AtCapacity(_)
+    ));
+    rig.seal_in(gate_lineage, 1);
+    rig.run();
+    assert_eq!(
+        rig.core.held.len(),
+        0,
+        "the gate's empty seal released them all"
+    );
+    rig.seal(4);
+    rig.run();
+    rig.entries();
+    assert_eq!(rig.core.window_places(), 0);
+}
+
+#[test]
+fn uncovered_writes_fill_the_write_table_to_the_operations_declared_and_a_seal_lets_them_go() {
+    let mut rig = rig_over(core_with(tight(4)), FaultScript::new());
+    let other = rig.core.mint_lineage(None).expect("room for a lineage");
+    for epoch in 1..=2 {
+        rig.write_to(KEY, epoch, epoch * 8, b"x").expect("room");
+        rig.write_with(
+            OTHER,
+            Epoch::new(other, epoch),
+            epoch * 8,
+            b"y",
+            Default::default(),
+        )
+        .expect("room");
+    }
+    assert_eq!(rig.core.window_places(), 4, "two lineages share one table");
+    rig.run();
+    rig.entries();
+    assert_eq!(rig.core.window_places(), 4, "completed, and uncovered");
+    assert!(matches!(
+        rig.write_to(KEY, 3, 24, b"z").expect_err("full").reason,
+        PushRefusal::AtCapacity(_)
+    ));
+    rig.seal(2);
+    rig.seal_in(other, 2);
+    rig.run();
+    rig.entries();
+    assert_eq!(rig.core.window_places(), 0, "covered");
+    rig.write_to(KEY, 3, 24, b"z")
+        .expect("room again: nothing was kept");
+}
+
+#[test]
+fn held_writes_stopped_by_their_lineage_ending_let_go_of_every_table_slot() {
+    let mut rig = rig_over(core_with(tight(2)), FaultScript::new());
+    let gate_lineage = rig.core.mint_lineage(None).expect("room for a lineage");
+    let gate = Epoch::new(gate_lineage, 1);
+    let ending = rig.core.mint_lineage(None).expect("room for a lineage");
+    for epoch in 1..=2 {
+        rig.write_with(
+            KEY,
+            Epoch::new(ending, epoch),
+            epoch * 8,
+            b"x",
+            crate::types::WriteOptions::new().gate(gate),
+        )
+        .expect("held, and room");
+    }
+    let actions = rig.core.end_lineage(ending).expect("live, not the default");
+    rig.act(actions);
+    rig.entries();
+    assert_eq!(rig.core.held.len(), 0, "both ended as never issued");
+    assert_eq!(rig.core.window_places(), 0);
+    // Held again, at the same size: a slot any table kept for the stopped writes would refuse.
+    for epoch in 1..=2 {
+        rig.write_with(
+            KEY,
+            rig.epoch(epoch),
+            epoch * 8,
+            b"y",
+            crate::types::WriteOptions::new().gate(gate),
+        )
+        .expect("held again, and room");
+    }
+    rig.seal_in(gate_lineage, 1);
+    rig.run();
+    rig.seal(2);
+    rig.run();
+    rig.entries();
+    assert_eq!(rig.core.window_places(), 0);
 }

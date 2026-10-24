@@ -29,7 +29,7 @@ fn two() -> (Lineage, Key) {
 
 /// Whether the core still records `key`, live or draining.
 fn recorded(lineage: &Lineage, key: Key) -> bool {
-    lineage.0.lineages.contains_key(&key)
+    lineage.0.lineages.get(&key).is_some()
 }
 
 /// Retire `key`, expecting the refusal `why` names, and report it by its counts and the sequence

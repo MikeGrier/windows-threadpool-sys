@@ -633,17 +633,17 @@
       "name": "DI-3.2.5.2: operations released together go in gate order",
       "file": "src/durability/gates.rs",
       "expect": "caught",
-      "why": "DI-D-43: operations released at once are pushed in push order, whatever epoch each waited for, so a release reorders nothing the consumer pushed. Caught by the core push-order test.",
-      "find": ["        released.sort_unstable();\n"],
-      "replace": [""]
+      "why": "DI-D-43: operations released at once are pushed in push order, whatever epoch each waited for, so a release reorders nothing the consumer pushed. The held operations are kept in push order and released in it; walked backwards, they go in reverse. Caught by the core push-order test.",
+      "find": ["        for held in self.held.values_mut() {\n"],
+      "replace": ["        for held in self.held.values_mut().rev() {\n"]
     },
     {
       "name": "DI-3.2.5.2: a seal does not wait for the held writes it covers",
       "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "Guarantee 5: Durable follows every write it covers, and a held write is one. A seal that passes it reports durable a write not yet written. Caught by the core and ring tests whose seal covers a held write, and by the oracle's Durable-before-completion rule.",
-      "find": ["        let held = self.held_by_epoch.keys().next().copied();"],
-      "replace": ["        let held: Option<E> = None;"]
+      "find": ["        let held = tables::lowest(&self.held_by_epoch, lineage);\n"],
+      "replace": ["        let held: Option<E> = None;\n"]
     },
     {
       "name": "DI-3.2.5.2: an issued write is not recorded in flight",
@@ -2264,7 +2264,7 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "A tag names one allocating call (DI-D-104). The guard records where each was made, so the allocation test must report a tag seen from two places in the source, naming both.",
-      "find": ["tagged(tag::IO_CORE_ISSUE_HELD, || {"],
+      "find": ["tagged(tag::IO_CORE_ACT_COMMIT_SUBMIT, || {"],
       "replace": ["tagged(tag::IO_CORE_ISSUE_BACKEND_PUSH, || {"]
     },
     {
@@ -2336,8 +2336,8 @@
       "file": "src/durability/spans.rs",
       "expect": "survives",
       "why": "The control. Which lost write the inconsistency names, when several are lost in one let-go, changes no state and no outcome; a test failing here would be asserting the message's choice of example.",
-      "find": ["            if let Some(what) = forget(&mut self.spans, &mut self.window, &write) {\n                lost.get_or_insert((what, write.op));"],
-      "replace": ["            if let Some(what) = forget(&mut self.spans, &mut self.window, &write) {\n                lost = Some((what, write.op));"]
+      "find": ["                if let Some(what) = forget(spans, window, &write) {\n                    lost.get_or_insert((what, write.op));\n"],
+      "replace": ["                if let Some(what) = forget(spans, window, &write) {\n                    lost = Some((what, write.op));\n"]
     },
     {
       "name": "DI-23.7: every seal is recorded",
@@ -2360,8 +2360,8 @@
       "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "A write held for its gate is outstanding as one in flight is (guarantee 5): a seal over it must wait for it and name it, so the seal is not empty.",
-      "find": ["        }) && state.held_by_epoch.range(span).next().is_none()"],
-      "replace": ["        })"]
+      "find": ["        }) && tables::of(&self.held_by_epoch, lineage, span)\n            .next()\n"],
+      "replace": ["        }) && Option::<()>::None\n"]
     },
     {
       "name": "DI-23.7: an overwritten empty seal's pair is left open",
@@ -2632,8 +2632,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "The answer for a flush is found through the lineage; retiring it with the flush out loses the writes the answer lets go.",
-      "find": ["            state.ended && state.in_flight_by_epoch.is_empty() && state.seals.is_empty()"],
-      "replace": ["            state.ended && state.in_flight_by_epoch.is_empty()"]
+      "find": ["            .is_some_and(|state| state.ended && !in_flight && state.seals.is_empty())\n"],
+      "replace": ["            .is_some_and(|state| state.ended && !in_flight)\n"]
     },
     {
       "name": "DI-23.5.2.1: a write kept for its flush out holds its file",
@@ -2930,6 +2930,86 @@
       "why": "IoTargetBusy points at target_holds only when it counts something the query names, which an operation in flight is not.",
       "find": ["        if self.held_for_gate > 0 || self.uncovered > 0 || self.failures > 0 {\n"],
       "replace": ["        if true {\n"]
+    },
+    {
+      "name": "DI-23.12.1: an entry takes an empty slot out of its place",
+      "file": "src/ordered.rs",
+      "expect": "caught",
+      "why": "An ordered table keeps its entries sorted; an empty slot is taken only where the entry belongs.",
+      "find": ["            self.entries[at - 1] = (key, Some(value));\n"],
+      "replace": ["            self.entries[0] = (key, Some(value));\n"]
+    },
+    {
+      "name": "DI-23.12.1: a full array of slots is grown rather than compacted",
+      "file": "src/ordered.rs",
+      "expect": "caught",
+      "why": "A table never grows its storage (DI-D-109): a full array of slots with some empty is compacted, not extended.",
+      "find": ["            self.compact();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.1: a table takes one more entry than it was made for",
+      "file": "src/ordered.rs",
+      "expect": "caught",
+      "why": "A table holds at most as many entries as it was made for, and refuses one more.",
+      "find": ["        if self.live == self.limit {\n"],
+      "replace": ["        if self.live > self.limit {\n"]
+    },
+    {
+      "name": "DI-23.12.1: a removal is still counted",
+      "file": "src/ordered.rs",
+      "expect": "caught",
+      "why": "A table counts the entries present, which a removal lowers.",
+      "find": ["        let value = self.entries[at].1.take()?;\n        self.live -= 1;\n"],
+      "replace": ["        let value = self.entries[at].1.take()?;\n"]
+    },
+    {
+      "name": "DI-23.12.1: an inverted range of keys is not empty",
+      "file": "src/ordered.rs",
+      "expect": "caught",
+      "why": "A range whose end is before its start names no entry.",
+      "find": ["            .partition_point(|(key, _)| upto(key))\n            .max(start);\n"],
+      "replace": ["            .partition_point(|(key, _)| upto(key));\n"]
+    },
+    {
+      "name": "DI-23.12.1: an epoch counted down to nothing stays counted",
+      "file": "src/durability/tables.rs",
+      "expect": "caught",
+      "why": "An epoch is present in a count table only while operations stand at it; a seal waits for the lowest present.",
+      "find": ["        counts.remove(&(lineage, epoch));\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.1: a lineage range runs past its last epoch",
+      "file": "src/durability/tables.rs",
+      "expect": "caught",
+      "why": "A lineage's span of a shared table ends at the last epoch asked for.",
+      "find": ["            key.lineage() < lineage || (key.lineage() == lineage && ends_at_or_after(&key.epoch()))\n"],
+      "replace": ["            key.lineage() <= lineage\n"]
+    },
+    {
+      "name": "DI-23.12.1: a mark releases another lineage's gated operations",
+      "file": "src/durability/gates.rs",
+      "expect": "caught",
+      "why": "A lineage's mark releases only the operations gated on that lineage.",
+      "find": ["            if held.ready || held.gate.lineage != lineage || held.gate.epoch > through {\n"],
+      "replace": ["            if held.ready || held.gate.epoch > through {\n"]
+    },
+    {
+      "name": "DI-23.12.1: a stopped write stays counted as held",
+      "file": "src/durability/gates.rs",
+      "expect": "caught",
+      "why": "A held write that ends as never issued no longer holds its epoch, so a seal does not wait for it.",
+      "find": ["                    tables::count_down(held_by_epoch, write.lineage, write.epoch);\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.1: a stopped write stays an edge of the gate search",
+      "file": "src/durability/gates.rs",
+      "expect": "caught",
+      "why": "A held write that ends as never issued is no longer an edge the cycle search follows (DI-D-43).",
+      "find": ["                    gated.remove(&(write.lineage, write.epoch, seq));\n"],
+      "replace": [""]
     }
   ]
 }

@@ -4584,3 +4584,15 @@ requests, lineages and `close()`, and visitor queries behind `IoTargetBusy` and 
 "As built". A breaking change to both crates, in one commit because the `DurableRing` trait couples them. Whether a
 failure suspects a write to a file, which the count and the visitor both ask, was made one method rather than left at two
 sites. Sabotage: fifteen entries re-anchored to where their behaviour now lives, and seven added.
+
+## Moved 2026-10-24 16:21:55 -04:00 -- DI-23.12.1.1: the ordered tables on fixed storage
+
+### <a id="di-231211"></a>DI-23.12.1.1 -- The ordered tables but the seal queue are on fixed storage of the crate's own, shared across lineages and keyed by lineage first where they were per lineage. *(completed 2026-10-24 16:21:55 -04:00)*
+
+**The ordered tables onto fixed storage** ([DI-D-109](DESIGN-NOTES.md#di-d-109)): the push-sequence tables (`writes`, both
+`held`) and the lineage table, the per-epoch counts and `gated`, on one fixed-capacity ordered table type, with `waiting`
+removed. What was built is DI-D-109's "As built (DI-23.12.1)". Construction makes six more allocations and the clean
+path's writes, gates and holds none for these tables. Sabotage: six entries re-anchored, ten added; one first survived,
+which showed nothing checked that a held write ended as never issued lets go of its edge in the gate table, and a test
+filling the held tables after such writes now does. The seal queue was
+left for `DI-23.12.1.2`, which waits for the engineer.

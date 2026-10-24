@@ -26,7 +26,7 @@ use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use core::ops::Bound;
 
-use super::{Accepted, Due, Durability, Event, Gate, HeldOp, Key, Standing, State};
+use super::{Accepted, Due, Durability, Event, Gate, HeldOp, Key, Standing, State, tables};
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
@@ -53,17 +53,9 @@ struct Step<E> {
     parent: Option<usize>,
 }
 
-/// A range of a lineage's held writes, keyed by epoch and push order.
-type Span<E> = (Bound<(E, u64)>, Bound<(E, u64)>);
-
-/// The range of a lineage's held writes with epochs above `lower` and at or below `upper`.
-fn span<E: EpochId>(lower: Bound<E>, upper: E) -> Span<E> {
-    let lower = match lower {
-        Bound::Unbounded => Bound::Unbounded,
-        Bound::Excluded(epoch) => Bound::Excluded((epoch, u64::MAX)),
-        Bound::Included(epoch) => Bound::Included((epoch, 0)),
-    };
-    (lower, Bound::Included((upper, u64::MAX)))
+/// The epochs above `lower` and at or below `upper`.
+fn span<E>(lower: Bound<E>, upper: E) -> (Bound<E>, Bound<E>) {
+    (lower, Bound::Included(upper))
 }
 
 /// Raise `lineage`'s bound to `extent`, returning the bound below the newly covered range, or
@@ -108,9 +100,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// cheap test: if it never needs the lowest of them, none is on a cycle. Only if it does is each
     /// tested alone, in epoch order.
     pub(super) fn seal_cycle(&self, lineage: Key, through: E) -> Option<Vec<Gate<E>>> {
-        let state = self.live(lineage)?;
-        let covered = state.gated.range(..=(through, u64::MAX));
-        let (&(lowest, _), _) = covered.clone().next()?;
+        self.live(lineage)?;
+        let covered = tables::of(&self.gated, lineage, ..=through);
+        let (&(_, lowest, _), _) = covered.clone().next()?;
         let extra = Some(Gate {
             lineage,
             epoch: through,
@@ -126,7 +118,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             return None;
         }
         covered
-            .map(|(&(epoch, _), &gate)| (Gate { lineage, epoch }, gate))
+            .map(|(&(_, epoch, _), &gate)| (Gate { lineage, epoch }, gate))
             .find(|&(write, gate)| {
                 let seeds = tagged(tag::GATES_SEAL_CYCLE_SEED, || vec![gate]);
                 self.needs(seeds, write, extra)
@@ -194,9 +186,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             let Some(lower) = raise(&mut bounds, gate.lineage, extent) else {
                 continue;
             };
-            let gated = &self.lineages[&gate.lineage].gated;
+            let gated = tables::of(&self.gated, gate.lineage, span(lower, extent));
             tagged(tag::GATES_NEEDS_WORK, || {
-                work.extend(gated.range(span(lower, extent)).map(|(_, gate)| *gate));
+                work.extend(gated.map(|(_, gate)| *gate));
             });
         }
         false
@@ -239,8 +231,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             let Some(lower) = raise(&mut bounds, gate.lineage, extent) else {
                 continue;
             };
-            let gated = &self.lineages[&gate.lineage].gated;
-            for (&(epoch, _), &next_gate) in gated.range(span(lower, extent)) {
+            for (&(_, epoch, _), &next_gate) in
+                tables::of(&self.gated, gate.lineage, span(lower, extent))
+            {
                 tagged(tag::GATES_TRACE_STEP, || {
                     steps.push(Step {
                         write: Gate {
@@ -273,29 +266,33 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         }
         if let Some(write) = &write {
             let state = self.lineages.get_mut(&write.lineage).expect("live");
-            tagged(tag::GATES_HOLD_GATED, || {
-                state.gated.insert((write.epoch, op.seq), gate)
-            });
-            tagged(tag::GATES_HOLD_HELD_BY_EPOCH, || {
-                *state.held_by_epoch.entry(write.epoch).or_insert(0) += 1;
-            });
             state.pushed_through = state.pushed_through.max(Some(write.epoch));
+            let gated = self
+                .gated
+                .insert((write.lineage, write.epoch, op.seq), gate)
+                .is_ok();
+            let counted =
+                tables::count_up(&mut self.held_by_epoch, write.lineage, write.epoch).is_ok();
+            if !gated || !counted {
+                self.inconsistent(
+                    "a held write was recorded past the operations declared",
+                    format_args!("write {op:?}, gated on {gate:?}"),
+                );
+                return;
+            }
         }
-        let state = self.lineages.get_mut(&gate.lineage).expect("live");
-        tagged(tag::GATES_HOLD_WAITING, || {
-            state.waiting.insert((gate.epoch, op.seq))
-        });
-        tagged(tag::GATES_HOLD_HELD, || {
-            self.held.insert(
-                op.seq,
-                HeldOp {
-                    op,
-                    write,
-                    gate,
-                    ready: false,
-                },
-            )
-        });
+        let held = HeldOp {
+            op,
+            write,
+            gate,
+            ready: false,
+        };
+        if self.held.insert(op.seq, held).is_err() {
+            self.inconsistent(
+                "an operation was held past the operations declared",
+                format_args!("operation {op:?}, gated on {gate:?}"),
+            );
+        }
     }
 
     /// A released operation was pushed to the ring: a write is recorded as in flight from now.
@@ -311,7 +308,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             }
             Some(held) => {
                 let gate = held.gate;
-                tagged(tag::GATES_ISSUED_KEPT, || self.held.insert(op.seq, held));
+                // Its slot was just let go, so it has room.
+                let _ = self.held.insert(op.seq, held);
                 self.inconsistent(
                     "an operation was issued before its gate was durable",
                     format_args!("operation {op:?}, gated on {gate:?}"),
@@ -328,33 +326,15 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// mark has just reached, in push order. Abandoned epochs never reach this: abandoning one ends
     /// what waits for it at once.
     pub(super) fn release_through(&mut self, lineage: Key, through: E, due: &mut Due<E, T, I>) {
-        let Some(state) = self.lineages.get_mut(&lineage) else {
-            return;
-        };
-        if state
-            .waiting
-            .first()
-            .is_none_or(|&(epoch, _)| epoch > through)
-        {
-            return;
-        }
-        let rest = tagged(tag::GATES_RELEASE_THROUGH_REST, || {
-            state.waiting.split_off(&(through, u64::MAX))
-        });
-        let ready = core::mem::replace(&mut state.waiting, rest);
-        let mut released: Vec<u64> = tagged(tag::GATES_RELEASE_THROUGH_RELEASED, || {
-            ready.into_iter().map(|(_, seq)| seq).collect()
-        });
-        released.sort_unstable();
-        for seq in released {
-            let Some(held) = self.held.get_mut(&seq) else {
+        // The held operations are kept in push order, so they are released in it.
+        for held in self.held.values_mut() {
+            if held.ready || held.gate.lineage != lineage || held.gate.epoch > through {
                 continue;
-            };
+            }
             held.ready = true;
-            if let Some(write) = &held.write
-                && let Some(state) = self.lineages.get_mut(&write.lineage)
-            {
-                state.gated.remove(&(write.epoch, seq));
+            if let Some(write) = &held.write {
+                self.gated
+                    .remove(&(write.lineage, write.epoch, held.op.seq));
             }
             tagged(tag::GATES_RELEASE_THROUGH_DUE, || {
                 due.released.push(held.op)
@@ -429,48 +409,29 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         stopped: impl Fn(&HeldOp<E, T>) -> Option<Gate<E>>,
         due: &mut Due<E, T, I>,
     ) {
-        if self.held.is_empty() {
-            return;
-        }
-        let stopped: Vec<(u64, Gate<E>)> = tagged(tag::GATES_STOP_HELD_STOPPED, || {
-            self.held
-                .iter()
-                .filter_map(|(&seq, held)| stopped(held).map(|abandoned| (seq, abandoned)))
-                .collect()
-        });
-        for (seq, abandoned) in stopped {
-            let Some(held) = self.held.remove(&seq) else {
-                continue;
-            };
-            if let Some(write) = &held.write {
-                if let Some(state) = self.lineages.get_mut(&write.lineage) {
-                    state.gated.remove(&(write.epoch, seq));
+        let (gated, held_by_epoch) = (&mut self.gated, &mut self.held_by_epoch);
+        self.held.take_where(
+            |_, held| stopped(held).is_some(),
+            |&seq, held| {
+                let Some(abandoned) = stopped(&held) else {
+                    return;
+                };
+                if let Some(write) = &held.write {
+                    gated.remove(&(write.lineage, write.epoch, seq));
+                    tables::count_down(held_by_epoch, write.lineage, write.epoch);
                 }
-                self.unhold(write.lineage, write.epoch);
-            }
-            if !held.ready
-                && let Some(state) = self.lineages.get_mut(&held.gate.lineage)
-            {
-                state.waiting.remove(&(held.gate.epoch, seq));
-            }
-            tagged(tag::GATES_STOP_HELD_EVENT, || {
-                due.events.push(Event::NeverIssued {
-                    op: held.op,
-                    abandoned,
+                tagged(tag::GATES_STOP_HELD_EVENT, || {
+                    due.events.push(Event::NeverIssued {
+                        op: held.op,
+                        abandoned,
+                    });
                 });
-            });
-        }
+            },
+        );
     }
 
     /// One held write of `lineage` at `epoch` is no longer held.
     fn unhold(&mut self, lineage: Key, epoch: E) {
-        if let Some(state) = self.lineages.get_mut(&lineage)
-            && let Some(count) = state.held_by_epoch.get_mut(&epoch)
-        {
-            *count -= 1;
-            if *count == 0 {
-                state.held_by_epoch.remove(&epoch);
-            }
-        }
+        tables::count_down(&mut self.held_by_epoch, lineage, epoch);
     }
 }

@@ -35,7 +35,7 @@
 //! The durability rules themselves -- seals, coverage, failures and their suspect sets -- are the
 //! durability core's, shared with the Windows driver while both paths exist.
 
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 
 use fixed_hash_table::HeapMap;
@@ -45,7 +45,7 @@ use crate::backend::{
     Completion, IoBackend, Refused, Submission, SubmissionData, SubmissionOp, SubmissionToken,
     refusal_fault,
 };
-use crate::capacity::{AtCapacity, Capacity, ConstructionError, Limit, table};
+use crate::capacity::{AtCapacity, Capacity, ConstructionError, Limit, ordered, table};
 use crate::clock::StampClock;
 use crate::contract::{EpochId, Identities};
 use crate::diagnostics::DiagnosticSink;
@@ -55,6 +55,7 @@ use crate::durability::{
 };
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::io_target::IoTargetDescription;
+use crate::ordered::Ordered;
 use crate::provider::ProviderRequest;
 use crate::types::{
     AddTargetCause, AddTargetError, DurabilityRequest, Entry, Epoch, EpochState, FlushDomain,
@@ -174,7 +175,7 @@ pub struct DurableIoCore<E: EpochId + 'static, B, C, K: StampClock> {
     /// Every submission handed out and not yet completed.
     in_flight: HeapMap<SubmissionToken, InFlight<E, K::Instant, C>>,
     /// The operations held for their gates, by push order.
-    held: BTreeMap<u64, HeldOp<E, K::Instant, B, C>>,
+    held: Ordered<u64, HeldOp<E, K::Instant, B, C>>,
     /// Consumer operations in flight, by target, as `remove_target` reports them; a target with
     /// none has no entry.
     per_target: HeapMap<IoTargetKey, usize>,
@@ -233,6 +234,12 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         let per_target = tagged(tag::IO_CORE_NEW_PER_TARGET, || {
             table("the operations in flight by target", Some(capacity.targets))
         })?;
+        let held = tagged(tag::IO_CORE_NEW_HELD, || {
+            ordered(
+                "the operations held for their gates",
+                Some(capacity.operations),
+            )
+        })?;
         Ok(Self {
             instance,
             capacity,
@@ -242,7 +249,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             served: tagged(tag::IO_CORE_NEW_SERVED, || Arc::from([])),
             served_names: Vec::new(),
             in_flight,
-            held: BTreeMap::new(),
+            held,
             per_target,
             queue: VecDeque::new(),
             unpushed: Vec::new(),
@@ -792,19 +799,21 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             self.durability.admit(id);
             let accepted = epoch.map(|epoch| self.accepted(id, target, epoch));
             self.durability.hold(id, accepted, at);
-            tagged(tag::IO_CORE_ISSUE_HELD, || {
-                self.held.insert(
-                    id.seq,
-                    HeldOp {
-                        id,
-                        kind,
-                        target,
-                        op,
-                        context,
-                        gate: named,
-                    },
-                )
-            });
+            let held = HeldOp {
+                id,
+                kind,
+                target,
+                op,
+                context,
+                gate: named,
+            };
+            if self.held.insert(id.seq, held).is_err() {
+                // The window refused the push before it got here if there was no room for it.
+                self.durability.inconsistent(
+                    "an operation was held past the operations declared",
+                    format_args!("operation {id:?}, gated on {named:?}"),
+                );
+            }
             #[cfg(test)]
             self.check_window();
             return Ok(id);

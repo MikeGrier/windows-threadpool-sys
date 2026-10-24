@@ -567,11 +567,11 @@ fn failures() -> Vec<Measured> {
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
-    ("construction, with two targets", 13),
-    ("writes, first round", 7),
+    ("construction, with two targets", 19),
+    ("writes, first round", 3),
     ("write completions, first round", 19),
     ("pops, first round", 0),
-    ("writes, second round", 2),
+    ("writes, second round", 0),
     ("write completions, second round", 16),
     ("pops, second round", 0),
     ("reads", 0),
@@ -581,12 +581,12 @@ const CLEAN: &[(&str, u64)] = &[
     ("pops after the seal", 0),
     ("a seal covering no writes", 2),
     ("completions and pops after the empty seal", 0),
-    ("gated writes", 13),
-    ("the gate's epoch written", 18),
-    ("the gate's epoch sealed, releasing the gated writes", 18),
+    ("gated writes", 8),
+    ("the gate's epoch written", 16),
+    ("the gate's epoch sealed, releasing the gated writes", 16),
     ("the gated writes sealed", 6),
     ("a lineage minted", 0),
-    ("the minted lineage written", 19),
+    ("the minted lineage written", 16),
     ("a busy lineage refused, and its holds named", 0),
     ("the minted lineage sealed", 11),
     ("the minted lineage ended", 2),
@@ -601,14 +601,14 @@ const CLEAN: &[(&str, u64)] = &[
 
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
-    ("construction, with two targets", 13),
-    ("writes before the failure", 26),
+    ("construction, with two targets", 19),
+    ("writes before the failure", 22),
     ("a commit failure observed", 21),
     ("failures queried", 2),
-    ("writes re-issued", 19),
+    ("writes re-issued", 16),
     ("a heal resolved", 3),
     ("the heal taking effect at the next seal", 10),
-    ("writes before the import", 18),
+    ("writes before the import", 16),
     ("a failure imported", 9),
     ("an abandon resolved", 3),
 ];
@@ -617,9 +617,30 @@ const FAILURES: &[(&str, u64)] = &[
 const CLEAN_TAGS: &[(&str, &str, u64)] = &[
     (
         "construction, with two targets",
-        "durability::new::default_lineage",
+        "durability::new::lineages",
         1,
     ),
+    (
+        "construction, with two targets",
+        "durability::new::writes",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::in_flight_by_epoch",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::held_by_epoch",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::gated",
+        1,
+    ),
+    ("construction, with two targets", "durability::new::held", 1),
     (
         "construction, with two targets",
         "durability::new::spans",
@@ -657,6 +678,7 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "io_core::new::per_target",
         1,
     ),
+    ("construction, with two targets", "io_core::new::held", 1),
     ("construction, with two targets", "io_core::new::served", 1),
     (
         "construction, with two targets",
@@ -664,12 +686,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         2,
     ),
     ("writes, first round", "io_core::issue::backend_push", 3),
-    (
-        "writes, first round",
-        "durability::pushed::in_flight_by_epoch",
-        1,
-    ),
-    ("writes, first round", "durability::pushed::write", 3),
     (
         "write completions, first round",
         "io_core::complete::queue",
@@ -680,7 +696,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "durability::advance::live",
         16,
     ),
-    ("writes, second round", "durability::pushed::write", 2),
     (
         "write completions, second round",
         "durability::advance::live",
@@ -705,12 +720,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
     ),
     ("gated writes", "durability::gates::write_cycle::seeds", 4),
     ("gated writes", "durability::gates::raise::bound", 4),
-    ("gated writes", "durability::gates::hold::gated", 1),
-    ("gated writes", "durability::gates::hold::held_by_epoch", 1),
-    ("gated writes", "durability::gates::hold::waiting", 1),
-    ("gated writes", "durability::gates::hold::held", 1),
-    ("gated writes", "io_core::issue::held", 1),
-    ("the gate's epoch written", "durability::pushed::write", 2),
     ("the gate's epoch written", "durability::advance::live", 16),
     (
         "the gate's epoch sealed, releasing the gated writes",
@@ -735,16 +744,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
     (
         "the gate's epoch sealed, releasing the gated writes",
         "durability::advance_mark::durable",
-        1,
-    ),
-    (
-        "the gate's epoch sealed, releasing the gated writes",
-        "durability::gates::release_through::rest",
-        1,
-    ),
-    (
-        "the gate's epoch sealed, releasing the gated writes",
-        "durability::gates::release_through::released",
         1,
     ),
     (
@@ -774,12 +773,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "durability::advance_mark::durable",
         1,
     ),
-    (
-        "the minted lineage written",
-        "durability::pushed::in_flight_by_epoch",
-        1,
-    ),
-    ("the minted lineage written", "durability::pushed::write", 2),
     (
         "the minted lineage written",
         "durability::advance::live",
@@ -838,9 +831,30 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
 const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     (
         "construction, with two targets",
-        "durability::new::default_lineage",
+        "durability::new::lineages",
         1,
     ),
+    (
+        "construction, with two targets",
+        "durability::new::writes",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::in_flight_by_epoch",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::held_by_epoch",
+        1,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::gated",
+        1,
+    ),
+    ("construction, with two targets", "durability::new::held", 1),
     (
         "construction, with two targets",
         "durability::new::spans",
@@ -878,6 +892,7 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "io_core::new::per_target",
         1,
     ),
+    ("construction, with two targets", "io_core::new::held", 1),
     ("construction, with two targets", "io_core::new::served", 1),
     (
         "construction, with two targets",
@@ -889,12 +904,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "io_core::issue::backend_push",
         3,
     ),
-    (
-        "writes before the failure",
-        "durability::pushed::in_flight_by_epoch",
-        1,
-    ),
-    ("writes before the failure", "durability::pushed::write", 3),
     ("writes before the failure", "io_core::complete::queue", 3),
     ("writes before the failure", "durability::advance::live", 16),
     ("a commit failure observed", "durability::seal::record", 1),
@@ -941,7 +950,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     ("a commit failure observed", "durability::mark::event", 2),
     ("failures queried", "durability::failures::infos", 1),
     ("failures queried", "durability::failures::markings", 1),
-    ("writes re-issued", "durability::pushed::write", 3),
     ("writes re-issued", "durability::advance::live", 16),
     ("a heal resolved", "durability::resolve::heal_pending", 2),
     ("a heal resolved", "durability::advance::live", 1),
@@ -970,7 +978,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "durability::release_healed::event",
         1,
     ),
-    ("writes before the import", "durability::pushed::write", 2),
     ("writes before the import", "durability::advance::live", 16),
     ("a failure imported", "durability::observe::suspect", 3),
     (

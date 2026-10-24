@@ -2183,7 +2183,7 @@ through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads wh
 
 ## <a id="di-d-106"></a>DI-D-106: the core's tables are fixed-capacity, preallocated, and refuse when full, from a new crate, `fixed-hash-table`
 
-**Decided; the crate is DI-23.5.1 and the core's hashed tables moved onto it in DI-23.5.2.3 ([DI-D-107](#di-d-107)'s "As built"), with the sequence-keyed tables still at DI-23.10 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-23: "Seems like the collections need to move to closed hashing", then "yes fixed capacity preallocated tables".
+**Decided; the crate is DI-23.5.1 and the core's hashed tables moved onto it in DI-23.5.2.3 ([DI-D-107](#di-d-107)'s "As built"); the ordered tables moved onto fixed storage of this crate's own in DI-23.12.1 ([DI-D-109](#di-d-109)'s "As built").** The engineer, 2026-10-23: "Seems like the collections need to move to closed hashing", then "yes fixed capacity preallocated tables".
 
 - **Why not `std`'s.** `std`'s `HashMap` is already closed hashing (hashbrown's SwissTable). What rules it out is that it grows
   on insert past its capacity -- `try_reserve` at construction sizes it but does not stop a later insert growing it -- that it
@@ -2331,6 +2331,18 @@ notes when it is created.
 - **The ordered tables**: slabs in insertion order for the push-sequence tables and the lineages; sorted fixed-capacity
   arrays, reserved at construction and keyed by lineage first, for the per-epoch tables and `gated`. In this crate, in safe
   code.
+- **As built** (DI-23.12.1, the assistant's, 2026-10-24): one table type, [ordered.rs](src/ordered.rs), serves every ordered
+  table rather than a slab and a sorted array: a sorted array reserved when the table is made, a removal leaving its slot
+  empty in place, an insert taking an empty slot beside its place, and the empty slots compacted only when an insert finds
+  the array full, so a table keyed by a count that only rises inserts at its end and removes without shifting, and none
+  grows. The writes, both `held` tables and the lineages are keyed by sequence and lineage; the per-epoch counts and `gated`
+  are shared across lineages and keyed by lineage first ([durability/tables.rs](src/durability/tables.rs)). `waiting` is
+  gone: the held operations are kept in push order, so a mark releases what waits for it by walking them, which also
+  removed the scratch it sorted. Sized from `operations` (the lineages from `lineages`); a refusal inside that bound is an
+  inconsistency, and [io_core/tests/tables.rs](src/io_core/tests/tables.rs) fills each to it. **Not moved: the seal
+  queue.** A recorded seal stays queued until the mark passes it, so behind an unresolved failure holding the mark,
+  finished seals whose writes were covered accumulate with nothing bounding them -- the bound DI-D-107 gives covers seals
+  with flushes out only. It waits for the engineer's decision (DI-23.12.1.2).
 - **The slots of DI-D-108** are one array of atomics made when the driver builds the instance, reached through the home it
   supplies; a target's domains are a range in a fixed table.
 - **Without `std`**: the driver's locking (`engine.rs`, `lock_watch.rs`) and the `thread::panicking()` guard on an

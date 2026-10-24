@@ -71,15 +71,20 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   available now and are expected to sharpen, or split again, when they start.
 
 - [ ] **DI-23.12.1** -- **The ordered tables onto fixed storage** ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s "ordered
-  tables"): the push-sequence tables (`writes`, both `held`) and the lineage table become slabs kept in insertion order;
-  the per-epoch counts (`in_flight_by_epoch`, `held_by_epoch`), `waiting` and `gated` become sorted fixed-capacity arrays
-  reserved at construction for `operations`, shared across lineages and keyed by lineage first; and the seal queue goes
-  onto storage made at construction. Safe code in this crate, sized from the declared counts, refusing inside a proved bound only as an
-  inconsistency, as the hashed tables do. No contract change. Not `abandoned` (`DI-23.12.5`) nor the failure records
-  (`DI-23.12.3`).
+  tables"). Split 2026-10-24 when building it showed the seal queue has no bound to size it from: finished seals behind a
+  mark held by an unresolved failure accumulate, their writes covered and their places let go.
+
+- [x] **DI-23.12.1.1** -- The ordered tables but the seal queue are on fixed storage of the crate's own, shared across lineages and keyed by lineage first where they were per lineage. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231211)
+
+- [ ] **DI-23.12.1.2** -- **The seal queue onto fixed storage**, once the engineer decides what bounds a finished seal the
+  mark has not passed: blocked behind an unresolved failure, such seals accumulate with nothing holding a place for them,
+  and each queues a `Blocked` entry, so `DI-23.12.3`'s completion-queue bound depends on the answer too. Options brought
+  with `DI-23.12.1.1`: a finished seal the mark has not passed holds a place of the window, as an abandoned epoch above
+  the mark does ([DI-D-109](DESIGN-NOTES.md#di-d-109)); or consecutive finished seals coalesce into the latest, as
+  `Durable` entries do (DI-D-101). Either is a contract change.
 
 - [ ] **DI-23.12.2** -- **The core's per-call scratch and the lists a call returns onto storage made at construction**
-  ([DI-D-97](DESIGN-NOTES.md#di-d-97)): what `advance`, `cover`, `release_through` and `end_pairs` collect into, the
+  ([DI-D-97](DESIGN-NOTES.md#di-d-97)): what `advance`, `cover` and `end_pairs` collect into, the
   gate search's work lists, and `Due`'s events, flushes and submissions with the `CoreActions` a call hands the driver,
   drained in place as `drain_requests` is, so their storage is kept. Added 2026-10-24 when `DI-23.12.1` began: the
   allocation test's tags showed these lists allocating on every clean-path call and no step owning them. A change to the

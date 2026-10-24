@@ -11,6 +11,7 @@ use alloc::sync::Arc;
 
 use super::{
     DEFAULT_LINEAGE, Due, Durability, Event, Key, LineageState, SealStage, Stage, Standing, V,
+    tables,
 };
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
@@ -27,9 +28,17 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let description = tagged(tag::LINEAGES_MINT_DESCRIPTION, || {
             description.map(Arc::from)
         });
-        tagged(tag::LINEAGES_MINT_STATE, || {
-            self.lineages.insert(key, LineageState::new(description))
-        });
+        if self
+            .lineages
+            .insert(key, LineageState::new(description))
+            .is_err()
+        {
+            // The I/O core refuses a mint past the lineages declared before it gets here.
+            self.inconsistent(
+                "a lineage was minted past the lineages declared",
+                format_args!("lineage {key}"),
+            );
+        }
         key
     }
 
@@ -89,7 +98,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             .values()
             .filter(|write| write.lineage == lineage)
             .map(|write| write.epoch)
-            .chain(state.held_by_epoch.keys().copied())
+            .chain(tables::of(&self.held_by_epoch, lineage, ..).map(|(key, _)| key.1))
             .filter(above)
             .max();
         let abandoned_through = sealed.max(written);
@@ -130,14 +139,16 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// gate, no operation held for a gate on one of its epochs, and no unresolved failure holding
     /// it. The lineage must be live and not the default.
     pub(crate) fn retire(&mut self, lineage: Key) -> Result<(), LineageBusy<V<E, I>>> {
-        let Some(state) = self.live(lineage).filter(|_| lineage != DEFAULT_LINEAGE) else {
+        if self.live(lineage).is_none() || lineage == DEFAULT_LINEAGE {
             self.inconsistent(
                 "a retire of a lineage that is not live, or of the default",
                 format_args!("lineage {lineage}"),
             );
             return Ok(());
-        };
-        let in_flight = state.in_flight_by_epoch.values().sum();
+        }
+        let in_flight = tables::of(&self.in_flight_by_epoch, lineage, ..)
+            .map(|(_, count)| count)
+            .sum();
         let uncovered = self
             .writes
             .values()

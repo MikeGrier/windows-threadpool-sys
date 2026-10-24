@@ -19,7 +19,7 @@ use core::iter;
 use core::ops::Bound;
 
 use super::{
-    Due, Durability, Event, Failure, Key, LineageState, Seal, SealStage, Standing, end_seal,
+    Due, Durability, Event, Failure, Key, LineageState, Seal, SealStage, Standing, end_seal, tables,
 };
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::Instant;
@@ -91,16 +91,6 @@ impl<E: EpochId> LineageState<E> {
                 })
                 .chain(seal.trailing.iter().map(Empty::point))
             }))
-    }
-
-    /// The oldest epoch with a write in flight or held for its gate: a seal at or above it waits.
-    pub(super) fn oldest_outstanding(&self) -> Option<E> {
-        let in_flight = self.in_flight_by_epoch.keys().next().copied();
-        let held = self.held_by_epoch.keys().next().copied();
-        match (in_flight, held) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
     }
 
     /// Put `empty` in its slot: the trailing seal of the last recorded seal queued, or the
@@ -198,6 +188,17 @@ pub(super) fn release_heals<E: EpochId + 'static, I: Instant>(
 }
 
 impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
+    /// The oldest epoch of `lineage` with a write in flight or held for its gate: a seal at or
+    /// above it waits.
+    pub(super) fn oldest_outstanding(&self, lineage: Key) -> Option<E> {
+        let in_flight = tables::lowest(&self.in_flight_by_epoch, lineage);
+        let held = tables::lowest(&self.held_by_epoch, lineage);
+        match (in_flight, held) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
     /// Whether a seal of `lineage` through `through`, made now, would cover no writes: none of the
     /// lineage's writes in flight, completed or held for a gate is above its seal point and at or
     /// below `through`.
@@ -213,7 +214,9 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         );
         !self.writes.values().any(|write| {
             write.lineage == lineage && core::ops::RangeBounds::contains(&span, &write.epoch)
-        }) && state.held_by_epoch.range(span).next().is_none()
+        }) && tables::of(&self.held_by_epoch, lineage, span)
+            .next()
+            .is_none()
     }
 
     /// Put an empty seal of `lineage` in its slot, ending the pair of the one it overwrites as
@@ -237,10 +240,10 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// Finish every empty seal of `lineage` whose writes are all out of flight and whose
     /// predecessors have all started, releasing the heals it is the release of.
     pub(super) fn finish_empties(&mut self, lineage: Key) {
+        let oldest = self.oldest_outstanding(lineage);
         let Some(state) = self.lineages.get_mut(&lineage) else {
             return;
         };
-        let oldest = state.oldest_outstanding();
         let ready = |through: E| oldest.is_none_or(|oldest| oldest > through);
         let failures = &mut self.failures;
         let mut finish = |empty: &mut Empty<E>| {
