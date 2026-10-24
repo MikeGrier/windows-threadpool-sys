@@ -5,5 +5,5 @@ What this component is: [README.md](README.md). Decisions: [DESIGN-NOTES.md](DES
 Nothing is pending. `FHT-M1`, the fixed-capacity map and set, is archived in
 [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#fht-m1-complete).
 
-> **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M23` -> `DI-23.5.2` (declare
-> capacity and refuse past it). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+> **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M23` -> `DI-23.6`, and the
+> tables move onto this crate at `DI-23.5.2`, which follows `DI-23.9`. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).

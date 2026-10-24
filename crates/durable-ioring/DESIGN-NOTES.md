@@ -2131,12 +2131,27 @@ notes when it is created.
 
 ## <a id="di-d-107"></a>DI-D-107: what capacity the consumer declares
 
-**Decided, not yet implemented: scheduled as DI-23.5.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** Settles the shape [DI-D-98](#di-d-98) left open. The engineer, 2026-10-23, confirming the assistant's proposal ("4: yes", "5: a").
+**Decided, not yet implemented: scheduled as DI-23.5.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction), after DI-23.6 to DI-23.9.** Settles the shape [DI-D-98](#di-d-98) left open. The engineer, 2026-10-23, confirming the assistant's proposal ("4: yes", "5: a"), then adding `domains` and ordering the work ("1: b.", "2: a").
 
 - **Declared:** `operations`, the operations outstanding at once -- pushed and not yet popped as a completion, whether in
   flight, held for a gate, or completed and queued -- with reads and writes sharing the one window; `lineages`, live lineages,
-  the default among them; `imports`, unresolved imported failures; and `targets`, the targets attached at once.
-- **Refused past it, as being at capacity:** a push, a mint, an import, and an `add_target`.
+  the default among them; `imports`, unresolved imported failures; `targets`, the targets attached at once; and `domains`,
+  the distinct flush domains the core has been given, the provider's among them.
+- **Refused past it, as being at capacity:** a push, a mint, an import, and an `add_target`, which is also refused when its
+  domains would take the core past `domains`. A provider serving more domains than `domains` is refused at construction.
+- **Why `domains` is declared** (the engineer, 2026-10-23, "2: a", over counting each domain's targets and dropping it with
+  the last, or leaving the table growable until DI-23.10): the table interning flush domains keeps every domain any target
+  was declared with, past the target's removal, so nothing else bounds it.
+- **Order** (the engineer, "1: b.", over narrowing DI-23.5.2 to what the declaration alone bounds): DI-23.6 to DI-23.9
+  come first, because three of DI-23.5.2's sizes do not exist before them -- the commits in flight and the flush pairs are
+  what DI-23.6 charges to a span's first write; an observed failure's storage is DI-23.8's; and the queue's size is bounded
+  per lineage only once DI-23.7 makes no record for a seal that covers no writes and DI-23.9 coalesces `Durable`.
+- **The refusals' shapes** (the assistant's, accepted by the engineer, 2026-10-23: "seem ok we'll work out any
+  incongruities if needed"): a full window is `PushRefusal::AtCapacity`; `mint_lineage` returns a `Result`, in the core and
+  in [`DurableRing`](src/contract.rs); `import_failure`'s error names an unknown lineage or being at capacity;
+  `AddTargetError` gains being at capacity; construction takes the declaration and fails as too large or for a refused
+  allocation. An operation counts from its push, held for a gate included, until its completion is popped; a lineage until
+  it is retired, so an ended one not yet retired counts; an import until it is resolved.
 - **Derived, not declared:** the completion queue's size and the storage an observed failure needs, from the declared ones:
   every queued entry traces to an operation, a lineage or a failure, and an observed failure holds its suspect writes'
   capacity ([DI-D-100](#di-d-100)).

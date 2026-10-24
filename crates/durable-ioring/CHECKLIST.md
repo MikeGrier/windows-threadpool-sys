@@ -37,19 +37,13 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [ ] **DI-23.5** -- **Capacity declared at construction, and construction fallible** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
   [DI-D-98](DESIGN-NOTES.md#di-d-98)). Re-planned 2026-10-23: the tables are fixed-capacity and preallocated
-  ([DI-D-106](DESIGN-NOTES.md#di-d-106)), so the crate that provides them comes first.
+  ([DI-D-106](DESIGN-NOTES.md#di-d-106)), so the crate that provides them comes first. Re-planned again 2026-10-23
+  ([DI-D-107](DESIGN-NOTES.md#di-d-107)'s "Order"): `DI-23.5.2` follows `DI-23.9`, whose work bounds three of its sizes.
 
 - [x] **DI-23.5.1** -- The fixed-hash-table crate is created, registered, and given its decisions and its first milestone. -> [completed 2026-10-23](COMPLETED-CHECKLIST.md#di-2351)
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/fixed-hash-table` -> `FHT-M1` -> `FHT-1.1` (the map's
-  > core). See [CHECKLIST.md](../fixed-hash-table/CHECKLIST.md). Control returns here at `DI-23.5.2`.
-
-- [ ] **DI-23.5.2** -- **Declare capacity and refuse past it** ([DI-D-107](DESIGN-NOTES.md#di-d-107)): `operations`,
-  `lineages`, `imports` and `targets`, given at construction, which becomes fallible; the queue and observed-failure storage
-  derived from them; a push, a mint, an import and an `add_target` refused at capacity; the core's keyed tables moved onto
-  `fixed-hash-table`. Breaking for this crate and `win-durable-ioring`.
-
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/fixed-hash-table`' first milestone must land first.
+  > core). See [CHECKLIST.md](../fixed-hash-table/CHECKLIST.md). Control returns here at `DI-23.6`.
 
 - [ ] **DI-23.6** -- **Charge a seal's work to the (lineage, file, seal span)** ([DI-D-98](DESIGN-NOTES.md#di-d-98)): the
   first write to a file in its lineage's unsealed span pays for the flush, the flush pair and the provider's parts; the
@@ -65,6 +59,16 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [ ] **DI-23.9** -- **Coalesce `Durable`** ([DI-D-101](DESIGN-NOTES.md#di-d-101)): remove the older un-popped entry and append
   the new one at the tail; the oracle and the tests that expect one `Durable` per seal follow.
+
+- [ ] **DI-23.5.2** -- **Declare capacity and refuse past it** ([DI-D-107](DESIGN-NOTES.md#di-d-107)): `operations`,
+  `lineages`, `imports`, `targets` and `domains`, given at construction, which becomes fallible; the queue and
+  observed-failure storage derived from them; a push, a mint, an import and an `add_target` refused at capacity, and a
+  provider serving more domains than declared refused at construction; the core's keyed tables moved onto
+  `fixed-hash-table`. Breaking for this crate and `win-durable-ioring`. Placed after `DI-23.9`: the commits in flight and
+  the flush pairs are sized by `DI-23.6`'s charge, an observed failure's storage by `DI-23.8`, and the queue per lineage by
+  `DI-23.7` and `DI-23.9`.
+
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/fixed-hash-table`' first milestone must land first.
 
 - [ ] **DI-23.10** -- **Settle the open designs with the engineer**, as the session lists them: the storage a failure holds and
   how events and the inventory lend out its suspect set and markings; the `Arc`-shared contract types; the ordered tables;

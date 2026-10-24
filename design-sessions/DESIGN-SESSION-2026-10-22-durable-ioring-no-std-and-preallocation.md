@@ -305,6 +305,25 @@ saves storage as well as allow for an instance which permits per collection func
 already does, a zero-sized one being per type -- the capacity declaration confirmed, and targets declared and refused past
 capacity ("5: a"). Recorded as DI-D-106 and DI-D-107; DI-23.5 is re-planned with the crate first.
 
+## The order of DI-23.5.2, and the domain table (continued 2026-10-23)
+
+With `fixed-hash-table` built, the assistant mapped the core before starting DI-23.5.2 and stopped on two findings. First,
+three of the item's sizes have no bound yet: `in_flight` holds a seal's commits beside operations, and `flush_pairs` is
+keyed by seal, both sized by what DI-23.6 charges to a span's first write; an observed failure's storage is DI-23.8's; and
+the queue's size, derived from the declaration, is bounded per lineage only once DI-23.7 stops a seal that covers no
+writes from making a record and DI-23.9 coalesces `Durable`. It offered (a) narrowing DI-23.5.2 to what the declaration
+alone bounds -- the counts, fallible construction, the four refusals, and the tables sized by `targets` -- with the rest
+moved later, which it preferred because the refusals would be real sooner, or (b) doing DI-23.6 to DI-23.9 first. The
+engineer: "1: b."
+
+Second, a gap in DI-D-107: the table interning flush domains keeps every distinct domain a target was ever declared with,
+past the target's removal, so churn grows it without bound. Offered: (a) declare `domains` and refuse an `add_target`
+past it; (b) count each domain's targets and drop it with the last, bounding by `targets` times a declared per-target
+maximum; (c) leave it growable until DI-23.10. The engineer: "2: a".
+
+The assistant also proposed the refusals' shapes and what counts against each limit; the engineer: "seem ok we'll work
+out any incongruities if needed". All three are recorded in DI-D-107, and DI-23.5.2 moves after DI-23.9.
+
 ## Working positions and open questions (not decisions)
 
 - **The failure's slot.** How a failure's fixed storage holds its suspect set and markings, and how the events and the
