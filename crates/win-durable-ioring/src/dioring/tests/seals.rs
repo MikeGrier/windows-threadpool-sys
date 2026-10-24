@@ -97,17 +97,23 @@ fn successive_seals_are_reported_in_order_each_after_its_own_writes() {
     assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
     harness.write(GIVEN, 8, b"two", 2, 2);
     assert_eq!(harness.seal(2), DurabilityRequest::Submitted);
+    // Both seals may be answered before the consumer pops, and then the one through 1 is replaced
+    // by the one through 2 (DI-D-101): whether it is depends on timing, so what is asserted is what
+    // holds either way -- the marks rise, the last names 2, and both completions came first.
     let mut durable = Vec::new();
     let mut completions = 0;
-    while durable.len() < 2 {
+    while durable.last() != Some(&harness.epoch(2)) {
         match harness.next_entry() {
             Entry::Op(_) => completions += 1,
             Entry::Durable { through } => durable.push(through),
             other => panic!("expected a completion or Durable, got {other:?}"),
         }
     }
-    assert_eq!(durable, [harness.epoch(1), harness.epoch(2)]);
-    assert_eq!(completions, 2);
+    assert!(
+        durable == [harness.epoch(2)] || durable == [harness.epoch(1), harness.epoch(2)],
+        "{durable:?}"
+    );
+    assert_eq!(completions, 2, "the Durable through 2 follows both writes");
     harness.finish();
 }
 
