@@ -618,8 +618,8 @@ assert_eq!(ring.epoch_state(epoch(43)), Ok(EpochState::Abandoned));
 
 An instance is built for a declared `Capacity`, and a push that would take it past `operations` is
 refused at submit with `PushRefusal::AtCapacity`: nothing was queued, and the call's buffer and context
-come back. A write holds its place until its completion is popped **and** a seal has covered it, so
-popping alone does not clear the refusal. This instance is built for two operations.
+come back. A write holds its place until its completion is popped **and** a seal has covered it and
+become durable, so popping alone does not clear the refusal. This instance is built for two operations.
 
 ```rust
 # use std::time::{Duration, Instant};
