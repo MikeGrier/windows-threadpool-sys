@@ -349,6 +349,20 @@ failure is resolved, as the consumer must do for 8 anyway; (b) keeping the overw
 holds, failures being bounded; or (c) deferring that slot to DI-23.8, where a failure's storage is designed. The
 engineer: "I choose a". Recorded in DI-D-99.
 
+## DI-23.5.2 findings and split (continued 2026-10-24)
+
+Starting DI-23.5.2, the assistant mapped the core's tables and stopped on findings rather than begin. (1) A flush can
+outlive its window places: ending a lineage let go its writes' places and span entries while a commit already out for them
+stayed in `in_flight`, against DI-D-98's "released when the span empties or its flush completes", so write, seal, end and
+mint could outgrow the table. Offered: (a) an ended lineage's writes keep their places until their flush answers; (b) a
+sixth declared count; (c) leave the table growable until DI-23.10. (2) The completion queue and the failure storage are not
+sized by the places held, since `Marked` entries are one per failure and suspect write, and the failure storage is
+DI-23.10's; so DI-23.5.2 should size the hashed tables only. (3) Whether the declaration has a default. (4) A split.
+
+The engineer: "1: a, yes, i think that is the obvious outcome." Then: "2: ok. 3: agree no default in library. maybe examples
+in docs? 4: split approved." Recorded in DI-D-107; DI-23.5.2 became DI-23.5.2.1 (the places), .2 (the declaration, with
+examples in the documentation) and .3 (the tables).
+
 ## DI-23.8 split (continued 2026-10-23)
 
 Starting DI-23.8, the assistant found it cannot land whole before DI-23.5.2: its worked examples of a consumer refused at

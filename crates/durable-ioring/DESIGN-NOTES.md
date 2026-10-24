@@ -2185,7 +2185,7 @@ notes when it is created.
 
 ## <a id="di-d-107"></a>DI-D-107: what capacity the consumer declares
 
-**Decided, not yet implemented: scheduled as DI-23.5.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction), after DI-23.6 to DI-23.9.** Settles the shape [DI-D-98](#di-d-98) left open. The engineer, 2026-10-23, confirming the assistant's proposal ("4: yes", "5: a"), then adding `domains` and ordering the work ("1: b.", "2: a").
+**Decided, not yet implemented: scheduled as DI-23.5.2.1 to DI-23.5.2.3 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction), after DI-23.6 to DI-23.9; the completion queue and the failure storage are DI-23.10's and DI-23.12's ("Split", below).** Settles the shape [DI-D-98](#di-d-98) left open. The engineer, 2026-10-23, confirming the assistant's proposal ("4: yes", "5: a"), then adding `domains` and ordering the work ("1: b.", "2: a").
 
 - **Declared:** `operations`, the operations outstanding at once -- pushed and not yet popped as a completion, whether in
   flight, held for a gate, or completed and queued -- with reads and writes sharing the one window; `lineages`, live lineages,
@@ -2211,10 +2211,26 @@ notes when it is created.
   write's record until then, to name it in a later failure's suspect set, so counting only until the pop would leave a
   consumer that pushes and pops without sealing growing that record without bound. The window therefore covers written but
   unsealed data as well as I/O in flight, as unresolved failures already shrink it ([DI-D-100](#di-d-100)).
-- **Every per-seal record is bounded by the window.** A (lineage, file, seal span) entry exists only while a write is in
-  it, so there are never more entries than uncovered writes, however a seal divides an unsealed span; a commit in flight
-  and a file's flush pair each belong to one entry, and a seal's domain parts number at most the provider's domains. So
-  the storage these need is derived from `operations` and the provider's domains, and none of them is ever refused for.
-- **Derived, not declared:** the completion queue's size and the storage an observed failure needs, from the declared ones:
-  every queued entry traces to an operation, a lineage or a failure, and an observed failure holds its suspect writes'
-  capacity ([DI-D-100](#di-d-100)).
+- **Every per-seal record is bounded by the window, provided a flush's places outlive its lineage.** A (lineage, file,
+  seal span) entry exists only while a write is in it, so there are never more entries than uncovered writes, however a
+  seal divides an unsealed span; a commit in flight and a file's flush pair each belong to one entry, and a seal's domain
+  parts number at most the provider's domains. So the storage these need is derived from `operations` and the provider's
+  domains, and none of them is ever refused for. **Corrected 2026-10-24** (the assistant's finding, 2026-10-24): DI-23.6
+  let go a write's places and entries when its lineage ended, while a commit already out for them stayed in flight, so a
+  loop of write, seal, end and mint could outgrow the window. [DI-D-98](#di-d-98) had said the charge is released "when the
+  span empties or its flush completes"; the engineer, 2026-10-24, "1: a, yes, i think that is the obvious outcome", over a
+  sixth declared count for commits in flight and over leaving that table growable: an ended lineage's writes named to a
+  seal whose flush is out keep their places, and the flush's answer lets them go (DI-23.5.2.1).
+- **Derived, not declared:** the hashed tables' sizes, from the declared counts: `targets`, `domains`, `operations`, and for
+  the flush pairs `operations` times one plus the served domains (DI-23.5.2.3).
+
+**Split** (the engineer, 2026-10-24: "2: ok. 3: agree no default in library. maybe examples in docs? 4: split approved"):
+
+- **The completion queue and the failure storage are not sized by DI-23.5.2.** A `Marked` entry is one per failure and
+  suspect write, so the entries one failure's records can queue are not bounded by the places held, and what they need
+  depends on how a failure's storage is laid out, which DI-23.10 settles. They follow it, in DI-23.12.
+- **The library gives the declaration no default**, so a consumer chooses its own numbers and a wrong silent one is not
+  possible; the documentation carries examples of a declaration, and the crate's tests a small named one.
+- **Three steps, not two**: DI-23.5.2.1 keeps a flush's places past its lineage, since the table bounds below depend on it;
+  DI-23.5.2.2 declares, constructs fallibly and refuses; DI-23.5.2.3 moves the hashed tables, `targets`, `domains`,
+  `per_target`, `in_flight`, `spans`, `window`, `flush_pairs` and `served_names`, onto `fixed-hash-table`.

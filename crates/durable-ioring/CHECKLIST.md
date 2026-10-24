@@ -53,15 +53,27 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.9** -- A lineage has at most one un-popped Durable: a later one removes the older and goes to the tail. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-239)
 
-- [ ] **DI-23.5.2** -- **Declare capacity and refuse past it** ([DI-D-107](DESIGN-NOTES.md#di-d-107)): `operations`,
-  `lineages`, `imports`, `targets` and `domains`, given at construction, which becomes fallible; the queue and
-  observed-failure storage derived from them; a push, a mint, an import and an `add_target` refused at capacity, and a
-  provider serving more domains than declared refused at construction; the core's keyed tables moved onto
-  `fixed-hash-table`. Breaking for this crate and `win-durable-ioring`. Placed after `DI-23.9`: the commits in flight and
-  the flush pairs are sized by `DI-23.6`'s charge, an observed failure's storage by `DI-23.8.1`, and the queue per lineage by
-  `DI-23.7` and `DI-23.9`.
+- [ ] **DI-23.5.2** -- **Declare capacity and refuse past it** ([DI-D-107](DESIGN-NOTES.md#di-d-107)), in three steps,
+  split 2026-10-24 on the engineer's approval ("4: split approved") after the findings in DI-D-107's "Split". Placed after
+  `DI-23.9`.
 
   > **CROSS-COMPONENT PREREQUISITE:** `crates/fixed-hash-table`' first milestone must land first.
+
+- [ ] **DI-23.5.2.1** -- **A flush's places outlive its lineage** ([DI-D-98](DESIGN-NOTES.md#di-d-98), "released when the span
+  empties or its flush completes"; the engineer, 2026-10-24: "a, yes, i think that is the obvious outcome"): ending a
+  lineage no longer lets go of the writes named to a seal whose flush is still out, nor their span entries and window
+  places; the flush's answer does, so the commits in flight are bounded by the window.
+
+- [ ] **DI-23.5.2.2** -- **Declare capacity, construct fallibly, refuse past it**: a `Capacity` of `operations`, `lineages`,
+  `imports`, `targets` and `domains`, which the library gives no default (the engineer: "agree no default in library"),
+  with examples in the documentation; construction in the core and in `Dioring` fallible; a push, a mint, an import and an
+  `add_target` refused at capacity, and a provider serving more domains than declared refused at construction. Breaking for
+  this crate and `win-durable-ioring`: `mint_lineage` returns a `Result` in the trait.
+
+- [ ] **DI-23.5.2.3** -- **The core's keyed tables onto `fixed-hash-table`**: `targets`, `domains`, `per_target`,
+  `in_flight`, `spans`, `window`, `flush_pairs` and `served_names`, each sized from the declared counts: `targets`,
+  `domains`, `operations`, and for the flush pairs `operations` times one plus the served domains. The queue and the
+  observed-failure storage are not sized here (the engineer: "2: ok"): they follow what `DI-23.10` settles, in `DI-23.12`.
 
 - [ ] **DI-23.8.2** -- **Say so in the contract and the documentation** ([DI-D-100](DESIGN-NOTES.md#di-d-100)):
   [CONTRACT.md](CONTRACT.md) and the crate's documentation, with compiled worked examples of a consumer refused at submit
@@ -71,7 +83,10 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 - [ ] **DI-23.10** -- **Settle the open designs with the engineer**, as the session lists them: the storage a failure holds and
   how events and the inventory lend out its suspect set and markings; the `Arc`-shared contract types; the ordered tables;
   `Mutex` and `thread::panicking()` without `std`; whether a portable `ErrorKind` is wanted; and the shared report a refusal
-  carrying a backend fault allocates ([DI-D-105](DESIGN-NOTES.md#di-d-105)'s "what building it settled").
+  carrying a backend fault allocates ([DI-D-105](DESIGN-NOTES.md#di-d-105)'s "what building it settled"). It also sizes
+  the completion queue and the failure storage, which `DI-23.5.2.3` leaves: a `Marked` entry is one per failure and
+  suspect write, which is more than the places held, so the bound is not the places and depends on how a failure's
+  storage is laid out.
 
 - [ ] **DI-23.11** -- **The clean paths hand out no allocated collection** ([DI-D-103](DESIGN-NOTES.md#di-d-103)): visitors for
   provider requests, lineages and `close()`, and visitor queries behind `IoTargetBusy` and `LineageBusy`.
