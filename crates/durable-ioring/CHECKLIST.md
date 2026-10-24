@@ -84,8 +84,9 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   over write records that keep where they stopped being uncovered and are kept while a failure could name them; a marking
   kept once per write; the failure's records lent by a scoped borrow, events and the inventory carrying its identity,
   token, cause and stamp; a resolved failure's records kept until its `Abandoned` or `Healed` is popped; a `Marked` queued
-  once per marked write and expanded at pop; and the failure table and the completion queue sized from the derived
-  bounds. Proof obligations: unresolved observed failures within `operations` times one plus the served domains, a
+  once per marked write and expanded at pop; and the failure table, the completion queue, and the list of entries one
+  change makes (`Due`'s events, made at construction by `DI-23.12.2` for the clean paths only) sized from the derived
+  bounds, the entries list pushed onto within its room as the others are. Proof obligations: unresolved observed failures within `operations` times one plus the served domains, a
   provider's answer for an ended lineage included, and a test filling the table and the queue to their bounds. Breaking:
   `Failed`, `Abandoned`, `Healed`, `Marked`, `FailureInfo` and `SuspectSet` change shape in both crates, and the oracle
   follows.
@@ -114,7 +115,18 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   unconditionally; and every other use of `std` the crate still has moved to `core` or `alloc`, or behind the feature.
   Built here locally for a target without `std`; CI is `DI-23.13`.
 
-- [ ] **DI-23.12.8** -- **The allocation test asserts zero after construction in every phase** (`DI-23.1`): the recorded
+- [ ] **DI-23.12.8** -- **A provider request's contents and a gate cycle's report onto storage made at construction**
+  ([DI-D-97](DESIGN-NOTES.md#di-d-97)), **once the engineer decides their shape**: both reach the consumer, a request through
+  the provider and a cycle in `PushRefusal::GateCycle` and `SealError::GateCycle`. Each is allocated where it is made: a
+  seal's domain parts and the write lists in them, the `ProviderRequest` built from them, and the traced cycle's `Vec` of
+  epochs. Found 2026-10-24 implementing `DI-23.12.2`, which moved the lists that carry these but not the contents; no step
+  owned them, and the allocation test cannot see them, since it runs no provider and closes no cycle, so it gains a
+  provider-routed seal and a refused cycle here. The assistant's recommendation, for the engineer: lend each by a scoped
+  borrow of fixed storage, as a failure's records are ([DI-D-108](DESIGN-NOTES.md#di-d-108)) -- a request's parts sized
+  from the recorded seals and the served domains, and a cycle, at most the operations plus one steps long, read through the
+  refusal for the duration of a visitor. A contract change for both crates.
+
+- [ ] **DI-23.12.9** -- **The allocation test asserts zero after construction in every phase** (`DI-23.1`): the recorded
   tables become an assertion that every phase after construction allocates nothing, construction's allocations staying
   recorded. Closes `DI-23.12`.
 
