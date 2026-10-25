@@ -5,8 +5,9 @@
 //! An operation has up to four holders. **The operation** holds its place from its push, held for
 //! a gate included, until its completion entry is popped. **The write** holds it while it is
 //! uncovered: the core keeps its record until a seal covers it, it fails, or its lineage ends.
-//! **Each unresolved failure suspecting it** holds it until the failure is healed or abandoned,
-//! which is what keeps a failure's suspect set and markings within the places it holds. **A
+//! **Each failure suspecting it** holds it until the failure is healed or abandoned and its
+//! `Healed` or `Abandoned` entry is popped (DI-D-108), which is what keeps a failure's suspect set
+//! and markings, lent until then, within the places it holds. **A
 //! recorded seal** holds the place of one write it covers, from when it is made until the mark
 //! passes it or its lineage ends (DI-D-110), which is what bounds the seals behind a mark an
 //! unresolved failure holds. A place is one, however many holders it has, so the count is of
@@ -35,7 +36,7 @@ pub(super) enum Holder {
     Operation,
     /// The write, while it is uncovered.
     Uncovered,
-    /// An unresolved failure suspecting the write: one hold for each such failure.
+    /// A failure suspecting the write, until its resolution is popped: one hold for each.
     Suspect,
     /// A recorded seal covering the write, until the mark passes the seal.
     Seal,
@@ -274,7 +275,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     }
 
     /// Whether the places the writes, the failures and the seals hold are exactly the uncovered
-    /// writes, each write once for every unresolved failure suspecting it, and the write each
+    /// writes, each write once for every failure suspecting it not yet forgotten, and the write each
     /// recorded seal pins; whether the kept records are exactly the suspected writes no longer
     /// uncovered (DI-D-108); and whether each failure's rule names exactly the writes observation
     /// listed (DI-D-109).

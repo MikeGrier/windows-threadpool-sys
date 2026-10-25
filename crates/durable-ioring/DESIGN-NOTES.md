@@ -2304,8 +2304,8 @@ notes when it is created.
   some unresolved failure suspects it keeps a record in a table made at construction for `operations`, since a suspected
   write holds its place; the argument is at the table's module. `mark` returns at once for a write nothing suspects,
   and otherwise writes the marking to the record once; a failure's markings are read from its suspects' records in the
-  order they were marked. A record is let go when the last failure suspecting its write is resolved. The inventory and
-  the resolution entries still copy the markings out, until DI-23.12.3.4.
+  order they were marked. A record is let go when the last failure suspecting its write is let go -- since DI-23.12.3.4,
+  when its resolution entry is popped (below).
 - **A lineage handle and a failure token are slots**: an index and a generation into storage made when the instance is
   built, holding the handle's count of copies and the token's liveness flag as atomics, reached without the engine's lock
   as the handle's home is today. Minting, cloning and dropping either allocates nothing; `mint_lineage` still refuses at
@@ -2319,7 +2319,7 @@ notes when it is created.
   none free is an inconsistency. `LineageHandle::mint` returns `None` when no slot is free, and `Home` gains `slots`.
   **As built for failure tokens** (DI-23.12.4.2): the core makes `TokenSlots` for `Capacity::failures` at
   construction, one word per slot holding the failure's number above a liveness bit, and a failure holds a slot from
-  observation until it is resolved, freed slots kept on a list made with them. A token is its failure, a `Weak` of the
+  observation until its resolution entry is popped (DI-23.12.3.4), freed slots kept on a list made with them. A token is its failure, a `Weak` of the
   slots and its index: a token's drop clears liveness by one compare-and-swap from its own failure's live word, so a
   token dropped after its slot was given to a later failure changes nothing, and the inventory hands out a token by the
   same swap from its failure's not-live word, which keeps DI-D-12's one live token. The core mints tokens and holds no
@@ -2334,11 +2334,27 @@ notes when it is created.
   answers). As built: the durability core's `DomainLists` holds `targets` plus `imports` rows, each as wide as the
   domains declared; a list is a row and a length, copied wherever a write, a span, a kept record or a failure's reach
   names it. A target holds its row from `add_target` to `remove_target`; an import by domains holds one of its own
-  from its observation to its resolution, claimed only once the import is admitted, since at capacity every row may be
+  from its observation until its resolution entry is popped (DI-23.12.3.4), claimed only once the import is admitted, since at capacity every row may be
   held; an empty list holds none; a failed provider part reaches by its one domain and needs none. A failed flush
-  reaches by its file's own row, which is not reused while the failure is unresolved: the failure suspects the write
-  the flush answered for, which keeps the target from being removed. The census checks in every change that nothing
+  reaches by its file's own row, which is not reused while the failure is held: the failure suspects the write the
+  flush answered for, which keeps the target from being removed. The census checks in every change that nothing
   names a free row.
+- **As built** (DI-23.12.3.4, the assistant's, 2026-10-24): **entries and the inventory carry no records.** `Failed` is
+  the failure's identity, token, cause and stamp; `Abandoned` and `Healed` its identity; `FailureInfo` its identity,
+  cause, stamp and whether its token is live; `SuspectSet` is gone. `failure_suspects` and `failure_markings`, on the
+  ring trait and the core, lend a failure's suspect writes in push order and its markings in the order marked, one at a
+  time to a visitor, under the engine's lock; a failure the instance does not hold is `UnknownFailure`. A resolved
+  failure stays in the failure table, standing `Resolved`, with its places, its token slot, its kept records and an
+  import's domain list, until the core pops its `Abandoned` or `Healed` and forgets it; until then it is out of the
+  inventory, gives out no token and gains no marking. **Retention runs to the pop, not to the resolution**, because that is
+  what keeps the bounds already argued true -- each failure in the table holds a place, and a failed file's row is held by
+  the failure suspecting its write -- while the consumer can still read what it is told was resolved. Two consequences are
+  in [CONTRACT.md](CONTRACT.md): the places, and an import's count against `imports`, are let go when the resolution entry
+  is popped, not when `resolve` returns. A kept record's markings are shared by every failure suspecting its write, so a
+  resolved failure keeps the kept table's order at its resolution and lends only the markings made before it. The
+  conformance oracle no longer compares resolution entries with `Failed`: it is owed each `Failed`'s suspect set, given
+  by `suspects` or read from the instance by `observe_from`, and refuses the next entry until it has it. Reading a
+  failure's records allocates nothing, which the allocation test measures.
 - **This is a breaking change to both crates**: `Failed`, `Abandoned` and `Healed`, `FailureInfo`, `SuspectSet`,
   `LineageHandle`, `FailureToken` and `LineageInfo` change shape. It is made in DI-23.12.
 
@@ -2348,8 +2364,8 @@ notes when it is created.
 
 - **Failures are not declared**, reversing the engineer's "4: yes", which was given before the bound below was found. An
   observed failure answers one part of one seal, a part is issued only for that seal's named writes, and a write is named
-  to one seal, so each observed failure suspects a write that holds its place until the failure is resolved
-  ([DI-D-100](#di-d-100)). Unresolved observed failures are therefore at most `operations` times one plus the served
+  to one seal, so each observed failure suspects a write that holds its place until the failure's resolution entry is popped
+  ([DI-D-100](#di-d-100), [DI-D-108](#di-d-108)'s as built for DI-23.12.3.4). Unresolved observed failures are therefore at most `operations` times one plus the served
   domains, and imported ones at most `imports`; the storage is sized from those. **As built** (DI-23.12.3.1): the
   failure table is a list made at construction for `Capacity::failures`, kept in observation order, a failure past it an
   inconsistency; the argument is at that function, and an answer for a lineage no longer live -- a flush's, a provider's,
@@ -2365,7 +2381,8 @@ notes when it is created.
   readings, so the rule reads it as it reads an uncovered write. The epochs a failure holds, which `blocking`, the gate
   search and abandoning read, and the lineages a heal is pending on, are its suspects', read the same way; a heal's
   release for each lineage is still a map made at the heal, until DI-23.12.3.6. The census compares each failure's rule
-  with the list observation would have made, and the oracle compares each resolution entry's set with `Failed`'s.
+  with the list observation would have made, and the oracle checks the set the instance lends for each `Failed` (since
+  DI-23.12.3.4; before it, the oracle compared each resolution entry's set with `Failed`'s).
 - **The completion queue is sized by derivation**: a `Marked` is queued once per marked write and expanded at pop into one
   entry per failure observed before the marking that suspects the write, in observation order.
 - **An abandoned epoch is forgotten once the mark passes it.** A contract change: `epoch_state` reports an epoch at or

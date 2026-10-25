@@ -399,6 +399,14 @@ fn an_import_past_the_imports_declared_is_refused_and_a_resolution_lifts_it() {
         .resolve(vec![(token, Resolution::Abandon)])
         .expect("resolved");
     rig.act(actions);
+    assert!(
+        matches!(
+            rig.core.import_failure(ImportScope::All),
+            Err(ImportError::AtCapacity(_))
+        ),
+        "resolved, but its Abandoned not yet popped (DI-D-108)"
+    );
+    rig.entries();
     let (_, actions) = rig
         .core
         .import_failure(ImportScope::All)

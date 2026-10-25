@@ -304,17 +304,19 @@ fn seen(due: &Due<u64, &'static str, Stamp>) -> Vec<Seen> {
                 lineage,
                 abandoned_through,
             } => Seen::LineageEnded(*lineage, *abandoned_through),
-            Event::Failed(failed) => Seen::Failed(failed.id.seq, ops(failed.suspect.writes())),
-            Event::Abandoned {
-                failure,
-                suspect,
-                markings,
-            } => Seen::Abandoned(failure.seq, ops(suspect.writes()), marks(markings)),
-            Event::Healed {
-                failure,
-                suspect,
-                markings,
-            } => Seen::Healed(failure.seq, ops(suspect.writes()), marks(markings)),
+            Event::Failed { failed, snapshot } => {
+                Seen::Failed(failed.id.seq, ops(&snapshot.suspect))
+            }
+            Event::Abandoned { failure, snapshot } => Seen::Abandoned(
+                failure.seq,
+                ops(&snapshot.suspect),
+                marks(&snapshot.markings),
+            ),
+            Event::Healed { failure, snapshot } => Seen::Healed(
+                failure.seq,
+                ops(&snapshot.suspect),
+                marks(&snapshot.markings),
+            ),
             Event::Marked { failure, marking } => {
                 Seen::Marked(failure.seq, marking.write.seq, marking.kind.clone())
             }
@@ -323,6 +325,41 @@ fn seen(due: &Due<u64, &'static str, Stamp>) -> Vec<Seen> {
             }
         })
         .collect()
+}
+
+/// The writes failure `seq` suspects, by sequence number, as the core lends them.
+fn suspects_of<K: StampClock<Instant = Stamp>>(lineage: &One<K>, seq: u64) -> Vec<u64> {
+    let id = crate::ids::FailureId {
+        instance: lineage.0.instance,
+        seq,
+    };
+    let mut writes = Vec::new();
+    assert!(
+        lineage
+            .0
+            .failure_suspects(id, |write| writes.push(write.op.seq)),
+        "the core holds failure {seq}'s records"
+    );
+    writes
+}
+
+/// The markings failure `seq` has gained, as the core lends them.
+fn markings_of<K: StampClock<Instant = Stamp>>(
+    lineage: &One<K>,
+    seq: u64,
+) -> Vec<crate::types::Marking<Ids>> {
+    let id = crate::ids::FailureId {
+        instance: lineage.0.instance,
+        seq,
+    };
+    let mut markings = Vec::new();
+    assert!(
+        lineage
+            .0
+            .failure_markings(id, |marking| markings.push(marking)),
+        "the core holds failure {seq}'s records"
+    );
+    markings
 }
 
 /// Markings by their write's sequence number and kind.
@@ -348,7 +385,7 @@ fn tokens(due: Due<u64, &'static str, Stamp>) -> Vec<FailureToken> {
     due.events
         .into_iter()
         .filter_map(|event| match event {
-            Event::Failed(failed) => Some(failed.token),
+            Event::Failed { failed, .. } => Some(failed.token),
             _ => None,
         })
         .collect()

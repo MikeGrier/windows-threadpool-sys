@@ -133,6 +133,8 @@ struct Rig {
     requests: Vec<ProviderRequest<V>>,
     /// The contract's rules, over every push, seal, heal and entry the rig sees (DI-D-24).
     oracle: ConformanceOracle<V, &'static str>,
+    /// Each failure's suspect set, as the core lent it when its `Failed` was popped (DI-D-108).
+    suspected: std::collections::HashMap<u64, Vec<crate::types::SuspectWrite<V>>>,
 }
 
 impl Rig {
@@ -176,6 +178,7 @@ impl Rig {
             backend: MemoryBackend::new(nz(8), nz(16)),
             requests: Vec::new(),
             oracle: ConformanceOracle::new(),
+            suspected: std::collections::HashMap::new(),
         }
     }
 
@@ -338,14 +341,26 @@ impl Rig {
         }
     }
 
+    /// Every entry, popped one at a time and each reported to the oracle: a `Failed`'s suspect set
+    /// is read from the core as it is popped, kept in `suspected`, and given to the oracle.
     fn entries(&mut self) -> Vec<Entry<V, Vec<u8>, &'static str>> {
-        let entries: Vec<_> = std::iter::from_fn(|| self.core.pop()).collect();
-        for entry in &entries {
+        std::iter::from_fn(|| self.pop_entry()).collect()
+    }
+
+    /// The next entry, reported to the oracle, a `Failed`'s suspect set read as `entries` reads it.
+    fn pop_entry(&mut self) -> Option<Entry<V, Vec<u8>, &'static str>> {
+        let entry = self.core.pop()?;
+        self.oracle
+            .observe(&entry)
+            .expect("the oracle accepts the entry");
+        if let Entry::Failed(failed) = &entry {
+            let suspect = suspects_of(&self.core, failed.id);
             self.oracle
-                .observe(entry)
-                .expect("the oracle accepts the entry");
+                .suspects(failed.id, &suspect)
+                .expect("the oracle accepts the suspect set");
+            self.suspected.insert(failed.id.seq, suspect);
         }
-        entries
+        Some(entry)
     }
 
     fn target(&self) -> &MemoryTarget {
@@ -353,8 +368,28 @@ impl Rig {
     }
 }
 
-/// An entry, briefly: what a test compares.
-fn show(entry: &Entry<V, Vec<u8>, &'static str>) -> String {
+/// The writes `failure` suspects, as `core` lends them.
+fn suspects_of(core: &Core, failure: crate::ids::FailureId) -> Vec<crate::types::SuspectWrite<V>> {
+    let mut writes = Vec::new();
+    core.failure_suspects(failure, |write| writes.push(write))
+        .expect("the core holds the failure's records");
+    writes
+}
+
+/// The markings `failure` has gained, as `core` lends them.
+fn markings_of(core: &Core, failure: crate::ids::FailureId) -> Vec<crate::types::Marking<V>> {
+    let mut markings = Vec::new();
+    core.failure_markings(failure, |marking| markings.push(marking))
+        .expect("the core holds the failure's records");
+    markings
+}
+
+/// An entry, briefly: what a test compares, a failure by the size of its suspect set as
+/// `suspected` holds it.
+fn show(
+    entry: &Entry<V, Vec<u8>, &'static str>,
+    suspected: &std::collections::HashMap<u64, Vec<crate::types::SuspectWrite<V>>>,
+) -> String {
     match entry {
         Entry::Op(op) => {
             let kind = match op.kind {
@@ -369,14 +404,18 @@ fn show(entry: &Entry<V, Vec<u8>, &'static str>) -> String {
             format!("op{} {kind} {outcome} {}", op.id.seq, op.context)
         }
         Entry::Durable { through } => format!("durable {}", through.id),
-        Entry::Failed(failed) => format!("failed {}", failed.suspect.writes().len()),
+        Entry::Failed(failed) => format!("failed {}", suspected[&failed.id.seq].len()),
         Entry::Blocked { through, .. } => format!("blocked {}", through.id),
         other => format!("{other:?}"),
     }
 }
 
 fn shown(rig: &mut Rig) -> Vec<String> {
-    rig.entries().iter().map(show).collect()
+    let entries = rig.entries();
+    entries
+        .iter()
+        .map(|entry| show(entry, &rig.suspected))
+        .collect()
 }
 
 #[test]
@@ -631,7 +670,7 @@ fn a_failed_commit_is_reported_as_a_failure_suspecting_its_writes() {
     };
     assert_eq!(*target, KEY);
     assert_eq!(fault.source, crate::memory::MEMORY);
-    assert_eq!(failed.suspect.writes().len(), 1);
+    assert_eq!(rig.suspected[&failed.id.seq].len(), 1);
     assert!(
         matches!(
             rig.core.epoch_state(rig.epoch(1)),

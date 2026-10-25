@@ -417,12 +417,15 @@ ring.fail_next_flush(FILE, 1117); // ERROR_IO_DEVICE, for the flush the seal iss
 // -> make_durable_through(41)                 // seals everything <= 41
 ring.make_durable_through(tag(41)).expect("a seal");
 // <- WriteDone(A) ; WriteDone(B) ; WriteDone(C)
-// <- Failed { failure: F1, cause: Commit, suspect: [A@41, B@41, C@41] }
+// <- Failed { failure: F1, cause: Commit }
 let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
     unreachable!()
 };
 assert!(matches!(f1.cause, FailureCause::Commit { .. }));
-assert_eq!(f1.suspect.writes().len(), 3);
+// -> failure_suspects(F1)                     // lends [A@41, B@41, C@41]
+let mut suspect = 0;
+ring.failure_suspects(f1.id, |_| suspect += 1).expect("F1 is held");
+assert_eq!(suspect, 3);
 assert_eq!(ring.durable_through(lineage.lineage()), Ok(None)); // nothing is durable yet
 // -> write(tag 41, A')                        // refused: 41 is sealed (guarantee 6)
 let refused = ring.write(FILE, 0, vec![2; 8], tag(41), ()).expect_err("41 is sealed");
@@ -493,7 +496,11 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 # .expect("an instance");
 let tag = |n: u64| lineage.at(n); // what a write or a seal takes
 let epoch = |n: u64| Epoch::new(lineage.lineage(), n); // what a query or an entry names
-let ops = |set: &SuspectSet<WindowsIds<u64>>| set.writes().iter().map(|w| w.op).collect::<Vec<_>>();
+let ops = |ring: &Ring, failure| {
+    let mut ops = Vec::new();
+    ring.failure_suspects(failure, |w| ops.push(w.op)).expect("held");
+    ops
+};
 
 // -> write(tag 41, A) ; write(tag 43, P)      // 43 is open
 let a = ring.write(FILE, 0, vec![1; 8], tag(41), ()).expect("a write");
@@ -502,23 +509,23 @@ ring.fail_next_flush(FILE, 1117);
 // -> make_durable_through(41)                 // seals 41
 ring.make_durable_through(tag(41)).expect("a seal");
 // <- WriteDone(A) ; WriteDone(P)
-// <- Failed { failure: F1, cause: Commit, suspect: [A@41, P@43] }
+// <- Failed { failure: F1, cause: Commit }    // -> failure_suspects(F1): [A@41, P@43]
 let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
     unreachable!()
 };
-assert_eq!(ops(&f1.suspect), [a, p]); // one failure, two epochs: sealed 41 and open 43
+assert_eq!(ops(&ring, f1.id), [a, p]); // one failure, two epochs: sealed 41 and open 43
 // -> write(tag 43, R)                         // still allowed: 43 is open
 let r = ring.write(FILE, 16, vec![1; 8], tag(43), ()).expect("a write");
 // <- WriteDone(R)
 pop_until(&mut ring, |e| matches!(e, Entry::Op(done) if done.id == r));
 // -> import_failure()                         // the consumer learned of an outside failure
 let f2_id = ring.import_failure(ImportScope::All).expect("the whole instance").failure;
-// <- Failed { failure: F2, cause: Imported, suspect: [A@41, P@43, R@43] }
+// <- Failed { failure: F2, cause: Imported } // -> failure_suspects(F2): [A@41, P@43, R@43]
 let Entry::Failed(f2) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
     unreachable!()
 };
 assert_eq!(f2.id, f2_id);
-assert_eq!(ops(&f2.suspect), [a, p, r]); // epoch 43 now sits in F1 and F2
+assert_eq!(ops(&ring, f2.id), [a, p, r]); // epoch 43 now sits in F1 and F2
 
 // The first ending: heal both. Re-issue A, P and R under tag 44, resolve both in one atomic
 // call, and seal 44.
@@ -599,7 +606,7 @@ fails as never issued.
 // The trace above, to F2's arrival, is hidden. Then:
 ring.resolve(vec![(f1.token, Resolution::Heal), (f2.token, Resolution::Abandon)])
     .expect("heal F1, abandon F2");
-// <- Abandoned { failure: F2, suspect: [A@41, P@43, R@43] }
+// <- Abandoned { failure: F2 }
 pop_until(&mut ring, |e| matches!(e, Entry::Abandoned { .. }));
 assert_eq!(ring.epoch_state(epoch(41)), Ok(EpochState::Abandoned));
 assert_eq!(ring.epoch_state(epoch(43)), Ok(EpochState::Abandoned));
@@ -695,11 +702,12 @@ A consumer that writes and never seals is refused for the same reason, however f
 
 ### Refused at capacity, and cleared by resolving a failure
 
-An unresolved failure keeps the place of every write it suspects, so a consumer that leaves failures
+A failure keeps the place of every write it suspects until its `Abandoned` or `Healed` entry is
+popped -- the instance lends its suspect set until then -- so a consumer that leaves failures
 unresolved finds the submit window shrinking, popped completions or not. Here a seal's commit fails
 with two writes suspected, in an instance built for three operations: one more write is accepted, and
-the next is refused until the failure is resolved. Healing frees the places the same way, once the
-seal after it takes effect.
+the next is refused until the failure is resolved and its `Abandoned` popped. Healing frees the
+places the same way, once the seal after it takes effect and its `Healed` is popped.
 
 ```rust
 # use std::time::{Duration, Instant};
@@ -748,7 +756,7 @@ ring.fail_next_flush(FILE, 1117); // ERROR_IO_DEVICE, for the flush the seal iss
 // -> make_durable_through(41)
 ring.make_durable_through(tag(41)).expect("a seal");
 // <- WriteDone(A) ; WriteDone(B)
-// <- Failed { failure: F1, cause: Commit, suspect: [A@41, B@41] }
+// <- Failed { failure: F1, cause: Commit }
 let (mut done, mut failure) = (0, None);
 while done < 2 || failure.is_none() {
     match pop_until(&mut ring, |_| true) {
@@ -766,9 +774,11 @@ assert!(matches!(
     refused.reason,
     PushRefusal::AtCapacity(AtCapacity { limit: Limit::Operations, declared: 3 })
 ));
-// -> abandon(F1)                              // resolving it lets go of A's and B's places
+// -> abandon(F1)
 ring.resolve(vec![(f1.token, Resolution::Abandon)]).expect("abandon");
-// <- Abandoned { failure: F1, suspect: [A@41, B@41] }
+// -> write(tag 42, D)                         // still refused: F1's Abandoned is not popped
+ring.write(FILE, 24, vec![2; 8], tag(42), ()).expect_err("still full");
+// <- Abandoned { failure: F1 }                // popping it lets go of A's and B's places
 pop_until(&mut ring, |e| matches!(e, Entry::Abandoned { .. }));
 // -> write(tag 42, D)                         // accepted now
 ring.write(FILE, 24, vec![2; 8], tag(42), ()).expect("room again");

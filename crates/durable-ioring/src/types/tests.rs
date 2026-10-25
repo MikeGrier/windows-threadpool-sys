@@ -2,12 +2,10 @@
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::sync::Arc;
 
-use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
+use crate::ids::{DioringIds, InstanceId, Lineage};
 use crate::types::{
-    Epoch, FlushDomain, IoTargetBusy, IoTargetKey, ReadOptions, SuspectSet, SuspectWrite,
-    WriteCaching, WriteOptions,
+    Epoch, FlushDomain, IoTargetBusy, IoTargetKey, ReadOptions, WriteCaching, WriteOptions,
 };
 
 type V = DioringIds<u64, u64>;
@@ -94,30 +92,6 @@ fn read_options_default_to_no_gate() {
     );
 }
 
-#[test]
-fn a_suspect_set_is_shared_not_copied() {
-    let instance = InstanceId::next();
-    let l = lineage(instance, 0);
-    let writes: Arc<[SuspectWrite<V>]> = vec![
-        SuspectWrite {
-            op: OpId { instance, seq: 3 },
-            target: IoTargetKey(1),
-            epoch: Epoch::new(l, 41),
-        },
-        SuspectWrite {
-            op: OpId { instance, seq: 4 },
-            target: IoTargetKey(2),
-            epoch: Epoch::new(l, 43),
-        },
-    ]
-    .into();
-    let set = SuspectSet(writes);
-    let copy = set.clone();
-    assert_eq!(set.writes().len(), 2);
-    assert_eq!(set.writes()[1].epoch, Epoch::new(l, 43));
-    assert!(std::ptr::eq(set.writes(), copy.writes()));
-}
-
 fn busy() -> IoTargetBusy {
     IoTargetBusy {
         target: IoTargetKey(9),
@@ -175,7 +149,7 @@ fn target_busy_says_what_clears_each_hold_it_reports() {
     }
     .to_string();
     assert!(
-        failed.contains("1 unresolved failure(s), heal or abandon them"),
+        failed.contains("1 failure(s), resolve them and pop what that reports"),
         "{failed}"
     );
     for named in [gated, uncovered, failed] {
@@ -197,7 +171,7 @@ fn file_busy_reports_every_hold_at_once() {
         "in flight",
         "held until",
         "not yet covered",
-        "heal or abandon",
+        "resolve them and pop",
         "target_holds",
     ] {
         assert!(all.contains(part), "missing {part:?} in {all}");

@@ -1,13 +1,19 @@
 // Copyright (c) 2026 Mike Grier
 //! The submit window's places, as the durability core holds them (DI-D-100, DI-D-107): a write
-//! holds its place while it is uncovered, and each unresolved failure suspecting it holds the place
-//! until the failure is resolved, and a recorded seal holds the place of the first write it covers
+//! holds its place while it is uncovered, and each failure suspecting it holds the place until its
+//! `Abandoned` or `Healed` entry is popped (DI-D-108), and a recorded seal holds the place of the first write it covers
 //! until the mark passes it (DI-D-110). Every change here is also checked, inside the core, against
 //! a census of the uncovered writes, the failures and the seals (`window_agrees`).
 
 use super::{A, B, DEFAULT, FULL, Ops, failed, lineage, submitted, tokens};
 use crate::durability::Reach;
 use crate::types::{FailureCause, ImportScope, Resolution};
+
+/// The consumer pops failure `id`'s `Abandoned` or `Healed` entry, as the I/O core reports it: the
+/// failure lets go of what it held then, not at its resolution (DI-D-108).
+fn popped(lineage: &mut super::Lineage, id: crate::ids::FailureId) {
+    lineage.0.forget(id);
+}
 
 /// A failure the consumer learned of, reaching every uncovered write: its token.
 fn import(lineage: &mut super::Lineage) -> crate::ids::FailureToken {
@@ -71,10 +77,17 @@ fn a_failure_holds_the_place_of_a_write_covered_after_it_suspected_it() {
         1,
         "covered, and so no longer uncovered, but still suspected"
     );
+    let id = token.id();
     lineage
         .resolve(vec![(token, Resolution::Abandon)])
         .expect("abandon");
-    assert_eq!(lineage.window_places(), 0, "the failure was resolved");
+    assert_eq!(
+        lineage.window_places(),
+        1,
+        "resolved, its Abandoned not yet popped"
+    );
+    popped(&mut lineage, id);
+    assert_eq!(lineage.window_places(), 0, "its entry was popped");
 }
 
 #[test]
@@ -89,9 +102,11 @@ fn a_failure_holds_the_place_of_a_write_that_failed_after_it_suspected_it() {
         1,
         "the write is not uncovered any more, and its failure keeps the place"
     );
+    let id = token.id();
     lineage
         .resolve(vec![(token, Resolution::Abandon)])
         .expect("abandon");
+    popped(&mut lineage, id);
     assert_eq!(lineage.window_places(), 0);
 }
 
@@ -106,13 +121,16 @@ fn each_failure_suspecting_a_write_holds_its_place_until_every_one_is_resolved()
     submitted(lineage.seal(1));
     lineage.flushed(1, A, Ok(()));
     assert_eq!(lineage.window_places(), 1, "one place, two failures");
+    let (first_id, second_id) = (first.id(), second.id());
     lineage
         .resolve(vec![(first, Resolution::Abandon)])
         .expect("abandon");
+    popped(&mut lineage, first_id);
     assert_eq!(lineage.window_places(), 1, "the second still suspects it");
     lineage
         .resolve(vec![(second, Resolution::Abandon)])
         .expect("abandon");
+    popped(&mut lineage, second_id);
     assert_eq!(lineage.window_places(), 0);
 }
 
@@ -123,6 +141,7 @@ fn a_healed_failure_lets_go_when_the_heal_takes_effect_and_not_when_it_is_asked_
     let write = ops.push(&mut lineage, 1, A, DEFAULT);
     lineage.completed(write, FULL);
     let token = import(&mut lineage);
+    let id = token.id();
     lineage
         .resolve(vec![(token, Resolution::Heal)])
         .expect("heal");
@@ -135,6 +154,12 @@ fn a_healed_failure_lets_go_when_the_heal_takes_effect_and_not_when_it_is_asked_
     assert_eq!(lineage.window_places(), 1, "the seal's flush is out");
     lineage.flushed(1, A, Ok(()));
     assert!(lineage.failures().is_empty(), "the heal took effect");
+    assert_eq!(
+        lineage.window_places(),
+        1,
+        "healed, its Healed not yet popped"
+    );
+    popped(&mut lineage, id);
     assert_eq!(lineage.window_places(), 0);
 }
 
@@ -155,9 +180,11 @@ fn a_failure_holds_only_the_writes_it_suspects() {
         1,
         "the write pushed after the failure was covered, and is not suspected"
     );
+    let id = token.id();
     lineage
         .resolve(vec![(token, Resolution::Abandon)])
         .expect("abandon");
+    popped(&mut lineage, id);
     assert_eq!(lineage.window_places(), 0);
 }
 

@@ -12,18 +12,16 @@
 //! The epochs a failure holds, and the lineages it holds them in, are its suspects', read the same
 //! way.
 
-use alloc::vec::Vec;
 use core::ops::RangeBounds;
 
 use super::kept::Kept;
 use super::{Durability, Failure, Key, V, Write};
-use crate::alloc_tags::{Tag, tagged};
 use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::domain_lists::DomainLists;
 use crate::ids::{Lineage, OpId};
 use crate::ordered::Ordered;
-use crate::types::{Epoch, IoTargetKey, SuspectSet, SuspectWrite};
+use crate::types::{Epoch, IoTargetKey, SuspectWrite};
 
 /// A write a failure suspects, as its rule reads it.
 #[derive(Clone, Copy)]
@@ -42,6 +40,20 @@ pub(super) fn suspects<'a, E: EpochId + 'static, T, I: Instant>(
     kept: &'a Kept<E, I>,
     failure: &'a Failure<E, I>,
 ) -> impl Iterator<Item = Suspect<E>> + 'a {
+    let (uncovered, gone) = parts(lists, writes, kept, failure);
+    uncovered.chain(gone)
+}
+
+/// The uncovered writes `failure` suspects and the kept ones, each in push order.
+fn parts<'a, E: EpochId + 'static, T, I: Instant>(
+    lists: &'a DomainLists,
+    writes: &'a Ordered<u64, Write<E, T>>,
+    kept: &'a Kept<E, I>,
+    failure: &'a Failure<E, I>,
+) -> (
+    impl Iterator<Item = Suspect<E>> + 'a,
+    impl Iterator<Item = Suspect<E>> + 'a,
+) {
     let uncovered = writes
         .values()
         .filter(move |write| {
@@ -70,7 +82,7 @@ pub(super) fn suspects<'a, E: EpochId + 'static, T, I: Instant>(
             epoch: write.epoch,
             file: write.file,
         });
-    uncovered.chain(gone)
+    (uncovered, gone)
 }
 
 impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
@@ -116,26 +128,35 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
                 .any(|write| write.lineage == lineage && epochs.contains(&write.epoch))
     }
 
-    /// `failure`'s suspect set as the entries carry it, in push order, collected under `tag`
-    /// (until DI-23.12.3.4 lends it instead).
-    pub(super) fn suspect_set(&self, failure: &Failure<E, I>, tag: Tag) -> SuspectSet<V<E, I>> {
+    /// Give `visit` each write `failure` suspects, as the consumer names it, in push order: the
+    /// uncovered and the kept writes merged, with nothing collected (DI-D-108).
+    pub(super) fn visit_suspects(
+        &self,
+        failure: &Failure<E, I>,
+        mut visit: impl FnMut(SuspectWrite<V<E, I>>),
+    ) {
         let instance = self.instance;
-        let mut writes: Vec<SuspectWrite<V<E, I>>> = tagged(tag, || {
-            suspects(&self.lists, &self.writes, &self.kept, failure)
-                .map(|write| SuspectWrite {
-                    op: write.op,
-                    target: write.file,
-                    epoch: Epoch::new(
-                        Lineage {
-                            instance,
-                            seq: write.lineage,
-                        },
-                        write.epoch,
-                    ),
-                })
-                .collect()
-        });
-        writes.sort_unstable_by_key(|write| write.op.seq);
-        SuspectSet::new(writes)
+        let (uncovered, gone) = parts(&self.lists, &self.writes, &self.kept, failure);
+        let (mut uncovered, mut gone) = (uncovered.peekable(), gone.peekable());
+        loop {
+            let next = match (uncovered.peek(), gone.peek()) {
+                (Some(a), Some(b)) if a.op.seq <= b.op.seq => uncovered.next(),
+                (Some(_), Some(_)) | (None, Some(_)) => gone.next(),
+                (Some(_), None) => uncovered.next(),
+                (None, None) => break,
+            };
+            let Some(write) = next else { break };
+            visit(SuspectWrite {
+                op: write.op,
+                target: write.file,
+                epoch: Epoch::new(
+                    Lineage {
+                        instance,
+                        seq: write.lineage,
+                    },
+                    write.epoch,
+                ),
+            });
+        }
     }
 }

@@ -141,7 +141,8 @@ Everything below either sharpens one word of that sentence or states a condition
    below an already-sealed number is a no-op that reports m's current state -- durable, pending,
    failed, or abandoned.
 8. **Failures are reported, inventoried, and left to the consumer.** Every durability failure is
-   delivered as a `Failed` event carrying its suspect set, stays in the inventory until resolved, and
+   delivered as a `Failed` event, whose suspect set the instance lends for reading, stays in the
+   inventory until resolved, and
    is resolved only by the consumer. dioring never resolves one on its own and never judges whether a
    repair was sufficient.
 9. **Gated operations wait for durability, not for resolution.** A gated operation on epoch n is
@@ -403,11 +404,11 @@ failure was observed ([DI-D-36](DESIGN-NOTES.md#di-d-36), [DI-D-39](DESIGN-NOTES
   provider, whose answer is its own warranty ([DI-D-47](DESIGN-NOTES.md#di-d-47)).
 
 The kinds are open to more. A marking carries the write, its kind and when it was observed, and is
-reported by a `Marked` entry, kept in the inventory, and carried by the failure's final record. It
+reported by a `Marked` entry and kept with the failure's records, from which it can be read. It
 exists so the history can be reconciled after the fact, and it **changes nothing**: not the
 high-water mark, not what a failure holds, and not what resolving it needs. A failure gains
-markings until it is abandoned or its heal takes effect, so its final record is the record as of
-that moment; a suspect write still in flight then is reported only by its own completion.
+markings until it is abandoned or its heal takes effect, so the markings read after that are those it
+had at that moment; a suspect write still in flight then is reported only by its own completion.
 
 **Where every report comes from** ([DI-D-47](DESIGN-NOTES.md#di-d-47),
 [DI-D-50](DESIGN-NOTES.md#di-d-50)). dioring relays every failure, and says from where. A fault a
@@ -451,11 +452,18 @@ its tokens back. Resolution is per failure ([DI-D-12](DESIGN-NOTES.md#di-d-12)).
 
 ### The inventory
 
-Unresolved failures can be enumerated and each queried for its identity, cause, suspect set, the
-time it was observed, and its markings so far.
-Resolved failures leave no memory. Because identities are never reused, an identity no longer in the
-inventory means resolved; its `Healed` or `Abandoned` entry was the final record, with its suspect
-set and every marking it gained.
+Unresolved failures can be enumerated and each queried for its identity, cause, the time it was
+observed, and whether its token is live.
+
+**A failure's records are read, not carried** ([DI-D-108](DESIGN-NOTES.md#di-d-108)). Its suspect set
+and its markings are not copied into any entry: the instance lends them, one at a time to a visitor
+the consumer gives (`failure_suspects`, `failure_markings`), from its own storage. They can be read
+from the failure's `Failed` entry until its `Abandoned` or `Healed` entry is popped, a resolved
+failure's included; popping that entry is what lets them go, and after it the failure is unknown to
+the instance. A consumer that wants them after that keeps its own copy.
+
+Resolved failures leave no other memory. Because identities are never reused, an identity no longer
+in the inventory means resolved.
 
 ### Importing a failure
 
@@ -490,7 +498,8 @@ capacity declares no lineage or fewer domains than the provider serves.
   - **the write**, while it is uncovered: until a seal covers it successfully, it fails, or its lineage
     ends. The instance keeps a write's record until then, to name it in a later failure's suspect set,
     so popping a write's completion does not let go of its place;
-  - **each unresolved failure suspecting it**, until the failure is healed or abandoned;
+  - **each failure suspecting it**, until the failure is healed or abandoned and its `Healed` or
+    `Abandoned` entry is popped -- until then the instance keeps the write's record to lend;
   - **a seal the high-water mark has not passed**, which holds the place of the first write it covers
     ([DI-D-110](DESIGN-NOTES.md#di-d-110)) from when it is made until the mark passes it or its lineage
     ends. The place is one the write already holds, so a seal adds none; it keeps the place after the
@@ -498,16 +507,17 @@ capacity declares no lineage or fewer domains than the provider serves.
 
   **Unresolved failures therefore shrink the submit window**: a consumer that leaves failures unresolved
   is refused at submit for capacity, however many completions it has popped, until it heals or abandons
-  them. The same is true of writes it never seals, and of seals behind a mark that a failure holds:
+  them and pops what that reports. The same is true of writes it never seals, and of seals behind a mark that a failure holds:
   each finishes and is answered `Blocked`, and keeps its place until the failure is resolved and the mark
   passes it.
 - **What counts until it is let go.** A lineage counts until it is retired, so an ended one counts until
   its operations in flight have completed and the commits out for its sealed writes have answered; an
-  imported failure counts until it is resolved, a heal waiting for its seal included; a flush domain
+  imported failure counts until it is resolved and its `Abandoned` or `Healed` entry is popped, a heal
+  waiting for its seal included; a flush domain
   counts for the life of the instance, a removed target's included.
 - **Clearing a refusal for operations**, in the order a consumer usually has them to hand: pop
   completions; seal what it has written, so the writes are covered; resolve its failures, healing or
-  abandoning. The worked examples show
+  abandoning, and pop the `Abandoned` or `Healed` entries that report it. The worked examples show
   [a push refused at capacity and cleared by a seal](../win-durable-ioring/README.md#refused-at-capacity-and-cleared-by-a-seal),
   and
   [another cleared by resolving a failure](../win-durable-ioring/README.md#refused-at-capacity-and-cleared-by-resolving-a-failure).
@@ -524,11 +534,11 @@ synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-
 | Event | When |
 |---|---|
 | `Durable { through: n }` | the high-water mark has reached n; at most one per lineage waits un-popped, a later replacing an older |
-| `Failed { failure, token, cause, suspect, observed }` | a durability failure was observed (a target's commit, or a provider's domain, failed; or an import) |
+| `Failed { failure, token, cause, observed }` | a durability failure was observed (a target's commit, or a provider's domain, failed; or an import) |
 | `Blocked { through: n, by: failure }` | a request's commits succeeded, but an unresolved failure at or below n prevents reporting it |
 | `Marked { failure, marking }` | a suspect write of an unresolved failure was nullified or covered |
-| `Abandoned { failure, suspect, markings }` | the consumer abandoned a failure: its final record |
-| `Healed { failure, suspect, markings }` | a heal took effect: the failure's final record |
+| `Abandoned { failure }` | the consumer abandoned a failure; popping it lets go of the failure's records |
+| `Healed { failure }` | a heal took effect; popping it lets go of the failure's records |
 | `LineageEnded { lineage, abandoned_through }` | a lineage ended -- its last handle was released, or given to `end_lineage` -- and every epoch of it not yet durable is abandoned |
 
 ## The readiness signal

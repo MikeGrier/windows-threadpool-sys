@@ -452,8 +452,8 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// What holds the target under `key` that an [`IoTargetBusy`] counts without naming, given to
     /// `visit` (DI-D-103): for each lineage gated on, in lineage order, the lowest gate its
     /// operations to the target are held for; for each lineage with an uncovered write to it, the
-    /// highest epoch among them; and each unresolved failure suspecting a write to it, in the
-    /// order observed. Nothing for a key with no target, or a target nothing holds.
+    /// highest epoch among them; and each failure suspecting a write to it, until its `Abandoned`
+    /// or `Healed` entry is popped (DI-D-108), in the order observed. Nothing for a key with no target, or a target nothing holds.
     pub fn target_holds(&self, key: IoTargetKey, mut visit: impl FnMut(Hold<V<E, K>>)) {
         if !self.targets.contains_key(&key) {
             return;
@@ -700,11 +700,16 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     }
 
     /// The next entry, if there is one. Popping an operation's completion lets go of the place the
-    /// operation held in the submit window.
+    /// operation held in the submit window, and popping a failure's `Abandoned` or `Healed` lets go
+    /// of its records and what it held (DI-D-108).
     pub fn pop(&mut self) -> Option<Entry<V<E, K>, B, C>> {
         let entry = self.queue.pop_front()?;
-        if let Entry::Op(done) = &entry {
-            self.durability.popped(done.id);
+        match &entry {
+            Entry::Op(done) => self.durability.popped(done.id),
+            Entry::Abandoned { failure } | Entry::Healed { failure } => {
+                self.durability.forget(*failure);
+            }
+            _ => {}
         }
         #[cfg(test)]
         self.check_window();

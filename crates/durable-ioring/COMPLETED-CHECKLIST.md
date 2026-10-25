@@ -4770,3 +4770,26 @@ written for it.
 **Handles, tokens, descriptions and domain lists as fixed storage** ([DI-D-108](DESIGN-NOTES.md#di-d-108)). Split when it
 began into [DI-23.12.4.1](#di-231241), [DI-23.12.4.2](#di-231242), [DI-23.12.4.3](#di-231243) and
 [DI-23.12.4.4](#di-231244); what each built is in its entry and in DI-D-108's "As built" notes.
+
+## Moved 2026-10-24 23:06:19 -04:00 -- DI-23.12.3.4: a failure's records lent, and held until its resolution is popped
+
+### <a id="di-231234"></a>DI-23.12.3.4 -- A failure's suspect writes and markings are lent to a visitor from the instance's own records, held until its Abandoned or Healed is popped, and no entry or inventory row carries them. *(completed 2026-10-24 23:06:19 -04:00)*
+
+**A failure's records lent by a scoped borrow** ([DI-D-108](DESIGN-NOTES.md#di-d-108)):
+`Failed`, `Abandoned`, `Healed` and `FailureInfo` carry the failure's identity, token, cause and stamp, and its suspect
+writes and markings are lent for the duration of a visitor; a resolved failure's records are kept until its `Abandoned`
+or `Healed` is popped. Breaking for both crates; CONTRACT.md, the READMEs' examples, and the oracle follow. The
+inventory itself -- `failures()` handing out a `Vec` of copied causes -- is `DI-23.12.3.7`.
+
+What was built is [DI-D-108](DESIGN-NOTES.md#di-d-108)'s "As built (DI-23.12.3.4)". `Failed`, `Abandoned`, `Healed` and
+`FailureInfo` carry no records and `SuspectSet` is gone; `failure_suspects` and `failure_markings` lend them on the ring
+trait and the core. A resolved failure stays in the table until the core pops its resolution entry and forgets it, so its
+places, token slot, kept records and an import's domain list and count are let go then; [CONTRACT.md](CONTRACT.md) says
+so, and the capacity example in [win-durable-ioring's README.md](../win-durable-ioring/README.md) shows a push still
+refused between the abandon and the pop. A resolved failure lends only the markings made before its resolution, since a
+kept record is shared. The oracle is owed each `Failed`'s suspect set (`suspects`, or `observe_from` reading it from
+the instance) and no longer compares resolution entries; the harnesses of both crates report it. Reading the records
+allocates nothing, a new phase of the allocation test, and the failure paths now allocate only in the inventory and in
+resolve. Sabotage: twelve entries added, eleven re-anchored, and four removed -- three healed twins of an abandoned entry,
+now that both let go at one site, and the oracle's final-record comparison, which is gone; all swept as declared, four
+only after the tests for a resolved failure's markings, its marking and its token were written.

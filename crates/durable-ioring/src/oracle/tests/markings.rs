@@ -4,14 +4,14 @@
 use std::io;
 use std::sync::LazyLock;
 
-use super::{LEN, Oracle, TestEntry, V, completion, op, write_kind};
+use super::{FailedEntry, LEN, Oracle, Report, TestEntry, V, completion, op, write_kind};
 use crate::IoTargetKey;
 use crate::error_code::ErrorCode;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::oracle::Violation;
 use crate::types::{
     Entry, Epoch, Failed, FailureCause, ImportScope, IoFault, Marking, MarkingKind, Outcome,
-    SuspectSet, SuspectWrite,
+    SuspectWrite,
 };
 
 /// The fault the failed write here reports, `ERROR_IO_DEVICE`: one report, shared by its
@@ -31,30 +31,28 @@ fn failure(instance: InstanceId, seq: u64) -> FailureId {
     FailureId { instance, seq }
 }
 
-fn suspect(instance: InstanceId, writes: &[u64]) -> SuspectSet<V> {
-    SuspectSet::new(
-        writes
-            .iter()
-            .map(|&seq| SuspectWrite {
-                op: op(instance, seq),
-                target: IoTargetKey(1),
-                epoch: Epoch::new(Lineage { instance, seq: 0 }, 1),
-            })
-            .collect(),
-    )
+fn suspect(instance: InstanceId, writes: &[u64]) -> Vec<SuspectWrite<V>> {
+    writes
+        .iter()
+        .map(|&seq| SuspectWrite {
+            op: op(instance, seq),
+            target: IoTargetKey(1),
+            epoch: Epoch::new(Lineage { instance, seq: 0 }, 1),
+        })
+        .collect()
 }
 
-fn failed_at(instance: InstanceId, id: u64, writes: &[u64], ticks: u64) -> TestEntry {
+fn failed_at(instance: InstanceId, id: u64, writes: &[u64], ticks: u64) -> FailedEntry {
     let id = failure(instance, id);
-    Entry::Failed(Failed {
+    let entry = Entry::Failed(Failed {
         id,
         token: FailureToken::detached(id),
         cause: FailureCause::Imported {
             scope: ImportScope::All,
         },
-        suspect: suspect(instance, writes),
         observed: ticks,
-    })
+    });
+    FailedEntry(entry, suspect(instance, writes))
 }
 
 fn marking(write: OpId, kind: MarkingKind, ticks: u64) -> Marking<V> {
@@ -88,7 +86,7 @@ fn three_writes_one_failure(instance: InstanceId) -> Oracle {
             .expect("a write");
     }
     oracle
-        .observe(&failed_at(instance, 0, &[0, 1, 2], 0))
+        .report(failed_at(instance, 0, &[0, 1, 2], 0))
         .expect("a failure suspecting all three");
     let outcomes = [
         Outcome::Failed(IO_DEVICE.clone()),
@@ -174,7 +172,7 @@ fn a_marking_before_its_writes_completion_is_refused() {
         .pushed(op(instance, 0), write_kind(instance, 1), LEN, 0)
         .expect("a write");
     oracle
-        .observe(&failed_at(instance, 0, &[0], 0))
+        .report(failed_at(instance, 0, &[0], 0))
         .expect("a failure suspecting it");
     assert!(matches!(
         oracle.observe(&marked(
@@ -194,7 +192,7 @@ fn a_marking_naming_a_write_the_failure_does_not_suspect_is_refused() {
     let instance = InstanceId::next();
     let mut oracle = three_writes_one_failure(instance);
     oracle
-        .observe(&failed_at(instance, 1, &[0], 0))
+        .report(failed_at(instance, 1, &[0], 0))
         .expect("a second failure, suspecting write 0 alone");
     assert!(matches!(
         oracle.observe(&marked(
@@ -229,8 +227,6 @@ fn a_marking_for_a_failure_not_live_is_refused() {
     ));
     let ended: TestEntry = Entry::Abandoned {
         failure: failure(instance, 0),
-        suspect: suspect(instance, &[0, 1, 2]),
-        markings: Vec::new(),
     };
     oracle.observe(&ended).expect("abandoned");
     assert!(matches!(
@@ -254,7 +250,7 @@ fn markings_and_failures_share_one_stamp_order() {
         .pushed(op(instance, 0), write_kind(instance, 1), LEN, 0)
         .expect("a write");
     oracle
-        .observe(&failed_at(instance, 0, &[0], 100))
+        .report(failed_at(instance, 0, &[0], 100))
         .expect("a failure at 100");
     oracle
         .observe(&completion(
@@ -287,7 +283,7 @@ fn markings_and_failures_share_one_stamp_order() {
     ));
     assert!(
         matches!(
-            oracle.observe(&failed_at(instance, 1, &[], 120)),
+            oracle.report(failed_at(instance, 1, &[], 120)),
             Err(Violation::StampWentBackwards { .. })
         ),
         "a failure stamped before the last marking"
@@ -295,92 +291,64 @@ fn markings_and_failures_share_one_stamp_order() {
 }
 
 #[test]
-fn a_final_record_carries_exactly_the_markings_reported() {
+fn a_failed_is_owed_its_suspect_set_before_anything_else_is_reported() {
     let instance = InstanceId::next();
     let f = failure(instance, 0);
-    let reported = vec![
-        marking(op(instance, 0), nullified(), 0),
-        marking(
-            op(instance, 1),
-            MarkingKind::Covered {
-                flushed: true,
-                provider: false,
-            },
-            0,
-        ),
-    ];
-    let setup = || {
-        let mut oracle = three_writes_one_failure(instance);
-        for m in &reported {
-            let entry: TestEntry = Entry::Marked {
-                failure: f,
-                marking: m.clone(),
-            };
-            oracle.observe(&entry).expect("a marking");
-        }
-        oracle.healed(f);
-        oracle
+    let FailedEntry(entry, writes) = failed_at(instance, 0, &[], 0);
+    let other: TestEntry = Entry::Durable {
+        through: Epoch::new(Lineage { instance, seq: 0 }, 1),
     };
-    let abandoned = |markings: Vec<Marking<V>>| -> TestEntry {
-        Entry::Abandoned {
-            failure: f,
-            suspect: suspect(instance, &[0, 1, 2]),
-            markings,
-        }
-    };
-    let healed = |markings: Vec<Marking<V>>| -> TestEntry {
-        Entry::Healed {
-            failure: f,
-            suspect: suspect(instance, &[0, 1, 2]),
-            markings,
-        }
-    };
-    let fewer = reported[..1].to_vec();
-    let mut more = reported.clone();
-    more.push(marking(
-        op(instance, 2),
-        MarkingKind::Covered {
-            flushed: true,
-            provider: false,
-        },
-        0,
+
+    let mut oracle = Oracle::new();
+    oracle.observe(&entry).expect("the Failed itself");
+    assert!(matches!(
+        oracle.observe(&other),
+        Err(Violation::SuspectsNotReported { failure }) if failure == f
     ));
-    let mut reordered = reported.clone();
-    reordered.reverse();
-    for wrong in [fewer, more, reordered] {
-        for entry in [abandoned(wrong.clone()), healed(wrong.clone())] {
-            assert!(
-                matches!(
-                    setup().observe(&entry),
-                    Err(Violation::MarkingsChanged { .. })
-                ),
-                "{entry:?}"
-            );
-        }
-    }
-    setup()
-        .observe(&abandoned(reported.clone()))
-        .expect("abandoned with its record");
-    setup()
-        .observe(&healed(reported.clone()))
-        .expect("healed with its record");
+
+    let mut oracle = Oracle::new();
+    oracle.observe(&entry).expect("the Failed itself");
+    assert!(matches!(
+        oracle.finish(),
+        Err(Violation::SuspectsNotReported { failure }) if failure == f
+    ));
+
+    let mut oracle = Oracle::new();
+    assert!(
+        matches!(
+            oracle.suspects(f, &writes),
+            Err(Violation::SuspectsUnasked { failure }) if failure == f
+        ),
+        "no Failed was reported"
+    );
+    oracle.observe(&entry).expect("the Failed itself");
+    assert!(
+        matches!(
+            oracle.suspects(failure(instance, 1), &writes),
+            Err(Violation::SuspectsUnasked { .. })
+        ),
+        "another failure's"
+    );
+    oracle.suspects(f, &writes).expect("its own");
+    assert!(
+        matches!(
+            oracle.suspects(f, &writes),
+            Err(Violation::SuspectsUnasked { .. })
+        ),
+        "given once"
+    );
+    oracle.finish().expect("nothing owed");
 }
 
 #[test]
 fn healed_is_accepted_once_and_only_for_a_failure_the_consumer_healed() {
     let instance = InstanceId::next();
     let f = failure(instance, 0);
-    let healed = |writes: &[u64]| -> TestEntry {
-        Entry::Healed {
-            failure: f,
-            suspect: suspect(instance, writes),
-            markings: Vec::new(),
-        }
-    };
+    let healed: TestEntry = Entry::Healed { failure: f };
     let mut oracle = three_writes_one_failure(instance);
     assert!(
         matches!(
-            oracle.observe(&healed(&[0, 1, 2])),
+            oracle.observe(&healed),
             Err(Violation::HealedUnknown { .. })
         ),
         "the consumer never healed it"
@@ -388,17 +356,10 @@ fn healed_is_accepted_once_and_only_for_a_failure_the_consumer_healed() {
 
     let mut oracle = three_writes_one_failure(instance);
     oracle.healed(f);
-    assert!(matches!(
-        oracle.observe(&healed(&[0, 1])),
-        Err(Violation::HealedSuspectChanged { .. })
-    ));
-
-    let mut oracle = three_writes_one_failure(instance);
-    oracle.healed(f);
-    oracle.observe(&healed(&[0, 1, 2])).expect("healed");
+    oracle.observe(&healed).expect("healed");
     assert!(
         matches!(
-            oracle.observe(&healed(&[0, 1, 2])),
+            oracle.observe(&healed),
             Err(Violation::HealedUnknown { .. })
         ),
         "a failure ends once"

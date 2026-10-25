@@ -120,12 +120,7 @@ fn a_suspect_set_is_frozen_and_a_later_seal_it_holds_is_answered_blocked() {
         "2's flush succeeded, but failure 0 holds 1"
     );
     assert_eq!(blocked_by(lineage.state(2)), Some(0));
-    let suspects: Vec<u64> = lineage.failures()[0]
-        .suspect
-        .writes()
-        .iter()
-        .map(|w| w.op.seq)
-        .collect();
+    let suspects = super::suspects_of(&lineage, 0);
     assert_eq!(
         suspects,
         [0],

@@ -162,9 +162,6 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_FREE_TOKENS: Tag = Tag::new("durability::new::free_tokens");
     pub(crate) const DURABILITY_NEW_LISTS: Tag = Tag::new("durability::new::lists");
     pub(crate) const DURABILITY_NEW_KEPT: Tag = Tag::new("durability::new::kept");
-    pub(crate) const DURABILITY_RESOLVE_MARKINGS: Tag = Tag::new("durability::resolve::markings");
-    pub(crate) const DURABILITY_RELEASE_HEALED_MARKINGS: Tag =
-        Tag::new("durability::release_healed::markings");
     pub(crate) const DURABILITY_NEW_DUE: Tag = Tag::new("durability::new::due");
     pub(crate) const DURABILITY_FRESH_DUE: Tag = Tag::new("durability::fresh::due");
     pub(crate) const DURABILITY_NEW_SCRATCH_LIVE: Tag = Tag::new("durability::new::scratch_live");
@@ -182,13 +179,7 @@ pub(crate) mod tag {
         Tag::new("durability::resolve::heal_pending");
     pub(crate) const DURABILITY_FAILURES_INFOS: Tag = Tag::new("durability::failures::infos");
     pub(crate) const DURABILITY_FAILURES_CAUSE: Tag = Tag::new("durability::failures::cause");
-    pub(crate) const DURABILITY_FAILURES_MARKINGS: Tag = Tag::new("durability::failures::markings");
     pub(crate) const DURABILITY_FAILURES_INFO: Tag = Tag::new("durability::failures::info");
-    pub(crate) const DURABILITY_OBSERVE_SUSPECT: Tag = Tag::new("durability::observe::suspect");
-    pub(crate) const DURABILITY_RESOLVE_SUSPECT: Tag = Tag::new("durability::resolve::suspect");
-    pub(crate) const DURABILITY_RELEASE_HEALED_SUSPECT: Tag =
-        Tag::new("durability::release_healed::suspect");
-    pub(crate) const DURABILITY_FAILURES_SUSPECT: Tag = Tag::new("durability::failures::suspect");
     pub(crate) const DURABILITY_OBSERVE_CAUSE: Tag = Tag::new("durability::observe::cause");
     pub(crate) const DURABILITY_OBSERVE_EVENT: Tag = Tag::new("durability::observe::event");
     pub(crate) const DURABILITY_MARK_EVENT: Tag = Tag::new("durability::mark::event");
@@ -276,7 +267,6 @@ pub(crate) mod tag {
     pub(crate) const BACKEND_REFUSAL_FAULT_SHARED: Tag = Tag::new("backend::refusal_fault::shared");
 
     // types.rs
-    pub(crate) const TYPES_SUSPECT_SET_NEW: Tag = Tag::new("types::suspect_set::new");
     pub(crate) const TYPES_FLUSH_DOMAIN_NEW: Tag = Tag::new("types::flush_domain::new");
 
     // diagnostics.rs

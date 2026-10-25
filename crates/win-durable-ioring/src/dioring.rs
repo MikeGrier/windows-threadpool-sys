@@ -68,6 +68,7 @@ use durable_ioring::{
     ProviderRequest,
 };
 use durable_ioring::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
+use durable_ioring::{Marking, SuspectWrite, UnknownFailure};
 use durable_ioring::{ReadKey, TargetKey, WriteKey};
 use durable_ioring_events::EtwDiagnostics;
 
@@ -895,6 +896,22 @@ where
 
     fn failures(&self) -> Vec<FailureInfo<Self::Ids>> {
         self.engine().core.failures()
+    }
+
+    fn failure_suspects(
+        &self,
+        failure: FailureId,
+        visit: impl FnMut(SuspectWrite<Self::Ids>),
+    ) -> Result<(), UnknownFailure<Self::Ids>> {
+        self.engine().core.failure_suspects(failure, visit)
+    }
+
+    fn failure_markings(
+        &self,
+        failure: FailureId,
+        visit: impl FnMut(Marking<Self::Ids>),
+    ) -> Result<(), UnknownFailure<Self::Ids>> {
+        self.engine().core.failure_markings(failure, visit)
     }
 
     fn take_token(&mut self, failure: FailureId) -> Option<FailureToken> {

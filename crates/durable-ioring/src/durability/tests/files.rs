@@ -140,10 +140,17 @@ fn a_suspect_write_is_reported_through_its_failure_and_not_as_uncovered() {
         "the write pushed after the failure is uncovered, the one before it suspect"
     );
 
+    let id = token.id();
     lineage
         .resolve(vec![(token, Resolution::Abandon)])
         .expect("abandon");
-    assert!(holds(&lineage, A).failures.is_empty(), "resolved");
+    assert_eq!(
+        holds(&lineage, A).failures,
+        [id],
+        "resolved, and holding the file until its Abandoned is popped (DI-D-108)"
+    );
+    lineage.0.forget(id);
+    assert!(holds(&lineage, A).failures.is_empty(), "popped");
 }
 
 #[test]

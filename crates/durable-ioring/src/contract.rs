@@ -16,9 +16,9 @@ use crate::io_target::IoTarget;
 use crate::key::{ReadKey, TargetKey, WriteKey};
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
-    Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover, LineageInfo,
+    Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover, LineageInfo, Marking,
     PushError, ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
-    SealError, Tag, UnknownLineage, WriteOptions,
+    SealError, SuspectWrite, Tag, UnknownFailure, UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -136,8 +136,8 @@ pub trait DurableRing {
     /// Give `visit` what holds the target under `key` that an [`IoTargetBusy`](crate::IoTargetBusy)
     /// counts without naming (DI-D-103): for each lineage gated on, in lineage order, the lowest
     /// gate its operations to the target are held for; for each lineage with an uncovered write to
-    /// it, the highest epoch among them; and each unresolved failure suspecting a write to it, in
-    /// the order observed. Nothing for a key with no target. The visitor runs under the instance's
+    /// it, the highest epoch among them; and each failure suspecting a write to it, until its
+    /// `Abandoned` or `Healed` entry is popped (DI-D-108), in the order observed. Nothing for a key with no target. The visitor runs under the instance's
     /// own lock, if it has one, and must not call back into the instance.
     fn target_holds(&self, key: IoTargetKey, visit: impl FnMut(Hold<Self::Ids>));
 
@@ -364,6 +364,38 @@ pub trait DurableRing {
 
     /// The unresolved failures, in the order they were observed.
     fn failures(&self) -> Vec<FailureInfo<Self::Ids>>;
+
+    /// Give `visit` each write `failure` put at risk -- its suspect set, frozen when it was observed
+    /// -- in push order (DI-D-108). The writes are read from the instance's own records, lent for
+    /// the call; a visitor that keeps one copies it. The visitor runs under the instance's own
+    /// lock, if it has one, and must not call back into the instance.
+    ///
+    /// The records are held from the failure's `Failed` until its `Abandoned` or `Healed` entry is
+    /// popped, and the failure holds what it held until then: read them before popping that entry.
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownFailure`] when the instance holds no records for `failure`: another instance's,
+    /// or resolved and its `Abandoned` or `Healed` already popped.
+    fn failure_suspects(
+        &self,
+        failure: FailureIdOf<Self>,
+        visit: impl FnMut(SuspectWrite<Self::Ids>),
+    ) -> Result<(), UnknownFailure<Self::Ids>>;
+
+    /// Give `visit` each marking `failure` has gained, in the order observed -- for a resolved
+    /// failure, those it gained before it was resolved -- read and lent as
+    /// [`failure_suspects`](Self::failure_suspects) reads its writes (DI-D-36, DI-D-108). Each was
+    /// also reported by its own `Marked` entry.
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownFailure`], as [`failure_suspects`](Self::failure_suspects) says.
+    fn failure_markings(
+        &self,
+        failure: FailureIdOf<Self>,
+        visit: impl FnMut(Marking<Self::Ids>),
+    ) -> Result<(), UnknownFailure<Self::Ids>>;
 
     /// A token for an unresolved failure whose token is not live -- it was closed or dropped.
     /// `None` otherwise, including for a failure that is resolved, another instance's, or healed

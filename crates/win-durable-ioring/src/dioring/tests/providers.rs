@@ -313,8 +313,7 @@ fn a_provider_failure_is_reported_with_its_domain_and_error_and_holds_the_seal()
         }
         other => panic!("expected a provider failure, got {other:?}"),
     }
-    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
-    assert_eq!(suspects, [write]);
+    assert_eq!(harness.suspects(failed.id), [write]);
     assert_eq!(harness.state(1), EpochState::Blocked(failed.id));
     assert!(harness.ring.pop().expect("pop").is_none(), "one answer");
     harness.finish();
@@ -502,9 +501,8 @@ fn one_routed_provider_failing_fails_only_the_files_in_its_domains() {
         }
         other => panic!("expected the log provider's failure, got {other:?}"),
     }
-    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
     assert_eq!(
-        suspects,
+        harness.suspects(failed.id),
         [log_write],
         "the disk's file is not in the log's domain"
     );
@@ -535,8 +533,7 @@ fn a_file_whose_domains_span_routed_providers_fails_when_either_fails() {
         "{:?}",
         failed.cause
     );
-    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
-    assert_eq!(suspects, [write]);
+    assert_eq!(harness.suspects(failed.id), [write]);
     assert_eq!(harness.state(1), EpochState::Blocked(failed.id));
     harness.finish();
 }

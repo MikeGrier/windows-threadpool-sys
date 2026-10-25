@@ -174,13 +174,23 @@ impl<K: TimeBase> Harness<K> {
             .expect("the oracle accepts the push");
     }
 
-    /// The next entry, within the bound, after the oracle has accepted it.
+    /// The ops `failure` suspects, in push order, as the ring lends them (DI-D-108).
+    pub(super) fn suspects(&self, failure: durable_ioring::FailureId) -> Vec<OpId> {
+        let mut ops = Vec::new();
+        self.ring
+            .failure_suspects(failure, |write| ops.push(write.op))
+            .expect("held until its resolution is popped");
+        ops
+    }
+
+    /// The next entry, within the bound, after the oracle has accepted it and the suspect set of a
+    /// `Failed`.
     pub(super) fn next_entry(&mut self) -> RingEntry {
         let started = Instant::now();
         loop {
             if let Some(entry) = self.ring.pop().expect("pop") {
                 self.oracle
-                    .observe(&entry)
+                    .observe_from(&self.ring, &entry)
                     .expect("the oracle accepts the entry");
                 return entry;
             }

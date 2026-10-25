@@ -87,9 +87,22 @@ fn entries(
     engine: &mut Eng,
     oracle: &mut ConformanceOracle<V, u32>,
 ) -> Vec<Entry<V, Vec<u8>, u32>> {
-    let entries: Vec<_> = std::iter::from_fn(|| engine.core.pop()).collect();
-    for entry in &entries {
-        oracle.observe(entry).expect("the oracle accepts the entry");
+    let mut entries = Vec::new();
+    while let Some(entry) = engine.core.pop() {
+        oracle
+            .observe(&entry)
+            .expect("the oracle accepts the entry");
+        if let Entry::Failed(failed) = &entry {
+            let mut suspect = Vec::new();
+            engine
+                .core
+                .failure_suspects(failed.id, |write| suspect.push(write))
+                .expect("held until its resolution is popped");
+            oracle
+                .suspects(failed.id, &suspect)
+                .expect("the oracle accepts the suspect set");
+        }
+        entries.push(entry);
     }
     entries
 }

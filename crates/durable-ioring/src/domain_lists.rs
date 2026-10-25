@@ -9,10 +9,11 @@
 //! import by domains from its observation to its resolution, and an empty list holds none.
 //!
 //! **A row is not reused while anything names it.** A target is removed only when nothing holds
-//! it: no write to it in flight, held, uncovered or kept, and no unresolved failure suspecting a
-//! write to it (DI-D-45). A failed flush of a file reaches by that file's row, and the failure
-//! suspects the write the flush answered for (DI-D-109), which holds the file until the failure is
-//! resolved. An import's row is the failure's own, let go once it is resolved.
+//! it: no write to it in flight, held, uncovered or kept, and no failure suspecting a write to it
+//! whose resolution is not yet popped (DI-D-45, DI-D-108). A failed flush of a file reaches by that
+//! file's row, and the failure suspects the write the flush answered for (DI-D-109), which holds
+//! the file until the failure's resolution is popped. An import's row is the failure's own, let go
+//! then too.
 
 use alloc::vec::Vec;
 

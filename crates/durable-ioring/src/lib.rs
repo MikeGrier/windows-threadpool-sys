@@ -85,8 +85,8 @@ pub use types::{
     ImportError, ImportScope, Imported, IoFault, IoTargetBusy, IoTargetKey, Leftover, LineageBusy,
     LineageInfo, Marking, MarkingKind, OpCompletion, OpKind, Outcome, PushError, PushRefusal,
     ReadOptions, RemoveTargetError, Resolution, ResolveError, ResolveRefusal, RetireLineageError,
-    RetireLineageRefusal, SealError, SuspectSet, SuspectWrite, Tag, UnknownLineage, WriteCaching,
-    WriteOptions,
+    RetireLineageRefusal, SealError, SuspectWrite, Tag, UnknownFailure, UnknownLineage,
+    WriteCaching, WriteOptions,
 };
 // The types the contract's signatures name from the crate it is built on, so a consumer needs no
 // direct dependency on it to call it.

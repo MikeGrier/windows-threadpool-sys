@@ -35,7 +35,7 @@ fn covered() -> MarkingKind {
 
 /// The writes `kept`'s markings name, among those `suspects` picks, in the order read.
 fn marked(kept: &Kept<u64, u64>, suspects: impl Fn(OpId) -> bool) -> Vec<(u64, u64)> {
-    kept.markings(suspects)
+    kept.markings(suspects, None)
         .map(|marking: crate::types::Marking<V>| (marking.write.seq, marking.observed))
         .collect()
 }

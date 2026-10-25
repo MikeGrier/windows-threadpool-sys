@@ -6,7 +6,7 @@ use std::io;
 
 use super::{ConformanceOracle, Violation};
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
-use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
+use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome, SuspectWrite};
 
 // The failure rules: DI-3.2.4.
 mod failures;
@@ -23,6 +23,25 @@ type V = DioringIds<u64, u64>;
 const LEN: u32 = 4;
 type Oracle = ConformanceOracle<V, u32>;
 type TestEntry = Entry<V, Vec<u8>, u32>;
+
+/// A `Failed` entry, with the suspect set a harness reads from the instance once it is popped
+/// (DI-D-108).
+struct FailedEntry(TestEntry, Vec<SuspectWrite<V>>);
+
+/// Report a `Failed` entry as a harness does: the entry, then its suspect set.
+trait Report {
+    fn report(&mut self, failed: FailedEntry) -> Result<(), Violation<V>>;
+}
+
+impl Report for Oracle {
+    fn report(&mut self, FailedEntry(entry, suspect): FailedEntry) -> Result<(), Violation<V>> {
+        self.observe(&entry)?;
+        let Entry::Failed(failed) = &entry else {
+            panic!("a FailedEntry holds a Failed");
+        };
+        self.suspects(failed.id, &suspect)
+    }
+}
 
 fn op(instance: InstanceId, seq: u64) -> OpId {
     OpId { instance, seq }

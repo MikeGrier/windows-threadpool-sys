@@ -495,8 +495,8 @@ fn clean() -> Vec<Measured> {
     phases
 }
 
-/// The failure paths: a commit that fails, the inventory queried, a heal taking effect, an import,
-/// and an abandon.
+/// The failure paths: a commit that fails, the inventory queried, its suspect set and markings read,
+/// a heal taking effect, an import, and an abandon.
 fn failures() -> Vec<Measured> {
     let script = FaultScript::new().on(
         When::any().op(ScriptOp::Commit).target(KEY).nth(1),
@@ -526,6 +526,16 @@ fn failures() -> Vec<Measured> {
     assert_eq!(inventory.len(), 1, "the one failure");
     drop(inventory);
     rig.phase("failures queried");
+    let core = &rig.core;
+    let (mut suspects, mut markings) = (0_usize, 0_usize);
+    counted(|| {
+        core.failure_suspects(token.id(), |_| suspects += 1)
+            .expect("unresolved");
+        core.failure_markings(token.id(), |_| markings += 1)
+            .expect("unresolved");
+    });
+    assert!(suspects > 0, "the failed commit's writes are suspect");
+    rig.phase("a failure's suspects and markings read");
 
     rig.round(default, 2);
     rig.run();
@@ -606,14 +616,15 @@ const CLEAN: &[(&str, u64)] = &[
 const FAILURES: &[(&str, u64)] = &[
     ("construction, with two targets", 39),
     ("writes before the failure", 6),
-    ("a commit failure observed", 4),
-    ("failures queried", 7),
+    ("a commit failure observed", 0),
+    ("failures queried", 1),
+    ("a failure's suspects and markings read", 0),
     ("writes re-issued", 0),
     ("a heal resolved", 1),
-    ("the heal taking effect at the next seal", 6),
+    ("the heal taking effect at the next seal", 0),
     ("writes before the import", 0),
-    ("a failure imported", 4),
-    ("an abandon resolved", 5),
+    ("a failure imported", 0),
+    ("an abandon resolved", 1),
 ];
 
 /// Each phase's allocations by tag, as last recorded, in the order the tags were first seen.
@@ -908,36 +919,8 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         3,
     ),
     ("writes before the failure", "io_core::complete::queue", 3),
-    (
-        "a commit failure observed",
-        "durability::observe::suspect",
-        3,
-    ),
-    ("a commit failure observed", "types::suspect_set::new", 1),
     ("failures queried", "durability::failures::infos", 1),
-    ("failures queried", "durability::failures::markings", 2),
-    ("failures queried", "durability::failures::suspect", 3),
-    ("failures queried", "types::suspect_set::new", 1),
     ("a heal resolved", "durability::resolve::heal_pending", 1),
-    (
-        "the heal taking effect at the next seal",
-        "durability::release_healed::markings",
-        2,
-    ),
-    (
-        "the heal taking effect at the next seal",
-        "durability::release_healed::suspect",
-        3,
-    ),
-    (
-        "the heal taking effect at the next seal",
-        "types::suspect_set::new",
-        1,
-    ),
-    ("a failure imported", "durability::observe::suspect", 3),
-    ("a failure imported", "types::suspect_set::new", 1),
-    ("an abandon resolved", "durability::resolve::suspect", 3),
-    ("an abandon resolved", "types::suspect_set::new", 1),
     ("an abandon resolved", "durability::resolve::abandoned", 1),
 ];
 

@@ -280,7 +280,7 @@ fn a_commit_the_backend_refuses_for_good_fails_its_seals_flush() {
     };
     assert_eq!(*target, KEY);
     assert_eq!(*refusal(fault), RefusalCause::UnknownTarget);
-    assert_eq!(failed.suspect.writes().len(), 1);
+    assert_eq!(rig.suspected[&failed.id.seq].len(), 1);
     assert!(matches!(
         rig.core.epoch_state(rig.epoch(1)),
         Ok(EpochState::Blocked(_))

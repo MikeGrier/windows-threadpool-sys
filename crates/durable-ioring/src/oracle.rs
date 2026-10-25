@@ -38,7 +38,9 @@
 //!   held, so one lineage's `Durable` may pass a healed failure before that entry.
 //! - **A failure is new, and suspects only accepted writes** (DI-D-12 (b)): its identity was never
 //!   reported before, and every suspect write was accepted as a write tagged with the epoch
-//!   reported, listed in push order.
+//!   reported, listed in push order. A `Failed` entry carries no suspect set: the harness reads it
+//!   through the instance's `failure_suspects` and gives it to [`suspects`](ConformanceOracle::suspects)
+//!   before it reports another entry (DI-D-108).
 //! - **Finality** (guarantee 3): no suspect write is of an epoch its lineage was already reported
 //!   durable through.
 //! - **Stamps never decrease** (DI-D-38): each `Failed` and each `Marked` was observed at or after
@@ -48,12 +50,10 @@
 //!   suspect writes, whose completion has been observed and agrees with the marking -- a
 //!   nullifier's write completed with the same fault, the one report its completion carried; a
 //!   covered marking's completed with a transfer.
-//! - **A final record is the record** (DI-D-36): `Abandoned` and `Healed` name a live failure, with
-//!   the suspect set `Failed` reported and every marking `Marked` reported for it, in order; and
-//!   `Healed` only for a failure the consumer healed.
-//! - **`Abandoned` and `Blocked` name a live failure**: `Abandoned` one reported and not yet
-//!   abandoned, with the suspect set it was reported with; `Blocked { through: n, by }` one
-//!   containing an epoch of n's lineage at or below n.
+//! - **`Abandoned`, `Healed` and `Blocked` name a live failure**: `Abandoned` one reported and not
+//!   yet ended, `Healed` one the consumer healed, and `Blocked { through: n, by }` one containing an
+//!   epoch of n's lineage at or below n. The resolution entries carry no record of their own to
+//!   compare: a failure's records are the instance's, lent until the entry is popped (DI-D-108).
 //! - **A gated operation waits for its gate** (guarantee 9): it completes, other than as never
 //!   issued, only once the stream has reported its gate's lineage durable through the gate, and
 //!   the gate not abandoned; and no failure suspects a gated write before then, since it has not
@@ -116,7 +116,7 @@
 use alloc::collections::BTreeSet;
 use std::collections::{HashMap, HashSet};
 
-use crate::contract::Identities;
+use crate::contract::{DurableRing, EntryOf, Identities};
 use crate::types::{Entry, Epoch, IoFault, Marking, MarkingKind, OpKind, Outcome, SuspectWrite};
 
 mod pairing;
@@ -253,23 +253,25 @@ pub enum Violation<V: Identities> {
         /// The failure.
         failure: V::FailureId,
     },
-    /// `Abandoned` with a suspect set other than the one `Failed` reported.
-    AbandonedSuspectChanged {
-        /// The failure.
-        failure: V::FailureId,
-    },
-    /// `Abandoned` or `Healed` with markings other than those `Marked` reported for the failure.
-    MarkingsChanged {
-        /// The failure.
-        failure: V::FailureId,
-    },
     /// `Healed` for a failure not reported, already ended, or not healed by the consumer.
     HealedUnknown {
         /// The failure.
         failure: V::FailureId,
     },
-    /// `Healed` with a suspect set other than the one `Failed` reported.
-    HealedSuspectChanged {
+    /// Another entry reported, or the stream finished, before the suspect set of the `Failed`
+    /// before it was given.
+    SuspectsNotReported {
+        /// The failure whose suspect set is owed.
+        failure: V::FailureId,
+    },
+    /// A suspect set given for a failure whose `Failed` was not the entry just reported.
+    SuspectsUnasked {
+        /// The failure named.
+        failure: V::FailureId,
+    },
+    /// The instance would not lend the suspect set of the `Failed` just popped: its records are
+    /// held until the failure's `Abandoned` or `Healed` is popped (DI-D-108).
+    SuspectsNotLent {
         /// The failure.
         failure: V::FailureId,
     },
@@ -359,7 +361,6 @@ struct Reported<V: Identities> {
     suspect: Vec<(V::OpId, Epoch<V>)>,
     /// The consumer healed it; its `Healed` entry may follow.
     healed: bool,
-    markings: Vec<Marking<V>>,
 }
 
 /// How a write's completion ended it, kept for the markings that may name it.
@@ -393,6 +394,8 @@ pub struct ConformanceOracle<V: Identities, C> {
     ended_lineages: HashSet<V::Lineage>,
     /// Every gated write's gate, kept after it completes: a failure may suspect it later.
     gates: HashMap<V::OpId, Epoch<V>>,
+    /// The failure whose `Failed` was just reported, until its suspect set is given.
+    owed: Option<V::FailureId>,
 }
 
 impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
@@ -411,6 +414,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             abandoned: HashMap::new(),
             ended_lineages: HashSet::new(),
             gates: HashMap::new(),
+            owed: None,
         }
     }
 
@@ -518,32 +522,44 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         Ok(())
     }
 
+    /// Report an entry popped from `ring`, and, when it is `Failed`, the suspect set `ring` lends
+    /// for it through [`DurableRing::failure_suspects`] -- [`observe`](Self::observe) and
+    /// [`suspects`](Self::suspects) in one call, for a harness holding the instance.
+    ///
+    /// # Errors
+    ///
+    /// As [`observe`](Self::observe) and [`suspects`](Self::suspects), and
+    /// [`Violation::SuspectsNotLent`] when `ring` holds no records for the failure just popped.
+    pub fn observe_from<R>(&mut self, ring: &R, entry: &EntryOf<R>) -> Result<(), Violation<V>>
+    where
+        R: DurableRing<Ids = V, Context = C>,
+    {
+        self.observe(entry)?;
+        let Entry::Failed(failed) = entry else {
+            return Ok(());
+        };
+        let mut suspect = Vec::new();
+        ring.failure_suspects(failed.id, |write| suspect.push(write))
+            .map_err(|_| Violation::SuspectsNotLent { failure: failed.id })?;
+        self.suspects(failed.id, &suspect)
+    }
+
     /// Report a popped entry.
     ///
     /// # Errors
     ///
     /// The first rule the entry breaks.
+    /// [`Violation::SuspectsNotReported`] when the `Failed` before it is owed its suspect set.
     pub fn observe<B>(&mut self, entry: &Entry<V, B, C>) -> Result<(), Violation<V>> {
+        if let Some(failure) = self.owed {
+            return Err(Violation::SuspectsNotReported { failure });
+        }
         let completion = match entry {
             Entry::Op(completion) => completion,
             Entry::Durable { through } => return self.durable(*through),
-            Entry::Failed(failed) => {
-                return self.failed(failed.id, failed.suspect.writes(), failed.observed);
-            }
-            Entry::Abandoned {
-                failure,
-                suspect,
-                markings,
-            } => {
-                return self.abandoned(*failure, suspect.writes(), markings);
-            }
-            Entry::Healed {
-                failure,
-                suspect,
-                markings,
-            } => {
-                return self.healed_entry(*failure, suspect.writes(), markings);
-            }
+            Entry::Failed(failed) => return self.failed(failed.id, failed.observed),
+            Entry::Abandoned { failure } => return self.abandoned(*failure),
+            Entry::Healed { failure } => return self.healed_entry(*failure),
             Entry::Marked { failure, marking } => return self.marked(*failure, marking),
             Entry::Blocked { through, by } => return self.blocked(*through, *by),
             Entry::LineageEnded { lineage, .. } => {
@@ -651,29 +667,14 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         if !agrees {
             return Err(Violation::MarkingContradicted { failure, write });
         }
-        reported.markings.push(marking.clone());
         Ok(())
     }
 
-    fn healed_entry(
-        &mut self,
-        failure: V::FailureId,
-        suspect: &[SuspectWrite<V>],
-        markings: &[Marking<V>],
-    ) -> Result<(), Violation<V>> {
+    fn healed_entry(&mut self, failure: V::FailureId) -> Result<(), Violation<V>> {
         if !self.failures.get(&failure).is_some_and(|r| r.healed) {
             return Err(Violation::HealedUnknown { failure });
         }
-        let reported = self
-            .failures
-            .remove(&failure)
-            .expect("checked above that the failure is live");
-        if !same_suspects(&reported, suspect) {
-            return Err(Violation::HealedSuspectChanged { failure });
-        }
-        if reported.markings != markings {
-            return Err(Violation::MarkingsChanged { failure });
-        }
+        self.failures.remove(&failure);
         Ok(())
     }
 
@@ -714,16 +715,31 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         Ok(())
     }
 
-    fn failed(
-        &mut self,
-        failure: V::FailureId,
-        suspect: &[SuspectWrite<V>],
-        observed: V::Instant,
-    ) -> Result<(), Violation<V>> {
+    fn failed(&mut self, failure: V::FailureId, observed: V::Instant) -> Result<(), Violation<V>> {
         if !self.failure_ids.insert(failure) {
             return Err(Violation::DuplicateFailure { failure });
         }
         self.stamped(failure, observed)?;
+        self.owed = Some(failure);
+        Ok(())
+    }
+
+    /// Give the suspect set of the failure whose `Failed` was just reported, as the instance's
+    /// `failure_suspects` lent it, in the order given (DI-D-108).
+    ///
+    /// # Errors
+    ///
+    /// [`Violation::SuspectsUnasked`] when the entry just reported was not that failure's
+    /// `Failed`, or the first rule the set breaks.
+    pub fn suspects(
+        &mut self,
+        failure: V::FailureId,
+        suspect: &[SuspectWrite<V>],
+    ) -> Result<(), Violation<V>> {
+        if self.owed != Some(failure) {
+            return Err(Violation::SuspectsUnasked { failure });
+        }
+        self.owed = None;
         for write in suspect {
             if self.ended_lineages.contains(&write.epoch.lineage) {
                 return Err(Violation::SuspectOfEndedLineage {
@@ -764,27 +780,15 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             Reported {
                 suspect: suspect.iter().map(|w| (w.op, w.epoch)).collect(),
                 healed: false,
-                markings: Vec::new(),
             },
         );
         Ok(())
     }
 
-    fn abandoned(
-        &mut self,
-        failure: V::FailureId,
-        suspect: &[SuspectWrite<V>],
-        markings: &[Marking<V>],
-    ) -> Result<(), Violation<V>> {
+    fn abandoned(&mut self, failure: V::FailureId) -> Result<(), Violation<V>> {
         let Some(reported) = self.failures.remove(&failure) else {
             return Err(Violation::AbandonedUnknown { failure });
         };
-        if !same_suspects(&reported, suspect) {
-            return Err(Violation::AbandonedSuspectChanged { failure });
-        }
-        if reported.markings != markings {
-            return Err(Violation::MarkingsChanged { failure });
-        }
         for (_, epoch) in reported.suspect {
             self.abandoned
                 .entry(epoch.lineage)
@@ -835,8 +839,12 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
     ///
     /// # Errors
     ///
-    /// [`Violation::Outstanding`], naming the operations that did not.
+    /// [`Violation::Outstanding`], naming the operations that did not; or
+    /// [`Violation::SuspectsNotReported`] for a `Failed` whose suspect set was never given.
     pub fn finish(self) -> Result<(), Violation<V>> {
+        if let Some(failure) = self.owed {
+            return Err(Violation::SuspectsNotReported { failure });
+        }
         if self.outstanding.is_empty() {
             Ok(())
         } else {
@@ -845,15 +853,6 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             })
         }
     }
-}
-
-/// Whether a final record's suspect set is the one `Failed` reported.
-fn same_suspects<V: Identities>(reported: &Reported<V>, suspect: &[SuspectWrite<V>]) -> bool {
-    reported
-        .suspect
-        .iter()
-        .copied()
-        .eq(suspect.iter().map(|w| (w.op, w.epoch)))
 }
 
 /// Whether a reported failure contains an epoch of `through`'s lineage at or below it.

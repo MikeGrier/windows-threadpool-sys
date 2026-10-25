@@ -2,13 +2,12 @@
 //! The oracle's rules for an ended lineage (DI-3.2.5.1), each refused when broken and accepted when
 //! kept, and the lineage's neighbours left alone.
 
-use super::{LEN, Oracle, TestEntry, V, done, op};
+use super::{FailedEntry, LEN, Oracle, Report, TestEntry, V, done, op};
 use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage};
 use crate::oracle::Violation;
 use crate::types::{
-    Entry, Epoch, Failed, FailureCause, ImportScope, Marking, MarkingKind, OpKind, SuspectSet,
-    SuspectWrite,
+    Entry, Epoch, Failed, FailureCause, ImportScope, Marking, MarkingKind, OpKind, SuspectWrite,
 };
 
 /// Lineage `seq` of `instance`.
@@ -29,25 +28,24 @@ fn write(lineage: Lineage, id: u64) -> OpKind<V> {
     }
 }
 
-fn failed(id: FailureId, writes: &[(crate::ids::OpId, Epoch<V>)]) -> TestEntry {
-    Entry::Failed(Failed {
+fn failed(id: FailureId, writes: &[(crate::ids::OpId, Epoch<V>)]) -> FailedEntry {
+    let entry = Entry::Failed(Failed {
         id,
         token: FailureToken::detached(id),
         cause: FailureCause::Imported {
             scope: ImportScope::All,
         },
-        suspect: SuspectSet::new(
-            writes
-                .iter()
-                .map(|&(op, epoch)| SuspectWrite {
-                    op,
-                    target: IoTargetKey(1),
-                    epoch,
-                })
-                .collect(),
-        ),
         observed: 0,
-    })
+    });
+    let suspect = writes
+        .iter()
+        .map(|&(op, epoch)| SuspectWrite {
+            op,
+            target: IoTargetKey(1),
+            epoch,
+        })
+        .collect();
+    FailedEntry(entry, suspect)
 }
 
 #[test]
@@ -137,16 +135,16 @@ fn no_failure_after_the_end_suspects_the_lineage_but_one_before_is_still_marked(
         .expect("a write of its neighbour");
     let before = FailureId { instance, seq: 0 };
     oracle
-        .observe(&failed(before, &[w_gone, w_kept]))
+        .report(failed(before, &[w_gone, w_kept]))
         .expect("a failure before the end");
     oracle.observe(&ended(gone)).expect("ends");
 
     assert!(matches!(
-        oracle.observe(&failed(FailureId { instance, seq: 1 }, &[w_gone])),
+        oracle.report(failed(FailureId { instance, seq: 1 }, &[w_gone])),
         Err(Violation::SuspectOfEndedLineage { op, .. }) if op == w_gone.0
     ));
     oracle
-        .observe(&failed(FailureId { instance, seq: 2 }, &[w_kept]))
+        .report(failed(FailureId { instance, seq: 2 }, &[w_kept]))
         .expect("a failure of its neighbour");
 
     oracle

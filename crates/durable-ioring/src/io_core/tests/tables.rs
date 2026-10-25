@@ -416,6 +416,8 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
         rig.act(actions);
         rig.run();
         assert!(rig.core.failures().is_empty(), "each heal took effect");
+        // Popping the Healed entries lets the failures go (DI-D-108).
+        rig.entries();
         for _ in 0..2 {
             let (_, actions) = rig
                 .core
@@ -430,7 +432,7 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
 #[test]
 fn kept_writes_fill_to_the_operations_declared() {
     // A failure suspects every write declared, and one commit covers them all while it does: each
-    // is kept, with its marking, until the failure is resolved.
+    // is kept, with its marking, until the failure's resolution is popped.
     let mut rig = Rig::over(core_with(tight(4)));
     rig.attach(KEY, MemoryTarget::new());
     for offset in 0..4 {
@@ -453,7 +455,11 @@ fn kept_writes_fill_to_the_operations_declared() {
         })
         .expect("the import's entry");
     let failures = rig.core.failures();
-    assert_eq!(failures[0].markings.len(), 4, "each kept write's marking");
+    assert_eq!(
+        super::markings_of(&rig.core, failures[0].id).len(),
+        4,
+        "each kept write's marking"
+    );
     assert_eq!(rig.core.window_places(), 4, "each kept for the failure");
     let actions = rig
         .core

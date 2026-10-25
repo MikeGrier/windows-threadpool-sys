@@ -1,13 +1,13 @@
 // Copyright (c) 2026 Mike Grier
 //! Markings (DI-D-36, DI-D-39), without a ring: what happens to a failure's suspect writes after
-//! it is observed is appended to its record and reported, and its final record -- `Abandoned` or
-//! `Healed` -- carries them.
+//! it is observed is appended to its record and reported, and its record is read as it stood when
+//! it was resolved -- `Abandoned` or `Healed` -- until that entry is popped (DI-D-108).
 
 use std::io;
 
 use super::{
-    A, B, DEFAULT, Due, FULL, Lineage, One, Ops, Seen, Stamp, failed, flush, lineage, nullified,
-    seen, submitted, tokens,
+    A, B, DEFAULT, Due, FULL, Lineage, One, Ops, Seen, Stamp, failed, flush, lineage, marks,
+    nullified, seen, submitted, tokens,
 };
 use crate::durability::Reach;
 use crate::test_support::ManualClock;
@@ -20,10 +20,9 @@ fn import(lineage: &mut Lineage) -> Due<u64, &'static str, Stamp> {
     lineage.import(cause, &Reach::All).1
 }
 
-/// The inventory's markings for its first failure, by write and kind.
+/// The markings the core lends for failure 0, by write and kind.
 fn inventory(lineage: &Lineage) -> Vec<(u64, MarkingKind)> {
-    lineage.failures()[0]
-        .markings
+    super::markings_of(lineage, 0)
         .iter()
         .map(|m| (m.write.seq, m.kind.clone()))
         .collect()
@@ -120,10 +119,9 @@ fn a_write_two_failures_suspect_marks_both_with_one_reading() {
             Seen::Marked(1, write.seq, nullified())
         ]
     );
-    let stamps: Vec<u64> = lineage
-        .failures()
-        .iter()
-        .map(|failure| failure.markings[0].observed)
+    let stamps: Vec<u64> = [0, 1]
+        .into_iter()
+        .map(|seq| super::markings_of(&lineage, seq)[0].observed)
         .collect();
     assert_eq!(stamps, [1_000, 1_000]);
 }
@@ -153,8 +151,8 @@ fn abandoning_carries_the_markings_and_ends_them() {
     );
 }
 
-/// A heal that takes effect reports the failure's final record, before any `Durable` it lets
-/// through; a healing failure goes on gaining markings until then.
+/// A heal that takes effect reports `Healed`, before any `Durable` it lets through, and the
+/// record read for it is the one it had then; a healing failure goes on gaining markings until then.
 #[test]
 fn a_heal_taking_effect_reports_healed_with_the_record_before_any_durable() {
     let mut lineage = lineage();
@@ -200,4 +198,75 @@ fn the_inventory_reports_markings_as_they_accrue() {
         inventory(&lineage),
         [(first.seq, nullified()), (second.seq, nullified())]
     );
+}
+
+/// A resolved failure is held until its `Abandoned` is popped, and gains nothing meanwhile: a write
+/// it shares with a failure still open is marked for that one only, and the resolved one lends the
+/// markings it had when it was resolved, though they are read from the same record (DI-D-108). Nor
+/// does it give out a token.
+#[test]
+fn a_resolved_failure_gains_no_marking_and_lends_those_it_had_when_resolved() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let first = ops.push(&mut lineage, 1, A, DEFAULT);
+    let second = ops.push(&mut lineage, 1, A, DEFAULT);
+    let token = tokens(import(&mut lineage)).remove(0);
+    import(&mut lineage);
+    lineage.completed(first, failed());
+    let id = token.id();
+    lineage
+        .resolve(vec![(token, Resolution::Abandon)])
+        .expect("abandon");
+    assert!(lineage.take_token(id).is_none(), "resolved for good");
+    assert_eq!(
+        seen(&lineage.completed(second, failed())),
+        [Seen::Marked(1, second.seq, nullified())],
+        "marked for the open failure only"
+    );
+    assert_eq!(inventory(&lineage), [(first.seq, nullified())]);
+    assert_eq!(
+        marks(&super::markings_of(&lineage, 1)),
+        [(first.seq, nullified()), (second.seq, nullified())]
+    );
+    lineage.0.forget(id);
+    assert!(
+        !lineage.0.failure_markings(id, |_| {}),
+        "popped, and let go"
+    );
+}
+
+/// As for an abandoned failure, a healed one lends the markings it had when the heal took effect:
+/// here a write of a lineage that ended while the heal waited completes failed afterwards.
+#[test]
+fn a_healed_failure_lends_the_markings_it_had_when_the_heal_took_effect() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let minted = lineage.mint(None);
+    let own = ops.push(&mut lineage, 1, A, DEFAULT);
+    lineage.completed(own, FULL);
+    let theirs = ops.push_to(&mut lineage, minted, 1, B, DEFAULT, &[]);
+    let token = tokens(import(&mut lineage)).remove(0);
+    import(&mut lineage);
+    lineage
+        .resolve(vec![(token, Resolution::Heal)])
+        .expect("heal");
+    lineage.end(minted);
+    submitted(lineage.seal(1));
+    let healed = seen(&lineage.flushed(1, A, Ok(())));
+    assert!(
+        healed.contains(&Seen::Marked(0, own.seq, super::COVERED)),
+        "{healed:?}"
+    );
+    assert!(
+        healed
+            .iter()
+            .any(|seen| matches!(seen, Seen::Healed(0, ..))),
+        "{healed:?}"
+    );
+    assert_eq!(
+        seen(&lineage.completed(theirs, failed())),
+        [Seen::Marked(1, theirs.seq, nullified())],
+        "marked for the open failure only"
+    );
+    assert_eq!(inventory(&lineage), [(own.seq, super::COVERED)]);
 }

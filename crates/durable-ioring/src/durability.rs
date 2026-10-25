@@ -279,6 +279,11 @@ enum Standing<E> {
     /// DI-D-46). Healed once it names none. The heal holds the token, so the inventory does not
     /// hand out another.
     Healing { pending: BTreeMap<Key, Release<E>> },
+    /// Abandoned, or healed and the heal taken effect, and its `Abandoned` or `Healed` entry not yet
+    /// popped: it holds what it held, and lends its records, until then (DI-D-108). Its markings
+    /// are those made before `marks_before` in the order observed: a suspect write marked since,
+    /// for another failure, is not one of its.
+    Resolved { marks_before: u64 },
 }
 
 /// What releases a healing failure from one lineage (DI-D-41, DI-D-46): the lineage's first seal
@@ -342,6 +347,7 @@ impl<E: EpochId + 'static, I: Instant> Failure<E, I> {
         match &self.standing {
             Standing::Open => true,
             Standing::Healing { pending } => pending.contains_key(&lineage),
+            Standing::Resolved { .. } => false,
         }
     }
 }
@@ -1095,15 +1101,19 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         }
         let at = self.failures.len() - 1;
         self.hold_suspects(at);
-        let suspect = self.suspect_set(&self.failures[at], tag::DURABILITY_OBSERVE_SUSPECT);
+        #[cfg(test)]
+        let snapshot = self.snapshot(&self.failures[at]);
         tagged(tag::DURABILITY_OBSERVE_EVENT, || {
-            due.events.push(Event::Failed(Failed {
-                id,
-                token,
-                cause,
-                suspect,
-                observed,
-            }));
+            due.events.push(Event::Failed {
+                failed: Failed {
+                    id,
+                    token,
+                    cause,
+                    observed,
+                },
+                #[cfg(test)]
+                snapshot,
+            });
         });
         id
     }
@@ -1112,9 +1122,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// (DI-D-36): one reading of the clock, kept once with the write's record, and a `Marked` for
     /// each failure suspecting it, in observation order.
     fn mark(&mut self, write: OpId, kind: MarkingKind, due: &mut Due<E, T, I>) {
+        let open =
+            |failure: &&Failure<E, I>| !matches!(failure.standing, Standing::Resolved { .. });
         if !self
             .failures
             .iter()
+            .filter(open)
             .any(|failure| self.suspects(failure, write))
         {
             return;
@@ -1126,6 +1139,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         for failure in self
             .failures
             .iter()
+            .filter(open)
             .filter(|failure| self.suspects(failure, write))
         {
             let marking = Marking {
@@ -1143,40 +1157,40 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     }
 
     /// Every marking `failure` has gained, in the order observed: its suspect writes', read from
-    /// their records (DI-D-108).
+    /// their records (DI-D-108), and for a resolved failure only those made before it was.
     fn markings<'a>(
         &'a self,
         failure: &'a Failure<E, I>,
     ) -> impl Iterator<Item = Marking<V<E, I>>> + 'a {
+        let before = match failure.standing {
+            Standing::Resolved { marks_before } => Some(marks_before),
+            Standing::Open | Standing::Healing { .. } => None,
+        };
         self.kept
-            .markings(move |write| self.suspects(failure, write))
+            .markings(move |write| self.suspects(failure, write), before)
     }
 
     /// Resolve as healed every healing failure that holds no lineage any more, each reported by its
-    /// `Healed` entry (DI-D-41).
+    /// `Healed` entry (DI-D-41); it keeps what it holds until that entry is popped (DI-D-108).
     fn release_healed(&mut self, due: &mut Due<E, T, I>) {
-        let mut at = 0;
-        while at < self.failures.len() {
-            if matches!(&self.failures[at].standing, Standing::Healing { pending } if pending.is_empty())
+        for at in 0..self.failures.len() {
+            if !matches!(&self.failures[at].standing, Standing::Healing { pending } if pending.is_empty())
             {
-                let failure = self.failures.remove(at);
-                self.free_tokens.push(failure.token);
-                let markings = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {
-                    self.markings(&failure).collect()
-                });
-                let suspect = self.suspect_set(&failure, tag::DURABILITY_RELEASE_HEALED_SUSPECT);
-                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {
-                    due.events.push(Event::Healed {
-                        failure: failure.id,
-                        suspect,
-                        markings,
-                    });
-                });
-                self.release_suspects(&failure);
-                self.release_reach(failure.reach);
-            } else {
-                at += 1;
+                continue;
             }
+            let failure = self.failures[at].id;
+            #[cfg(test)]
+            let snapshot = self.snapshot(&self.failures[at]);
+            tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {
+                due.events.push(Event::Healed {
+                    failure,
+                    #[cfg(test)]
+                    snapshot,
+                });
+            });
+            self.failures[at].standing = Standing::Resolved {
+                marks_before: self.kept.order(),
+            };
         }
     }
 

@@ -30,7 +30,7 @@ fn a_scripted_commit_failure_blocks_the_epoch_and_names_its_target() {
     };
     assert_eq!(*target, KEY);
     assert_eq!(fault.source, MEMORY);
-    assert_eq!(failed.suspect.writes().len(), 1);
+    assert_eq!(rig.suspected[&failed.id.seq].len(), 1);
     assert!(
         matches!(
             rig.core.epoch_state(rig.epoch(1)),

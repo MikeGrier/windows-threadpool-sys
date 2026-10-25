@@ -10,6 +10,7 @@ use windows_ioring_sys::IoRingErrorExt;
 use super::pushes::{ADDED, GIVEN, Harness, Ring, given, instance, temp};
 use super::{empty, file, setup};
 use durable_ioring::DurableRing;
+use durable_ioring::oracle::{ConformanceOracle, Violation};
 use durable_ioring::{
     DurabilityRequest, Entry, Failed, FailureCause, ImportError, ImportScope, UnknownLineage,
 };
@@ -27,9 +28,13 @@ fn next_failed(harness: &mut Harness) -> Failed<V> {
     }
 }
 
-/// The ops a failure suspects, by sequence number.
-fn suspects(failed: &Failed<V>) -> Vec<u64> {
-    failed.suspect.writes().iter().map(|w| w.op.seq).collect()
+/// The ops a failure suspects, by sequence number, as the ring lends them (DI-D-108).
+fn suspects(harness: &Harness, failed: &Failed<V>) -> Vec<u64> {
+    harness
+        .suspects(failed.id)
+        .iter()
+        .map(|op| op.seq)
+        .collect()
 }
 
 /// Two writes tagged 1 to `GIVEN`, completed, then sealed through 1 with its flush failing.
@@ -113,7 +118,7 @@ fn an_import_suspects_what_its_scope_reaches() {
         let failed = next_failed(&mut harness);
         assert_eq!(failed.id, imported.failure);
         assert!(matches!(failed.cause, FailureCause::Imported { scope: ref s } if *s == scope));
-        assert_eq!(suspects(&failed), expected, "{scope:?}");
+        assert_eq!(suspects(&harness, &failed), expected, "{scope:?}");
     }
     assert_eq!(harness.ring.failures().len(), 4);
     harness.finish();
@@ -149,15 +154,17 @@ fn an_imported_domain_the_instance_was_never_given_is_reported_and_reaches_the_u
         [super::domain("disk-l"), super::domain("disk-9")],
         "in the order named; disk-1 matched"
     );
-    assert_eq!(suspects(&next_failed(&mut harness)), [0, 1]);
+    let failed = next_failed(&mut harness);
+    assert_eq!(suspects(&harness, &failed), [0, 1]);
 
     let only_unknown = harness
         .ring
         .import_failure(ImportScope::Domains(vec![super::domain("disk-l")]))
         .expect("import");
     assert_eq!(only_unknown.unmatched, [super::domain("disk-l")]);
+    let failed = next_failed(&mut harness);
     assert_eq!(
-        suspects(&next_failed(&mut harness)),
+        suspects(&harness, &failed),
         [1],
         "only the file declared with none"
     );
@@ -187,4 +194,33 @@ fn an_armed_failure_is_used_by_its_own_file_only() {
     assert!(matches!(failed.cause, FailureCause::Commit { target, .. } if target == ADDED));
     drop(failed);
     harness.finish();
+}
+
+/// The oracle refuses a `Failed` whose instance will not lend its suspect set: here, another
+/// instance is asked, which holds no records for it (DI-D-108).
+#[test]
+fn the_oracle_refuses_a_failed_whose_suspects_the_ring_will_not_lend() {
+    let (first, second) = (temp(&[0; 16]), temp(&[0; 16]));
+    let mut harness = Harness::new(instance(vec![given(GIVEN, &first)], Vec::new()));
+    let other = Harness::new(instance(vec![given(GIVEN, &second)], Vec::new()));
+    harness.write(GIVEN, 0, b"x", 1, 1);
+    harness.next();
+    harness
+        .ring
+        .import_failure(ImportScope::All)
+        .expect("import");
+    let entry = harness.next_entry();
+    let Entry::Failed(failed) = &entry else {
+        panic!("expected Failed, got {entry:?}");
+    };
+    let mut oracle = ConformanceOracle::<V, u32>::new();
+    assert!(
+        matches!(
+            oracle.observe_from(&other.ring, &entry),
+            Err(Violation::SuspectsNotLent { failure }) if failure == failed.id
+        ),
+        "the other instance holds no records for it"
+    );
+    harness.finish();
+    other.finish();
 }

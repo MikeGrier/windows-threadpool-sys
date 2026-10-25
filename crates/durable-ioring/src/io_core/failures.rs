@@ -10,7 +10,8 @@ use crate::domains::{import_list, import_reach};
 use crate::durability::Reach;
 use crate::ids::{FailureId, FailureToken};
 use crate::types::{
-    FailureCause, FailureInfo, ImportError, ImportScope, Imported, Resolution, ResolveError,
+    FailureCause, FailureInfo, ImportError, ImportScope, Imported, Marking, Resolution,
+    ResolveError, SuspectWrite, UnknownFailure,
 };
 
 /// What an import recorded and made due, or why it was refused.
@@ -76,6 +77,42 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     #[must_use]
     pub fn failures(&self) -> Vec<FailureInfo<V<E, K>>> {
         self.durability.failures()
+    }
+
+    /// Give `visit` each write `failure` suspects, in push order (DI-D-108).
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownFailure`] when the core holds no records for it: another instance's, or resolved
+    /// and its `Abandoned` or `Healed` entry already popped.
+    pub fn failure_suspects(
+        &self,
+        failure: FailureId,
+        visit: impl FnMut(SuspectWrite<V<E, K>>),
+    ) -> Result<(), UnknownFailure<V<E, K>>> {
+        if self.durability.failure_suspects(failure, visit) {
+            Ok(())
+        } else {
+            Err(UnknownFailure(failure))
+        }
+    }
+
+    /// Give `visit` each marking `failure` has gained, in the order observed -- a resolved
+    /// failure's up to its resolution (DI-D-108).
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownFailure`], as [`failure_suspects`](Self::failure_suspects) says.
+    pub fn failure_markings(
+        &self,
+        failure: FailureId,
+        visit: impl FnMut(Marking<V<E, K>>),
+    ) -> Result<(), UnknownFailure<V<E, K>>> {
+        if self.durability.failure_markings(failure, visit) {
+            Ok(())
+        } else {
+            Err(UnknownFailure(failure))
+        }
     }
 
     /// A new token for `failure`, if it is unresolved and its token was dropped.

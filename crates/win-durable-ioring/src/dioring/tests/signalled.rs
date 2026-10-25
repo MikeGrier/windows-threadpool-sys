@@ -89,7 +89,7 @@ fn a_signalled_instance_delivers_nothing_until_the_consumer_drains() {
     let entry = harness.ring.pop().expect("pop").expect("an entry");
     harness
         .oracle
-        .observe(&entry)
+        .observe_from(&harness.ring, &entry)
         .expect("the oracle accepts the entry");
     match entry {
         Entry::Op(done) => assert_eq!(done.id, id),

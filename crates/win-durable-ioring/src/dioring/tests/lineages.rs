@@ -271,8 +271,7 @@ fn an_import_scoped_to_a_lineage_suspects_only_its_writes() {
         harness.ring.import_failure(scope.clone()).expect("import");
         match harness.next_entry() {
             Entry::Failed(failed) => {
-                let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
-                assert_eq!(suspects, expected, "{scope:?}");
+                assert_eq!(harness.suspects(failed.id), expected, "{scope:?}");
             }
             other => panic!("expected Failed, got {other:?}"),
         }

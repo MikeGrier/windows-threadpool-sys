@@ -44,7 +44,7 @@ fn an_import_suspects_the_uncovered_writes_in_scope() {
     };
     assert_eq!(failed.id, imported.failure);
     assert!(matches!(failed.cause, FailureCause::Imported { .. }));
-    assert_eq!(failed.suspect.writes().len(), 1);
+    assert_eq!(rig.suspected[&failed.id.seq].len(), 1);
     let listed = rig.core.failures();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, imported.failure);
@@ -99,8 +99,8 @@ fn an_import_confined_to_a_lineage_suspects_only_its_writes() {
     let [Entry::Failed(failed)] = entries.as_slice() else {
         panic!("one failure: {entries:?}");
     };
-    assert_eq!(failed.suspect.writes().len(), 1);
-    assert_eq!(failed.suspect.writes()[0].epoch.lineage, lineage);
+    assert_eq!(rig.suspected[&failed.id.seq].len(), 1);
+    assert_eq!(rig.suspected[&failed.id.seq][0].epoch.lineage, lineage);
 }
 
 #[test]

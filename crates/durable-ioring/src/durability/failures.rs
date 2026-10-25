@@ -11,7 +11,9 @@ use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::ids::{FailureId, FailureToken};
-use crate::types::{FailureCause, FailureInfo, Resolution, ResolveError, ResolveRefusal};
+use crate::types::{
+    FailureCause, FailureInfo, Marking, Resolution, ResolveError, ResolveRefusal, SuspectWrite,
+};
 
 impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     Durability<E, T, I, K>
@@ -57,12 +59,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             };
             match resolution {
                 Resolution::Abandon => {
-                    let failure = self.failures.remove(index);
-                    self.free_tokens.push(failure.token);
-                    let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {
-                        self.markings(&failure).collect()
-                    });
-                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);
+                    // Out of the table while it is read and its holds are acted on, and back in its
+                    // place once resolved: it holds what it held until its entry is popped.
+                    let mut failure = self.failures.remove(index);
                     let (lists, writes, kept) = (&self.lists, &self.writes, &self.kept);
                     let lineages = &mut self.lineages;
                     for write in suspects(lists, writes, kept, &failure) {
@@ -72,16 +71,20 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                             });
                         }
                     }
+                    #[cfg(test)]
+                    let snapshot = self.snapshot(&failure);
                     tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {
                         due.events.push(Event::Abandoned {
                             failure: failure.id,
-                            suspect,
-                            markings,
+                            #[cfg(test)]
+                            snapshot,
                         });
                     });
                     self.abandon_held(&failure, &mut due);
-                    self.release_suspects(&failure);
-                    self.release_reach(failure.reach);
+                    failure.standing = Standing::Resolved {
+                        marks_before: self.kept.order(),
+                    };
+                    self.failures.insert(index, failure);
                 }
                 Resolution::Heal => {
                     let lineages = &self.lineages;
@@ -117,7 +120,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let failure = self.failures.iter().find(|f| f.id == id)?;
         match failure.standing {
             Standing::Open => FailureToken::mint(id, &self.tokens, failure.token, false),
-            Standing::Healing { .. } => None,
+            Standing::Healing { .. } | Standing::Resolved { .. } => None,
         }
     }
 
@@ -133,27 +136,83 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// Each unresolved failure, in observation order.
     pub(crate) fn failure_infos(&self, mut visit: impl FnMut(FailureInfo<V<E, I>>)) {
         for failure in &self.failures {
+            let token_live = match &failure.standing {
+                Standing::Open => self.tokens.is_live(failure.token, failure.id),
+                Standing::Healing { .. } => true,
+                Standing::Resolved { .. } => continue,
+            };
             let cause = tagged(tag::DURABILITY_FAILURES_CAUSE, || failure.cause.clone());
-            let markings = tagged(tag::DURABILITY_FAILURES_MARKINGS, || {
-                self.markings(failure).collect()
-            });
-            let info = FailureInfo {
+            visit(FailureInfo {
                 id: failure.id,
                 cause,
-                suspect: self.suspect_set(failure, tag::DURABILITY_FAILURES_SUSPECT),
                 observed: failure.observed,
-                markings,
-                token_live: match &failure.standing {
-                    Standing::Open => self.tokens.is_live(failure.token, failure.id),
-                    Standing::Healing { .. } => true,
-                },
-            };
-            visit(info);
+                token_live,
+            });
         }
     }
 
-    /// How many unresolved failures were imported: each counts from its import until it is
-    /// resolved, a heal waiting for its seal included (DI-D-107).
+    /// Give `visit` each write failure `id` suspects, in push order (DI-D-108): `false` if its
+    /// records are not held -- it is not this instance's, or its `Abandoned` or `Healed` was popped.
+    pub(crate) fn failure_suspects(
+        &self,
+        id: FailureId,
+        visit: impl FnMut(SuspectWrite<V<E, I>>),
+    ) -> bool {
+        let Some(failure) = self.failures.iter().find(|failure| failure.id == id) else {
+            return false;
+        };
+        self.visit_suspects(failure, visit);
+        true
+    }
+
+    /// Give `visit` each marking failure `id` has gained, in the order observed, those of a
+    /// resolved failure up to its resolution (DI-D-108): `false` if its records are not held.
+    pub(crate) fn failure_markings(
+        &self,
+        id: FailureId,
+        visit: impl FnMut(Marking<V<E, I>>),
+    ) -> bool {
+        let Some(failure) = self.failures.iter().find(|failure| failure.id == id) else {
+            return false;
+        };
+        self.markings(failure).for_each(visit);
+        true
+    }
+
+    /// The consumer popped failure `id`'s `Abandoned` or `Healed` entry: its records go, and with
+    /// them the places, the token slot and the import's list it held (DI-D-108).
+    pub(crate) fn forget(&mut self, id: FailureId) {
+        let Some(index) = self.failures.iter().position(|failure| {
+            failure.id == id && matches!(failure.standing, Standing::Resolved { .. })
+        }) else {
+            self.inconsistent(
+                "a resolution entry was popped for a failure not resolved",
+                format_args!("failure {id:?}"),
+            );
+            return;
+        };
+        let failure = self.failures.remove(index);
+        self.free_tokens.push(failure.token);
+        self.release_suspects(&failure);
+        self.release_reach(failure.reach);
+    }
+
+    /// `failure`'s records as they stand, for a test to compare with an event about it.
+    #[cfg(test)]
+    pub(super) fn snapshot(
+        &self,
+        failure: &super::Failure<E, I>,
+    ) -> super::exchange::Snapshot<E, I> {
+        let mut suspect = Vec::new();
+        self.visit_suspects(failure, |write| suspect.push(write));
+        super::exchange::Snapshot {
+            suspect,
+            markings: self.markings(failure).collect(),
+        }
+    }
+
+    /// How many imported failures the table holds: each counts from its import until its
+    /// resolution entry is popped, a heal waiting for its seal included (DI-D-107, DI-D-108).
     pub(crate) fn imports(&self) -> usize {
         self.failures
             .iter()

@@ -53,7 +53,7 @@ pub(super) fn next(harness: &mut Harness) -> RingEntry {
         if let Some(entry) = harness.ring.pop().expect("pop") {
             harness
                 .oracle
-                .observe(&entry)
+                .observe_from(&harness.ring, &entry)
                 .expect("the oracle accepts the entry");
             return entry;
         }
@@ -156,7 +156,7 @@ fn a_pump_reports_the_error_of_a_wait_that_fails_and_drains_all_the_same() {
     assert!(matches!(entry, Entry::Op(_)), "drained all the same");
     harness
         .oracle
-        .observe(&entry)
+        .observe_from(&harness.ring, &entry)
         .expect("the oracle accepts the entry");
     harness.finish();
 }
@@ -387,7 +387,7 @@ fn a_pumped_instance_offers_the_rings_own_event_to_wait_on_before_it_pumps() {
         .expect("the entry the pump made");
     harness
         .oracle
-        .observe(&entry)
+        .observe_from(&harness.ring, &entry)
         .expect("the oracle accepts the entry");
     match entry {
         Entry::Op(done) => assert_eq!(done.id, id),

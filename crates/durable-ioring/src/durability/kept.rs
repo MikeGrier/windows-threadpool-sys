@@ -137,14 +137,22 @@ impl<E: EpochId + 'static, I: Instant> Kept<E, I> {
         self.records.values().map(|record| &record.write)
     }
 
-    /// Every marking of a write `suspects` picks, in the order observed.
+    /// The place in the order observed the next marking will take.
+    pub(super) fn order(&self) -> u64 {
+        self.next
+    }
+
+    /// Every marking of a write `suspects` picks, in the order observed: only those made before
+    /// `before` in that order, if given.
     pub(super) fn markings<'a>(
         &'a self,
         suspects: impl Fn(OpId) -> bool + 'a,
+        before: Option<u64>,
     ) -> impl Iterator<Item = Marking<DioringIds<E, I>>> + 'a {
         self.marked
-            .values()
-            .filter_map(|op| self.records.get(op))
+            .iter()
+            .take_while(move |(order, _)| before.is_none_or(|before| **order < before))
+            .filter_map(|(_, op)| self.records.get(op))
             .filter(move |record| suspects(record.write.op))
             .filter_map(|record| {
                 let (_, observed, kind) = record.marking.as_ref()?;

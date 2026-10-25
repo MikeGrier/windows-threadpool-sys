@@ -112,6 +112,23 @@ impl<V: Identities> fmt::Display for UnknownLineage<V> {
 
 impl<V: Identities> core::error::Error for UnknownLineage<V> {}
 
+/// A failure whose records the instance does not hold: not one of its own, or resolved and its
+/// `Abandoned` or `Healed` entry already popped (DI-D-108).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownFailure<V: Identities>(pub V::FailureId);
+
+impl<V: Identities> fmt::Display for UnknownFailure<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:?} is not a failure whose records this instance holds",
+            self.0
+        )
+    }
+}
+
+impl<V: Identities> core::error::Error for UnknownFailure<V> {}
+
 /// Why an `import_failure` was refused; nothing was recorded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImportError<V: Identities> {
@@ -166,24 +183,6 @@ pub struct SuspectWrite<V: Identities> {
     pub target: IoTargetKey,
     /// The epoch it was tagged with.
     pub epoch: Epoch<V>,
-}
-
-/// A failure's suspect set: frozen when the failure is observed, shared rather than copied. It never
-/// gains a write; what happens to its writes afterwards is recorded as [`Marking`]s (DI-D-36).
-#[derive(Clone, Debug)]
-pub struct SuspectSet<V: Identities>(Arc<[SuspectWrite<V>]>);
-
-impl<V: Identities> SuspectSet<V> {
-    /// Freeze `writes`, in push order.
-    pub(crate) fn new(writes: Vec<SuspectWrite<V>>) -> Self {
-        Self(tagged(tag::TYPES_SUSPECT_SET_NEW, || writes.into()))
-    }
-
-    /// The set's writes. The one borrow the API returns, into frozen shared data that nothing
-    /// can change.
-    pub fn writes(&self) -> &[SuspectWrite<V>] {
-        &self.0
-    }
 }
 
 /// Where an imported failure lands (DI-2.10 point 5).
@@ -310,6 +309,9 @@ pub enum FailureCause<V: Identities> {
 }
 
 /// The payload of a `Failed` entry: the one place a token is dispensed besides the inventory.
+/// The writes it put at risk -- its suspect set, frozen now and never gaining a write (DI-D-12
+/// (b)) -- are lent by the instance's `failure_suspects`, which reads the instance's own records
+/// rather than a copy (DI-D-108).
 #[derive(Debug)]
 pub struct Failed<V: Identities> {
     /// The failure's identity.
@@ -318,8 +320,6 @@ pub struct Failed<V: Identities> {
     pub token: V::FailureToken,
     /// Why it exists.
     pub cause: FailureCause<V>,
-    /// The writes it put at risk.
-    pub suspect: SuspectSet<V>,
     /// When the instance observed it, read from the clock the instance stamps with (DI-D-37,
     /// DI-D-50): interrupt time for the Windows driver, whose resolution is the system clock tick,
     /// so failures observed within one tick carry equal stamps.
@@ -427,26 +427,20 @@ pub enum Entry<V: Identities, B, C> {
         /// The failure in the way.
         by: V::FailureId,
     },
-    /// The consumer abandoned a failure: its final record.
+    /// The consumer abandoned a failure, and its suspect writes are declared lost. Its records --
+    /// its suspect writes, and every marking it gained up to this resolution -- are lent by
+    /// `failure_suspects` and `failure_markings` until this entry is popped, and the failure holds
+    /// what it held until then (DI-D-108). A suspect write still in flight now is reported only by
+    /// its own completion (DI-D-47).
     Abandoned {
         /// The failure abandoned.
         failure: V::FailureId,
-        /// Its suspect set, now declared lost.
-        suspect: SuspectSet<V>,
-        /// Every marking it gained up to this resolution, in the order observed. A suspect write
-        /// still in flight now is reported only by its own completion (DI-D-47).
-        markings: Vec<Marking<V>>,
     },
-    /// A heal took effect (DI-D-12 (c)): the failure is resolved as healed, and this is its final
-    /// record.
+    /// A heal took effect (DI-D-12 (c)): the failure is resolved as healed. Its records are lent
+    /// until this entry is popped, as `Abandoned`'s are.
     Healed {
         /// The failure healed.
         failure: V::FailureId,
-        /// Its suspect set.
-        suspect: SuspectSet<V>,
-        /// Every marking it gained up to this resolution, in the order observed. A suspect write
-        /// still in flight now is reported only by its own completion (DI-D-47).
-        markings: Vec<Marking<V>>,
     },
     /// A failure not yet resolved gained a marking.
     Marked {
@@ -696,19 +690,16 @@ pub struct ResolveError<V: Identities> {
     pub returned: Vec<(V::FailureToken, Resolution)>,
 }
 
-/// One unresolved failure, as the inventory reports it. Owned, so holding it borrows nothing.
+/// One unresolved failure, as the inventory reports it. Its suspect writes and markings are lent
+/// by the instance's `failure_suspects` and `failure_markings` (DI-D-108).
 #[derive(Clone, Debug)]
 pub struct FailureInfo<V: Identities> {
     /// The failure's identity.
     pub id: V::FailureId,
     /// Why it exists.
     pub cause: FailureCause<V>,
-    /// The writes it put at risk.
-    pub suspect: SuspectSet<V>,
     /// When the instance observed it: the same stamp its `Failed` entry carried.
     pub observed: V::Instant,
-    /// Every marking it has gained, in the order observed.
-    pub markings: Vec<Marking<V>>,
     /// Whether its token is held somewhere; if not, the inventory can hand one out.
     pub token_live: bool,
 }
@@ -806,8 +797,9 @@ pub struct IoTargetBusy {
     /// busy while any lineage has such a write. Cleared by `make_durable_through` at or above
     /// each.
     pub uncovered: usize,
-    /// Unresolved failures whose suspect sets include writes to the file. Cleared by resolving
-    /// them: heal and seal again, or abandon.
+    /// Failures whose suspect sets include writes to the file. Cleared by resolving them -- heal
+    /// and seal again, or abandon -- and popping the `Healed` or `Abandoned` entry each reports
+    /// (DI-D-108).
     pub failures: usize,
 }
 
@@ -838,7 +830,7 @@ impl fmt::Display for IoTargetBusy {
         if self.failures > 0 {
             write!(
                 f,
-                " writes suspect in {} unresolved failure(s), heal or abandon them;",
+                " writes suspect in {} failure(s), resolve them and pop what that reports;",
                 self.failures
             )?;
         }

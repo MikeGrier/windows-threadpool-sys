@@ -95,11 +95,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.3.3** -- A failure's suspects, its epochs and a heal's pending lineages are read from the write records by the rule observation applied, over a failure clock each record reads twice. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231233)
 
-- [ ] **DI-23.12.3.4** -- **A failure's records lent by a scoped borrow** ([DI-D-108](DESIGN-NOTES.md#di-d-108)):
-  `Failed`, `Abandoned`, `Healed` and `FailureInfo` carry the failure's identity, token, cause and stamp, and its suspect
-  writes and markings are lent for the duration of a visitor; a resolved failure's records are kept until its `Abandoned`
-  or `Healed` is popped. Breaking for both crates; CONTRACT.md, the READMEs' examples, and the oracle follow. The
-  inventory itself -- `failures()` handing out a `Vec` of copied causes -- is `DI-23.12.3.7`.
+- [x] **DI-23.12.3.4** -- A failure's suspect writes and markings are lent to a visitor from the instance's own records, held until its Abandoned or Healed is popped, and no entry or inventory row carries them. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231234)
 
 - [ ] **DI-23.12.3.5** -- **The completion queue and a change's entries within derived bounds**
   ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s third item): a `Marked` queued once per marked write and expanded at pop into one

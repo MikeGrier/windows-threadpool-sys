@@ -8,7 +8,18 @@ use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::domains::DomainId;
 use crate::ids::{FailureId, InstanceId, Lineage, OpId};
-use crate::types::{Entry, Epoch, Failed, IoFault, IoTargetKey, Marking, SuspectSet};
+#[cfg(test)]
+use crate::types::SuspectWrite;
+use crate::types::{Entry, Epoch, Failed, IoFault, IoTargetKey, Marking};
+
+/// A failure's records as they stood when an event about it was made, for a test to compare: the
+/// entries carry none (DI-D-108).
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct Snapshot<E: EpochId + 'static, I: Instant> {
+    pub(crate) suspect: Vec<SuspectWrite<V<E, I>>>,
+    pub(crate) markings: Vec<Marking<V<E, I>>>,
+}
 
 /// A flush now due: `lineage`'s seal `through`'s flush of `file`, through `target`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,16 +42,20 @@ pub(crate) enum Event<E: EpochId + 'static, I: Instant> {
         through: E,
         by: FailureId,
     },
-    Failed(Failed<V<E, I>>),
+    Failed {
+        failed: Failed<V<E, I>>,
+        #[cfg(test)]
+        snapshot: Snapshot<E, I>,
+    },
     Abandoned {
         failure: FailureId,
-        suspect: SuspectSet<V<E, I>>,
-        markings: Vec<Marking<V<E, I>>>,
+        #[cfg(test)]
+        snapshot: Snapshot<E, I>,
     },
     Healed {
         failure: FailureId,
-        suspect: SuspectSet<V<E, I>>,
-        markings: Vec<Marking<V<E, I>>>,
+        #[cfg(test)]
+        snapshot: Snapshot<E, I>,
     },
     Marked {
         failure: FailureId,
@@ -82,25 +97,9 @@ impl<E: EpochId + 'static, I: Instant> Event<E, I> {
                 through: Epoch::new(name(lineage), through),
                 by,
             },
-            Event::Failed(failed) => Entry::Failed(failed),
-            Event::Abandoned {
-                failure,
-                suspect,
-                markings,
-            } => Entry::Abandoned {
-                failure,
-                suspect,
-                markings,
-            },
-            Event::Healed {
-                failure,
-                suspect,
-                markings,
-            } => Entry::Healed {
-                failure,
-                suspect,
-                markings,
-            },
+            Event::Failed { failed, .. } => Entry::Failed(failed),
+            Event::Abandoned { failure, .. } => Entry::Abandoned { failure },
+            Event::Healed { failure, .. } => Entry::Healed { failure },
             Event::Marked { failure, marking } => Entry::Marked { failure, marking },
             Event::LineageEnded {
                 lineage,
