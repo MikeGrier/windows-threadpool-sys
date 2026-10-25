@@ -80,6 +80,7 @@ mod empties;
 mod exchange;
 mod files;
 mod gates;
+mod kept;
 mod lineages;
 mod providers;
 mod scratch;
@@ -89,6 +90,7 @@ mod window;
 
 use crate::ordered::Ordered;
 use empties::{Empty, release_heals};
+use kept::Kept;
 use scratch::Scratch;
 use spans::{Span, SpanFile, Spans};
 use tables::{Counts, Seals};
@@ -290,7 +292,6 @@ struct Failure<E: EpochId + 'static, I: Instant> {
     cause: FailureCause<V<E, I>>,
     suspect: SuspectSet<V<E, I>>,
     observed: I,
-    markings: Vec<Marking<V<E, I>>>,
     /// The epochs of its suspect writes, by lineage: the lineages it belongs to.
     epochs: BTreeMap<Key, BTreeSet<E>>,
     standing: Standing<E>,
@@ -415,6 +416,8 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     window: Window,
     /// The unresolved failures, in observation order.
     failures: Vec<Failure<E, I>>,
+    /// Writes no longer uncovered that an unresolved failure still suspects, with their markings.
+    kept: Kept<I>,
     next_failure: u64,
     /// The operations held for their gates, by push order.
     held: Ordered<u64, HeldOp<E, T>>,
@@ -561,6 +564,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         let failures = tagged(tag::DURABILITY_NEW_FAILURES, || {
             list("the unresolved failures", capacity.failures(served))
         })?;
+        let kept = tagged(tag::DURABILITY_NEW_KEPT, || Kept::new(capacity.operations))?;
         let spare = tagged(tag::DURABILITY_NEW_DUE, || Due::reserved(capacity))?;
         let scratch = Scratch::new(capacity, served)?;
         Ok(Self {
@@ -575,6 +579,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             spans,
             window,
             failures,
+            kept,
             next_failure: 0,
             held,
             served: tagged(tag::DURABILITY_NEW_SERVED, || Arc::from([])),
@@ -1014,6 +1019,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             match resolution {
                 Resolution::Abandon => {
                     let failure = self.failures.remove(index);
+                    let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {
+                        self.markings(&failure).collect()
+                    });
                     self.release_suspects(&failure.suspect);
                     for (lineage, epochs) in &failure.epochs {
                         if let Some(state) = self.lineages.get_mut(lineage) {
@@ -1026,7 +1034,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                         due.events.push(Event::Abandoned {
                             failure: failure.id,
                             suspect: failure.suspect,
-                            markings: failure.markings,
+                            markings,
                         });
                     });
                     self.abandon_held(&failure.epochs, &mut due);
@@ -1083,7 +1091,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         for failure in &self.failures {
             let cause = tagged(tag::DURABILITY_FAILURES_CAUSE, || failure.cause.clone());
             let markings = tagged(tag::DURABILITY_FAILURES_MARKINGS, || {
-                failure.markings.clone()
+                self.markings(failure).collect()
             });
             let info = FailureInfo {
                 id: failure.id,
@@ -1165,7 +1173,6 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             cause: recorded_cause,
             suspect: suspect.clone(),
             observed,
-            markings: Vec::new(),
             epochs,
             standing: Standing::Open(live),
         };
@@ -1189,24 +1196,27 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         id
     }
 
-    /// Mark every unresolved failure that suspects `write` (DI-D-36), with one reading of the
-    /// clock, in observation order.
+    /// Mark `write`, which has just stopped being uncovered, if an unresolved failure suspects it
+    /// (DI-D-36): one reading of the clock, kept once with the write's record, and a `Marked` for
+    /// each failure suspecting it, in observation order.
     fn mark(&mut self, write: OpId, kind: MarkingKind, due: &mut Due<E, T, I>) {
-        let mut observed = None;
-        for failure in &mut self.failures {
-            if !failure.suspects(write) {
-                continue;
-            }
+        if !self.failures.iter().any(|failure| failure.suspects(write)) {
+            return;
+        }
+        let observed = tagged(tag::DURABILITY_MARK_CLOCK, || self.clock.now());
+        if let Err(what) = self.kept.mark(write, observed, kind.clone()) {
+            self.inconsistent(what, format_args!("write {write:?}, {kind:?}"));
+        }
+        for failure in self
+            .failures
+            .iter()
+            .filter(|failure| failure.suspects(write))
+        {
             let marking = Marking {
                 write,
-                observed: *observed
-                    .get_or_insert_with(|| tagged(tag::DURABILITY_MARK_CLOCK, || self.clock.now())),
+                observed,
                 kind: kind.clone(),
             };
-            let recorded = marking.clone();
-            tagged(tag::DURABILITY_MARK_MARKING, || {
-                failure.markings.push(recorded)
-            });
             tagged(tag::DURABILITY_MARK_EVENT, || {
                 due.events.push(Event::Marked {
                     failure: failure.id,
@@ -1214,6 +1224,15 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 });
             });
         }
+    }
+
+    /// Every marking `failure` has gained, in the order observed: its suspect writes', read from
+    /// their records (DI-D-108).
+    fn markings<'a>(
+        &'a self,
+        failure: &'a Failure<E, I>,
+    ) -> impl Iterator<Item = Marking<V<E, I>>> + 'a {
+        self.kept.markings(move |write| failure.suspects(write))
     }
 
     /// Resolve as healed every healing failure that holds no lineage any more, each reported by its
@@ -1224,12 +1243,15 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             if matches!(&self.failures[at].standing, Standing::Healing { pending } if pending.is_empty())
             {
                 let failure = self.failures.remove(at);
+                let markings = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {
+                    self.markings(&failure).collect()
+                });
                 self.release_suspects(&failure.suspect);
                 tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {
                     due.events.push(Event::Healed {
                         failure: failure.id,
                         suspect: failure.suspect,
-                        markings: failure.markings,
+                        markings,
                     });
                 });
             } else {

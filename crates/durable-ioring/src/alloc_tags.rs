@@ -158,6 +158,10 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_FLUSH_PAIRS: Tag = Tag::new("durability::new::flush_pairs");
     pub(crate) const DURABILITY_NEW_SERVED_NAMES: Tag = Tag::new("durability::new::served_names");
     pub(crate) const DURABILITY_NEW_FAILURES: Tag = Tag::new("durability::new::failures");
+    pub(crate) const DURABILITY_NEW_KEPT: Tag = Tag::new("durability::new::kept");
+    pub(crate) const DURABILITY_RESOLVE_MARKINGS: Tag = Tag::new("durability::resolve::markings");
+    pub(crate) const DURABILITY_RELEASE_HEALED_MARKINGS: Tag =
+        Tag::new("durability::release_healed::markings");
     pub(crate) const DURABILITY_NEW_DUE: Tag = Tag::new("durability::new::due");
     pub(crate) const DURABILITY_FRESH_DUE: Tag = Tag::new("durability::fresh::due");
     pub(crate) const DURABILITY_NEW_SCRATCH_LIVE: Tag = Tag::new("durability::new::scratch_live");
@@ -184,7 +188,6 @@ pub(crate) mod tag {
         Tag::new("durability::observe::epochs_epoch");
     pub(crate) const DURABILITY_OBSERVE_CAUSE: Tag = Tag::new("durability::observe::cause");
     pub(crate) const DURABILITY_OBSERVE_EVENT: Tag = Tag::new("durability::observe::event");
-    pub(crate) const DURABILITY_MARK_MARKING: Tag = Tag::new("durability::mark::marking");
     pub(crate) const DURABILITY_MARK_EVENT: Tag = Tag::new("durability::mark::event");
     pub(crate) const DURABILITY_RELEASE_HEALED_EVENT: Tag =
         Tag::new("durability::release_healed::event");

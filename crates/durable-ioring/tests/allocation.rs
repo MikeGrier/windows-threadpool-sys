@@ -568,7 +568,7 @@ fn failures() -> Vec<Measured> {
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
-    ("construction, with two targets", 34),
+    ("construction, with two targets", 36),
     ("writes, first round", 3),
     ("write completions, first round", 3),
     ("pops, first round", 0),
@@ -602,13 +602,13 @@ const CLEAN: &[(&str, u64)] = &[
 
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
-    ("construction, with two targets", 34),
+    ("construction, with two targets", 36),
     ("writes before the failure", 6),
-    ("a commit failure observed", 9),
-    ("failures queried", 2),
+    ("a commit failure observed", 7),
+    ("failures queried", 3),
     ("writes re-issued", 0),
     ("a heal resolved", 2),
-    ("the heal taking effect at the next seal", 0),
+    ("the heal taking effect at the next seal", 2),
     ("writes before the import", 0),
     ("a failure imported", 7),
     ("an abandon resolved", 1),
@@ -672,6 +672,7 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "durability::new::failures",
         1,
     ),
+    ("construction, with two targets", "durability::new::kept", 2),
     ("construction, with two targets", "durability::new::due", 4),
     (
         "construction, with two targets",
@@ -809,6 +810,7 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "durability::new::failures",
         1,
     ),
+    ("construction, with two targets", "durability::new::kept", 2),
     ("construction, with two targets", "durability::new::due", 4),
     (
         "construction, with two targets",
@@ -902,10 +904,14 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     ),
     ("a commit failure observed", "ids::failure_token::mint", 1),
     ("a commit failure observed", "types::suspect_set::new", 1),
-    ("a commit failure observed", "durability::mark::marking", 2),
     ("failures queried", "durability::failures::infos", 1),
-    ("failures queried", "durability::failures::markings", 1),
+    ("failures queried", "durability::failures::markings", 2),
     ("a heal resolved", "durability::resolve::heal_pending", 2),
+    (
+        "the heal taking effect at the next seal",
+        "durability::release_healed::markings",
+        2,
+    ),
     ("a failure imported", "durability::observe::suspect", 3),
     (
         "a failure imported",

@@ -143,6 +143,13 @@ impl Window {
         Ok(())
     }
 
+    /// Whether an unresolved failure suspects operation `op`.
+    pub(super) fn suspected(&self, op: u64) -> bool {
+        self.places
+            .get(&op)
+            .is_some_and(|holds| holds.suspected > 0)
+    }
+
     /// The operations whose place `holder` holds, and, for failures, how many hold each.
     #[cfg(test)]
     pub(super) fn held_by(&self, holder: Holder) -> std::collections::BTreeMap<u64, u32> {
@@ -211,6 +218,9 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         for write in suspect.writes() {
             let released = self.window.release(write.op.seq, Holder::Suspect);
             self.window_inconsistent(released, write.op);
+            if !self.window.suspected(write.op.seq) {
+                self.kept.release(write.op.seq);
+            }
         }
     }
 
@@ -231,7 +241,8 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
 
     /// Whether the places the writes, the failures and the seals hold are exactly the uncovered
     /// writes, each write once for every unresolved failure suspecting it, and the write each
-    /// recorded seal pins.
+    /// recorded seal pins; and whether the kept records are exactly the suspected writes no longer
+    /// uncovered (DI-D-108).
     #[cfg(test)]
     pub(super) fn window_agrees(&self) -> bool {
         let uncovered = self.writes.keys().map(|&op| (op, 1)).collect();
@@ -247,9 +258,15 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             .filter_map(|seal| seal.pin)
             .map(|op| (op, 1))
             .collect();
+        let kept: std::collections::BTreeSet<u64> = suspected
+            .keys()
+            .copied()
+            .filter(|op| self.writes.get(op).is_none())
+            .collect();
         self.window.held_by(Holder::Uncovered) == uncovered
             && self.window.held_by(Holder::Suspect) == suspected
             && self.window.held_by(Holder::Seal) == pinned
+            && self.kept.ops().collect::<std::collections::BTreeSet<_>>() == kept
     }
 
     /// The operations whose place the operation itself holds.

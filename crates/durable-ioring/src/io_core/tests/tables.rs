@@ -375,3 +375,40 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
     assert!(rig.core.failures().is_empty());
     assert_eq!(rig.core.window_places(), 0);
 }
+
+#[test]
+fn kept_writes_fill_to_the_operations_declared() {
+    // A failure suspects every write declared, and one commit covers them all while it does: each
+    // is kept, with its marking, until the failure is resolved.
+    let mut rig = Rig::over(core_with(tight(4)));
+    rig.attach(KEY, MemoryTarget::new());
+    for offset in 0..4 {
+        rig.write_to(KEY, 1, offset, b"x").expect("room");
+    }
+    rig.run();
+    let (_, actions) = rig
+        .core
+        .import_failure(crate::types::ImportScope::All)
+        .expect("room");
+    rig.act(actions);
+    rig.seal(1);
+    rig.run();
+    let token = rig
+        .entries()
+        .into_iter()
+        .find_map(|entry| match entry {
+            crate::types::Entry::Failed(failed) => Some(failed.token),
+            _ => None,
+        })
+        .expect("the import's entry");
+    let failures = rig.core.failures();
+    assert_eq!(failures[0].markings.len(), 4, "each kept write's marking");
+    assert_eq!(rig.core.window_places(), 4, "each kept for the failure");
+    let actions = rig
+        .core
+        .resolve(vec![(token, crate::types::Resolution::Abandon)])
+        .expect("resolved");
+    rig.act(actions);
+    rig.entries();
+    assert_eq!(rig.core.window_places(), 0);
+}

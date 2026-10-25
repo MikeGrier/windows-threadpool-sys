@@ -426,16 +426,16 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal's final record is the one DI-D-36 found missing: the failure leaves the inventory, and with no entry its record is lost.",
-      "find": ["                let failure = self.failures.remove(at);","                self.release_suspects(&failure.suspect);","                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {","                    due.events.push(Event::Healed {","                        failure: failure.id,","                        suspect: failure.suspect,","                        markings: failure.markings,","                    });","                });"],
-      "replace": ["                let failure = self.failures.remove(at);","                self.release_suspects(&failure.suspect);","                drop(failure);"]
+      "find": ["                self.release_suspects(&failure.suspect);\n                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {\n                    due.events.push(Event::Healed {\n                        failure: failure.id,\n                        suspect: failure.suspect,\n                        markings,\n                    });\n                });\n"],
+      "replace": ["                self.release_suspects(&failure.suspect);\n                drop::<(_, Vec<_>)>((failure, markings));\n"]
     },
     {
       "name": "DI-3.2.4.2: the inventory reports no markings",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "The inventory is where a consumer reads a live failure's record; reporting it without its markings hides what the stream already said.",
-      "find": ["                failure.markings.clone()"],
-      "replace": ["                Vec::new()"]
+      "find": ["                self.markings(failure).collect()\n"],
+      "replace": ["                Vec::new()\n"]
     },
     {
       "name": "DI-3.10.3.2: the oracle accepts a nullifier with any fault",
@@ -2336,8 +2336,8 @@
       "file": "src/durability/spans.rs",
       "expect": "survives",
       "why": "The control. Which lost write the inconsistency names, when several are lost in one let-go, changes no state and no outcome; a test failing here would be asserting the message's choice of example.",
-      "find": ["                if let Some(what) = forget(spans, window, &write) {\n                    lost.get_or_insert((what, write.op));\n"],
-      "replace": ["                if let Some(what) = forget(spans, window, &write) {\n                    lost = Some((what, write.op));\n"]
+      "find": ["                if let Some(what) = forget(spans, window, kept, &write) {\n                    lost.get_or_insert((what, write.op));\n"],
+      "replace": ["                if let Some(what) = forget(spans, window, kept, &write) {\n                    lost = Some((what, write.op));\n"]
     },
     {
       "name": "DI-23.7: every seal is recorded",
@@ -2432,16 +2432,16 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Resolving a failure lets go of the places it held; one that never does leaves them counted for ever and shrinks the window for good.",
-      "find": ["                    let failure = self.failures.remove(index);", "                    self.release_suspects(&failure.suspect);"],
-      "replace": ["                    let failure = self.failures.remove(index);"]
+      "find": ["                    self.release_suspects(&failure.suspect);\n                    for (lineage, epochs) in &failure.epochs {\n"],
+      "replace": ["                    for (lineage, epochs) in &failure.epochs {\n"]
     },
     {
       "name": "DI-23.8.1: a healed failure keeps its places",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal that takes effect resolves its failure as an abandon does; its places must go with it.",
-      "find": ["                let failure = self.failures.remove(at);", "                self.release_suspects(&failure.suspect);"],
-      "replace": ["                let failure = self.failures.remove(at);"]
+      "find": ["                self.release_suspects(&failure.suspect);\n                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {\n"],
+      "replace": ["                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {\n"]
     },
     {
       "name": "DI-23.8.1: a write that is no longer uncovered keeps its place",
@@ -3218,6 +3218,70 @@
       "why": "A write's parts are its file's flush and each served domain of its file, and each can fail once, so the observed failures are the places times one plus the served domains.",
       "find": ["        self.flush_parts(served)?.checked_add(self.imports)"],
       "replace": ["        self.flush_parts(0)?.checked_add(self.imports)"]
+    },
+    {
+      "name": "DI-23.12.3.2: the kept writes are made one short",
+      "file": "src/durability/kept.rs",
+      "expect": "caught",
+      "why": "A kept write holds a place while a failure suspects it, so the records reach the operations declared; one short refuses inside the bound, an inconsistency.",
+      "find": ["            records: ordered(\"the kept writes\", Some(operations))?,"],
+      "replace": ["            records: ordered(\"the kept writes\", Some(operations - 1))?,"]
+    },
+    {
+      "name": "DI-23.12.3.2: a suspected write is not kept when it stops being uncovered",
+      "file": "src/durability/spans.rs",
+      "expect": "caught",
+      "why": "A failure keeps no copy of its suspects, so a write it suspects must keep its record past coverage, or its marking has nowhere to go.",
+      "find": ["    if window.suspected(write.op.seq)\n"],
+      "replace": ["    if false && window.suspected(write.op.seq)\n"]
+    },
+    {
+      "name": "DI-23.12.3.2: a resolved failure leaves its kept writes",
+      "file": "src/durability/window.rs",
+      "expect": "caught",
+      "why": "A record is kept while a failure suspects its write; once the last is resolved it is let go, or the records outlive the places that bound them.",
+      "find": ["                self.kept.release(write.op.seq);\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.3.2: a marking is not kept",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A failure's markings are read from its suspects' records, so a marking not written there is lost from the inventory and the resolution entries.",
+      "find": ["        if let Err(what) = self.kept.mark(write, observed, kind.clone()) {"],
+      "replace": ["        if let Err(what) = Ok::<(), &str>(()) {"]
+    },
+    {
+      "name": "DI-23.12.3.2: a write no failure suspects is marked",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Only a suspected write is kept, so marking one no failure suspects marks a write with no record, an inconsistency.",
+      "find": ["        if !self.failures.iter().any(|failure| failure.suspects(write)) {\n            return;\n        }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.3.2: a released write's marking keeps its room",
+      "file": "src/durability/kept.rs",
+      "expect": "caught",
+      "why": "The markings table is made for the kept writes, so a released write must give its marking room back with it.",
+      "find": ["            self.marked.remove(&order);\n"],
+      "replace": ["            let _ = order;\n"]
+    },
+    {
+      "name": "DI-23.12.3.2: an abandoned failure's markings are read after its writes are released",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Releasing a failure's suspects lets go of the records its markings are read from, so they are read first.",
+      "find": ["                    let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {\n                        self.markings(&failure).collect()\n                    });\n                    self.release_suspects(&failure.suspect);\n"],
+      "replace": ["                    self.release_suspects(&failure.suspect);\n                    let markings: Vec<_> = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {\n                        self.markings(&failure).collect()\n                    });\n"]
+    },
+    {
+      "name": "DI-23.12.3.2: a healed failure's markings are read after its writes are released",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "As for an abandoned failure: the records its markings are read from go with its suspects.",
+      "find": ["                let markings = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {\n                    self.markings(&failure).collect()\n                });\n                self.release_suspects(&failure.suspect);\n"],
+      "replace": ["                self.release_suspects(&failure.suspect);\n                let markings: Vec<_> = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {\n                    self.markings(&failure).collect()\n                });\n"]
     }
   ]
 }

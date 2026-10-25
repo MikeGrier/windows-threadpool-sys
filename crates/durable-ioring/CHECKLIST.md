@@ -91,12 +91,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.3.1** -- The unresolved failures are kept in a table made at construction for the flush parts plus the imports, with the bound argued and filled by a test. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231231)
 
-- [ ] **DI-23.12.3.2** -- **Write records kept while a failure could name them, each with its marking once**
-  ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a write that stops being uncovered -- covered, nullified, or let go with its
-  lineage -- keeps its record, marked with where it stopped and, once, with its marking, for as long as an unresolved
-  failure suspects it; the table holds at most a record for each place, which the places already bound. A failure's
-  markings are read from its suspects' records in observation order, so `mark` writes one marking and none per failure.
-  Internal: the inventory and the resolution entries still copy the markings out until `DI-23.12.3.4`.
+- [x] **DI-23.12.3.2** -- A suspected write keeps its record and its marking once, in a table made at construction for the operations, and a failure's markings are read from those records. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231232)
 
 - [ ] **DI-23.12.3.3** -- **The suspect set as the rule that made it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s second
   item): a failure keeps its cut, its reach, its lineage if one was named, and what else observation filtered on, and a

@@ -2300,7 +2300,12 @@ notes when it is created.
   are scoped by reach and lineage, so a pause would stop lineages the contract says carry on. A resolved failure's records
   are kept until its `Abandoned` or `Healed` entry is popped.
 - **A marking is kept once per write.** `mark` takes one clock reading and one kind for every failure suspecting the write,
-  so each failure's marking of it is the same.
+  so each failure's marking of it is the same. **As built** (DI-23.12.3.2): a write that stops being uncovered while
+  some unresolved failure suspects it keeps a record in a table made at construction for `operations`, since a suspected
+  write holds its place; the argument is at the table's module. `mark` returns at once for a write nothing suspects,
+  and otherwise writes the marking to the record once; a failure's markings are read from its suspects' records in the
+  order they were marked. A record is let go when the last failure suspecting its write is resolved. The inventory and
+  the resolution entries still copy the markings out, until DI-23.12.3.4.
 - **A lineage handle and a failure token are slots**: an index and a generation into storage made when the instance is
   built, holding the handle's count of copies and the token's liveness flag as atomics, reached without the engine's lock
   as the handle's home is today. Minting, cloning and dropping either allocates nothing; `mint_lineage` still refuses at
@@ -2322,8 +2327,9 @@ notes when it is created.
   domains, and imported ones at most `imports`; the storage is sized from those. **As built** (DI-23.12.3.1): the
   failure table is a list made at construction for `Capacity::failures`, kept in observation order, a failure past it an
   inconsistency; the argument is at that function, and an answer for a lineage no longer live -- a flush's, a provider's,
-  failed or abandoned -- observes nothing, which a test shows. Each failure's own suspect list, markings and epochs
-  still allocate, until DI-23.12.3.2 and DI-23.12.3.3.
+  failed or abandoned -- observes nothing, which a test shows. Each failure's own suspect list and epochs still
+  allocate, until DI-23.12.3.3; its markings are kept on the write records since DI-23.12.3.2
+  ([DI-D-108](#di-d-108)'s as built).
 - **A failure's suspect set is the rule that made it** -- its cut, its reach, its lineage -- over write records that keep
   where they stopped being uncovered ([DI-D-108](#di-d-108)'s (c) as built).
 - **The completion queue is sized by derivation**: a `Marked` is queued once per marked write and expanded at pop into one

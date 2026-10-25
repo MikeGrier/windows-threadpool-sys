@@ -4659,3 +4659,21 @@ pushed onto within its room, and [io_core/tests/tables.rs](src/io_core/tests/tab
 a failed provider answer for each operation and every import. A provider's failed or abandoned answer for an ended
 lineage is now shown to observe nothing; a flush's answer for one already was. Construction makes one more allocation and
 an observed failure one fewer. Sabotage: three entries added, swept with the ended-lineage entry they rest on.
+
+## Moved 2026-10-24 20:34:19 -04:00 -- DI-23.12.3.2: a suspected write's record and its marking kept once
+
+### <a id="di-231232"></a>DI-23.12.3.2 -- A suspected write keeps its record and its marking once, in a table made at construction for the operations, and a failure's markings are read from those records. *(completed 2026-10-24 20:34:19 -04:00)*
+
+**Write records kept while a failure could name them, each with its marking once**
+([DI-D-108](DESIGN-NOTES.md#di-d-108)): a write that stops being uncovered -- covered, nullified, or let go with its
+lineage -- keeps its record, marked with where it stopped and, once, with its marking, for as long as an unresolved
+failure suspects it; the table holds at most a record for each place, which the places already bound. A failure's
+markings are read from its suspects' records in observation order, so `mark` writes one marking and none per failure.
+Internal: the inventory and the resolution entries still copy the markings out until `DI-23.12.3.4`.
+
+What was built is DI-D-108's "As built (DI-23.12.3.2)": [kept.rs](src/durability/kept.rs) holds the records and the
+order they were marked in, with the bound argued in its module doc, and its own unit tests;
+[io_core/tests/tables.rs](src/io_core/tests/tables.rs) fills it to the operations declared. The window's census now also
+checks that the kept records are exactly the suspected writes no longer uncovered. A failure no longer carries a list of
+markings, so marking a suspected write no longer allocates; construction makes two more allocations, and the inventory
+and the resolution entries collect their markings until DI-23.12.3.4. Sabotage: eight entries added and five re-anchored, all swept as declared.

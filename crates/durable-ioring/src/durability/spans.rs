@@ -13,6 +13,7 @@ use alloc::sync::Arc;
 
 use fixed_hash_table::HeapMap;
 
+use super::kept::Kept;
 use super::window::{Holder, Window};
 use super::{Durability, Key, Stage, Write};
 use crate::clock::Instant;
@@ -86,11 +87,13 @@ pub(super) fn leave(spans: &mut Spans, key: SpanKey) -> bool {
     true
 }
 
-/// `write` is no longer uncovered: out of its span's entry, and its hold on its place released. What
-/// about that was inconsistent, if anything.
-fn forget<E, T>(
+/// `write` is no longer uncovered: out of its span's entry, its hold on its place released, and kept
+/// in `kept` if an unresolved failure suspects it (DI-D-108). What about that was inconsistent, if
+/// anything.
+fn forget<E, T, I: Instant>(
     spans: &mut Spans,
     window: &mut Window,
+    kept: &mut Kept<I>,
     write: &Write<E, T>,
 ) -> Option<&'static str> {
     let mut lost = None;
@@ -100,6 +103,11 @@ fn forget<E, T>(
     if let Err(what) = window.release(write.op.seq, Holder::Uncovered) {
         lost = lost.or(Some(what));
     }
+    if window.suspected(write.op.seq)
+        && let Err(what) = kept.keep(write.op)
+    {
+        lost = lost.or(Some(what));
+    }
     lost
 }
 
@@ -107,11 +115,11 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// Let go every uncovered write `leaves` picks, each out of its span's entry.
     pub(super) fn let_go(&mut self, mut leaves: impl FnMut(&Write<E, T>) -> bool) {
         let mut lost = None;
-        let (spans, window) = (&mut self.spans, &mut self.window);
+        let (spans, window, kept) = (&mut self.spans, &mut self.window, &mut self.kept);
         self.writes.take_where(
             |_, write| leaves(write),
             |_, write| {
-                if let Some(what) = forget(spans, window, &write) {
+                if let Some(what) = forget(spans, window, kept, &write) {
                     lost.get_or_insert((what, write.op));
                 }
             },
@@ -124,7 +132,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// Let go every uncovered write of `lineage`, which has ended, except those named to a seal whose
     /// flush of their file is out: its commit is in flight, and its answer lets them go (DI-D-98).
     pub(super) fn let_go_ended(&mut self, lineage: Key) {
-        let (spans, window) = (&mut self.spans, &mut self.window);
+        let (spans, window, kept) = (&mut self.spans, &mut self.window, &mut self.kept);
         let mut lost = None;
         self.writes.retain(|_, write| {
             if write.lineage != lineage || write.stage == Stage::InFlight {
@@ -137,7 +145,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             {
                 return true;
             }
-            if let Some(what) = forget(spans, window, write) {
+            if let Some(what) = forget(spans, window, kept, write) {
                 lost.get_or_insert((what, write.op));
             }
             false
@@ -152,7 +160,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         let Some(write) = self.writes.remove(&seq) else {
             return;
         };
-        if let Some(what) = forget(&mut self.spans, &mut self.window, &write) {
+        if let Some(what) = forget(&mut self.spans, &mut self.window, &mut self.kept, &write) {
             self.inconsistent(what, format_args!("write {:?}", write.op));
         }
     }
