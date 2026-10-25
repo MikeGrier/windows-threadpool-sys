@@ -9,8 +9,8 @@ use std::os::windows::io::AsRawHandle;
 use super::{CAPACITY, Ring, SetupRefusal, TempFile, file, refused, serves, setup, target};
 use crate::dioring::{Dioring, Setup};
 use durable_ioring::{
-    AddTargetCause, AtCapacity, Capacity, ConstructionError, DurableRing, ImportError, ImportScope,
-    IoTargetKey, Limit, PushRefusal,
+    AddTargetCause, AtCapacity, Capacity, ConstructionError, DurableRing, Entry, ImportError,
+    ImportScope, IoTargetKey, Limit, PushRefusal,
 };
 
 fn declared(f: impl FnOnce(&mut Capacity)) -> Capacity {
@@ -193,6 +193,33 @@ fn a_mint_past_the_lineages_declared_is_refused_and_a_retire_lifts_it() {
     assert_eq!(ring.mint_lineage(None).err(), Some(at(Limit::Lineages, 2)));
     ring.retire_lineage(minted).expect("nothing holds it");
     let _again = ring.mint_lineage(None).expect("a place was let go");
+}
+
+#[test]
+fn minting_reuses_a_released_lineages_handle_slot() {
+    let mut ring = Dioring::<Vec<u8>>::new(with(
+        declared(|c| c.lineages = 3),
+        setup(Vec::new(), Vec::new(), None),
+    ))
+    .expect("build")
+    .0;
+    for round in 0..8 {
+        let first = ring.mint_lineage(None).expect("room for two");
+        let second = ring.mint_lineage(None).expect("room for two");
+        let copy = second.clone();
+        assert_eq!(
+            ring.mint_lineage(None).err(),
+            Some(at(Limit::Lineages, 3)),
+            "round {round}: the core refuses"
+        );
+        drop((first, second, copy));
+        let mut ended = 0;
+        while let Some(entry) = ring.pop().expect("pop") {
+            assert!(matches!(entry, Entry::LineageEnded { .. }));
+            ended += 1;
+        }
+        assert_eq!(ended, 2, "round {round}: each ended once");
+    }
 }
 
 #[test]

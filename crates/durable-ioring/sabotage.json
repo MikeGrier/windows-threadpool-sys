@@ -570,8 +570,8 @@
       "file": "src/ids.rs",
       "expect": "caught",
       "why": "Disarming is what stops the last handle, consumed by end_lineage or retire_lineage, from ending the lineage again as it is released: the release ends it first, and end_lineage then finds it already ended, an inconsistency reported and panicked on (DI-D-46). Silently ignored, as the swap first had it, the double end is invisible and this entry survives -- which is how that was found. First recorded as an equivalent CONTROL, on the argument that a release finds the lineage no longer live; running it hung, because retire_lineage then consumed the handle under the core's lock, which a release takes. It now releases the lock first. Caught by the ring tests of end_lineage.",
-      "find": ["                held.armed = false;\n"],
-      "replace": [""]
+      "find": ["            taken.home = Weak::<Nowhere>::new();"],
+      "replace": ["            taken.with_slot(|_, slot| slot.copies.fetch_add(1, AtomicOrdering::Relaxed));"]
     },
     {
       "name": "CONTROL: the abandoned-through bound takes its operands in the other order",
@@ -3362,6 +3362,46 @@
       "why": "The rule reads uncovered writes before kept ones, so the set the entries carry is sorted into push order, which the oracle compares with Failed.",
       "find": ["        writes.sort_unstable_by_key(|write| write.op.seq);\n"],
       "replace": [""]
+    },
+    {
+      "name": "DI-23.12.4.1: the last copy released ends nothing",
+      "file": "src/ids.rs",
+      "expect": "caught",
+      "why": "The last copy of a handle ends its lineage (DI-D-30): the count reaching zero is what reports the release.",
+      "find": ["            if slot.copies.fetch_sub(1, AtomicOrdering::Release) == 1 {"],
+      "replace": ["            if slot.copies.fetch_sub(1, AtomicOrdering::Release) == 0 {"]
+    },
+    {
+      "name": "DI-23.12.4.1: a clone is not counted",
+      "file": "src/ids.rs",
+      "expect": "caught",
+      "why": "Copies share one slot, and every copy is counted, or the first copy dropped ends a lineage another still holds.",
+      "find": ["        self.with_slot(|_, slot| slot.copies.fetch_add(1, AtomicOrdering::Relaxed));"],
+      "replace": ["        self.with_slot(|_, slot| slot.copies.load(AtomicOrdering::Relaxed));"]
+    },
+    {
+      "name": "DI-23.12.4.1: a slot is claimed whether or not it is free",
+      "file": "src/ids.rs",
+      "expect": "caught",
+      "why": "A mint claims only a slot no copy holds, or two lineages count in one slot.",
+      "find": ["                .compare_exchange(0, 1, AtomicOrdering::Acquire, AtomicOrdering::Relaxed)"],
+      "replace": ["                .compare_exchange(0, 1, AtomicOrdering::Acquire, AtomicOrdering::Relaxed)","                .or(Ok::<usize, usize>(0))"]
+    },
+    {
+      "name": "DI-23.12.4.1: a slot ignores its generation",
+      "file": "src/ids.rs",
+      "expect": "caught",
+      "why": "The lineage's number is the slot's generation: a handle naming a slot another lineage has since claimed counts nothing in it.",
+      "find": ["        (slot.lineage.load(AtomicOrdering::Acquire) == lineage.seq).then_some(slot)"],
+      "replace": ["        let _ = lineage;","        Some(slot)"]
+    },
+    {
+      "name": "DI-23.12.4.1: every copy is the last",
+      "file": "src/ids.rs",
+      "expect": "caught",
+      "why": "Only the one remaining copy is the last, which end and retire require (DI-D-40).",
+      "find": ["        self.with_slot(|_, slot| slot.copies.load(AtomicOrdering::Acquire) == 1)"],
+      "replace": ["        self.with_slot(|_, slot| slot.copies.load(AtomicOrdering::Acquire) >= 1)"]
     }
   ]
 }

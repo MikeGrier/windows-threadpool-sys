@@ -2310,7 +2310,13 @@ notes when it is created.
   built, holding the handle's count of copies and the token's liveness flag as atomics, reached without the engine's lock
   as the handle's home is today. Minting, cloning and dropping either allocates nothing; `mint_lineage` still refuses at
   capacity. **DI-D-12's one live token per failure is kept** (option A, over dropping liveness, which would have changed
-  DI-D-12 (c), and over a token whose drop calls the core, which would lock the engine from `Drop`).
+  DI-D-12 (c), and over a token whose drop calls the core, which would lock the engine from `Drop`). **As built for
+  lineage handles** (DI-23.12.4.1): a handle is its home, its lineage and a slot index; the home's `LineageSlots`, made
+  for `lineages` when the instance is built, holds each slot's copy count and the number of the lineage holding it,
+  which is the generation. Minting claims a free slot, and the last copy dropped frees it and ends the lineage; a handle
+  whose home is gone or never existed counts nothing, so it is never the last. A lineage with a copy out has not been
+  ended or retired through its handles, so the instance holds it, and a slot is free whenever the core admits a mint;
+  none free is an inconsistency. `LineageHandle::mint` returns `None` when no slot is free, and `Home` gains `slots`.
 - **A lineage's description is the consumer's own string, kept and lent as `&str`** by borrow, not copied into an
   `Arc<str>` (the engineer: "a delegate/functor that is called with a borrow of the string").
 - **This is a breaking change to both crates**: `Failed`, `Abandoned` and `Healed`, `FailureInfo`, `SuspectSet`,

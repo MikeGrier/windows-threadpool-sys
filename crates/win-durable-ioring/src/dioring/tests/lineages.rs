@@ -6,7 +6,7 @@
 
 use super::pushes::{ADDED, GIVEN, Harness, given, instance, temp};
 use super::{empty, listed};
-use durable_ioring::driver::Home;
+use durable_ioring::driver::{Home, LineageSlots};
 use durable_ioring::{
     DurabilityRequest, EndLineageRefusal, Entry, Epoch, ImportError, ImportScope, Resolution,
     RetireLineageRefusal, UnknownLineage,
@@ -155,6 +155,11 @@ struct Stranger;
 
 impl Home for Stranger {
     fn release(&self, _: durable_ioring::Lineage) {}
+
+    fn slots(&self) -> &LineageSlots {
+        static SLOTS: std::sync::OnceLock<LineageSlots> = std::sync::OnceLock::new();
+        SLOTS.get_or_init(|| LineageSlots::new(8).expect("eight slots"))
+    }
 }
 
 #[test]
@@ -173,7 +178,7 @@ fn a_handle_the_instance_did_not_mint_is_refused_and_disturbs_nothing() {
     let forgeries = |lineage| {
         [
             LineageHandle::detached(lineage),
-            LineageHandle::mint(lineage, home.clone()),
+            LineageHandle::mint(lineage, home.clone()).expect("a slot of the stranger's"),
         ]
     };
     for forged in forgeries(lineage) {

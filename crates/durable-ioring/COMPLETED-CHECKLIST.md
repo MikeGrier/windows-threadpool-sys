@@ -4699,3 +4699,21 @@ failure no longer builds an epoch map at observation; the inventory and the reso
 from the rule until DI-23.12.3.4. One test added: a write kept for one failure is not suspected by a later one, which
 the sabotage of a kept record that never stops being nameable showed nothing covered. Sabotage: ten entries added,
 seventeen re-anchored, all swept as declared.
+
+## Moved 2026-10-24 21:32:16 -04:00 -- DI-23.12.4.1: lineage handles as slots
+
+### <a id="di-231241"></a>DI-23.12.4.1 -- A lineage handle is its home, its lineage and a slot of copy counts made when the instance is built, so minting, cloning and releasing one allocate nothing. *(completed 2026-10-24 21:32:16 -04:00)*
+
+**Lineage handles as slots** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a handle is its home, its lineage and an index into
+the home's table of copy counts, made when the instance is built for `lineages`, the lineage's number standing as the
+slot's generation; minting claims a slot, cloning and dropping count in it without allocating, and the last drop ends
+the lineage as before. Proof obligation: a lineage with a copy out is one the core holds, so a slot is free whenever the
+core admits a mint. Breaking: `LineageHandle::mint` can refuse, and `Home` grows the table.
+
+What was built is DI-D-108's "As built for lineage handles". `LineageSlots` is in [ids.rs](src/ids.rs) and exported to
+drivers; win-durable-ioring's hub makes it with the core and reports a mint finding no slot free as an inconsistency.
+Taking the last copy disarms the handle by swapping in a home that never upgrades, rather than forgetting it, so the
+handle's `Weak` is still released. The argument is tested by minting to capacity, refusing, and releasing over several
+rounds; an ended lineage held by in-flight I/O was not made a test, because when the core retires it depends on the
+I/O's timing. Unit tests cover counting, the last release, `take_last`, slots full and reused, a gone home, a detached
+handle and a stale generation. Sabotage: five entries added and one re-anchored, all swept as declared.

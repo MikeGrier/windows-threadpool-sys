@@ -49,12 +49,12 @@ use durable_ioring::DurableIoCore;
 use durable_ioring::IoTarget;
 use durable_ioring::StampClock;
 use durable_ioring::backend::{IoBackend, RegisteredRegion, SubmissionData, refusal_fault};
-use durable_ioring::driver::Home;
 use durable_ioring::driver::LockWatch;
 use durable_ioring::driver::PumpedDelivery;
 use durable_ioring::driver::first_repeat;
 use durable_ioring::driver::{Answer, DomainCall};
 use durable_ioring::driver::{Engine, EngineGuard};
+use durable_ioring::driver::{Home, LineageSlots};
 use durable_ioring::{
     Access, AddTargetCause, AddTargetError, AtCapacity, Capacity, ConstructionError,
     DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState, FailureInfo,
@@ -421,8 +421,9 @@ where
         } else {
             DurableIoCore::new(clock, Arc::clone(&diagnostics), capacity)
         };
-        let mut core = match built {
-            Ok(core) => core,
+        let made = built.and_then(|core| Ok((core, LineageSlots::new(capacity.lineages)?)));
+        let (mut core, slots) = match made {
+            Ok(made) => made,
             Err(refused) => {
                 return Err(SetupError {
                     reason: SetupRefusal::Construction(refused),
@@ -536,8 +537,9 @@ where
             default_lineage.instance,
             diagnostics,
             watch,
+            slots,
         ));
-        let default = LineageHandle::mint(default_lineage, home(&hub));
+        let default = minted(&hub, default_lineage);
         let handle = default.clone();
         Ok((
             Self {
@@ -578,6 +580,26 @@ fn declared_for(declarations: &[(IoTargetKey, Access)], key: IoTargetKey) -> Opt
 fn home<T: Home + 'static>(hub: &Arc<T>) -> Weak<dyn Home> {
     let home: Weak<T> = Arc::downgrade(hub);
     home
+}
+
+/// A handle to `lineage`, which the core has just admitted, homed at `hub`. A slot is free: a
+/// lineage with a copy out is one the core holds, and the core admitted this one within the
+/// lineages it was built for, which the slots number (DI-D-108). None free is an inconsistency.
+fn minted<E, B, C, K, R>(hub: &Arc<Hub<E, B, C, K, R>>, lineage: Lineage) -> LineageHandle
+where
+    E: EpochId + Send + Sync + 'static,
+    B: IoBuf + Send + 'static,
+    C: Send + 'static,
+    K: StampClock,
+    R: IoBufMut + Send + 'static,
+{
+    LineageHandle::mint(lineage, home(hub)).unwrap_or_else(|| {
+        hub.inconsistent(
+            "a lineage the core admitted found no handle slot free",
+            format_args!("lineage {lineage:?}"),
+        );
+        LineageHandle::detached(lineage)
+    })
 }
 
 /// Where an instance's provider completions answer.
@@ -765,7 +787,7 @@ where
 
     fn mint_lineage(&mut self, description: Option<String>) -> Result<LineageHandle, AtCapacity> {
         let lineage = self.engine().core.mint_lineage(description)?;
-        Ok(LineageHandle::mint(lineage, home(&self.hub)))
+        Ok(minted(&self.hub, lineage))
     }
 
     fn lineages(&self, visit: impl FnMut(LineageInfo<Self::Ids>)) {

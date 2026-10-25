@@ -276,7 +276,6 @@ pub(crate) mod tag {
     pub(crate) const PUMP_PUMP_WAIT: Tag = Tag::new("pump::pump::wait");
 
     // ids.rs
-    pub(crate) const IDS_LINEAGE_HANDLE_MINT: Tag = Tag::new("ids::lineage_handle::mint");
     pub(crate) const IDS_FAILURE_TOKEN_MINT: Tag = Tag::new("ids::failure_token::mint");
 
     // backend.rs

@@ -124,12 +124,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   began into the steps below: the four share no storage, and the domain lists reach into the failures' reach, which the
   others do not.
 
-- [ ] **DI-23.12.4.1** -- **Lineage handles as slots** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a handle is its home,
-  its lineage and an index into the home's table of copy counts, made when the instance is built for `lineages`, the
-  lineage's number standing as the slot's generation; minting claims a slot, cloning and dropping count in it without
-  allocating, and the last drop ends the lineage as before. Proof obligation: a lineage with a copy out is one the core
-  holds, so a slot is free whenever the core admits a mint. Breaking: `LineageHandle::mint` can refuse, and `Home`
-  grows the table.
+- [x] **DI-23.12.4.1** -- A lineage handle is its home, its lineage and a slot of copy counts made when the instance is built, so minting, cloning and releasing one allocate nothing. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231241)
 
 - [ ] **DI-23.12.4.2** -- **Failure tokens as slots** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a token is an index into a
   table of liveness flags made at construction for the failure bound, the failure's number standing as the generation;
