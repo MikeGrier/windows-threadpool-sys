@@ -239,7 +239,7 @@
     },
     {
       "name": "DI-3.2.4: abandoning does not abandon the failure's epochs",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "DI-D-12 (f): an epoch is abandoned if any failure containing it was. Reported Durable instead, the consumer would believe lost writes are on the media. Caught by the state assertions, unit, I/O and the worked examples.",
       "find": ["                                state.abandoned.insert(write.epoch);"],
@@ -263,7 +263,7 @@
     },
     {
       "name": "DI-3.2.4: a foreign token is resolved",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "DI-D-12 (d): another instance's token is refused, and the call hands every token back. Caught by the refusal tests; resolving it trips the debug assertion for a token with no failure.",
       "find": ["            .find(|id| id.instance != self.instance)\n"],
@@ -271,7 +271,7 @@
     },
     {
       "name": "DI-3.2.4: the inventory hands out a second live token",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "DI-D-12 (d): at most one live token per failure. Caught by the token tests.",
       "find": ["            Standing::Open => FailureToken::mint(id, &self.tokens, failure.token, false),"],
@@ -343,7 +343,7 @@
     },
     {
       "name": "WT-2.2.2: the inventory reports a reading taken when asked",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "The second time fact: the inventory reports the stamp the Failed entry carried. Re-reading the clock would report when the consumer asked, which drifts from the entry and from every other record of the failure.",
       "find": ["                observed: failure.observed,\n"],
@@ -431,7 +431,7 @@
     },
     {
       "name": "DI-3.2.4.2: the inventory reports no markings",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "The inventory is where a consumer reads a live failure's record; reporting it without its markings hides what the stream already said.",
       "find": ["                self.markings(failure).collect()\n"],
@@ -2429,7 +2429,7 @@
     },
     {
       "name": "DI-23.8.1: an abandoned failure keeps its places",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "Resolving a failure lets go of the places it held; one that never does leaves them counted for ever and shrinks the window for good.",
       "find": ["                    self.abandon_held(&failure, &mut due);","                    self.release_suspects(&failure);"],
@@ -2749,7 +2749,7 @@
     },
     {
       "name": "DI-23.5.2.2: every unresolved failure counts as an import",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "Only an imported failure counts against the imports declared; a failure the core observed is the consumer's to resolve but not its to have declared.",
       "find": ["            .filter(|failure| matches!(failure.cause, FailureCause::Imported { .. }))"],
@@ -3269,7 +3269,7 @@
     },
     {
       "name": "DI-23.12.3.2: an abandoned failure's markings are read after its writes are released",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "Releasing a failure's suspects lets go of the records its markings are read from, so they are read first.",
       "find": ["                    let failure = self.failures.remove(index);","                    self.free_tokens.push(failure.token);","                    let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {","                        self.markings(&failure).collect()","                    });","                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);","                    let (lists, writes, kept) = (&self.lists, &self.writes, &self.kept);","                    let lineages = &mut self.lineages;","                    for write in suspects(lists, writes, kept, &failure) {","                        if let Some(state) = lineages.get_mut(&write.lineage) {","                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {","                                state.abandoned.insert(write.epoch);","                            });","                        }","                    }","                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {","                        due.events.push(Event::Abandoned {","                            failure: failure.id,","                            suspect,","                            markings,","                        });","                    });","                    self.abandon_held(&failure, &mut due);","                    self.release_suspects(&failure);"],
@@ -3333,7 +3333,7 @@
     },
     {
       "name": "DI-23.12.3.3: a heal is pending on no lineage",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "A heal holds each live lineage its suspects belong to until that lineage's release (DI-D-41), read from the records.",
       "find": ["                                pending.insert(write.lineage, release);\n"],
@@ -3405,7 +3405,7 @@
     },
     {
       "name": "DI-23.12.4.2: an abandoned failure keeps its token slot",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "A resolved failure frees its token slot, or failures observed over the instance's life run out of slots below the bound.",
       "find": ["                    self.free_tokens.push(failure.token);"],
@@ -3421,7 +3421,7 @@
     },
     {
       "name": "DI-23.12.4.2: the inventory reads every token as live",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "Whether a token is live is read from its slot, which the inventory reports and take_token decides by.",
       "find": ["                    Standing::Open => self.tokens.is_live(failure.token, failure.id),"],
@@ -3469,7 +3469,7 @@
     },
     {
       "name": "DI-23.12.4.4: an abandoned import keeps its domain list",
-      "file": "src/durability.rs",
+      "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "An import by domains lets its list go when it is resolved, abandoned as healed.",
       "find": ["                    self.release_reach(failure.reach);"],
