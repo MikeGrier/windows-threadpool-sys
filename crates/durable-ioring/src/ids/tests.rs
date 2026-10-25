@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, Weak};
 use crate::contract::Identities;
 use crate::ids::{
     DioringIds, FailureId, FailureToken, Home, InstanceId, Lineage, LineageHandle, LineageSlots,
-    OpId,
+    OpId, TokenSlots,
 };
 
 /// A home with `slots` slots, recording every lineage released to it.
@@ -196,31 +196,84 @@ fn identities_carry_their_instance() {
     );
 }
 
+fn failure(instance: InstanceId, seq: u64) -> FailureId {
+    FailureId { instance, seq }
+}
+
+fn token_slots(n: usize) -> Arc<TokenSlots> {
+    Arc::new(TokenSlots::new(Some(n)).expect("small"))
+}
+
 #[test]
 fn a_token_names_its_failure() {
-    let id = FailureId {
-        instance: InstanceId::next(),
-        seq: 7,
-    };
-    let (token, _) = FailureToken::mint(id);
+    let id = failure(InstanceId::next(), 7);
+    let slots = token_slots(1);
+    let token = FailureToken::mint(id, &slots, 0, true).expect("slot 0");
     assert_eq!(token.id(), id);
     assert_eq!(<DioringIds<u64, u64> as Identities>::token_id(&token), id);
 }
 
 #[test]
 fn a_token_is_live_until_it_is_closed_or_dropped() {
-    let id = FailureId {
-        instance: InstanceId::next(),
-        seq: 0,
-    };
-    let (token, live) = FailureToken::mint(id);
-    assert!(live.load(std::sync::atomic::Ordering::Acquire));
+    let id = failure(InstanceId::next(), 0);
+    let slots = token_slots(1);
+    let token = FailureToken::mint(id, &slots, 0, true).expect("slot 0");
+    assert!(slots.is_live(0, id));
     token.close();
-    assert!(!live.load(std::sync::atomic::Ordering::Acquire));
+    assert!(!slots.is_live(0, id));
 
-    let (token, live) = FailureToken::mint(id);
+    let token = FailureToken::mint(id, &slots, 0, false).expect("none is live");
+    assert!(slots.is_live(0, id));
     drop(token);
-    assert!(!live.load(std::sync::atomic::Ordering::Acquire));
+    assert!(!slots.is_live(0, id));
+}
+
+#[test]
+fn a_second_token_is_refused_while_one_is_live() {
+    let id = failure(InstanceId::next(), 3);
+    let slots = token_slots(2);
+    let token = FailureToken::mint(id, &slots, 1, true).expect("slot 1");
+    assert!(
+        FailureToken::mint(id, &slots, 1, false).is_none(),
+        "one live token"
+    );
+    drop(token);
+    let again = FailureToken::mint(id, &slots, 1, false).expect("none is live now");
+    assert!(slots.is_live(1, id));
+    assert!(!slots.is_live(0, id), "the other slot is untouched");
+    drop(again);
+}
+
+#[test]
+fn a_token_dropped_after_its_slot_is_reclaimed_leaves_the_new_failure_live() {
+    let instance = InstanceId::next();
+    let (old, new) = (failure(instance, 1), failure(instance, 2));
+    let slots = token_slots(1);
+    let stale = FailureToken::mint(old, &slots, 0, true).expect("slot 0");
+    // The old failure resolved and its slot given to the next one before the token is dropped.
+    let current = FailureToken::mint(new, &slots, 0, true).expect("slot 0 again");
+    drop(stale);
+    assert!(
+        slots.is_live(0, new),
+        "the stale drop did not clear the new token"
+    );
+    assert!(!slots.is_live(0, old));
+    drop(current);
+    assert!(!slots.is_live(0, new));
+}
+
+#[test]
+fn a_token_outliving_its_instance_or_detached_drops_quietly() {
+    let id = failure(InstanceId::next(), 0);
+    let slots = token_slots(1);
+    let token = FailureToken::mint(id, &slots, 0, true).expect("slot 0");
+    drop(slots);
+    drop(token);
+    drop(FailureToken::detached(id));
+    assert!(
+        FailureToken::mint(id, &token_slots(1), 5, true).is_none(),
+        "no such slot"
+    );
 }
 
 /// An epoch-id type with no `Hash` and no `Default`.

@@ -48,7 +48,7 @@ fn failed_at(instance: InstanceId, id: u64, writes: &[u64], ticks: u64) -> TestE
     let id = failure(instance, id);
     Entry::Failed(Failed {
         id,
-        token: FailureToken::mint(id).0,
+        token: FailureToken::detached(id),
         cause: FailureCause::Imported {
             scope: ImportScope::All,
         },

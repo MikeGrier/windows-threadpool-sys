@@ -158,6 +158,8 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_FLUSH_PAIRS: Tag = Tag::new("durability::new::flush_pairs");
     pub(crate) const DURABILITY_NEW_SERVED_NAMES: Tag = Tag::new("durability::new::served_names");
     pub(crate) const DURABILITY_NEW_FAILURES: Tag = Tag::new("durability::new::failures");
+    pub(crate) const DURABILITY_NEW_TOKENS: Tag = Tag::new("durability::new::tokens");
+    pub(crate) const DURABILITY_NEW_FREE_TOKENS: Tag = Tag::new("durability::new::free_tokens");
     pub(crate) const DURABILITY_NEW_KEPT: Tag = Tag::new("durability::new::kept");
     pub(crate) const DURABILITY_RESOLVE_MARKINGS: Tag = Tag::new("durability::resolve::markings");
     pub(crate) const DURABILITY_RELEASE_HEALED_MARKINGS: Tag =
@@ -276,7 +278,6 @@ pub(crate) mod tag {
     pub(crate) const PUMP_PUMP_WAIT: Tag = Tag::new("pump::pump::wait");
 
     // ids.rs
-    pub(crate) const IDS_FAILURE_TOKEN_MINT: Tag = Tag::new("ids::failure_token::mint");
 
     // backend.rs
     pub(crate) const BACKEND_REFUSAL_FAULT_SHARED: Tag = Tag::new("backend::refusal_fault::shared");

@@ -568,7 +568,7 @@ fn failures() -> Vec<Measured> {
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
-    ("construction, with two targets", 36),
+    ("construction, with two targets", 39),
     ("writes, first round", 3),
     ("write completions, first round", 3),
     ("pops, first round", 0),
@@ -602,15 +602,15 @@ const CLEAN: &[(&str, u64)] = &[
 
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
-    ("construction, with two targets", 36),
+    ("construction, with two targets", 39),
     ("writes before the failure", 6),
-    ("a commit failure observed", 5),
+    ("a commit failure observed", 4),
     ("failures queried", 7),
     ("writes re-issued", 0),
     ("a heal resolved", 1),
     ("the heal taking effect at the next seal", 6),
     ("writes before the import", 0),
-    ("a failure imported", 5),
+    ("a failure imported", 4),
     ("an abandon resolved", 5),
 ];
 
@@ -673,6 +673,16 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         1,
     ),
     ("construction, with two targets", "durability::new::kept", 2),
+    (
+        "construction, with two targets",
+        "durability::new::tokens",
+        2,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::free_tokens",
+        1,
+    ),
     ("construction, with two targets", "durability::new::due", 4),
     (
         "construction, with two targets",
@@ -811,6 +821,16 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         1,
     ),
     ("construction, with two targets", "durability::new::kept", 2),
+    (
+        "construction, with two targets",
+        "durability::new::tokens",
+        2,
+    ),
+    (
+        "construction, with two targets",
+        "durability::new::free_tokens",
+        1,
+    ),
     ("construction, with two targets", "durability::new::due", 4),
     (
         "construction, with two targets",
@@ -887,7 +907,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         3,
     ),
     ("writes before the failure", "io_core::complete::queue", 3),
-    ("a commit failure observed", "ids::failure_token::mint", 1),
     (
         "a commit failure observed",
         "durability::observe::suspect",
@@ -914,7 +933,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "types::suspect_set::new",
         1,
     ),
-    ("a failure imported", "ids::failure_token::mint", 1),
     ("a failure imported", "durability::observe::suspect", 3),
     ("a failure imported", "types::suspect_set::new", 1),
     ("an abandon resolved", "durability::resolve::suspect", 3),

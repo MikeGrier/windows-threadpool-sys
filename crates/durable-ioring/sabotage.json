@@ -274,8 +274,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (d): at most one live token per failure. Caught by the token tests.",
-      "find": ["            Standing::Open(live) if !live.load(Ordering::Acquire) => {\n"],
-      "replace": ["            Standing::Open(_) => {\n"]
+      "find": ["            Standing::Open => FailureToken::mint(id, &self.tokens, failure.token, false),"],
+      "replace": ["            Standing::Open => FailureToken::mint(id, &self.tokens, failure.token, true),"]
     },
     {
       "name": "DI-3.2.4: the oracle lets Durable pass an unresolved failure",
@@ -474,8 +474,8 @@
       "file": "src/durability.rs",
       "expect": "survives",
       "why": "The manifest checking itself. Minting the token and freezing the suspect set read no clock and cannot move one, and all of it happens inside the one transition under the lock, so reading the clock first changes no stamp.",
-      "find": ["        let (token, live) = FailureToken::mint(id);","        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());"],
-      "replace": ["        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());","        let (token, live) = FailureToken::mint(id);"]
+      "find": ["        let minted = self.free_tokens.pop().and_then(|slot| {","            FailureToken::mint(id, &self.tokens, slot, true).map(|token| (slot, token))","        });","        let Some((slot, token)) = minted else {","            self.inconsistent(","                \"no token slot was free for a failure within the bound\",","                format_args!(\"failure {id:?}\"),","            );","            return id;","        };","        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());"],
+      "replace": ["        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());","        let minted = self.free_tokens.pop().and_then(|slot| {","            FailureToken::mint(id, &self.tokens, slot, true).map(|token| (slot, token))","        });","        let Some((slot, token)) = minted else {","            self.inconsistent(","                \"no token slot was free for a failure within the bound\",","                format_args!(\"failure {id:?}\"),","            );","            return id;","        };"]
     },
     {
       "name": "DI-3.2.5.1: ending a lineage abandons nothing",
@@ -3272,16 +3272,16 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Releasing a failure's suspects lets go of the records its markings are read from, so they are read first.",
-      "find": ["                    let failure = self.failures.remove(index);","                    let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {","                        self.markings(&failure).collect()","                    });","                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);","                    let (writes, kept, lineages) = (&self.writes, &self.kept, &mut self.lineages);","                    for write in suspects(writes, kept, &failure) {","                        if let Some(state) = lineages.get_mut(&write.lineage) {","                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {","                                state.abandoned.insert(write.epoch);","                            });","                        }","                    }","                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {","                        due.events.push(Event::Abandoned {","                            failure: failure.id,","                            suspect,","                            markings,","                        });","                    });","                    self.abandon_held(&failure, &mut due);","                    self.release_suspects(&failure);"],
-      "replace": ["                    let failure = self.failures.remove(index);","                    self.release_suspects(&failure);","                    let markings: Vec<_> = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {","                        self.markings(&failure).collect()","                    });","                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);","                    let (writes, kept, lineages) = (&self.writes, &self.kept, &mut self.lineages);","                    for write in suspects(writes, kept, &failure) {","                        if let Some(state) = lineages.get_mut(&write.lineage) {","                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {","                                state.abandoned.insert(write.epoch);","                            });","                        }","                    }","                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {","                        due.events.push(Event::Abandoned {","                            failure: failure.id,","                            suspect,","                            markings,","                        });","                    });","                    self.abandon_held(&failure, &mut due);"]
+      "find": ["                    let failure = self.failures.remove(index);","                    self.free_tokens.push(failure.token);","                    let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {","                        self.markings(&failure).collect()","                    });","                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);","                    let (writes, kept, lineages) = (&self.writes, &self.kept, &mut self.lineages);","                    for write in suspects(writes, kept, &failure) {","                        if let Some(state) = lineages.get_mut(&write.lineage) {","                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {","                                state.abandoned.insert(write.epoch);","                            });","                        }","                    }","                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {","                        due.events.push(Event::Abandoned {","                            failure: failure.id,","                            suspect,","                            markings,","                        });","                    });","                    self.abandon_held(&failure, &mut due);","                    self.release_suspects(&failure);"],
+      "replace": ["                    let failure = self.failures.remove(index);","                    self.free_tokens.push(failure.token);","                    self.release_suspects(&failure);","                    let markings: Vec<_> = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {","                        self.markings(&failure).collect()","                    });","                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);","                    let (writes, kept, lineages) = (&self.writes, &self.kept, &mut self.lineages);","                    for write in suspects(writes, kept, &failure) {","                        if let Some(state) = lineages.get_mut(&write.lineage) {","                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {","                                state.abandoned.insert(write.epoch);","                            });","                        }","                    }","                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {","                        due.events.push(Event::Abandoned {","                            failure: failure.id,","                            suspect,","                            markings,","                        });","                    });","                    self.abandon_held(&failure, &mut due);"]
     },
     {
       "name": "DI-23.12.3.2: a healed failure's markings are read after its writes are released",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "As for an abandoned failure: the records its markings are read from go with its suspects.",
-      "find": ["                let failure = self.failures.remove(at);","                let markings = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {","                    self.markings(&failure).collect()","                });","                let suspect = self.suspect_set(&failure, tag::DURABILITY_RELEASE_HEALED_SUSPECT);","                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {","                    due.events.push(Event::Healed {","                        failure: failure.id,","                        suspect,","                        markings,","                    });","                });","                self.release_suspects(&failure);"],
-      "replace": ["                let failure = self.failures.remove(at);","                self.release_suspects(&failure);","                let markings: Vec<_> = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {","                    self.markings(&failure).collect()","                });","                let suspect = self.suspect_set(&failure, tag::DURABILITY_RELEASE_HEALED_SUSPECT);","                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {","                    due.events.push(Event::Healed {","                        failure: failure.id,","                        suspect,","                        markings,","                    });","                });"]
+      "find": ["                let failure = self.failures.remove(at);","                self.free_tokens.push(failure.token);","                let markings = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {","                    self.markings(&failure).collect()","                });","                let suspect = self.suspect_set(&failure, tag::DURABILITY_RELEASE_HEALED_SUSPECT);","                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {","                    due.events.push(Event::Healed {","                        failure: failure.id,","                        suspect,","                        markings,","                    });","                });","                self.release_suspects(&failure);"],
+      "replace": ["                let failure = self.failures.remove(at);","                self.free_tokens.push(failure.token);","                self.release_suspects(&failure);","                let markings: Vec<_> = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {","                    self.markings(&failure).collect()","                });","                let suspect = self.suspect_set(&failure, tag::DURABILITY_RELEASE_HEALED_SUSPECT);","                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {","                    due.events.push(Event::Healed {","                        failure: failure.id,","                        suspect,","                        markings,","                    });","                });"]
     },
     {
       "name": "DI-23.12.3.3: the rule names a write recorded after the failure",
@@ -3402,6 +3402,46 @@
       "why": "Only the one remaining copy is the last, which end and retire require (DI-D-40).",
       "find": ["        self.with_slot(|_, slot| slot.copies.load(AtomicOrdering::Acquire) == 1)"],
       "replace": ["        self.with_slot(|_, slot| slot.copies.load(AtomicOrdering::Acquire) >= 1)"]
+    },
+    {
+      "name": "DI-23.12.4.2: an abandoned failure keeps its token slot",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A resolved failure frees its token slot, or failures observed over the instance's life run out of slots below the bound.",
+      "find": ["                    self.free_tokens.push(failure.token);"],
+      "replace": []
+    },
+    {
+      "name": "DI-23.12.4.2: a healed failure keeps its token slot",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A heal that takes effect frees its token slot as an abandon does.",
+      "find": ["                let failure = self.failures.remove(at);","                self.free_tokens.push(failure.token);"],
+      "replace": ["                let failure = self.failures.remove(at);"]
+    },
+    {
+      "name": "DI-23.12.4.2: the inventory reads every token as live",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Whether a token is live is read from its slot, which the inventory reports and take_token decides by.",
+      "find": ["                    Standing::Open => self.tokens.is_live(failure.token, failure.id),"],
+      "replace": ["                    Standing::Open => true,"]
+    },
+    {
+      "name": "DI-23.12.4.2: a dropped token stays live",
+      "file": "src/ids.rs",
+      "expect": "caught",
+      "why": "Dropping a token is close: its slot reads not live, so the inventory can hand out another (DI-D-12 (c)).",
+      "find": ["                token_word(self.id.seq, false),"],
+      "replace": ["                token_word(self.id.seq, true),"]
+    },
+    {
+      "name": "DI-23.12.4.2: a slot ignores which failure holds it",
+      "file": "src/ids.rs",
+      "expect": "caught",
+      "why": "A slot's word carries its failure's number, so a stale token cannot clear a later failure's liveness.",
+      "find": ["    (failure << 1) | live as u64"],
+      "replace": ["    let _ = failure;","    live as u64"]
     }
   ]
 }

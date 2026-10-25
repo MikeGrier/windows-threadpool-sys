@@ -126,9 +126,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.4.1** -- A lineage handle is its home, its lineage and a slot of copy counts made when the instance is built, so minting, cloning and releasing one allocate nothing. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231241)
 
-- [ ] **DI-23.12.4.2** -- **Failure tokens as slots** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a token is an index into a
-  table of liveness flags made at construction for the failure bound, the failure's number standing as the generation;
-  DI-D-12's one live token kept. Breaking: `FailureToken`'s fields and its mint.
+- [x] **DI-23.12.4.2** -- A failure token is its failure and a slot of liveness words made at construction for the failure bound, so observing a failure and handing out a token allocate nothing. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231242)
 
 - [ ] **DI-23.12.4.3** -- **A lineage's description kept and lent** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): the
   consumer's `String` kept as given, and `LineageInfo` lending it as `&str` for the visitor's duration. Breaking:

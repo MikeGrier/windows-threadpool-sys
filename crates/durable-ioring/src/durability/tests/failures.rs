@@ -521,7 +521,7 @@ fn a_refused_resolution_changes_nothing_and_hands_every_token_back() {
         instance: InstanceId::next(),
         seq: 0,
     };
-    let (foreign, _) = FailureToken::mint(foreign_id);
+    let foreign = FailureToken::detached(foreign_id);
     let error = lineage
         .resolve(vec![
             (token, Resolution::Abandon),

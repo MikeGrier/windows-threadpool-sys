@@ -2317,6 +2317,14 @@ notes when it is created.
   whose home is gone or never existed counts nothing, so it is never the last. A lineage with a copy out has not been
   ended or retired through its handles, so the instance holds it, and a slot is free whenever the core admits a mint;
   none free is an inconsistency. `LineageHandle::mint` returns `None` when no slot is free, and `Home` gains `slots`.
+  **As built for failure tokens** (DI-23.12.4.2): the core makes `TokenSlots` for `Capacity::failures` at
+  construction, one word per slot holding the failure's number above a liveness bit, and a failure holds a slot from
+  observation until it is resolved, freed slots kept on a list made with them. A token is its failure, a `Weak` of the
+  slots and its index: a token's drop clears liveness by one compare-and-swap from its own failure's live word, so a
+  token dropped after its slot was given to a later failure changes nothing, and the inventory hands out a token by the
+  same swap from its failure's not-live word, which keeps DI-D-12's one live token. The core mints tokens and holds no
+  home, so the tokens reach the slots by that `Weak` rather than through a home; neither is touched under the engine's
+  lock. Nothing public changed: the token's fields and its mint were the crate's own.
 - **A lineage's description is the consumer's own string, kept and lent as `&str`** by borrow, not copied into an
   `Arc<str>` (the engineer: "a delegate/functor that is called with a borrow of the string").
 - **This is a breaking change to both crates**: `Failed`, `Abandoned` and `Healed`, `FailureInfo`, `SuspectSet`,

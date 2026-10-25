@@ -4717,3 +4717,19 @@ handle's `Weak` is still released. The argument is tested by minting to capacity
 rounds; an ended lineage held by in-flight I/O was not made a test, because when the core retires it depends on the
 I/O's timing. Unit tests cover counting, the last release, `take_last`, slots full and reused, a gone home, a detached
 handle and a stale generation. Sabotage: five entries added and one re-anchored, all swept as declared.
+
+## Moved 2026-10-24 21:46:46 -04:00 -- DI-23.12.4.2: failure tokens as slots
+
+### <a id="di-231242"></a>DI-23.12.4.2 -- A failure token is its failure and a slot of liveness words made at construction for the failure bound, so observing a failure and handing out a token allocate nothing. *(completed 2026-10-24 21:46:46 -04:00)*
+
+**Failure tokens as slots** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a token is an index into a table of liveness flags
+made at construction for the failure bound, the failure's number standing as the generation; DI-D-12's one live token
+kept. Breaking: `FailureToken`'s fields and its mint.
+
+What was built is DI-D-108's "As built for failure tokens". The item's "breaking" turned out not to be: the token's
+fields and its mint were crate-private, so no public signature changed. The word packs the generation and liveness
+together so a stale token's drop cannot clear a later failure's token between a check and a store. The fill test now
+also cycles abandons and heals past the slot count, which is what shows each path frees its slot; unit tests cover
+liveness, one live token, a stale drop after reclaim, and a token outliving its instance. Construction makes three more
+allocations, and an observed failure one fewer. Sabotage: five entries added and four re-anchored, all swept as
+declared.

@@ -374,6 +374,49 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
     rig.entries();
     assert!(rig.core.failures().is_empty());
     assert_eq!(rig.core.window_places(), 0);
+
+    // The token slots the resolved failures held are free again (DI-D-108): two more failures,
+    // past the bound counted over the instance's life, each take one and hand out a live token.
+    for _ in 0..2 {
+        let (_, actions) = rig
+            .core
+            .import_failure(crate::types::ImportScope::All)
+            .expect("room");
+        rig.act(actions);
+    }
+    let inventory = rig.core.failures();
+    assert_eq!(inventory.len(), 2);
+    assert!(inventory.iter().all(|info| info.token_live));
+
+    // A healed failure frees its slot as an abandoned one does: more heals than there are slots.
+    // Nothing is uncovered, so each heal has nothing to wait for and takes effect at once.
+    for _ in 0..bound {
+        let heals: Vec<_> = rig
+            .entries()
+            .into_iter()
+            .filter_map(|entry| match entry {
+                crate::types::Entry::Failed(failed) => {
+                    Some((failed.token, crate::types::Resolution::Heal))
+                }
+                _ => None,
+            })
+            .collect();
+        for (token, _) in &heals {
+            rig.oracle.healed(token.id());
+        }
+        let actions = rig.core.resolve(heals).expect("healed");
+        rig.act(actions);
+        rig.run();
+        assert!(rig.core.failures().is_empty(), "each heal took effect");
+        for _ in 0..2 {
+            let (_, actions) = rig
+                .core
+                .import_failure(crate::types::ImportScope::All)
+                .expect("room");
+            rig.act(actions);
+        }
+    }
+    assert_eq!(rig.core.failures().len(), 2);
 }
 
 #[test]

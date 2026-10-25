@@ -32,7 +32,7 @@ fn write(lineage: Lineage, id: u64) -> OpKind<V> {
 fn failed(id: FailureId, writes: &[(crate::ids::OpId, Epoch<V>)]) -> TestEntry {
     Entry::Failed(Failed {
         id,
-        token: FailureToken::mint(id).0,
+        token: FailureToken::detached(id),
         cause: FailureCause::Imported {
             scope: ImportScope::All,
         },

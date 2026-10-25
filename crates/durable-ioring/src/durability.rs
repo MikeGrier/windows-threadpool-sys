@@ -58,7 +58,6 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use core::fmt;
 use core::ops::Bound;
-use core::sync::atomic::{AtomicBool, Ordering};
 use fixed_hash_table::HeapMap;
 
 use crate::alloc_tags::{tag, tagged};
@@ -70,7 +69,7 @@ use crate::diagnostics::{
     Diagnostic, DiagnosticKind, DiagnosticSink, FlushOutcome, FlushPart, SealOutcome,
 };
 use crate::domains::DomainId;
-use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
+use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId, TokenSlots};
 use crate::types::{
     Failed, FailureCause, FailureInfo, FlushDomain, IoFault, IoTargetKey, Marking, MarkingKind,
     Resolution, ResolveError, ResolveRefusal,
@@ -267,8 +266,8 @@ struct Seal<E> {
 
 /// Where an unresolved failure stands.
 enum Standing<E> {
-    /// Open to resolution; the flag is its token's, set while the token is live.
-    Open(Arc<AtomicBool>),
+    /// Open to resolution; whether its token is live is read from its token slot.
+    Open,
     /// Healed, and still holding the lineages named here, each until its [`Release`] (DI-D-41,
     /// DI-D-46). Healed once it names none. The heal holds the token, so the inventory does not
     /// hand out another.
@@ -304,6 +303,8 @@ struct Failure<E: EpochId + 'static, I: Instant> {
     only: Option<Key>,
     observed: I,
     standing: Standing<E>,
+    /// Its slot in the token slots, held until it is resolved.
+    token: u32,
     /// The suspect writes as observation listed them, for the census to compare the rule with.
     #[cfg(test)]
     listed: Vec<u64>,
@@ -325,7 +326,7 @@ impl<E: EpochId + 'static, I: Instant> Failure<E, I> {
     /// and pending on it.
     fn pending(&self, lineage: Key) -> bool {
         match &self.standing {
-            Standing::Open(_) => true,
+            Standing::Open => true,
             Standing::Healing { pending } => pending.contains_key(&lineage),
         }
     }
@@ -425,6 +426,10 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     failures: Vec<Failure<E, I>>,
     /// Writes no longer uncovered that an unresolved failure still suspects, with their markings.
     kept: Kept<E, I>,
+    /// Whether each unresolved failure's token is live (DI-D-108), shared with the tokens.
+    tokens: Arc<TokenSlots>,
+    /// The token slots no unresolved failure holds.
+    free_tokens: Vec<u32>,
     /// The failure clock: the number the next failure observed takes. A write record reads it when
     /// it is recorded and when it stops being nameable, which is what a failure's rule compares.
     next_failure: u64,
@@ -574,6 +579,17 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             list("the unresolved failures", capacity.failures(served))
         })?;
         let kept = tagged(tag::DURABILITY_NEW_KEPT, || Kept::new(capacity.operations))?;
+        let tokens = tagged(tag::DURABILITY_NEW_TOKENS, || {
+            TokenSlots::new(capacity.failures(served)).map(Arc::new)
+        })?;
+        let mut free_tokens = tagged(tag::DURABILITY_NEW_FREE_TOKENS, || {
+            list("the free token slots", Some(tokens.len()))
+        })?;
+        free_tokens.extend(
+            (0..tokens.len())
+                .rev()
+                .filter_map(|at| u32::try_from(at).ok()),
+        );
         let spare = tagged(tag::DURABILITY_NEW_DUE, || Due::reserved(capacity))?;
         let scratch = Scratch::new(capacity, served)?;
         Ok(Self {
@@ -589,6 +605,8 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             window,
             failures,
             kept,
+            tokens,
+            free_tokens,
             next_failure: 0,
             held,
             served: tagged(tag::DURABILITY_NEW_SERVED, || Arc::from([])),
@@ -1030,6 +1048,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             match resolution {
                 Resolution::Abandon => {
                     let failure = self.failures.remove(index);
+                    self.free_tokens.push(failure.token);
                     let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {
                         self.markings(&failure).collect()
                     });
@@ -1083,14 +1102,10 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
 
     /// A token for `id`, if it is an unresolved failure whose token is not live.
     pub(crate) fn take_token(&mut self, id: FailureId) -> Option<FailureToken> {
-        let failure = self.failures.iter_mut().find(|f| f.id == id)?;
-        match &failure.standing {
-            Standing::Open(live) if !live.load(Ordering::Acquire) => {
-                let (token, live) = FailureToken::mint(id);
-                failure.standing = Standing::Open(live);
-                Some(token)
-            }
-            _ => None,
+        let failure = self.failures.iter().find(|f| f.id == id)?;
+        match failure.standing {
+            Standing::Open => FailureToken::mint(id, &self.tokens, failure.token, false),
+            Standing::Healing { .. } => None,
         }
     }
 
@@ -1117,7 +1132,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 observed: failure.observed,
                 markings,
                 token_live: match &failure.standing {
-                    Standing::Open(live) => live.load(Ordering::Acquire),
+                    Standing::Open => self.tokens.is_live(failure.token, failure.id),
                     Standing::Healing { .. } => true,
                 },
             };
@@ -1161,7 +1176,16 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             seq: self.next_failure,
         };
         self.next_failure += 1;
-        let (token, live) = FailureToken::mint(id);
+        let minted = self.free_tokens.pop().and_then(|slot| {
+            FailureToken::mint(id, &self.tokens, slot, true).map(|token| (slot, token))
+        });
+        let Some((slot, token)) = minted else {
+            self.inconsistent(
+                "no token slot was free for a failure within the bound",
+                format_args!("failure {id:?}"),
+            );
+            return id;
+        };
         let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());
         let recorded_cause = tagged(tag::DURABILITY_OBSERVE_CAUSE, || cause.clone());
         let failure = Failure {
@@ -1170,11 +1194,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             reach: reach.clone(),
             only,
             observed,
-            standing: Standing::Open(live),
+            standing: Standing::Open,
+            token: slot,
             #[cfg(test)]
             listed,
         };
         if within(&mut self.failures, failure).is_err() {
+            self.free_tokens.push(slot);
             self.inconsistent(
                 "more failures were unresolved than the flush parts and the imports allow",
                 format_args!("failure {id:?}"),
@@ -1248,6 +1274,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             if matches!(&self.failures[at].standing, Standing::Healing { pending } if pending.is_empty())
             {
                 let failure = self.failures.remove(at);
+                self.free_tokens.push(failure.token);
                 let markings = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {
                     self.markings(&failure).collect()
                 });

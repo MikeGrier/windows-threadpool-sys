@@ -32,7 +32,7 @@ fn failed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
 fn failed_at(id: FailureId, writes: &[(OpId, Epoch<V>)], ticks: u64) -> TestEntry {
     Entry::Failed(Failed {
         id,
-        token: FailureToken::mint(id).0,
+        token: FailureToken::detached(id),
         cause: FailureCause::Imported {
             scope: ImportScope::All,
         },
