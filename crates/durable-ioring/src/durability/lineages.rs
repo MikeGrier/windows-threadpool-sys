@@ -109,6 +109,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             .expect("live, checked above");
         state.ended = true;
         state.leading = None;
+        // No failure observed from now on names its writes, the ones it keeps included.
+        let now = self.next_failure;
+        for write in self.writes.values_mut() {
+            if write.lineage == lineage {
+                write.until.get_or_insert(now);
+            }
+        }
         self.let_go_ended(lineage);
         // What stays is a seal with a flush out, to find the writes it let go when it answers.
         let window = &mut self.window;

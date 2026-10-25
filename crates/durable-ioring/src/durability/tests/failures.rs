@@ -178,6 +178,32 @@ fn a_write_already_covered_is_never_suspected() {
 }
 
 #[test]
+fn a_write_kept_for_one_failure_is_not_suspected_by_a_later_one() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let sealed = ops.push(&mut lineage, 1, A, DEFAULT);
+    lineage.completed(sealed, FULL);
+    let in_flight = ops.push(&mut lineage, 2, B, DEFAULT);
+    submitted(lineage.seal(1));
+    assert_eq!(
+        seen(&lineage.flushed(1, A, failed())),
+        [Seen::Failed(0, vec![sealed.seq, in_flight.seq])]
+    );
+    lineage.completed(in_flight, super::failed());
+
+    let (_, due) = import(&mut lineage, &Reach::All);
+    let failed: Vec<Seen> = seen(&due)
+        .into_iter()
+        .filter(|entry| matches!(entry, Seen::Failed(..)))
+        .collect();
+    assert_eq!(
+        failed,
+        [Seen::Failed(1, vec![sealed.seq])],
+        "the nullified write is kept for failure 0, but stopped being nameable before failure 1"
+    );
+}
+
+#[test]
 fn a_failed_flush_reaches_the_files_whose_domains_intersect_its_own_and_every_unknown_file() {
     let mut lineage = lineage();
     let mut ops = Ops::new();

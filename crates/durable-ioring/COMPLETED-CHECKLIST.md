@@ -4677,3 +4677,25 @@ order they were marked in, with the bound argued in its module doc, and its own 
 checks that the kept records are exactly the suspected writes no longer uncovered. A failure no longer carries a list of
 markings, so marking a suspected write no longer allocates; construction makes two more allocations, and the inventory
 and the resolution entries collect their markings until DI-23.12.3.4. Sabotage: eight entries added and five re-anchored, all swept as declared.
+
+## Moved 2026-10-24 21:09:03 -04:00 -- DI-23.12.3.3: the suspect set as the rule that made it
+
+### <a id="di-231233"></a>DI-23.12.3.3 -- A failure's suspects, its epochs and a heal's pending lineages are read from the write records by the rule observation applied, over a failure clock each record reads twice. *(completed 2026-10-24 21:09:03 -04:00)*
+
+**The suspect set as the rule that made it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s second item): a failure keeps its
+cut, its reach, its lineage if one was named, and what else observation filtered on, and a write is its suspect when the
+records say so; the epochs it holds, which `blocking`, gates and abandoning read, and the lineages a heal is pending on,
+read from the same records. Internal: `SuspectSet` is still built for the entries until `DI-23.12.3.4`, and a heal's
+releases are still a map until `DI-23.12.3.6`; the window's census and the oracle check that the rule names exactly the
+writes the old list did.
+
+What was built is DI-D-109's "As built (DI-23.12.3.3)". The cut turned out to be the failure's own number: a write record
+reads the failure clock when it is recorded and when it stops being nameable, which is what makes a gated write issued
+after the failure, and a write of a lineage that had ended, fall outside the set as observation left them, and ending a
+lineage now stamps the writes it leaves in the table. [suspects.rs](src/durability/suspects.rs) holds the rule's readers;
+a kept record carries what the rule reads; `stop_held` lends the records to its predicate so abandoning can read them.
+The census compares each failure's rule with the list observation would have made, kept only under `cfg(test)`. A
+failure no longer builds an epoch map at observation; the inventory and the resolution entries build their suspect sets
+from the rule until DI-23.12.3.4. One test added: a write kept for one failure is not suspected by a later one, which
+the sabotage of a kept record that never stops being nameable showed nothing covered. Sabotage: ten entries added,
+seventeen re-anchored, all swept as declared.

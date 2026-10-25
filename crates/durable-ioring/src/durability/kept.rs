@@ -10,33 +10,54 @@
 //! write's place in the window (DI-D-100), so the records are at most the places, at most the
 //! operations declared. The markings are kept in a second table in the order observed, so a
 //! failure's are read in that order.
+//!
+//! A record keeps what a failure's rule reads (DI-D-109): the write's lineage, epoch, file and
+//! domains, and the failure clock's readings when it was recorded and when it stopped being
+//! nameable, so whether a failure suspects it is decided the same way kept or uncovered.
 
+use alloc::sync::Arc;
+
+use super::Key;
 use crate::capacity::{ConstructionError, ordered};
 use crate::clock::Instant;
 use crate::contract::EpochId;
+use crate::domains::DomainId;
 use crate::ids::{DioringIds, OpId};
 use crate::ordered::Ordered;
-use crate::types::{Marking, MarkingKind};
+use crate::types::{IoTargetKey, Marking, MarkingKind};
 
 #[cfg(test)]
 mod tests;
 
+/// A write that has stopped being uncovered, as a failure's rule reads it.
+pub(super) struct Gone<E> {
+    pub(super) op: OpId,
+    pub(super) lineage: Key,
+    pub(super) epoch: E,
+    pub(super) file: IoTargetKey,
+    pub(super) domains: Arc<[DomainId]>,
+    /// The failure clock when it was recorded.
+    pub(super) born: u64,
+    /// The failure clock when it stopped being nameable: no failure observed since names it.
+    pub(super) until: u64,
+}
+
 /// One kept write.
-struct Record<I> {
-    op: OpId,
+pub(super) struct Record<E, I> {
+    pub(super) write: Gone<E>,
     /// Its marking, if it gained one: its place in the order observed, when, and what.
     marking: Option<(u64, I, MarkingKind)>,
 }
 
 /// The kept writes, by push sequence, and their markings in the order observed.
-pub(super) struct Kept<I> {
-    records: Ordered<u64, Record<I>>,
+pub(super) struct Kept<E, I> {
+    records: Ordered<u64, Record<E, I>>,
     /// The write each marking is of, by its place in the order observed.
     marked: Ordered<u64, u64>,
     next: u64,
 }
 
-impl<I: Instant> Kept<I> {
+impl<E: EpochId + 'static, I: Instant> Kept<E, I> {
     /// Room for a record for each of `operations` places.
     pub(super) fn new(operations: usize) -> Result<Self, ConstructionError> {
         Ok(Self {
@@ -46,17 +67,24 @@ impl<I: Instant> Kept<I> {
         })
     }
 
-    /// Keep write `op`, which has stopped being uncovered while a failure suspects it.
+    /// Keep `write`, which has stopped being uncovered while a failure suspects it.
     ///
     /// # Errors
     ///
     /// What about it is inconsistent: it is kept already, or there is no room for it.
-    pub(super) fn keep(&mut self, op: OpId) -> Result<(), &'static str> {
-        if self.records.get(&op.seq).is_some() {
+    pub(super) fn keep(&mut self, write: Gone<E>) -> Result<(), &'static str> {
+        let seq = write.op.seq;
+        if self.records.get(&seq).is_some() {
             return Err("a write was kept twice");
         }
         self.records
-            .insert(op.seq, Record { op, marking: None })
+            .insert(
+                seq,
+                Record {
+                    write,
+                    marking: None,
+                },
+            )
             .map(|_| ())
             .map_err(|_| "more writes were kept than there are places")
     }
@@ -87,30 +115,43 @@ impl<I: Instant> Kept<I> {
         Ok(())
     }
 
-    /// Let go of write `op`'s record, if it is kept: no failure suspects it any more.
-    pub(super) fn release(&mut self, op: u64) {
-        if let Some(Record {
-            marking: Some((order, ..)),
-            ..
-        }) = self.records.remove(&op)
-        {
-            self.marked.remove(&order);
-        }
+    /// Let go of every record `gone` picks: no failure suspects its write any more.
+    pub(super) fn release_where(&mut self, mut gone: impl FnMut(&Gone<E>) -> bool) {
+        let marked = &mut self.marked;
+        self.records.retain(|_, record| {
+            if !gone(&record.write) {
+                return true;
+            }
+            if let Some((order, ..)) = record.marking {
+                marked.remove(&order);
+            }
+            false
+        });
+    }
+
+    /// The kept write pushed `seq`th, if it is kept.
+    pub(super) fn get(&self, seq: u64) -> Option<&Gone<E>> {
+        self.records.get(&seq).map(|record| &record.write)
+    }
+
+    /// The kept writes, by push sequence.
+    pub(super) fn writes(&self) -> impl Iterator<Item = &Gone<E>> + Clone {
+        self.records.values().map(|record| &record.write)
     }
 
     /// Every marking of a write `suspects` picks, in the order observed.
-    pub(super) fn markings<'a, E: EpochId + 'static>(
+    pub(super) fn markings<'a>(
         &'a self,
         suspects: impl Fn(OpId) -> bool + 'a,
     ) -> impl Iterator<Item = Marking<DioringIds<E, I>>> + 'a {
         self.marked
             .values()
             .filter_map(|op| self.records.get(op))
-            .filter(move |record| suspects(record.op))
+            .filter(move |record| suspects(record.write.op))
             .filter_map(|record| {
                 let (_, observed, kind) = record.marking.as_ref()?;
                 Some(Marking {
-                    write: record.op,
+                    write: record.write.op,
                     observed: *observed,
                     kind: kind.clone(),
                 })

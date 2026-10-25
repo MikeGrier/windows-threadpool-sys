@@ -2327,11 +2327,19 @@ notes when it is created.
   domains, and imported ones at most `imports`; the storage is sized from those. **As built** (DI-23.12.3.1): the
   failure table is a list made at construction for `Capacity::failures`, kept in observation order, a failure past it an
   inconsistency; the argument is at that function, and an answer for a lineage no longer live -- a flush's, a provider's,
-  failed or abandoned -- observes nothing, which a test shows. Each failure's own suspect list and epochs still
-  allocate, until DI-23.12.3.3; its markings are kept on the write records since DI-23.12.3.2
-  ([DI-D-108](#di-d-108)'s as built).
+  failed or abandoned -- observes nothing, which a test shows. A failure's own suspect list and epochs are gone since
+  DI-23.12.3.3, read from the write records by its rule (below); its markings are kept on those records since
+  DI-23.12.3.2 ([DI-D-108](#di-d-108)'s as built).
 - **A failure's suspect set is the rule that made it** -- its cut, its reach, its lineage -- over write records that keep
-  where they stopped being uncovered ([DI-D-108](#di-d-108)'s (c) as built).
+  where they stopped being uncovered ([DI-D-108](#di-d-108)'s (c) as built). **As built** (DI-23.12.3.3): the cut is
+  the failure's own number on a failure clock that every write record reads twice, when it is recorded and when it stops
+  being nameable -- covered, nullified, let go, or its lineage ended, whichever first. A failure numbered `n` suspects a
+  write recorded at or before `n` and nameable after it, of its lineage if it was confined to one, whose file its reach
+  covers; that is what observation filtered on, so the set stays frozen (DI-D-12 (b)). A kept record carries the same
+  readings, so the rule reads it as it reads an uncovered write. The epochs a failure holds, which `blocking`, the gate
+  search and abandoning read, and the lineages a heal is pending on, are its suspects', read the same way; a heal's
+  release for each lineage is still a map made at the heal, until DI-23.12.3.6. The census compares each failure's rule
+  with the list observation would have made, and the oracle compares each resolution entry's set with `Failed`'s.
 - **The completion queue is sized by derivation**: a `Marked` is queued once per marked write and expanded at pop into one
   entry per failure observed before the marking that suspects the write, in observation order.
 - **An abandoned epoch is forgotten once the mark passes it.** A contract change: `epoch_state` reports an epoch at or

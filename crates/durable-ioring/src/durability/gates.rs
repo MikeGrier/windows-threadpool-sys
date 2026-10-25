@@ -22,16 +22,19 @@
 //! cycle, [`Durability::trace`] repeats the search with a parent per step to name it. A push with
 //! no gate, and a seal over no held write, never search at all.
 
-use alloc::collections::BTreeMap;
-use alloc::collections::BTreeSet;
-use core::ops::Bound;
+use core::ops::{Bound, RangeBounds};
 
-use super::{Accepted, Due, Durability, Event, Gate, HeldOp, Key, Standing, State, tables};
+use super::kept::Kept;
+use super::suspects::suspects;
+use super::{
+    Accepted, Due, Durability, Event, Failure, Gate, HeldOp, Key, Standing, State, Write, tables,
+};
 use crate::alloc_tags::{tag, tagged};
 use crate::capacity::within;
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::ids::OpId;
+use crate::ordered::Ordered;
 
 /// Where a gate stands when an operation names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,11 +217,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             let Some(release) = pending.get(&target.lineage) else {
                 continue;
             };
-            let holds = failure.epochs.get(&target.lineage).is_some_and(|epochs| {
-                epochs
-                    .range((lower, Bound::Included(target.epoch)))
-                    .next()
-                    .is_some()
+            let holds = suspects(&self.writes, &self.kept, failure).any(|write| {
+                write.lineage == target.lineage
+                    && (lower, Bound::Included(target.epoch)).contains(&write.epoch)
             });
             if holds
                 && let Some((_, through)) = seals
@@ -458,18 +459,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// End as never issued every held operation an abandoned failure stopped (DI-D-43): one whose
     /// gate it abandoned, and a write whose own epoch it abandoned, which no write may join
     /// (DI-D-35). The gate is named when both were.
-    pub(super) fn abandon_held(
-        &mut self,
-        epochs: &BTreeMap<Key, BTreeSet<E>>,
-        due: &mut Due<E, T, I>,
-    ) {
-        let hit = |at: Gate<E>| {
-            epochs
-                .get(&at.lineage)
-                .is_some_and(|epochs| epochs.contains(&at.epoch))
-        };
+    pub(super) fn abandon_held(&mut self, failure: &Failure<E, I>, due: &mut Due<E, T, I>) {
         self.stop_held(
-            |held| {
+            |writes, kept, held| {
+                let hit = |at: Gate<E>| {
+                    suspects(writes, kept, failure)
+                        .any(|write| write.lineage == at.lineage && write.epoch == at.epoch)
+                };
                 if !held.ready && hit(held.gate) {
                     return Some(held.gate);
                 }
@@ -490,7 +486,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// gate.
     pub(super) fn end_held(&mut self, lineage: Key, due: &mut Due<E, T, I>) {
         self.stop_held(
-            |held| match &held.write {
+            |_, _, held| match &held.write {
                 Some(write) if write.lineage == lineage => Some(Gate {
                     lineage,
                     epoch: write.epoch,
@@ -516,17 +512,18 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     }
 
     /// End as never issued, in push order, every held operation `stopped` names an abandoned epoch
-    /// for.
+    /// for, given the uncovered and the kept writes to read.
     fn stop_held(
         &mut self,
-        stopped: impl Fn(&HeldOp<E, T>) -> Option<Gate<E>>,
+        stopped: impl Fn(&Ordered<u64, Write<E, T>>, &Kept<E, I>, &HeldOp<E, T>) -> Option<Gate<E>>,
         due: &mut Due<E, T, I>,
     ) {
+        let (writes, kept) = (&self.writes, &self.kept);
         let (gated, held_by_epoch) = (&mut self.gated, &mut self.held_by_epoch);
         self.held.take_where(
-            |_, held| stopped(held).is_some(),
+            |_, held| stopped(writes, kept, held).is_some(),
             |&seq, held| {
-                let Some(abandoned) = stopped(&held) else {
+                let Some(abandoned) = stopped(writes, kept, &held) else {
                     return;
                 };
                 if let Some(write) = &held.write {

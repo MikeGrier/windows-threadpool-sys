@@ -93,12 +93,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.3.2** -- A suspected write keeps its record and its marking once, in a table made at construction for the operations, and a failure's markings are read from those records. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231232)
 
-- [ ] **DI-23.12.3.3** -- **The suspect set as the rule that made it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s second
-  item): a failure keeps its cut, its reach, its lineage if one was named, and what else observation filtered on, and a
-  write is its suspect when the records say so; the epochs it holds, which `blocking`, gates and abandoning read, and the
-  lineages a heal is pending on, read from the same records. Internal: `SuspectSet` is still built for the entries until
-  `DI-23.12.3.4`, and a heal's releases are still a map until `DI-23.12.3.6`; the window's census and the oracle check
-  that the rule names exactly the writes the old list did.
+- [x] **DI-23.12.3.3** -- A failure's suspects, its epochs and a heal's pending lineages are read from the write records by the rule observation applied, over a failure clock each record reads twice. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231233)
 
 - [ ] **DI-23.12.3.4** -- **A failure's records lent by a scoped borrow** ([DI-D-108](DESIGN-NOTES.md#di-d-108)):
   `Failed`, `Abandoned`, `Healed` and `FailureInfo` carry the failure's identity, token, cause and stamp, and its suspect

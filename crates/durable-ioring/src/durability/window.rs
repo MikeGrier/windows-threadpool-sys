@@ -18,12 +18,12 @@
 
 use fixed_hash_table::HeapMap;
 
-use super::{Durability, V};
+use super::suspects::suspects;
+use super::{Durability, Failure};
 use crate::capacity::{ConstructionError, table};
 use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::ids::OpId;
-use crate::types::SuspectSet;
 
 #[cfg(test)]
 mod tests;
@@ -204,23 +204,46 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         self.window_inconsistent(held, op);
     }
 
-    /// A failure now suspects every write of `suspect`, and holds each one's place until it is
-    /// resolved.
-    pub(super) fn hold_suspects(&mut self, suspect: &SuspectSet<V<E, I>>) {
-        for write in suspect.writes() {
-            let held = self.window.hold(write.op.seq, Holder::Suspect);
-            self.window_inconsistent(held, write.op);
+    /// The failure observed `at` in the table holds the place of every write it suspects, until it
+    /// is resolved. Every one is uncovered: it was just observed.
+    pub(super) fn hold_suspects(&mut self, at: usize) {
+        let failure = &self.failures[at];
+        let mut lost = None;
+        for write in suspects(&self.writes, &self.kept, failure) {
+            if let Err(what) = self.window.hold(write.op.seq, Holder::Suspect) {
+                lost.get_or_insert((what, write.op));
+            }
+        }
+        if let Some((what, op)) = lost {
+            self.window_inconsistent(Err(what), op);
         }
     }
 
-    /// A failure that suspected every write of `suspect` is resolved: it lets go of their places.
-    pub(super) fn release_suspects(&mut self, suspect: &SuspectSet<V<E, I>>) {
-        for write in suspect.writes() {
-            let released = self.window.release(write.op.seq, Holder::Suspect);
-            self.window_inconsistent(released, write.op);
-            if !self.window.suspected(write.op.seq) {
-                self.kept.release(write.op.seq);
+    /// `failure`, out of the table, is resolved: it lets go of its suspects' places, and a kept
+    /// write nothing suspects any more is let go.
+    pub(super) fn release_suspects(&mut self, failure: &Failure<E, I>) {
+        let mut lost = None;
+        let uncovered = self
+            .writes
+            .values()
+            .filter(|write| failure.names(write.born, write.until, write.lineage, &write.domains));
+        for write in uncovered {
+            if let Err(what) = self.window.release(write.op.seq, Holder::Suspect) {
+                lost.get_or_insert((what, write.op));
             }
+        }
+        let window = &mut self.window;
+        self.kept.release_where(|write| {
+            if !failure.names(write.born, Some(write.until), write.lineage, &write.domains) {
+                return false;
+            }
+            if let Err(what) = window.release(write.op.seq, Holder::Suspect) {
+                lost.get_or_insert((what, write.op));
+            }
+            !window.suspected(write.op.seq)
+        });
+        if let Some((what, op)) = lost {
+            self.window_inconsistent(Err(what), op);
         }
     }
 
@@ -241,15 +264,22 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
 
     /// Whether the places the writes, the failures and the seals hold are exactly the uncovered
     /// writes, each write once for every unresolved failure suspecting it, and the write each
-    /// recorded seal pins; and whether the kept records are exactly the suspected writes no longer
-    /// uncovered (DI-D-108).
+    /// recorded seal pins; whether the kept records are exactly the suspected writes no longer
+    /// uncovered (DI-D-108); and whether each failure's rule names exactly the writes observation
+    /// listed (DI-D-109).
     #[cfg(test)]
     pub(super) fn window_agrees(&self) -> bool {
         let uncovered = self.writes.keys().map(|&op| (op, 1)).collect();
         let mut suspected = std::collections::BTreeMap::new();
+        let mut ruled = true;
         for failure in &self.failures {
-            for write in failure.suspect.writes() {
-                *suspected.entry(write.op.seq).or_insert(0) += 1;
+            let mut named: std::vec::Vec<u64> = suspects(&self.writes, &self.kept, failure)
+                .map(|write| write.op.seq)
+                .collect();
+            named.sort_unstable();
+            ruled &= named == failure.listed;
+            for &op in &named {
+                *suspected.entry(op).or_insert(0) += 1;
             }
         }
         let pinned = self
@@ -267,6 +297,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             && self.window.held_by(Holder::Suspect) == suspected
             && self.window.held_by(Holder::Seal) == pinned
             && self.kept.ops().collect::<std::collections::BTreeSet<_>>() == kept
+            && ruled
     }
 
     /// The operations whose place the operation itself holds.

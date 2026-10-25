@@ -182,10 +182,10 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_FAILURES_MARKINGS: Tag = Tag::new("durability::failures::markings");
     pub(crate) const DURABILITY_FAILURES_INFO: Tag = Tag::new("durability::failures::info");
     pub(crate) const DURABILITY_OBSERVE_SUSPECT: Tag = Tag::new("durability::observe::suspect");
-    pub(crate) const DURABILITY_OBSERVE_EPOCHS_LINEAGE: Tag =
-        Tag::new("durability::observe::epochs_lineage");
-    pub(crate) const DURABILITY_OBSERVE_EPOCHS_EPOCH: Tag =
-        Tag::new("durability::observe::epochs_epoch");
+    pub(crate) const DURABILITY_RESOLVE_SUSPECT: Tag = Tag::new("durability::resolve::suspect");
+    pub(crate) const DURABILITY_RELEASE_HEALED_SUSPECT: Tag =
+        Tag::new("durability::release_healed::suspect");
+    pub(crate) const DURABILITY_FAILURES_SUSPECT: Tag = Tag::new("durability::failures::suspect");
     pub(crate) const DURABILITY_OBSERVE_CAUSE: Tag = Tag::new("durability::observe::cause");
     pub(crate) const DURABILITY_OBSERVE_EVENT: Tag = Tag::new("durability::observe::event");
     pub(crate) const DURABILITY_MARK_EVENT: Tag = Tag::new("durability::mark::event");

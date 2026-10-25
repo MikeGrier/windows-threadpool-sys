@@ -242,8 +242,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (f): an epoch is abandoned if any failure containing it was. Reported Durable instead, the consumer would believe lost writes are on the media. Caught by the state assertions, unit, I/O and the worked examples.",
-      "find": ["                            state.abandoned.extend(epochs.iter().copied());\n"],
-      "replace": ["                            let _ = (state, epochs);\n"]
+      "find": ["                                state.abandoned.insert(write.epoch);"],
+      "replace": ["                                let _ = (state, write);"]
     },
     {
       "name": "DI-3.2.4: no failure holds the high-water mark",
@@ -415,19 +415,19 @@
     },
     {
       "name": "DI-3.2.4.2: a marking finds only the first suspect write",
-      "file": "src/durability.rs",
+      "file": "src/durability/suspects.rs",
       "expect": "caught",
       "why": "The lookup is what ties a completion to the failures suspecting it; one that sees only the first write of each set loses the rest.",
-      "find": ["        writes\n            .binary_search_by_key(&write.seq, |suspect| suspect.op.seq)\n            .is_ok_and(|at| writes[at].op == write)\n"],
-      "replace": ["        writes\n            .first()\n            .is_some_and(|suspect| suspect.op == write)\n"]
+      "find": ["        self.kept.get(op.seq).is_some_and(|write| {"],
+      "replace": ["        self.kept.writes().next().is_some_and(|write| {"]
     },
     {
       "name": "DI-3.2.4.2: a heal takes effect without its Healed entry",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal's final record is the one DI-D-36 found missing: the failure leaves the inventory, and with no entry its record is lost.",
-      "find": ["                self.release_suspects(&failure.suspect);\n                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {\n                    due.events.push(Event::Healed {\n                        failure: failure.id,\n                        suspect: failure.suspect,\n                        markings,\n                    });\n                });\n"],
-      "replace": ["                self.release_suspects(&failure.suspect);\n                drop::<(_, Vec<_>)>((failure, markings));\n"]
+      "find": ["                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {","                    due.events.push(Event::Healed {","                        failure: failure.id,","                        suspect,","                        markings,","                    });","                });"],
+      "replace": ["                drop::<(_, Vec<_>)>((suspect, markings));"]
     },
     {
       "name": "DI-3.2.4.2: the inventory reports no markings",
@@ -474,8 +474,8 @@
       "file": "src/durability.rs",
       "expect": "survives",
       "why": "The manifest checking itself. Minting the token and freezing the suspect set read no clock and cannot move one, and all of it happens inside the one transition under the lock, so reading the clock first changes no stamp.",
-      "find": ["        let (token, live) = FailureToken::mint(id);", "        let suspect = SuspectSet::new(suspect);", "        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());"],
-      "replace": ["        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());", "        let (token, live) = FailureToken::mint(id);", "        let suspect = SuspectSet::new(suspect);"]
+      "find": ["        let (token, live) = FailureToken::mint(id);","        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());"],
+      "replace": ["        let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());","        let (token, live) = FailureToken::mint(id);"]
     },
     {
       "name": "DI-3.2.5.1: ending a lineage abandons nothing",
@@ -506,8 +506,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-41: once a lineage's next seal succeeds after the heal, the failure stops holding that lineage, whose mark may pass it before the failure is healed everywhere. Caught by the tests whose first lineage reports Durable while the failure still holds the second.",
-      "find": ["            Standing::Healing { pending } => pending.contains_key(&lineage).then_some(epochs),\n"],
-      "replace": ["            Standing::Healing { .. } => Some(epochs),\n"]
+      "find": ["            Standing::Healing { pending } => pending.contains_key(&lineage),"],
+      "replace": ["            Standing::Healing { .. } => true,"]
     },
     {
       "name": "DI-3.2.5.1: ending a lineage does not release a heal waiting for it",
@@ -890,8 +890,8 @@
       "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "IoTargetBusy.uncovered is outside every failure's suspect set; a suspect write is reported through its failure, and counting it twice tells the consumer to seal what sealing cannot clear.",
-      "find": ["            && !self\n                .failures\n                .iter()\n                .any(|failure| failure.suspects(write.op))\n"],
-      "replace": [""]
+      "find": ["            && !self","                .failures","                .iter()","                .any(|failure| self.suspects(failure, write.op))"],
+      "replace": []
     },
     {
       "name": "DI-3.2.7: a write in flight is also counted as uncovered",
@@ -911,11 +911,11 @@
     },
     {
       "name": "DI-3.2.7: every failure is said to hold every file",
-      "file": "src/durability.rs",
+      "file": "src/durability/suspects.rs",
       "expect": "caught",
       "why": "A failure holds a file only when its suspect set names a write to it; reporting the rest asks the consumer to resolve failures that do not concern the file.",
-      "find": ["            .any(|write| write.target == file)\n"],
-      "replace": ["            .any(|_| true)\n"]
+      "find": ["        suspects(&self.writes, &self.kept, failure).any(|write| write.file == file)"],
+      "replace": ["        suspects(&self.writes, &self.kept, failure).any(|_| true)"]
     },
     {
       "name": "DI-3.2.7: a completion never clears its file's last operation",
@@ -2336,8 +2336,8 @@
       "file": "src/durability/spans.rs",
       "expect": "survives",
       "why": "The control. Which lost write the inconsistency names, when several are lost in one let-go, changes no state and no outcome; a test failing here would be asserting the message's choice of example.",
-      "find": ["                if let Some(what) = forget(spans, window, kept, &write) {\n                    lost.get_or_insert((what, write.op));\n"],
-      "replace": ["                if let Some(what) = forget(spans, window, kept, &write) {\n                    lost = Some((what, write.op));\n"]
+      "find": ["                if let Some(what) = forget(spans, window, kept, &write, now) {","                    lost.get_or_insert((what, write.op));"],
+      "replace": ["                if let Some(what) = forget(spans, window, kept, &write, now) {","                    lost = Some((what, write.op));"]
     },
     {
       "name": "DI-23.7: every seal is recorded",
@@ -2424,24 +2424,24 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A failure holds the places of its suspect writes until resolved (DI-D-100), after the writes are covered or failed. Without it a failure outlives the places that bound its suspect set.",
-      "find": ["        self.hold_suspects(&suspect);"],
-      "replace": [""]
+      "find": ["        self.hold_suspects(at);"],
+      "replace": []
     },
     {
       "name": "DI-23.8.1: an abandoned failure keeps its places",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Resolving a failure lets go of the places it held; one that never does leaves them counted for ever and shrinks the window for good.",
-      "find": ["                    self.release_suspects(&failure.suspect);\n                    for (lineage, epochs) in &failure.epochs {\n"],
-      "replace": ["                    for (lineage, epochs) in &failure.epochs {\n"]
+      "find": ["                    self.abandon_held(&failure, &mut due);","                    self.release_suspects(&failure);"],
+      "replace": ["                    self.abandon_held(&failure, &mut due);"]
     },
     {
       "name": "DI-23.8.1: a healed failure keeps its places",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal that takes effect resolves its failure as an abandon does; its places must go with it.",
-      "find": ["                self.release_suspects(&failure.suspect);\n                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {\n"],
-      "replace": ["                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {\n"]
+      "find": ["                self.release_suspects(&failure);","            } else {"],
+      "replace": ["            } else {"]
     },
     {
       "name": "DI-23.8.1: a write that is no longer uncovered keeps its place",
@@ -2912,8 +2912,8 @@
       "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "lineage_holds and retire_lineage count only the failures holding the lineage.",
-      "find": ["            if failure.holds(lineage).is_some() {\n"],
-      "replace": ["            if true {\n"]
+      "find": ["            if self.holds_within(failure, lineage, ..) {"],
+      "replace": ["            if true {"]
     },
     {
       "name": "DI-23.11: the engine gives no provider request",
@@ -3240,8 +3240,8 @@
       "file": "src/durability/window.rs",
       "expect": "caught",
       "why": "A record is kept while a failure suspects its write; once the last is resolved it is let go, or the records outlive the places that bound them.",
-      "find": ["                self.kept.release(write.op.seq);\n"],
-      "replace": [""]
+      "find": ["            !window.suspected(write.op.seq)"],
+      "replace": ["            false"]
     },
     {
       "name": "DI-23.12.3.2: a marking is not kept",
@@ -3256,32 +3256,112 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Only a suspected write is kept, so marking one no failure suspects marks a write with no record, an inconsistency.",
-      "find": ["        if !self.failures.iter().any(|failure| failure.suspects(write)) {\n            return;\n        }\n"],
-      "replace": [""]
+      "find": ["        if !self","            .failures","            .iter()","            .any(|failure| self.suspects(failure, write))","        {","            return;","        }"],
+      "replace": []
     },
     {
       "name": "DI-23.12.3.2: a released write's marking keeps its room",
       "file": "src/durability/kept.rs",
       "expect": "caught",
       "why": "The markings table is made for the kept writes, so a released write must give its marking room back with it.",
-      "find": ["            self.marked.remove(&order);\n"],
-      "replace": ["            let _ = order;\n"]
+      "find": ["                marked.remove(&order);"],
+      "replace": ["                let _ = order;"]
     },
     {
       "name": "DI-23.12.3.2: an abandoned failure's markings are read after its writes are released",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Releasing a failure's suspects lets go of the records its markings are read from, so they are read first.",
-      "find": ["                    let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {\n                        self.markings(&failure).collect()\n                    });\n                    self.release_suspects(&failure.suspect);\n"],
-      "replace": ["                    self.release_suspects(&failure.suspect);\n                    let markings: Vec<_> = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {\n                        self.markings(&failure).collect()\n                    });\n"]
+      "find": ["                    let failure = self.failures.remove(index);","                    let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {","                        self.markings(&failure).collect()","                    });","                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);","                    let (writes, kept, lineages) = (&self.writes, &self.kept, &mut self.lineages);","                    for write in suspects(writes, kept, &failure) {","                        if let Some(state) = lineages.get_mut(&write.lineage) {","                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {","                                state.abandoned.insert(write.epoch);","                            });","                        }","                    }","                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {","                        due.events.push(Event::Abandoned {","                            failure: failure.id,","                            suspect,","                            markings,","                        });","                    });","                    self.abandon_held(&failure, &mut due);","                    self.release_suspects(&failure);"],
+      "replace": ["                    let failure = self.failures.remove(index);","                    self.release_suspects(&failure);","                    let markings: Vec<_> = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {","                        self.markings(&failure).collect()","                    });","                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);","                    let (writes, kept, lineages) = (&self.writes, &self.kept, &mut self.lineages);","                    for write in suspects(writes, kept, &failure) {","                        if let Some(state) = lineages.get_mut(&write.lineage) {","                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {","                                state.abandoned.insert(write.epoch);","                            });","                        }","                    }","                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {","                        due.events.push(Event::Abandoned {","                            failure: failure.id,","                            suspect,","                            markings,","                        });","                    });","                    self.abandon_held(&failure, &mut due);"]
     },
     {
       "name": "DI-23.12.3.2: a healed failure's markings are read after its writes are released",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "As for an abandoned failure: the records its markings are read from go with its suspects.",
-      "find": ["                let markings = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {\n                    self.markings(&failure).collect()\n                });\n                self.release_suspects(&failure.suspect);\n"],
-      "replace": ["                self.release_suspects(&failure.suspect);\n                let markings: Vec<_> = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {\n                    self.markings(&failure).collect()\n                });\n"]
+      "find": ["                let failure = self.failures.remove(at);","                let markings = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {","                    self.markings(&failure).collect()","                });","                let suspect = self.suspect_set(&failure, tag::DURABILITY_RELEASE_HEALED_SUSPECT);","                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {","                    due.events.push(Event::Healed {","                        failure: failure.id,","                        suspect,","                        markings,","                    });","                });","                self.release_suspects(&failure);"],
+      "replace": ["                let failure = self.failures.remove(at);","                self.release_suspects(&failure);","                let markings: Vec<_> = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {","                    self.markings(&failure).collect()","                });","                let suspect = self.suspect_set(&failure, tag::DURABILITY_RELEASE_HEALED_SUSPECT);","                tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {","                    due.events.push(Event::Healed {","                        failure: failure.id,","                        suspect,","                        markings,","                    });","                });"]
+    },
+    {
+      "name": "DI-23.12.3.3: the rule names a write recorded after the failure",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A failure names only writes recorded by the time it was observed: its set is frozen then (DI-D-12 (b)), so a write pushed or issued from its gate afterwards is not its suspect, which the census compares with what observation listed.",
+      "find": ["        born <= at\n"],
+      "replace": ["        true\n"]
+    },
+    {
+      "name": "DI-23.12.3.3: the rule names a write that stopped being nameable before the failure",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A write covered, nullified, let go, or of a lineage that ended before a failure was observed is not its suspect, even while another failure keeps its record.",
+      "find": ["            && until.is_none_or(|until| until > at)\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.3.3: the rule ignores the lineage a failure was confined to",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "An import confined to one lineage suspects only that lineage's writes (DI-D-12 (h)).",
+      "find": ["            && self.only.is_none_or(|only| only == lineage)\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.3.3: the rule ignores the failure's reach",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A failure suspects only the writes to files its reach covers (DI-D-21).",
+      "find": ["            && self.reach.reaches(domains)\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.3.3: an ended lineage's writes stay nameable",
+      "file": "src/durability/lineages.rs",
+      "expect": "caught",
+      "why": "A write of a lineage that has ended is not suspected by a failure observed afterwards, even while its seal's flush keeps it uncovered (DI-D-30).",
+      "find": ["                write.until.get_or_insert(now);\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.3.3: a kept write never stops being nameable",
+      "file": "src/durability/spans.rs",
+      "expect": "caught",
+      "why": "A kept record reads the clock when its write stopped being uncovered; a record that never stops would be named by every later failure.",
+      "find": ["            until: write.until.unwrap_or(now),\n"],
+      "replace": ["            until: u64::MAX,\n"]
+    },
+    {
+      "name": "DI-23.12.3.3: a heal is pending on no lineage",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A heal holds each live lineage its suspects belong to until that lineage's release (DI-D-41), read from the records.",
+      "find": ["                                pending.insert(write.lineage, release);\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.3.3: an abandon stops no held operation",
+      "file": "src/durability/gates.rs",
+      "expect": "caught",
+      "why": "Abandoning ends as never issued every held operation gated on, or writing to, an epoch of the failure's suspects (DI-D-43), read from the records.",
+      "find": ["                        .any(|write| write.lineage == at.lineage && write.epoch == at.epoch)\n"],
+      "replace": ["                        .any(|_| false)\n"]
+    },
+    {
+      "name": "DI-23.12.3.3: a healing failure raises no extent",
+      "file": "src/durability/gates.rs",
+      "expect": "caught",
+      "why": "A healing failure holding an epoch of the target lineage at or below the gate raises its extent to the seal its heal waits for (DI-D-41, DI-D-46), read from the records.",
+      "find": ["                    && (lower, Bound::Included(target.epoch)).contains(&write.epoch)\n"],
+      "replace": ["                    && false\n"]
+    },
+    {
+      "name": "DI-23.12.3.3: the entries' suspect sets are not in push order",
+      "file": "src/durability/suspects.rs",
+      "expect": "caught",
+      "why": "The rule reads uncovered writes before kept ones, so the set the entries carry is sorted into push order, which the oracle compares with Failed.",
+      "find": ["        writes.sort_unstable_by_key(|write| write.op.seq);\n"],
+      "replace": [""]
     }
   ]
 }

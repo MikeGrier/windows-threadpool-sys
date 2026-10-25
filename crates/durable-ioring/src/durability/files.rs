@@ -42,7 +42,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             failures: self
                 .failures
                 .iter()
-                .filter(|failure| failure.suspects_a_write_to(file))
+                .filter(|failure| self.suspects_a_write_to(failure, file))
                 .count(),
         }
     }
@@ -66,7 +66,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// Each unresolved failure whose suspect set includes a write to `file`, in observation order.
     pub(crate) fn file_failures(&self, file: IoTargetKey, mut visit: impl FnMut(FailureId)) {
         for failure in &self.failures {
-            if failure.suspects_a_write_to(file) {
+            if self.suspects_a_write_to(failure, file) {
                 visit(failure.id);
             }
         }
@@ -84,13 +84,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             && !self
                 .failures
                 .iter()
-                .any(|failure| failure.suspects(write.op))
+                .any(|failure| self.suspects(failure, write.op))
     }
 
     /// Each unresolved failure holding `lineage`, in observation order.
     pub(crate) fn lineage_failures(&self, lineage: Key, mut visit: impl FnMut(FailureId)) {
         for failure in &self.failures {
-            if failure.holds(lineage).is_some() {
+            if self.holds_within(failure, lineage, ..) {
                 visit(failure.id);
             }
         }

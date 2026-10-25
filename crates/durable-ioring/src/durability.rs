@@ -72,8 +72,8 @@ use crate::diagnostics::{
 use crate::domains::DomainId;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::types::{
-    Epoch, Failed, FailureCause, FailureInfo, FlushDomain, IoFault, IoTargetKey, Marking,
-    MarkingKind, Resolution, ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
+    Failed, FailureCause, FailureInfo, FlushDomain, IoFault, IoTargetKey, Marking, MarkingKind,
+    Resolution, ResolveError, ResolveRefusal,
 };
 
 mod empties;
@@ -85,6 +85,7 @@ mod lineages;
 mod providers;
 mod scratch;
 mod spans;
+mod suspects;
 mod tables;
 mod window;
 
@@ -93,6 +94,7 @@ use empties::{Empty, release_heals};
 use kept::Kept;
 use scratch::Scratch;
 use spans::{Span, SpanFile, Spans};
+use suspects::suspects;
 use tables::{Counts, Seals};
 use window::Window;
 
@@ -218,6 +220,10 @@ struct Write<E, T> {
     routing: Routing,
     domains: Arc<[DomainId]>,
     stage: Stage,
+    /// The failure clock when it was recorded: no failure observed before names it.
+    born: u64,
+    /// The failure clock when its lineage ended, if it has: no failure observed since names it.
+    until: Option<u64>,
 }
 
 /// One domain a seal asked the consumer's provider about.
@@ -287,39 +293,40 @@ impl<E: Ord + Copy> Release<E> {
     }
 }
 
+/// An unresolved failure. Its suspect writes are not listed: they are the ones its rule names
+/// ([`suspects()`]), read from the write records.
 struct Failure<E: EpochId + 'static, I: Instant> {
     id: FailureId,
     cause: FailureCause<V<E, I>>,
-    suspect: SuspectSet<V<E, I>>,
+    /// The files whose writes it reaches.
+    reach: Reach,
+    /// The lineage it was confined to, if one was named.
+    only: Option<Key>,
     observed: I,
-    /// The epochs of its suspect writes, by lineage: the lineages it belongs to.
-    epochs: BTreeMap<Key, BTreeSet<E>>,
     standing: Standing<E>,
+    /// The suspect writes as observation listed them, for the census to compare the rule with.
+    #[cfg(test)]
+    listed: Vec<u64>,
 }
 
 impl<E: EpochId + 'static, I: Instant> Failure<E, I> {
-    /// Whether this failure's suspect set includes a write to `file`.
-    fn suspects_a_write_to(&self, file: IoTargetKey) -> bool {
-        self.suspect
-            .writes()
-            .iter()
-            .any(|write| write.target == file)
+    /// Whether this failure names a write recorded at failure clock `born`, nameable until
+    /// `until` if it has stopped being, of `lineage`, to a file declared with `domains`: whether
+    /// observation would have, which is what freezes the set (DI-D-12 (b)).
+    fn names(&self, born: u64, until: Option<u64>, lineage: Key, domains: &[DomainId]) -> bool {
+        let at = self.id.seq;
+        born <= at
+            && until.is_none_or(|until| until > at)
+            && self.only.is_none_or(|only| only == lineage)
+            && self.reach.reaches(domains)
     }
 
-    /// Whether `write` is in this failure's suspect set, which is in push order.
-    fn suspects(&self, write: OpId) -> bool {
-        let writes = self.suspect.writes();
-        writes
-            .binary_search_by_key(&write.seq, |suspect| suspect.op.seq)
-            .is_ok_and(|at| writes[at].op == write)
-    }
-
-    /// The epochs of `lineage` this failure holds, if it holds the lineage at all.
-    fn holds(&self, lineage: Key) -> Option<&BTreeSet<E>> {
-        let epochs = self.epochs.get(&lineage)?;
+    /// Whether this failure still holds `lineage`'s epochs among its suspects': open, or healing
+    /// and pending on it.
+    fn pending(&self, lineage: Key) -> bool {
         match &self.standing {
-            Standing::Open(_) => Some(epochs),
-            Standing::Healing { pending } => pending.contains_key(&lineage).then_some(epochs),
+            Standing::Open(_) => true,
+            Standing::Healing { pending } => pending.contains_key(&lineage),
         }
     }
 }
@@ -417,7 +424,9 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     /// The unresolved failures, in observation order.
     failures: Vec<Failure<E, I>>,
     /// Writes no longer uncovered that an unresolved failure still suspects, with their markings.
-    kept: Kept<I>,
+    kept: Kept<E, I>,
+    /// The failure clock: the number the next failure observed takes. A write record reads it when
+    /// it is recorded and when it stops being nameable, which is what a failure's rule compares.
     next_failure: u64,
     /// The operations held for their gates, by push order.
     held: Ordered<u64, HeldOp<E, T>>,
@@ -770,6 +779,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             routing,
             domains,
             stage: Stage::InFlight,
+            born: self.next_failure,
+            until: None,
         };
         if self.writes.insert(op.seq, write).is_err() {
             self.inconsistent(
@@ -1022,39 +1033,45 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {
                         self.markings(&failure).collect()
                     });
-                    self.release_suspects(&failure.suspect);
-                    for (lineage, epochs) in &failure.epochs {
-                        if let Some(state) = self.lineages.get_mut(lineage) {
+                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);
+                    let (writes, kept, lineages) = (&self.writes, &self.kept, &mut self.lineages);
+                    for write in suspects(writes, kept, &failure) {
+                        if let Some(state) = lineages.get_mut(&write.lineage) {
                             tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {
-                                state.abandoned.extend(epochs.iter().copied());
+                                state.abandoned.insert(write.epoch);
                             });
                         }
                     }
                     tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {
                         due.events.push(Event::Abandoned {
                             failure: failure.id,
-                            suspect: failure.suspect,
+                            suspect,
                             markings,
                         });
                     });
-                    self.abandon_held(&failure.epochs, &mut due);
+                    self.abandon_held(&failure, &mut due);
+                    self.release_suspects(&failure);
                 }
                 Resolution::Heal => {
                     let lineages = &self.lineages;
+                    let failure = &self.failures[index];
                     let pending = tagged(tag::DURABILITY_RESOLVE_HEAL_PENDING, || {
-                        self.failures[index]
-                            .epochs
-                            .keys()
-                            .filter_map(|key| {
-                                lineages.get(key).filter(|state| !state.ended).map(|state| {
-                                    let release = Release {
-                                        after: state.next_seal,
-                                        through: state.pushed_through,
-                                    };
-                                    (*key, release)
-                                })
-                            })
-                            .collect()
+                        let mut pending = BTreeMap::new();
+                        for write in suspects(&self.writes, &self.kept, failure) {
+                            if pending.contains_key(&write.lineage) {
+                                continue;
+                            }
+                            if let Some(state) =
+                                lineages.get(&write.lineage).filter(|state| !state.ended)
+                            {
+                                let release = Release {
+                                    after: state.next_seal,
+                                    through: state.pushed_through,
+                                };
+                                pending.insert(write.lineage, release);
+                            }
+                        }
+                        pending
                     });
                     self.failures[index].standing = Standing::Healing { pending };
                 }
@@ -1096,7 +1113,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             let info = FailureInfo {
                 id: failure.id,
                 cause,
-                suspect: failure.suspect.clone(),
+                suspect: self.suspect_set(failure, tag::DURABILITY_FAILURES_SUSPECT),
                 observed: failure.observed,
                 markings,
                 token_live: match &failure.standing {
@@ -1127,54 +1144,35 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         only: Option<Key>,
         due: &mut Due<E, T, I>,
     ) -> FailureId {
-        let instance = self.instance;
-        let lineages = &self.lineages;
-        let suspect: Vec<SuspectWrite<V<E, I>>> = tagged(tag::DURABILITY_OBSERVE_SUSPECT, || {
+        // What observation named before the rule replaced the list, for the census (DI-D-109).
+        #[cfg(test)]
+        let listed = {
+            let lineages = &self.lineages;
             self.writes
                 .values()
                 .filter(|write| only.is_none_or(|lineage| write.lineage == lineage))
                 .filter(|write| lineages.get(&write.lineage).is_some_and(|s| !s.ended))
                 .filter(|write| reach.reaches(&write.domains))
-                .map(|write| SuspectWrite {
-                    op: write.op,
-                    target: write.file,
-                    epoch: Epoch::new(
-                        Lineage {
-                            instance,
-                            seq: write.lineage,
-                        },
-                        write.epoch,
-                    ),
-                })
+                .map(|write| write.op.seq)
                 .collect()
-        });
-        let mut epochs: BTreeMap<Key, BTreeSet<E>> = BTreeMap::new();
-        for write in &suspect {
-            let epochs = &mut epochs;
-            let of_lineage = tagged(tag::DURABILITY_OBSERVE_EPOCHS_LINEAGE, move || {
-                let epochs = epochs;
-                epochs.entry(write.epoch.lineage.seq).or_default()
-            });
-            tagged(tag::DURABILITY_OBSERVE_EPOCHS_EPOCH, || {
-                of_lineage.insert(write.epoch.id)
-            });
-        }
+        };
         let id = FailureId {
-            instance,
+            instance: self.instance,
             seq: self.next_failure,
         };
         self.next_failure += 1;
         let (token, live) = FailureToken::mint(id);
-        let suspect = SuspectSet::new(suspect);
         let observed = tagged(tag::DURABILITY_OBSERVE_CLOCK, || self.clock.now());
         let recorded_cause = tagged(tag::DURABILITY_OBSERVE_CAUSE, || cause.clone());
         let failure = Failure {
             id,
             cause: recorded_cause,
-            suspect: suspect.clone(),
+            reach: reach.clone(),
+            only,
             observed,
-            epochs,
             standing: Standing::Open(live),
+            #[cfg(test)]
+            listed,
         };
         if within(&mut self.failures, failure).is_err() {
             self.inconsistent(
@@ -1183,7 +1181,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             );
             return id;
         }
-        self.hold_suspects(&suspect);
+        let at = self.failures.len() - 1;
+        self.hold_suspects(at);
+        let suspect = self.suspect_set(&self.failures[at], tag::DURABILITY_OBSERVE_SUSPECT);
         tagged(tag::DURABILITY_OBSERVE_EVENT, || {
             due.events.push(Event::Failed(Failed {
                 id,
@@ -1200,7 +1200,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// (DI-D-36): one reading of the clock, kept once with the write's record, and a `Marked` for
     /// each failure suspecting it, in observation order.
     fn mark(&mut self, write: OpId, kind: MarkingKind, due: &mut Due<E, T, I>) {
-        if !self.failures.iter().any(|failure| failure.suspects(write)) {
+        if !self
+            .failures
+            .iter()
+            .any(|failure| self.suspects(failure, write))
+        {
             return;
         }
         let observed = tagged(tag::DURABILITY_MARK_CLOCK, || self.clock.now());
@@ -1210,7 +1214,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         for failure in self
             .failures
             .iter()
-            .filter(|failure| failure.suspects(write))
+            .filter(|failure| self.suspects(failure, write))
         {
             let marking = Marking {
                 write,
@@ -1232,7 +1236,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         &'a self,
         failure: &'a Failure<E, I>,
     ) -> impl Iterator<Item = Marking<V<E, I>>> + 'a {
-        self.kept.markings(move |write| failure.suspects(write))
+        self.kept
+            .markings(move |write| self.suspects(failure, write))
     }
 
     /// Resolve as healed every healing failure that holds no lineage any more, each reported by its
@@ -1246,14 +1251,15 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 let markings = tagged(tag::DURABILITY_RELEASE_HEALED_MARKINGS, || {
                     self.markings(&failure).collect()
                 });
-                self.release_suspects(&failure.suspect);
+                let suspect = self.suspect_set(&failure, tag::DURABILITY_RELEASE_HEALED_SUSPECT);
                 tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {
                     due.events.push(Event::Healed {
                         failure: failure.id,
-                        suspect: failure.suspect,
+                        suspect,
                         markings,
                     });
                 });
+                self.release_suspects(&failure);
             } else {
                 at += 1;
             }
@@ -1270,14 +1276,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let lower = durable.map_or(Bound::Unbounded, Bound::Excluded);
         self.failures
             .iter()
-            .find(|failure| {
-                failure.holds(lineage).is_some_and(|epochs| {
-                    epochs
-                        .range((lower, Bound::Included(through)))
-                        .next()
-                        .is_some()
-                })
-            })
+            .find(|failure| self.holds_within(failure, lineage, (lower, Bound::Included(through))))
             .map(|failure| failure.id)
     }
 
@@ -1317,7 +1316,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         #[cfg(test)]
         assert!(
             self.window_agrees(),
-            "the window's places disagree with the uncovered writes, the failures and the seals"
+            "the window's places disagree with the uncovered writes, the failures and the seals, \
+             or a failure's rule with what observation listed"
         );
         due
     }
