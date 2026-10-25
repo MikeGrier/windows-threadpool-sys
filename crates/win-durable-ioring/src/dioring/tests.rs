@@ -60,10 +60,32 @@ mod diagnostics;
 type Ring = Dioring<Vec<u8>>;
 type V = crate::WindowsIds<u64>;
 
+/// A lineage as the enumeration lent it, owned so a test can keep it past the visit.
+#[derive(Clone, Debug)]
+pub(crate) struct Listed<V: Identities> {
+    pub(crate) lineage: V::Lineage,
+    pub(crate) description: Option<String>,
+    pub(crate) is_default: bool,
+    pub(crate) durable_through: Option<V::EpochId>,
+    pub(crate) sealed_through: Option<V::EpochId>,
+}
+
+impl<V: Identities> From<LineageInfo<'_, V>> for Listed<V> {
+    fn from(info: LineageInfo<'_, V>) -> Self {
+        Self {
+            lineage: info.lineage,
+            description: info.description.map(str::to_owned),
+            is_default: info.is_default,
+            durable_through: info.durable_through,
+            sealed_through: info.sealed_through,
+        }
+    }
+}
+
 /// Each live lineage `ring` gives its visitor.
-pub(crate) fn listed<D: DurableRing>(ring: &D) -> Vec<LineageInfo<D::Ids>> {
+pub(crate) fn listed<D: DurableRing>(ring: &D) -> Vec<Listed<D::Ids>> {
     let mut listed = Vec::new();
-    ring.lineages(|info| listed.push(info));
+    ring.lineages(|info| listed.push(Listed::from(info)));
     listed
 }
 
@@ -78,7 +100,7 @@ pub(crate) fn holds<D: DurableRing>(ring: &D, key: IoTargetKey) -> Vec<Hold<D::I
 pub(crate) struct Closed<V: Identities, B, C> {
     pub(crate) held: Vec<HeldOperation<V, B, C>>,
     pub(crate) failures: Vec<FailureInfo<V>>,
-    pub(crate) lineages: Vec<LineageInfo<V>>,
+    pub(crate) lineages: Vec<Listed<V>>,
 }
 
 impl<V: Identities, B, C> Closed<V, B, C> {
@@ -91,7 +113,7 @@ impl<V: Identities, B, C> Closed<V, B, C> {
     }
 
     /// Keep `leftover`, checking the held operations come first and the lineages last.
-    pub(crate) fn keep(&mut self, leftover: Leftover<V, B, C>) {
+    pub(crate) fn keep(&mut self, leftover: Leftover<'_, V, B, C>) {
         match leftover {
             Leftover::Held(held) => {
                 assert!(
@@ -107,7 +129,7 @@ impl<V: Identities, B, C> Closed<V, B, C> {
                 );
                 self.failures.push(failure);
             }
-            Leftover::Lineage(lineage) => self.lineages.push(lineage),
+            Leftover::Lineage(lineage) => self.lineages.push(Listed::from(lineage)),
             _ => panic!("a leftover these tests do not know"),
         }
     }

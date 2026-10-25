@@ -148,7 +148,7 @@ impl<D: DurableRing> DeliveryHandle<D> {
 
     /// [`DurableRing::lineages`]. The visitor runs under the delivery's lock, and must not call
     /// back into it.
-    pub fn lineages(&self, visit: impl FnMut(LineageInfo<D::Ids>)) {
+    pub fn lineages(&self, visit: impl FnMut(LineageInfo<'_, D::Ids>)) {
         self.with(|ring| ring.lineages(visit));
     }
 
@@ -543,7 +543,7 @@ impl<D: DurableRing<Readiness = Event> + Send + 'static> EntryDelivery<D> {
 
     /// Quiesce the delivery and end the instance with [`DurableRing::close`], giving `visit` what
     /// is left. Entries not yet delivered are discarded with it.
-    pub fn close(self, visit: impl FnMut(Leftover<D::Ids, D::Buffer, D::Context>)) {
+    pub fn close(self, visit: impl FnMut(Leftover<'_, D::Ids, D::Buffer, D::Context>)) {
         self.into_inner().close(visit);
     }
 

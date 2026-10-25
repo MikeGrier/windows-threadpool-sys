@@ -80,3 +80,23 @@ pub(crate) fn fault(error: io::Error) -> IoFault {
         error: crate::report_io_error(error),
     }
 }
+
+/// A lineage as the enumeration lent it, owned so a test can keep it past the visit.
+#[derive(Clone, Debug)]
+pub(crate) struct Listed<V: crate::contract::Identities> {
+    pub(crate) lineage: V::Lineage,
+    pub(crate) description: Option<String>,
+    pub(crate) is_default: bool,
+    pub(crate) durable_through: Option<V::EpochId>,
+}
+
+impl<V: crate::contract::Identities> From<crate::types::LineageInfo<'_, V>> for Listed<V> {
+    fn from(info: crate::types::LineageInfo<'_, V>) -> Self {
+        Self {
+            lineage: info.lineage,
+            description: info.description.map(str::to_owned),
+            is_default: info.is_default,
+            durable_through: info.durable_through,
+        }
+    }
+}

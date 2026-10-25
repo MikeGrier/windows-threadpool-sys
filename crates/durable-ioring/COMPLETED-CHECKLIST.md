@@ -4733,3 +4733,16 @@ also cycles abandons and heals past the slot count, which is what shows each pat
 liveness, one live token, a stale drop after reclaim, and a token outliving its instance. Construction makes three more
 allocations, and an observed failure one fewer. Sabotage: five entries added and four re-anchored, all swept as
 declared.
+
+## Moved 2026-10-24 21:54:28 -04:00 -- DI-23.12.4.3: a lineage's description kept and lent
+
+### <a id="di-231243"></a>DI-23.12.4.3 -- A lineage's description is the consumer's string, kept as given and lent as `&str` by the enumeration and by `close()`. *(completed 2026-10-24 21:54:28 -04:00)*
+
+**A lineage's description kept and lent** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): the consumer's `String` kept as given,
+and `LineageInfo` lending it as `&str` for the visitor's duration. Breaking: `LineageInfo` gains a lifetime.
+
+What was built is DI-D-108's "As built" for the description. `Leftover` gained the lifetime too, which the item did not
+name: `close()` lends its lineages from the instance it consumes. The allocation test now mints with a description made
+before the count, and that phase stays at zero. Visitors written as `drop` no longer satisfy the higher-ranked bound
+and became `|_| {}`; tests that keep lineages hold owned copies. CONTRACT.md says a visitor's items may be lent.
+Sabotage: two entries added, swept as declared.

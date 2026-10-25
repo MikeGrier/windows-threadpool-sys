@@ -32,7 +32,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     }
 
     /// Each live lineage, in minting order, the default first, given to `visit` (DI-D-103).
-    pub fn lineages(&self, visit: impl FnMut(LineageInfo<V<E, K>>)) {
+    pub fn lineages(&self, visit: impl FnMut(LineageInfo<'_, V<E, K>>)) {
         self.durability.lineages(visit);
     }
 

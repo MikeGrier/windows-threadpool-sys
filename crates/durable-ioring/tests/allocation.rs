@@ -436,7 +436,9 @@ fn clean() -> Vec<Measured> {
     rig.drain();
     rig.phase("the gated writes sealed");
 
-    let minted = counted(|| rig.core.mint_lineage(None)).expect("room for a lineage");
+    // The description is the consumer's, made before the count: keeping it copies nothing.
+    let description = Some("the minted lineage".to_owned());
+    let minted = counted(|| rig.core.mint_lineage(description)).expect("room for a lineage");
     rig.phase("a lineage minted");
     rig.round(minted, 1);
     rig.run();
@@ -482,13 +484,13 @@ fn clean() -> Vec<Measured> {
     rig.phase("the added target removed");
 
     let core = &rig.core;
-    counted(|| core.lineages(drop));
+    counted(|| core.lineages(|_| {}));
     rig.phase("lineages queried");
 
     let Rig {
         core, mut phases, ..
     } = rig;
-    counted(|| core.close(drop));
+    counted(|| core.close(|_| {}));
     phases.push(take("close"));
     phases
 }

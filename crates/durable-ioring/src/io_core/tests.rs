@@ -17,11 +17,11 @@ use crate::io_target::IoTarget;
 use crate::memory::{MemoryBackend, MemoryTarget};
 use crate::oracle::ConformanceOracle;
 use crate::provider::ProviderRequest;
-use crate::test_support::Ticks;
+use crate::test_support::{Listed, Ticks};
 use crate::types::{
     DurabilityRequest, Entry, Epoch, EpochState, FailureCause, FailureInfo, FlushDomain,
-    HeldOperation, Hold, IoTargetKey, Leftover, LineageInfo, OpKind, Outcome, PushError,
-    PushRefusal, ReadOptions, RemoveTargetError, SealError, WriteOptions,
+    HeldOperation, Hold, IoTargetKey, Leftover, OpKind, Outcome, PushError, PushRefusal,
+    ReadOptions, RemoveTargetError, SealError, WriteOptions,
 };
 
 mod capacity;
@@ -71,9 +71,9 @@ fn nz(n: u32) -> NonZeroU32 {
 }
 
 /// Each live lineage, as the visitor gives them.
-fn listed(core: &Core) -> Vec<LineageInfo<V>> {
+fn listed(core: &Core) -> Vec<Listed<V>> {
     let mut listed = Vec::new();
-    core.lineages(|info| listed.push(info));
+    core.lineages(|info| listed.push(Listed::from(info)));
     listed
 }
 
@@ -95,7 +95,7 @@ fn lineage_holds(core: &Core, lineage: Lineage) -> Vec<Hold<V>> {
 struct Closed {
     held: Vec<HeldOperation<V, Vec<u8>, &'static str>>,
     failures: Vec<FailureInfo<V>>,
-    lineages: Vec<LineageInfo<V>>,
+    lineages: Vec<Listed<V>>,
 }
 
 /// Close `core`, checking it gives the held operations, then the failures, then the lineages.
@@ -120,7 +120,7 @@ fn closed(core: Core) -> Closed {
             );
             closed.failures.push(failure);
         }
-        Leftover::Lineage(lineage) => closed.lineages.push(lineage),
+        Leftover::Lineage(lineage) => closed.lineages.push(Listed::from(lineage)),
     });
     closed
 }

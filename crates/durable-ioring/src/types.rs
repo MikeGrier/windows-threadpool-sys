@@ -139,13 +139,14 @@ impl<V: Identities> fmt::Display for ImportError<V> {
 
 impl<V: Identities> core::error::Error for ImportError<V> {}
 
-/// One lineage, as the enumeration reports it. Owned, so holding it borrows nothing.
-#[derive(Clone, Debug)]
-pub struct LineageInfo<V: Identities> {
+/// One lineage, as the enumeration reports it, lent for the visit (DI-D-103): its description is
+/// the consumer's own string, kept as it was given and borrowed from the instance (DI-D-108).
+#[derive(Clone, Copy, Debug)]
+pub struct LineageInfo<'a, V: Identities> {
     /// The lineage.
     pub lineage: V::Lineage,
     /// The consumer's description, if one was supplied when the lineage was minted.
-    pub description: Option<Arc<str>>,
+    pub description: Option<&'a str>,
     /// The instance's default lineage, which never ends while the instance lives: the instance
     /// holds a copy of its handle.
     pub is_default: bool,
@@ -728,18 +729,18 @@ pub struct HeldOperation<V: Identities, B, C> {
 }
 
 /// One thing `close()` gives once the instance has ended (DI-2.7), each to the caller's visitor
-/// by value (DI-D-103): first the gated operations the kernel never saw, in push order; then the
-/// failures still unresolved, in the order observed; then every lineage, carrying its final
-/// high-water mark. Dropping the instance discards the same things.
+/// (DI-D-103): first the gated operations the kernel never saw, in push order and by value; then
+/// the failures still unresolved, in the order observed; then every lineage, carrying its final
+/// high-water mark, lent for the visit. Dropping the instance discards the same things.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum Leftover<V: Identities, B, C> {
+pub enum Leftover<'a, V: Identities, B, C> {
     /// A gated operation the kernel never saw.
     Held(HeldOperation<V, B, C>),
     /// A failure still unresolved.
     Failure(FailureInfo<V>),
     /// A lineage, carrying its final high-water mark.
-    Lineage(LineageInfo<V>),
+    Lineage(LineageInfo<'a, V>),
 }
 
 /// Why an `add_target` was refused (DI-13.10).

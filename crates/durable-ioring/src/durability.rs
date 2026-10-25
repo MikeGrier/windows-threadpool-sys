@@ -334,7 +334,8 @@ impl<E: EpochId + 'static, I: Instant> Failure<E, I> {
 
 /// One lineage's own state.
 struct LineageState<E> {
-    description: Option<Arc<str>>,
+    /// The consumer's description, kept as it was given and lent by the enumeration (DI-D-108).
+    description: Option<String>,
     sealed_through: Option<E>,
     durable_through: Option<E>,
     /// The latest empty seal made with no recorded seal queued before it (DI-D-99).
@@ -351,7 +352,7 @@ struct LineageState<E> {
 }
 
 impl<E: EpochId> LineageState<E> {
-    fn new(description: Option<Arc<str>>) -> Self {
+    fn new(description: Option<String>) -> Self {
         Self {
             description,
             sealed_through: None,

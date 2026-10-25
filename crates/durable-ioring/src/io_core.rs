@@ -772,11 +772,11 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             .ok_or(UnknownLineage(epoch.lineage))
     }
 
-    /// End the core, giving `visit` what it still holds (DI-D-103), each by value: the operations
-    /// held for their gates, which were never issued, in push order; then the unresolved failures,
-    /// in the order observed; then every live lineage with its final high-water mark. What is in
-    /// flight is the backend's to run down.
-    pub fn close(self, mut visit: impl FnMut(Leftover<V<E, K>, B, C>)) {
+    /// End the core, giving `visit` what it still holds (DI-D-103): the operations held for their
+    /// gates, which were never issued, by value in push order; then the unresolved failures, in the
+    /// order observed; then every live lineage with its final high-water mark, lent for the visit.
+    /// What is in flight is the backend's to run down.
+    pub fn close(self, mut visit: impl FnMut(Leftover<'_, V<E, K>, B, C>)) {
         let Self {
             held, durability, ..
         } = self;

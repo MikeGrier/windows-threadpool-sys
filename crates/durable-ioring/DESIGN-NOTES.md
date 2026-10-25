@@ -2326,7 +2326,10 @@ notes when it is created.
   home, so the tokens reach the slots by that `Weak` rather than through a home; neither is touched under the engine's
   lock. Nothing public changed: the token's fields and its mint were the crate's own.
 - **A lineage's description is the consumer's own string, kept and lent as `&str`** by borrow, not copied into an
-  `Arc<str>` (the engineer: "a delegate/functor that is called with a borrow of the string").
+  `Arc<str>` (the engineer: "a delegate/functor that is called with a borrow of the string"). **As built**
+  (DI-23.12.4.3): the `String` `mint_lineage` takes is kept as given, and `LineageInfo<'a, V>` lends it as `&'a str`
+  for the visit; `Leftover` takes the same lifetime, since `close()` lends its lineages from the instance it is
+  consuming. A consumer that keeps a description past the visit copies it.
 - **This is a breaking change to both crates**: `Failed`, `Abandoned` and `Healed`, `FailureInfo`, `SuspectSet`,
   `LineageHandle`, `FailureToken` and `LineageInfo` change shape. It is made in DI-23.12.
 

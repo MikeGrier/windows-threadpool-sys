@@ -7,8 +7,6 @@
 //! and so do the writes named to a seal whose commit of their file is out, until it answers
 //! (DI-D-98); the lineage is retired once the last has.
 
-use alloc::sync::Arc;
-
 use super::{
     DEFAULT_LINEAGE, Due, Durability, Event, Key, LineageState, SealStage, Stage, Standing, V,
     tables, window,
@@ -25,9 +23,6 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     pub(crate) fn mint(&mut self, description: Option<String>) -> Key {
         let key = self.next_lineage;
         self.next_lineage += 1;
-        let description = tagged(tag::LINEAGES_MINT_DESCRIPTION, || {
-            description.map(Arc::from)
-        });
         if self
             .lineages
             .insert(key, LineageState::new(description))
@@ -59,11 +54,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     }
 
     /// Each live lineage, in minting order.
-    pub(crate) fn lineages(&self, mut visit: impl FnMut(LineageInfo<V<E, I>>)) {
+    pub(crate) fn lineages(&self, mut visit: impl FnMut(LineageInfo<'_, V<E, I>>)) {
         for (&key, state) in self.lineages.iter().filter(|(_, state)| !state.ended) {
             visit(LineageInfo {
                 lineage: self.name(key),
-                description: state.description.clone(),
+                description: state.description.as_deref(),
                 is_default: key == DEFAULT_LINEAGE,
                 durable_through: state.durable_through,
                 sealed_through: state.sealed_through,

@@ -227,8 +227,6 @@ pub(crate) mod tag {
         Tag::new("durability::providers::provided::reach");
 
     // durability/lineages.rs
-    pub(crate) const LINEAGES_MINT_DESCRIPTION: Tag =
-        Tag::new("durability::lineages::mint::description");
     pub(crate) const LINEAGES_END_EVENT: Tag = Tag::new("durability::lineages::end::event");
 
     // io_core/provider.rs

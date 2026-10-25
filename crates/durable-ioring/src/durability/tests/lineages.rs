@@ -52,9 +52,9 @@ fn busy(lineage: &mut Lineage, key: Key, why: &str) -> (usize, usize, usize, Vec
 }
 
 /// The live lineages, as the visitor gives them.
-fn listed(lineage: &Lineage) -> Vec<crate::types::LineageInfo<super::Ids>> {
+fn listed(lineage: &Lineage) -> Vec<crate::test_support::Listed<super::Ids>> {
     let mut listed = Vec::new();
-    lineage.lineages(|info| listed.push(info));
+    lineage.lineages(|info| listed.push(info.into()));
     listed
 }
 

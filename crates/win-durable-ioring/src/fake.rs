@@ -144,7 +144,7 @@ impl DurableRing for Fake {
         unimplemented!("the fake has only its default lineage")
     }
 
-    fn lineages(&self, _visit: impl FnMut(LineageInfo<V>)) {}
+    fn lineages(&self, _visit: impl FnMut(LineageInfo<'_, V>)) {}
 
     fn lineage_holds(&self, _lineage: Lineage, _visit: impl FnMut(Hold<V>)) {}
 
@@ -227,5 +227,5 @@ impl DurableRing for Fake {
         None
     }
 
-    fn close(self, _visit: impl FnMut(Leftover<V, Vec<u8>, u32>)) {}
+    fn close(self, _visit: impl FnMut(Leftover<'_, V, Vec<u8>, u32>)) {}
 }

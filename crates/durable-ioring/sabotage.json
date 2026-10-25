@@ -3442,6 +3442,22 @@
       "why": "A slot's word carries its failure's number, so a stale token cannot clear a later failure's liveness.",
       "find": ["    (failure << 1) | live as u64"],
       "replace": ["    let _ = failure;","    live as u64"]
+    },
+    {
+      "name": "DI-23.12.4.3: a description is copied when kept",
+      "file": "src/durability/lineages.rs",
+      "expect": "caught",
+      "why": "The description is the consumer's string, kept as given: a copy allocates after construction, which the allocation test's mint phase counts.",
+      "find": ["            .insert(key, LineageState::new(description))"],
+      "replace": ["            .insert(key, LineageState::new(description.map(|d| d.as_str().to_owned())))"]
+    },
+    {
+      "name": "DI-23.12.4.3: the enumeration lends no description",
+      "file": "src/durability/lineages.rs",
+      "expect": "caught",
+      "why": "The enumeration lends the description the lineage was minted with.",
+      "find": ["                description: state.description.as_deref(),"],
+      "replace": ["                description: None,"]
     }
   ]
 }

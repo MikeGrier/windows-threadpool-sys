@@ -419,9 +419,8 @@ fn the_handle_reports_the_instances_lineages() {
     let (delivery, _rx) = forwarding(instance(&temp, Vec::new()));
     let lineage = delivery.default_lineage().lineage();
     let mut lineages = Vec::new();
-    delivery.lineages(|info| lineages.push(info));
-    assert_eq!(lineages.len(), 1);
-    assert_eq!(lineages[0].lineage, lineage);
+    delivery.lineages(|info| lineages.push(info.lineage));
+    assert_eq!(lineages, [lineage]);
     assert_eq!(delivery.into_inner().default_lineage().lineage(), lineage);
 }
 

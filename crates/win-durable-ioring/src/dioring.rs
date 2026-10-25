@@ -790,7 +790,7 @@ where
         Ok(minted(&self.hub, lineage))
     }
 
-    fn lineages(&self, visit: impl FnMut(LineageInfo<Self::Ids>)) {
+    fn lineages(&self, visit: impl FnMut(LineageInfo<'_, Self::Ids>)) {
         self.engine().core.lineages(visit);
     }
 
@@ -901,7 +901,7 @@ where
         self.engine().core.take_token(failure)
     }
 
-    fn close(mut self, visit: impl FnMut(Leftover<Self::Ids, B, C>)) {
+    fn close(mut self, visit: impl FnMut(Leftover<'_, Self::Ids, B, C>)) {
         // `close` consumes the instance, so nothing has ended it before.
         self.end(visit);
     }
@@ -1084,7 +1084,7 @@ impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Dioring<B, E
 
     /// End the instance, as the module's "Ending" says, giving `visit` what is left; nothing if it
     /// has ended already.
-    pub(crate) fn end(&mut self, visit: impl FnMut(Leftover<DioringIds<E, K::Instant>, B, C>)) {
+    pub(crate) fn end(&mut self, visit: impl FnMut(Leftover<'_, DioringIds<E, K::Instant>, B, C>)) {
         let Some(delivery) = self.delivery.take() else {
             return;
         };
@@ -1233,7 +1233,7 @@ impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Drop
         // Ends the instance on this thread, never inside one of delivery's own calls, where
         // stopping delivery would wait for itself. Nothing to do after `close()`, which has ended
         // it already; drop discards what it would have returned.
-        self.end(drop);
+        self.end(|_| {});
     }
 }
 /// Register `files` with `ring`, in order, and wait for the registration to complete. `None` for

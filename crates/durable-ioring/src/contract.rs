@@ -145,7 +145,8 @@ pub trait DurableRing {
     /// instance holds a copy of its own, so the default lineage never ends while it lives.
     fn default_lineage(&self) -> HandleOf<Self>;
 
-    /// A new lineage, with an optional description for the consumer's own reports (DI-D-19).
+    /// A new lineage, with an optional description for the consumer's own reports (DI-D-19),
+    /// kept as it was given and lent back by [`lineages`](Self::lineages) (DI-D-108).
     /// Releasing the last copy of its handle ends it (DI-D-40).
     ///
     /// # Errors
@@ -154,10 +155,10 @@ pub trait DurableRing {
     /// and those ended and not yet retired among them (DI-D-107); nothing is minted.
     fn mint_lineage(&mut self, description: Option<String>) -> Result<HandleOf<Self>, AtCapacity>;
 
-    /// Give `visit` each live lineage, the default among them, in minting order (DI-D-103). The
-    /// visitor runs under the instance's own lock, if it has one, and must not call back into the
-    /// instance.
-    fn lineages(&self, visit: impl FnMut(LineageInfo<Self::Ids>));
+    /// Give `visit` each live lineage, the default among them, in minting order (DI-D-103), each
+    /// lent for the visit. The visitor runs under the instance's own lock, if it has one, and must
+    /// not call back into the instance.
+    fn lineages(&self, visit: impl FnMut(LineageInfo<'_, Self::Ids>));
 
     /// Give `visit` what holds `lineage` from being retired that a [`LineageBusy`](crate::LineageBusy) counts without
     /// naming: each unresolved failure holding it, in the order observed. Nothing for a lineage
@@ -369,13 +370,14 @@ pub trait DurableRing {
     /// and waiting for its seal.
     fn take_token(&mut self, failure: FailureIdOf<Self>) -> Option<TokenOf<Self>>;
 
-    /// End the instance and give `visit` what is left (DI-D-25, DI-D-103), each by value: the gated
-    /// operations the kernel never saw, with their buffers and contexts, in push order; then the
-    /// unresolved failures; then every lineage with its final high-water mark. Seals and flushes
+    /// End the instance and give `visit` what is left (DI-D-25, DI-D-103): the gated operations the
+    /// kernel never saw, by value with their buffers and contexts, in push order; then the
+    /// unresolved failures; then every lineage with its final high-water mark, lent for the visit
+    /// as [`lineages`](Self::lineages) lends it. Seals and flushes
     /// nothing. Returns once every kernel operation and every durability-provider call in flight
     /// has completed, as drop does; entries not yet popped are discarded, and nothing already
     /// reported is undone.
-    fn close(self, visit: impl FnMut(Leftover<Self::Ids, Self::Buffer, Self::Context>))
+    fn close(self, visit: impl FnMut(Leftover<'_, Self::Ids, Self::Buffer, Self::Context>))
     where
         Self: Sized;
 }

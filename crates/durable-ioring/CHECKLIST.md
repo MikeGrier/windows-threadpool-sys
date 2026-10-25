@@ -128,9 +128,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.4.2** -- A failure token is its failure and a slot of liveness words made at construction for the failure bound, so observing a failure and handing out a token allocate nothing. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231242)
 
-- [ ] **DI-23.12.4.3** -- **A lineage's description kept and lent** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): the
-  consumer's `String` kept as given, and `LineageInfo` lending it as `&str` for the visitor's duration. Breaking:
-  `LineageInfo` gains a lifetime.
+- [x] **DI-23.12.4.3** -- A lineage's description is the consumer's string, kept as given and lent as `&str` by the enumeration and by `close()`. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231243)
 
 - [ ] **DI-23.12.4.4** -- **A target's domains as a range in a fixed table** ([DI-D-108](DESIGN-NOTES.md#di-d-108)):
   sized from `targets` and `domains`, the writes, spans, kept records and a commit failure's reach naming the range;

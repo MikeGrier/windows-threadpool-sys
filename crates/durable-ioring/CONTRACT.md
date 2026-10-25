@@ -272,7 +272,9 @@ failure reports by the key the consumer gave it, so a report stays usable after 
   with no failure in it -- its lineages, what holds a target or a lineage, what `close()` leaves -- it
   gives to a visitor the consumer passes, each item in turn, rather than handing out a collection it
   would have to allocate ([DI-D-103](DESIGN-NOTES.md#di-d-103)). The visitor may run under the
-  instance's own lock, so it must not call the instance.
+  instance's own lock, so it must not call the instance. What it is given may be lent for the visit
+  rather than owned -- a lineage's description is the consumer's own string, kept as it was given
+  ([DI-D-108](DESIGN-NOTES.md#di-d-108)) -- so a visitor that keeps something copies it.
 - **Honest heals.** A heal is the consumer's assertion that it has re-issued, under higher tags,
   everything the failure put at risk that it needs. dioring cannot check it.
 - **Reporting outside failures it learns of**, through the import, for every target whose warranty
