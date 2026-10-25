@@ -160,6 +160,7 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_FAILURES: Tag = Tag::new("durability::new::failures");
     pub(crate) const DURABILITY_NEW_TOKENS: Tag = Tag::new("durability::new::tokens");
     pub(crate) const DURABILITY_NEW_FREE_TOKENS: Tag = Tag::new("durability::new::free_tokens");
+    pub(crate) const DURABILITY_NEW_LISTS: Tag = Tag::new("durability::new::lists");
     pub(crate) const DURABILITY_NEW_KEPT: Tag = Tag::new("durability::new::kept");
     pub(crate) const DURABILITY_RESOLVE_MARKINGS: Tag = Tag::new("durability::resolve::markings");
     pub(crate) const DURABILITY_RELEASE_HEALED_MARKINGS: Tag =
@@ -223,8 +224,6 @@ pub(crate) mod tag {
     pub(crate) const PROVIDERS_NAME_WRITE: Tag = Tag::new("durability::providers::name::write");
     pub(crate) const PROVIDERS_NAME_WRITES: Tag = Tag::new("durability::providers::name::writes");
     pub(crate) const PROVIDERS_NAME_FILE: Tag = Tag::new("durability::providers::name::file");
-    pub(crate) const PROVIDERS_PROVIDED_REACH: Tag =
-        Tag::new("durability::providers::provided::reach");
 
     // durability/lineages.rs
     pub(crate) const LINEAGES_END_EVENT: Tag = Tag::new("durability::lineages::end::event");
@@ -238,12 +237,8 @@ pub(crate) mod tag {
     pub(crate) const IO_CORE_REQUEST_TARGETS: Tag = Tag::new("io_core::request::targets");
 
     // domains.rs
-    pub(crate) const DOMAINS_IMPORT_REACH_KNOWN: Tag = Tag::new("domains::import_reach::known");
-    pub(crate) const DOMAINS_IMPORT_REACH_KNOWN_ID: Tag =
-        Tag::new("domains::import_reach::known_id");
     pub(crate) const DOMAINS_IMPORT_REACH_UNMATCHED: Tag =
         Tag::new("domains::import_reach::unmatched");
-    pub(crate) const DOMAINS_IMPORT_REACH_SHARED: Tag = Tag::new("domains::import_reach::shared");
     pub(crate) const DOMAINS_FIRST_REPEAT_COPY: Tag = Tag::new("domains::first_repeat::copy");
     pub(crate) const DOMAINS_FIRST_REPEAT_SEEN: Tag = Tag::new("domains::first_repeat::seen");
     pub(crate) const DOMAINS_INTERN_ALL_ID: Tag = Tag::new("domains::intern_all::id");

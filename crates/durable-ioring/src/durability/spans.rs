@@ -9,8 +9,6 @@
 //! entries than uncovered writes, which the window bounds (DI-D-107); a seal's flush of a file,
 //! the commit in flight for it, and its flush pair each belong to one entry.
 
-use alloc::sync::Arc;
-
 use fixed_hash_table::HeapMap;
 
 use super::kept::{Gone, Kept};
@@ -18,7 +16,7 @@ use super::window::{Holder, Window};
 use super::{Durability, Key, Stage, Write};
 use crate::clock::Instant;
 use crate::contract::EpochId;
-use crate::domains::DomainId;
+use crate::domain_lists::DomainList;
 use crate::types::IoTargetKey;
 
 /// Which span of its lineage a write is in.
@@ -52,7 +50,7 @@ pub(super) struct SpanFile {
     /// Its uncovered writes; the entry is released with the last.
     pub(super) writes: usize,
     /// The file's flush domains, which a failed flush of it reaches.
-    pub(super) domains: Arc<[DomainId]>,
+    pub(super) domains: DomainList,
     /// The seal's flush of the file was issued: the built-in default answers for it.
     pub(super) flushed: bool,
     /// That flush answered.
@@ -63,7 +61,7 @@ pub(super) struct SpanFile {
 
 impl SpanFile {
     /// An entry with no writes yet, for a file declared with `domains`.
-    pub(super) fn new(domains: Arc<[DomainId]>) -> Self {
+    pub(super) fn new(domains: DomainList) -> Self {
         Self {
             writes: 0,
             domains,
@@ -111,7 +109,7 @@ fn forget<E: EpochId + 'static, T, I: Instant>(
             lineage: write.lineage,
             epoch: write.epoch,
             file: write.file,
-            domains: Arc::clone(&write.domains),
+            domains: write.domains,
             born: write.born,
             until: write.until.unwrap_or(now),
         })

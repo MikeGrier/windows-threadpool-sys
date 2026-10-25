@@ -15,13 +15,11 @@
 //! domains, and the failure clock's readings when it was recorded and when it stopped being
 //! nameable, so whether a failure suspects it is decided the same way kept or uncovered.
 
-use alloc::sync::Arc;
-
 use super::Key;
 use crate::capacity::{ConstructionError, ordered};
 use crate::clock::Instant;
 use crate::contract::EpochId;
-use crate::domains::DomainId;
+use crate::domain_lists::DomainList;
 use crate::ids::{DioringIds, OpId};
 use crate::ordered::Ordered;
 use crate::types::{IoTargetKey, Marking, MarkingKind};
@@ -35,7 +33,7 @@ pub(super) struct Gone<E> {
     pub(super) lineage: Key,
     pub(super) epoch: E,
     pub(super) file: IoTargetKey,
-    pub(super) domains: Arc<[DomainId]>,
+    pub(super) domains: DomainList,
     /// The failure clock when it was recorded.
     pub(super) born: u64,
     /// The failure clock when it stopped being nameable: no failure observed since names it.

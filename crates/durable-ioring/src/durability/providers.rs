@@ -6,7 +6,7 @@
 //! domain it serves that the seal's writes touched; [`Durability::cover`] covers a write once every
 //! part its file depends on has answered success. A failed or abandoned domain is observed as a
 //! failure reaching the files whose declared domains contain it, and every file declared with none
-//! -- `Reach::Domains` of that one domain -- which is narrower than a failed flush's reach, the
+//! -- `Reach::Domain` -- which is narrower than a failed flush's reach, the
 //! intersection with the failed file's whole set (DI-D-21).
 
 use alloc::sync::Arc;
@@ -137,10 +137,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         match outcome {
             Ok(()) => self.cover(lineage, seal, &mut due),
             Err(cause) => {
-                let reach = Reach::Domains(tagged(tag::PROVIDERS_PROVIDED_REACH, || {
-                    Arc::from([domain])
-                }));
-                self.observe(cause, &reach, None, &mut due);
+                self.observe(cause, &Reach::Domain(domain), None, &mut due);
             }
         }
         self.advance(due)
@@ -156,8 +153,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let SealStage::Flushing { domains, .. } = &found.stage else {
             return;
         };
-        let served = &self.served;
-        let spans = &self.spans;
+        let (served, spans, lists) = (&self.served, &self.spans, &self.lists);
         let covered = |write: &Write<E, T>| {
             write.lineage == lineage
                 && write.stage == Stage::Named(seal)
@@ -165,8 +161,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     || spans
                         .get(&(lineage, write.file, Span::Seal(seal)))
                         .is_some_and(|entry| entry.ok))
-                && write
-                    .domains
+                && lists
+                    .get(write.domains)
                     .iter()
                     .filter(|domain| served.contains(domain))
                     .all(|domain| domains.iter().any(|part| part.domain == *domain && part.ok))

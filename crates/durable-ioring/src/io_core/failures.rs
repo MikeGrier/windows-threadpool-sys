@@ -6,7 +6,8 @@ use super::{CoreActions, DurableIoCore, V};
 use crate::capacity::{AtCapacity, Limit};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
-use crate::domains::import_reach;
+use crate::domains::{import_list, import_reach};
+use crate::durability::Reach;
 use crate::ids::{FailureId, FailureToken};
 use crate::types::{
     FailureCause, FailureInfo, ImportError, ImportScope, Imported, Resolution, ResolveError,
@@ -48,6 +49,22 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 declared: self.capacity.imports,
             }));
         }
+        // Admitted, so a list is free for the domains it names: the unresolved imports are fewer
+        // than those declared, and the targets hold one list each at most.
+        let reach = match (reach, &scope) {
+            (Some(reach), _) => reach,
+            (None, ImportScope::Domains(names)) => {
+                match import_list(names, &self.domains, self.durability.lists_mut()) {
+                    Ok(reach) => reach,
+                    Err(what) => {
+                        self.durability
+                            .inconsistent(what, format_args!("an import naming {names:?}"));
+                        Reach::All
+                    }
+                }
+            }
+            (None, _) => Reach::All,
+        };
         let was_empty = self.queue.is_empty();
         let (failure, due) = self
             .durability

@@ -4746,3 +4746,27 @@ name: `close()` lends its lineages from the instance it consumes. The allocation
 before the count, and that phase stays at zero. Visitors written as `drop` no longer satisfy the higher-ranked bound
 and became `|_| {}`; tests that keep lineages hold owned copies. CONTRACT.md says a visitor's items may be lent.
 Sabotage: two entries added, swept as declared.
+
+## Moved 2026-10-24 22:17:56 -04:00 -- DI-23.12.4.4 and DI-23.12.4: domain lists as rows, and the group complete
+
+### <a id="di-231244"></a>DI-23.12.4.4 -- A target's domains and an import's are rows of one table made at construction, so adding a target and importing by domains allocate nothing. *(completed 2026-10-24 22:17:56 -04:00)*
+
+**A target's domains as a range in a fixed table** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): sized from `targets` and
+`domains`, the writes, spans, kept records and a commit failure's reach naming the range; an import's reach in a table of
+its own sized from `imports` and `domains`. Proof obligation: a range is not reused while a failure's reach names it -- a
+commit failure suspects a write to its file, which keeps the target from being removed.
+
+What was built is DI-D-108's "A target's domains are a row in a fixed table". One table serves both, `targets` plus
+`imports` rows rather than two tables, and a provider failure's reach became a single domain needing no row. An import
+claims its row only once admitted, since at capacity every row may be held. The census in every change checks that
+nothing names a free row; tests cycle targets and imports, abandoned and healed in turn, past the rows made, and show a
+failed file's row stays the file's once its failure is resolved. "A target added" now allocates nothing. A declaration
+too large for a table now names the flush-domain lists for `targets` and `domains`, the first table either sizes.
+Sabotage: six entries added and nine re-anchored, all swept as declared, one only after the failed-file test was
+written for it.
+
+### <a id="di-23124"></a>DI-23.12.4 -- Lineage handles, failure tokens, descriptions and domain lists are fixed storage made at construction: slots, a lent string, and rows. *(completed 2026-10-24 22:17:56 -04:00)*
+
+**Handles, tokens, descriptions and domain lists as fixed storage** ([DI-D-108](DESIGN-NOTES.md#di-d-108)). Split when it
+began into [DI-23.12.4.1](#di-231241), [DI-23.12.4.2](#di-231242), [DI-23.12.4.3](#di-231243) and
+[DI-23.12.4.4](#di-231244); what each built is in its entry and in DI-D-108's "As built" notes.

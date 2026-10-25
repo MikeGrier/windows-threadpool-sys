@@ -55,7 +55,8 @@ use crate::capacity::{
 use crate::clock::StampClock;
 use crate::contract::{EpochId, Identities};
 use crate::diagnostics::DiagnosticSink;
-use crate::domains::{DomainId, epoch_state, intern_all, routing};
+use crate::domain_lists::DomainList;
+use crate::domains::{DomainId, epoch_state, intern, routing};
 use crate::durability::{
     Accepted, DEFAULT_LINEAGE, Due, Durability, Gate, GateState, Key, Routing, Sealing, WriteEnd,
 };
@@ -173,8 +174,9 @@ struct HeldOp<E: EpochId + 'static, I: crate::clock::Instant, B, C> {
 /// A target as the core decides with it.
 struct TargetRecord {
     description: IoTargetDescription,
-    /// Its flush domains, interned, sorted, without repeats; shared with each write's record.
-    domains: Arc<[DomainId]>,
+    /// Its flush domains, interned, sorted, without repeats, in a list of the durability core's
+    /// (DI-D-108), named by each write's record and let go when the target is removed.
+    domains: DomainList,
     /// Who answers for its writes (DI-D-27): the built-in default, the provider, or both.
     routing: Routing,
 }
@@ -351,22 +353,41 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 AddTargetCause::AtCapacity(AtCapacity { limit, declared }),
             );
         }
-        let Ok(domains) = intern_all(&mut self.domains, description.flush_domains.iter().cloned())
-        else {
-            // The domains were checked to fit above, so this does not happen.
-            self.durability.inconsistent(
-                "the flush domains outnumbered the table made for them",
-                format_args!("target {key:?}"),
-            );
-            return refuse(
-                description,
-                AddTargetCause::AtCapacity(AtCapacity {
-                    limit: Limit::Domains,
-                    declared: self.capacity.domains,
-                }),
-            );
+        let table = &mut self.domains;
+        let mut lost = false;
+        let claimed =
+            self.durability
+                .lists_mut()
+                .claim(description.flush_domains.iter().filter_map(|name| {
+                    let id = intern(table, name);
+                    lost |= id.is_none();
+                    id
+                }));
+        let domains = match claimed {
+            Ok(list) if !lost => Ok(list),
+            Ok(list) => {
+                self.durability.lists_mut().release(list);
+                Err("the flush domains outnumbered the table made for them")
+            }
+            Err(what) => Err(what),
         };
-        let routing = routing(&domains, &self.served);
+        let domains = match domains {
+            Ok(domains) => domains,
+            Err(what) => {
+                // The domains were checked to fit above, and a target holds one list, so this
+                // does not happen.
+                self.durability
+                    .inconsistent(what, format_args!("target {key:?}"));
+                return refuse(
+                    description,
+                    AddTargetCause::AtCapacity(AtCapacity {
+                        limit: Limit::Domains,
+                        declared: self.capacity.domains,
+                    }),
+                );
+            }
+        };
+        let routing = routing(self.durability.lists().get(domains), &self.served);
         let record = TargetRecord {
             description,
             domains,
@@ -416,6 +437,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         let holds = self.durability.file_holds(key);
         if in_flight == 0 && held_for_gate == 0 && holds.is_empty() {
             let record = self.targets.remove(&key).expect("present, checked above");
+            self.durability.lists_mut().release(record.domains);
             return Ok(record.description);
         }
         Err(RemoveTargetError::Busy(IoTargetBusy {
@@ -985,7 +1007,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             file: target,
             target,
             routing: record.routing,
-            domains: Arc::clone(&record.domains),
+            domains: record.domains,
         }
     }
 

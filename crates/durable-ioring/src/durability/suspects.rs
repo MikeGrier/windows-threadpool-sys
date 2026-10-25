@@ -20,6 +20,7 @@ use super::{Durability, Failure, Key, V, Write};
 use crate::alloc_tags::{Tag, tagged};
 use crate::clock::Instant;
 use crate::contract::EpochId;
+use crate::domain_lists::DomainLists;
 use crate::ids::{Lineage, OpId};
 use crate::ordered::Ordered;
 use crate::types::{Epoch, IoTargetKey, SuspectSet, SuspectWrite};
@@ -33,15 +34,19 @@ pub(super) struct Suspect<E> {
     pub(super) file: IoTargetKey,
 }
 
-/// Every write `failure` suspects: the uncovered ones, then the kept ones, each in push order.
+/// Every write `failure` suspects: the uncovered ones, then the kept ones, each in push order,
+/// their files' domains read from `lists`.
 pub(super) fn suspects<'a, E: EpochId + 'static, T, I: Instant>(
+    lists: &'a DomainLists,
     writes: &'a Ordered<u64, Write<E, T>>,
     kept: &'a Kept<E, I>,
     failure: &'a Failure<E, I>,
 ) -> impl Iterator<Item = Suspect<E>> + 'a {
     let uncovered = writes
         .values()
-        .filter(move |write| failure.names(write.born, write.until, write.lineage, &write.domains))
+        .filter(move |write| {
+            failure.names(lists, write.born, write.until, write.lineage, write.domains)
+        })
         .map(|write| Suspect {
             op: write.op,
             lineage: write.lineage,
@@ -51,7 +56,13 @@ pub(super) fn suspects<'a, E: EpochId + 'static, T, I: Instant>(
     let gone = kept
         .writes()
         .filter(move |write| {
-            failure.names(write.born, Some(write.until), write.lineage, &write.domains)
+            failure.names(
+                lists,
+                write.born,
+                Some(write.until),
+                write.lineage,
+                write.domains,
+            )
         })
         .map(|write| Suspect {
             op: write.op,
@@ -67,17 +78,29 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     pub(super) fn suspects(&self, failure: &Failure<E, I>, op: OpId) -> bool {
         if let Some(write) = self.writes.get(&op.seq) {
             return write.op == op
-                && failure.names(write.born, write.until, write.lineage, &write.domains);
+                && failure.names(
+                    &self.lists,
+                    write.born,
+                    write.until,
+                    write.lineage,
+                    write.domains,
+                );
         }
         self.kept.get(op.seq).is_some_and(|write| {
             write.op == op
-                && failure.names(write.born, Some(write.until), write.lineage, &write.domains)
+                && failure.names(
+                    &self.lists,
+                    write.born,
+                    Some(write.until),
+                    write.lineage,
+                    write.domains,
+                )
         })
     }
 
     /// Whether `failure` suspects a write to `file`.
     pub(super) fn suspects_a_write_to(&self, failure: &Failure<E, I>, file: IoTargetKey) -> bool {
-        suspects(&self.writes, &self.kept, failure).any(|write| write.file == file)
+        suspects(&self.lists, &self.writes, &self.kept, failure).any(|write| write.file == file)
     }
 
     /// Whether `failure` holds an epoch of `lineage` within `epochs`: it suspects a write of it
@@ -89,7 +112,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         epochs: impl RangeBounds<E>,
     ) -> bool {
         failure.pending(lineage)
-            && suspects(&self.writes, &self.kept, failure)
+            && suspects(&self.lists, &self.writes, &self.kept, failure)
                 .any(|write| write.lineage == lineage && epochs.contains(&write.epoch))
     }
 
@@ -98,7 +121,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     pub(super) fn suspect_set(&self, failure: &Failure<E, I>, tag: Tag) -> SuspectSet<V<E, I>> {
         let instance = self.instance;
         let mut writes: Vec<SuspectWrite<V<E, I>>> = tagged(tag, || {
-            suspects(&self.writes, &self.kept, failure)
+            suspects(&self.lists, &self.writes, &self.kept, failure)
                 .map(|write| SuspectWrite {
                     op: write.op,
                     target: write.file,

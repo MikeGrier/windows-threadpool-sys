@@ -2,7 +2,6 @@
 //! Failures, their reach, and their resolution (DI-D-12, DI-D-21, DI-D-34), without a ring.
 
 use std::io;
-use std::sync::Arc;
 
 use super::Stamp;
 use super::{
@@ -20,12 +19,14 @@ fn failed() -> io::Result<()> {
     Err(io::Error::from_raw_os_error(1117))
 }
 
-fn domains(ids: &[u32]) -> Reach {
-    Reach::Domains(
-        ids.iter()
-            .map(|&d| DomainId(d))
-            .collect::<Arc<[DomainId]>>(),
-    )
+/// The reach of an import naming `ids`, in a list of its own, as the I/O core makes it.
+fn domains(lineage: &mut Lineage, ids: &[u32]) -> Reach {
+    let list = lineage
+        .0
+        .lists_mut()
+        .claim(ids.iter().map(|&d| DomainId(d)))
+        .expect("a free list");
+    Reach::Named(list)
 }
 
 fn import(
@@ -237,8 +238,8 @@ fn an_import_reaches_its_scope_with_the_same_rule() {
     ops.push_in(&mut lineage, 1, B, DEFAULT, &[2]);
     ops.push(&mut lineage, 1, C, DEFAULT);
     let cases = [
-        (domains(&[1]), None, vec![0, 2]),
-        (domains(&[9]), None, vec![2]),
+        (domains(&mut lineage, &[1]), None, vec![0, 2]),
+        (domains(&mut lineage, &[9]), None, vec![2]),
         (Reach::All, NO_LINEAGE, vec![]),
         (Reach::All, None, vec![0, 1, 2]),
     ];

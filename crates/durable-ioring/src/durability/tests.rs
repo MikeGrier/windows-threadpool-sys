@@ -227,7 +227,8 @@ impl Ops {
             seq: self.next,
         };
         self.next += 1;
-        let domains: Arc<[DomainId]> = domains.iter().map(|&d| DomainId(d)).collect();
+        let ids: Vec<DomainId> = domains.iter().map(|&d| DomainId(d)).collect();
+        let domains = lineage.0.test_domains(&ids);
         lineage.pushed(Accepted {
             op,
             lineage: key,

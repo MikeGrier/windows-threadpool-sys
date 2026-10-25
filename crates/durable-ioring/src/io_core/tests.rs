@@ -825,7 +825,12 @@ fn domains_are_interned_once_per_distinct_bytes() {
     let core = &rig.core;
     assert_eq!(core.domains.len(), 4, "A, B, C and D, once each");
     let id = |name: &str| core.domains[&domain(name)];
-    let of = |key: IoTargetKey| Arc::clone(&core.targets[&key].domains);
+    let of = |key: IoTargetKey| {
+        core.durability
+            .lists()
+            .get(core.targets[&key].domains)
+            .to_vec()
+    };
 
     let mut one = vec![id("A"), id("B")];
     one.sort_unstable();

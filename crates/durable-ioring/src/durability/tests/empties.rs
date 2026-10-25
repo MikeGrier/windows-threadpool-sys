@@ -162,7 +162,7 @@ fn a_failure_between_two_empty_seals_holds_the_mark_below_the_earlier_until_reso
         FailureCause::Imported {
             scope: ImportScope::All,
         },
-        &Reach::Domains(Arc::from([DomainId(2)])),
+        &Reach::Domain(DomainId(2)),
     );
     let token = tokens(due).remove(0);
     lineage.completed(sixth, failed());

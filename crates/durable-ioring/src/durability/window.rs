@@ -209,7 +209,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     pub(super) fn hold_suspects(&mut self, at: usize) {
         let failure = &self.failures[at];
         let mut lost = None;
-        for write in suspects(&self.writes, &self.kept, failure) {
+        for write in suspects(&self.lists, &self.writes, &self.kept, failure) {
             if let Err(what) = self.window.hold(write.op.seq, Holder::Suspect) {
                 lost.get_or_insert((what, write.op));
             }
@@ -223,18 +223,29 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// write nothing suspects any more is let go.
     pub(super) fn release_suspects(&mut self, failure: &Failure<E, I>) {
         let mut lost = None;
-        let uncovered = self
-            .writes
-            .values()
-            .filter(|write| failure.names(write.born, write.until, write.lineage, &write.domains));
+        let uncovered = self.writes.values().filter(|write| {
+            failure.names(
+                &self.lists,
+                write.born,
+                write.until,
+                write.lineage,
+                write.domains,
+            )
+        });
         for write in uncovered {
             if let Err(what) = self.window.release(write.op.seq, Holder::Suspect) {
                 lost.get_or_insert((what, write.op));
             }
         }
-        let window = &mut self.window;
+        let (window, lists) = (&mut self.window, &self.lists);
         self.kept.release_where(|write| {
-            if !failure.names(write.born, Some(write.until), write.lineage, &write.domains) {
+            if !failure.names(
+                lists,
+                write.born,
+                Some(write.until),
+                write.lineage,
+                write.domains,
+            ) {
                 return false;
             }
             if let Err(what) = window.release(write.op.seq, Holder::Suspect) {
@@ -273,9 +284,10 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         let mut suspected = std::collections::BTreeMap::new();
         let mut ruled = true;
         for failure in &self.failures {
-            let mut named: std::vec::Vec<u64> = suspects(&self.writes, &self.kept, failure)
-                .map(|write| write.op.seq)
-                .collect();
+            let mut named: std::vec::Vec<u64> =
+                suspects(&self.lists, &self.writes, &self.kept, failure)
+                    .map(|write| write.op.seq)
+                    .collect();
             named.sort_unstable();
             ruled &= named == failure.listed;
             for &op in &named {

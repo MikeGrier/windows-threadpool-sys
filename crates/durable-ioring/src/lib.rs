@@ -26,6 +26,7 @@ mod clock;
 mod contract;
 mod correlation;
 mod diagnostics;
+mod domain_lists;
 mod domains;
 pub mod driver;
 mod durability;

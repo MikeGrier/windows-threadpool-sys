@@ -13,7 +13,7 @@ use crate::diagnostics::{DiagnosticSink, NoDiagnostics};
 use crate::memory::{Fault, FaultScript, MemoryBackend, MemoryTarget, ScriptOp, When};
 use crate::provider::DomainOutcome;
 use crate::test_support::CAPACITY;
-use crate::types::{Epoch, PushRefusal};
+use crate::types::{Entry, Epoch, ImportScope, PushRefusal, Resolution};
 
 const WRITES: When = When::any().op(ScriptOp::Write);
 const COMMITS: When = When::any().op(ScriptOp::Commit);
@@ -178,8 +178,16 @@ fn a_declaration_too_large_for_a_table_is_refused_naming_the_table() {
             "the uncovered writes",
         ),
         (declared(|c| c.lineages = usize::MAX), "the lineages"),
-        (declared(|c| c.targets = usize::MAX), "the targets"),
-        (declared(|c| c.domains = usize::MAX), "the flush domains"),
+        // The flush-domain lists are sized by both, and are made before the targets' and the
+        // domains' own tables.
+        (
+            declared(|c| c.targets = usize::MAX),
+            "the flush-domain lists",
+        ),
+        (
+            declared(|c| c.domains = usize::MAX),
+            "the flush-domain lists",
+        ),
     ] {
         let refused = Core::new(Ticks::default(), Arc::new(NoDiagnostics), capacity);
         assert!(
@@ -454,4 +462,114 @@ fn kept_writes_fill_to_the_operations_declared() {
     rig.act(actions);
     rig.entries();
     assert_eq!(rig.core.window_places(), 0);
+}
+
+#[test]
+fn domain_lists_fill_to_the_targets_and_imports_and_each_is_let_go_with_its_holder() {
+    // A target declared with domains holds a list, and an import by domains another, so the rows
+    // made for the targets and the imports are all held at once here. Removing a target and
+    // resolving an import let theirs go: cycling both past the rows made finds one free each time,
+    // where a row kept would be an inconsistency on the next round.
+    let capacity = declared(|c| {
+        c.targets = 2;
+        c.imports = 2;
+        c.domains = 3;
+    });
+    let mut rig = Rig::over(core_with(capacity));
+    for round in 0..4 {
+        rig.attach(
+            KEY,
+            MemoryTarget::new().with_domains([domain("a"), domain("b")]),
+        );
+        rig.attach(OTHER, MemoryTarget::new().with_domains([domain("c")]));
+        for _ in 0..2 {
+            let (_, actions) = rig
+                .core
+                .import_failure(ImportScope::Domains(vec![domain("b"), domain("c")]))
+                .expect("room");
+            rig.act(actions);
+        }
+        // Abandoned and healed in turn: a heal with nothing to wait for takes effect at once, and
+        // either lets the import's list go.
+        let resolution = if round % 2 == 0 {
+            Resolution::Abandon
+        } else {
+            Resolution::Heal
+        };
+        let resolved: Vec<_> = rig
+            .entries()
+            .into_iter()
+            .filter_map(|entry| match entry {
+                Entry::Failed(failed) => Some((failed.token, resolution)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resolved.len(), 2, "round {round}");
+        if resolution == Resolution::Heal {
+            for (token, _) in &resolved {
+                rig.oracle.healed(token.id());
+            }
+        }
+        let actions = rig.core.resolve(resolved).expect("resolved");
+        rig.act(actions);
+        rig.entries();
+        for key in [KEY, OTHER] {
+            rig.core.remove_target(key).expect("nothing holds it");
+            crate::backend::IoBackend::detach(&mut rig.backend, key).expect("attached");
+        }
+    }
+}
+
+#[test]
+fn a_failed_files_list_stays_the_files_once_the_failure_is_resolved() {
+    // A failed flush reaches by its file's own list (DI-D-108), which the file holds: resolving the
+    // failure leaves it with the file. A target added afterwards takes a row of its own, and the
+    // failed file's writes still name the domains it was declared with.
+    let capacity = declared(|c| {
+        c.targets = 2;
+        c.imports = 0;
+    });
+    let mut rig = Rig::over(core_with(capacity));
+    rig.backend = MemoryBackend::new(nz(8), nz(16)).with_script(FaultScript::new().on(
+        COMMITS.nth(1),
+        Fault::Fail(crate::memory::scripted_fault("the flush failed")),
+    ));
+    rig.attach(
+        KEY,
+        MemoryTarget::new().with_domains([domain("a"), domain("b")]),
+    );
+    rig.write_to(KEY, 1, 1, b"x").expect("room");
+    rig.run();
+    rig.seal(1);
+    rig.run();
+    let abandons: Vec<_> = rig
+        .entries()
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::Failed(failed) => Some((failed.token, Resolution::Abandon)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(abandons.len(), 1, "the commit failed");
+    let actions = rig.core.resolve(abandons).expect("resolved");
+    rig.act(actions);
+    rig.entries();
+
+    rig.attach(OTHER, MemoryTarget::new().with_domains([domain("c")]));
+    let mut declared = vec![
+        rig.core.domains[&domain("a")],
+        rig.core.domains[&domain("b")],
+    ];
+    declared.sort_unstable();
+    let list = |key| {
+        rig.core
+            .durability
+            .lists()
+            .get(rig.core.targets[&key].domains)
+            .to_vec()
+    };
+    assert_eq!(list(KEY), declared, "the failed file's list is its own");
+    assert_eq!(list(OTHER), [rig.core.domains[&domain("c")]]);
+    rig.write_to(KEY, 2, 2, b"y").expect("room");
+    rig.run();
 }

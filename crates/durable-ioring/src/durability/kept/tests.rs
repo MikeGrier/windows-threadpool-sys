@@ -2,8 +2,6 @@
 //! The kept writes on their own: kept and marked once each, the markings read in the order
 //! observed, a release dropping a write's marking with it, and the room made for them refused past.
 
-use alloc::sync::Arc;
-
 use super::{Gone, Kept};
 use crate::ids::{InstanceId, OpId};
 use crate::types::{IoTargetKey, MarkingKind};
@@ -22,7 +20,7 @@ fn gone(instance: InstanceId, seq: u64) -> Gone<u64> {
         lineage: 0,
         epoch: 0,
         file: IoTargetKey(0),
-        domains: Arc::from([]),
+        domains: crate::domain_lists::DomainList::EMPTY,
         born: 0,
         until: 1,
     }

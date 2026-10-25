@@ -68,6 +68,7 @@ use crate::correlation::CorrelationId;
 use crate::diagnostics::{
     Diagnostic, DiagnosticKind, DiagnosticSink, FlushOutcome, FlushPart, SealOutcome,
 };
+use crate::domain_lists::{DomainList, DomainLists};
 use crate::domains::DomainId;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId, TokenSlots};
 use crate::types::{
@@ -81,6 +82,7 @@ mod files;
 mod gates;
 mod kept;
 mod lineages;
+mod lists;
 mod providers;
 mod scratch;
 mod spans;
@@ -120,33 +122,40 @@ pub(crate) struct Routing {
     pub(crate) provider: bool,
 }
 
-/// Which files' writes a failure reaches (DI-D-21).
-#[derive(Clone, Debug)]
+/// Which files' writes a failure reaches (DI-D-21). Each but `All` also reaches every file
+/// declared with no domain, which is unknown and shares fate with every file.
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum Reach {
     /// Every file.
     All,
-    /// Every file whose declared domains intersect these, and every file declared with none.
-    Domains(Arc<[DomainId]>),
+    /// Every file whose declared domains intersect a failed file's: the file's own list, held by
+    /// the file, which the failure holds in turn (DI-D-108).
+    File(DomainList),
+    /// Every file declared with one domain: a failed or abandoned provider part.
+    Domain(DomainId),
+    /// Every file whose declared domains intersect those an import named: a list of the failure's
+    /// own, let go when it is resolved.
+    Named(DomainList),
 }
 
 impl Reach {
     /// The reach of a failed flush of a file declared with `domains`: a file declared with none is
     /// unknown, so it shares fate with every file.
-    pub(crate) fn of_file(domains: &Arc<[DomainId]>) -> Self {
+    pub(crate) fn of_file(domains: DomainList) -> Self {
         if domains.is_empty() {
             Reach::All
         } else {
-            Reach::Domains(Arc::clone(domains))
+            Reach::File(domains)
         }
     }
 
-    fn reaches(&self, file: &[DomainId]) -> bool {
-        match self {
-            Reach::All => true,
-            Reach::Domains(domains) => {
-                file.is_empty() || file.iter().any(|domain| domains.contains(domain))
-            }
-        }
+    fn reaches(&self, lists: &DomainLists, file: &[DomainId]) -> bool {
+        let named = match *self {
+            Reach::All => return true,
+            Reach::Domain(domain) => return file.is_empty() || file.contains(&domain),
+            Reach::File(list) | Reach::Named(list) => lists.get(list),
+        };
+        file.is_empty() || file.iter().any(|domain| named.contains(domain))
     }
 }
 
@@ -206,7 +215,7 @@ pub(crate) struct Accepted<E, T> {
     /// What its seal's flush is pushed against.
     pub(crate) target: T,
     pub(crate) routing: Routing,
-    pub(crate) domains: Arc<[DomainId]>,
+    pub(crate) domains: DomainList,
 }
 
 /// A write not yet covered successfully, failed, or passed by its lineage's mark.
@@ -217,7 +226,7 @@ struct Write<E, T> {
     file: IoTargetKey,
     target: T,
     routing: Routing,
-    domains: Arc<[DomainId]>,
+    domains: DomainList,
     stage: Stage,
     /// The failure clock when it was recorded: no failure observed before names it.
     born: u64,
@@ -312,14 +321,21 @@ struct Failure<E: EpochId + 'static, I: Instant> {
 
 impl<E: EpochId + 'static, I: Instant> Failure<E, I> {
     /// Whether this failure names a write recorded at failure clock `born`, nameable until
-    /// `until` if it has stopped being, of `lineage`, to a file declared with `domains`: whether
-    /// observation would have, which is what freezes the set (DI-D-12 (b)).
-    fn names(&self, born: u64, until: Option<u64>, lineage: Key, domains: &[DomainId]) -> bool {
+    /// `until` if it has stopped being, of `lineage`, to a file declared with `domains` in
+    /// `lists`: whether observation would have, which is what freezes the set (DI-D-12 (b)).
+    fn names(
+        &self,
+        lists: &DomainLists,
+        born: u64,
+        until: Option<u64>,
+        lineage: Key,
+        domains: DomainList,
+    ) -> bool {
         let at = self.id.seq;
         born <= at
             && until.is_none_or(|until| until > at)
             && self.only.is_none_or(|only| only == lineage)
-            && self.reach.reaches(domains)
+            && self.reach.reaches(lists, lists.get(domains))
     }
 
     /// Whether this failure still holds `lineage`'s epochs among its suspects': open, or healing
@@ -375,7 +391,7 @@ fn answer<E: EpochId>(
     through: E,
     file: IoTargetKey,
     failed_now: bool,
-) -> Result<(u64, Arc<[DomainId]>), &'static str> {
+) -> Result<(u64, DomainList), &'static str> {
     let seal = tables::seals_of_mut(seals, lineage)
         .map(|(_, seal)| seal)
         .find(|seal| seal.through == through)
@@ -393,7 +409,7 @@ fn answer<E: EpochId>(
     entry.answered = true;
     entry.ok = !failed_now;
     *unanswered -= 1;
-    let domains = Arc::clone(&entry.domains);
+    let domains = entry.domains;
     if failed_now {
         *failed = true;
         seal.answered = true;
@@ -431,6 +447,11 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     tokens: Arc<TokenSlots>,
     /// The token slots no unresolved failure holds.
     free_tokens: Vec<u32>,
+    /// The flush-domain lists targets and imports by domains name (DI-D-108).
+    lists: DomainLists,
+    /// The lists `DomainLists::shared` handed a test that pushes writes without targets.
+    #[cfg(test)]
+    test_lists: Vec<DomainList>,
     /// The failure clock: the number the next failure observed takes. A write record reads it when
     /// it is recorded and when it stops being nameable, which is what a failure's rule compares.
     next_failure: u64,
@@ -591,6 +612,12 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
                 .rev()
                 .filter_map(|at| u32::try_from(at).ok()),
         );
+        let lists = tagged(tag::DURABILITY_NEW_LISTS, || {
+            DomainLists::new(
+                capacity.targets.checked_add(capacity.imports),
+                capacity.domains,
+            )
+        })?;
         let spare = tagged(tag::DURABILITY_NEW_DUE, || Due::reserved(capacity))?;
         let scratch = Scratch::new(capacity, served)?;
         Ok(Self {
@@ -608,6 +635,9 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             kept,
             tokens,
             free_tokens,
+            lists,
+            #[cfg(test)]
+            test_lists: Vec::new(),
             next_failure: 0,
             held,
             served: tagged(tag::DURABILITY_NEW_SERVED, || Arc::from([])),
@@ -773,11 +803,10 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             );
             return;
         }
-        let shared = Arc::clone(&domains);
         match self
             .spans
             .entry((lineage, file, Span::Unsealed))
-            .or_insert_with(|| SpanFile::new(shared))
+            .or_insert_with(|| SpanFile::new(domains))
         {
             Ok(entry) => entry.writes += 1,
             Err(_) => {
@@ -1001,7 +1030,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     target: file,
                     fault,
                 };
-                self.observe(cause, &Reach::of_file(&domains), None, &mut due);
+                self.observe(cause, &Reach::of_file(domains), None, &mut due);
             }
         }
         self.advance(due)
@@ -1054,8 +1083,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                         self.markings(&failure).collect()
                     });
                     let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);
-                    let (writes, kept, lineages) = (&self.writes, &self.kept, &mut self.lineages);
-                    for write in suspects(writes, kept, &failure) {
+                    let (lists, writes, kept) = (&self.lists, &self.writes, &self.kept);
+                    let lineages = &mut self.lineages;
+                    for write in suspects(lists, writes, kept, &failure) {
                         if let Some(state) = lineages.get_mut(&write.lineage) {
                             tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {
                                 state.abandoned.insert(write.epoch);
@@ -1071,13 +1101,14 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     });
                     self.abandon_held(&failure, &mut due);
                     self.release_suspects(&failure);
+                    self.release_reach(failure.reach);
                 }
                 Resolution::Heal => {
                     let lineages = &self.lineages;
                     let failure = &self.failures[index];
                     let pending = tagged(tag::DURABILITY_RESOLVE_HEAL_PENDING, || {
                         let mut pending = BTreeMap::new();
-                        for write in suspects(&self.writes, &self.kept, failure) {
+                        for write in suspects(&self.lists, &self.writes, &self.kept, failure) {
                             if pending.contains_key(&write.lineage) {
                                 continue;
                             }
@@ -1168,7 +1199,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 .values()
                 .filter(|write| only.is_none_or(|lineage| write.lineage == lineage))
                 .filter(|write| lineages.get(&write.lineage).is_some_and(|s| !s.ended))
-                .filter(|write| reach.reaches(&write.domains))
+                .filter(|write| reach.reaches(&self.lists, self.lists.get(write.domains)))
                 .map(|write| write.op.seq)
                 .collect()
         };
@@ -1192,7 +1223,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let failure = Failure {
             id,
             cause: recorded_cause,
-            reach: reach.clone(),
+            reach: *reach,
             only,
             observed,
             standing: Standing::Open,
@@ -1202,6 +1233,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         };
         if within(&mut self.failures, failure).is_err() {
             self.free_tokens.push(slot);
+            self.release_reach(*reach);
             self.inconsistent(
                 "more failures were unresolved than the flush parts and the imports allow",
                 format_args!("failure {id:?}"),
@@ -1288,6 +1320,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     });
                 });
                 self.release_suspects(&failure);
+                self.release_reach(failure.reach);
             } else {
                 at += 1;
             }
@@ -1343,6 +1376,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         );
         #[cfg(test)]
         assert!(
+            self.lists_agree(),
+            "something names a flush-domain list whose row is free"
+        );
+        #[cfg(test)]
+        assert!(
             self.window_agrees(),
             "the window's places disagree with the uncovered writes, the failures and the seals, \
              or a failure's rule with what observation listed"
@@ -1388,15 +1426,15 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                         &mut parts,
                         &self.served,
                         write.file,
-                        &write.domains,
+                        self.lists.get(write.domains),
                         write.op,
                     );
                 }
-                let shared = Arc::clone(&write.domains);
+                let domains = write.domains;
                 let Ok(entry) = self
                     .spans
                     .entry((lineage, write.file, Span::Seal(seq)))
-                    .or_insert_with(|| SpanFile::new(shared))
+                    .or_insert_with(|| SpanFile::new(domains))
                 else {
                     full.get_or_insert(write.op);
                     continue;

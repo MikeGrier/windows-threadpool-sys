@@ -9,6 +9,7 @@ use fixed_hash_table::{Full, HeapMap};
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::Instant;
 use crate::contract::EpochId;
+use crate::domain_lists::DomainLists;
 use crate::durability::{Reach, Routing, State};
 use crate::ids::{DioringIds, Lineage};
 use crate::types::{EpochState, FlushDomain, ImportScope, UnknownLineage};
@@ -32,9 +33,10 @@ pub(crate) fn routing(file: &[DomainId], served: &[DomainId]) -> Routing {
     }
 }
 
-/// What an import reaches: the files, the one lineage it is confined to if any, and the domains it
-/// named that the instance has never been given.
-pub(crate) type ImportReach = (Reach, Option<u64>, Vec<FlushDomain>);
+/// What an import reaches: the files -- `None` for the domains an [`ImportScope::Domains`] names,
+/// whose list [`import_list`] makes once the import is admitted -- the one lineage it is confined
+/// to if any, and the domains it named that the instance has never been given.
+pub(crate) type ImportReach = (Option<Reach>, Option<u64>, Vec<FlushDomain>);
 
 /// The targets an imported failure reaches (DI-D-21), the one lineage it is confined to, if the
 /// scope names one, and the domains it names that the instance has never been given, in the order
@@ -47,28 +49,37 @@ pub(crate) fn import_reach<E: EpochId + 'static, I: Instant>(
     live: impl Fn(Lineage) -> bool,
 ) -> Result<ImportReach, UnknownLineage<DioringIds<E, I>>> {
     Ok(match scope {
-        ImportScope::All => (Reach::All, None, Vec::new()),
+        ImportScope::All => (Some(Reach::All), None, Vec::new()),
         ImportScope::Lineage(lineage) if live(*lineage) => {
-            (Reach::All, Some(lineage.seq), Vec::new())
+            (Some(Reach::All), Some(lineage.seq), Vec::new())
         }
         ImportScope::Lineage(lineage) => return Err(UnknownLineage(*lineage)),
         ImportScope::Domains(names) => {
-            let mut known = tagged(tag::DOMAINS_IMPORT_REACH_KNOWN, || {
-                Vec::with_capacity(names.len())
-            });
             let mut unmatched = Vec::new();
-            for domain in names {
-                match domains.get(domain) {
-                    Some(&id) => tagged(tag::DOMAINS_IMPORT_REACH_KNOWN_ID, || known.push(id)),
-                    None => tagged(tag::DOMAINS_IMPORT_REACH_UNMATCHED, || {
-                        unmatched.push(domain.clone());
-                    }),
-                }
+            for domain in names.iter().filter(|domain| !domains.contains_key(*domain)) {
+                tagged(tag::DOMAINS_IMPORT_REACH_UNMATCHED, || {
+                    unmatched.push(domain.clone());
+                });
             }
-            let known = tagged(tag::DOMAINS_IMPORT_REACH_SHARED, || known.into());
-            (Reach::Domains(known), None, unmatched)
+            (None, None, unmatched)
         }
     })
+}
+
+/// The reach of an import naming `names`: the domains of them the instance was given, in a list of
+/// the failure's own (DI-D-108), let go when it is resolved.
+///
+/// # Errors
+///
+/// What is inconsistent: no list is free, which the imports admitted rule out.
+pub(crate) fn import_list(
+    names: &[FlushDomain],
+    domains: &HeapMap<FlushDomain, DomainId>,
+    lists: &mut DomainLists,
+) -> Result<Reach, &'static str> {
+    lists
+        .claim(names.iter().filter_map(|name| domains.get(name).copied()))
+        .map(Reach::Named)
 }
 
 /// The contract's spelling of a lineage's epoch state.
@@ -98,7 +109,17 @@ pub fn first_repeat<T: Eq + core::hash::Hash + Clone>(
     None
 }
 
-/// Intern `domains`, returning their ids sorted and without repeats.
+/// Intern `domain`, if the table has room for it or holds it already.
+pub(crate) fn intern(
+    table: &mut HeapMap<FlushDomain, DomainId>,
+    domain: &FlushDomain,
+) -> Option<DomainId> {
+    let next = DomainId(u32::try_from(table.len()).ok()?);
+    table.entry(domain.clone()).or_insert(next).ok().copied()
+}
+
+/// Intern `domains`, returning their ids sorted and without repeats: the provider's, when the
+/// instance is built.
 ///
 /// # Errors
 ///

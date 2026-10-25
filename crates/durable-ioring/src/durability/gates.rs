@@ -33,6 +33,7 @@ use crate::alloc_tags::{tag, tagged};
 use crate::capacity::within;
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
+use crate::domain_lists::DomainLists;
 use crate::ids::OpId;
 use crate::ordered::Ordered;
 
@@ -217,7 +218,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             let Some(release) = pending.get(&target.lineage) else {
                 continue;
             };
-            let holds = suspects(&self.writes, &self.kept, failure).any(|write| {
+            let holds = suspects(&self.lists, &self.writes, &self.kept, failure).any(|write| {
                 write.lineage == target.lineage
                     && (lower, Bound::Included(target.epoch)).contains(&write.epoch)
             });
@@ -461,9 +462,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// (DI-D-35). The gate is named when both were.
     pub(super) fn abandon_held(&mut self, failure: &Failure<E, I>, due: &mut Due<E, T, I>) {
         self.stop_held(
-            |writes, kept, held| {
+            |lists, writes, kept, held| {
                 let hit = |at: Gate<E>| {
-                    suspects(writes, kept, failure)
+                    suspects(lists, writes, kept, failure)
                         .any(|write| write.lineage == at.lineage && write.epoch == at.epoch)
                 };
                 if !held.ready && hit(held.gate) {
@@ -486,7 +487,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// gate.
     pub(super) fn end_held(&mut self, lineage: Key, due: &mut Due<E, T, I>) {
         self.stop_held(
-            |_, _, held| match &held.write {
+            |_, _, _, held| match &held.write {
                 Some(write) if write.lineage == lineage => Some(Gate {
                     lineage,
                     epoch: write.epoch,
@@ -515,15 +516,20 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// for, given the uncovered and the kept writes to read.
     fn stop_held(
         &mut self,
-        stopped: impl Fn(&Ordered<u64, Write<E, T>>, &Kept<E, I>, &HeldOp<E, T>) -> Option<Gate<E>>,
+        stopped: impl Fn(
+            &DomainLists,
+            &Ordered<u64, Write<E, T>>,
+            &Kept<E, I>,
+            &HeldOp<E, T>,
+        ) -> Option<Gate<E>>,
         due: &mut Due<E, T, I>,
     ) {
-        let (writes, kept) = (&self.writes, &self.kept);
+        let (lists, writes, kept) = (&self.lists, &self.writes, &self.kept);
         let (gated, held_by_epoch) = (&mut self.gated, &mut self.held_by_epoch);
         self.held.take_where(
-            |_, held| stopped(writes, kept, held).is_some(),
+            |_, held| stopped(lists, writes, kept, held).is_some(),
             |&seq, held| {
-                let Some(abandoned) = stopped(writes, kept, &held) else {
+                let Some(abandoned) = stopped(lists, writes, kept, &held) else {
                     return;
                 };
                 if let Some(write) = &held.write {

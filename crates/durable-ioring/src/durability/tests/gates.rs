@@ -4,7 +4,6 @@
 //! the cycles a push or a seal would close.
 
 use std::io;
-use std::sync::Arc;
 
 use super::Stamp;
 use super::{
@@ -57,7 +56,7 @@ fn hold_write(lineage: &mut Lineage, ops: &mut Ops, own: Gate<u64>, gate: Gate<u
         file: A,
         target: target(A),
         routing: DEFAULT,
-        domains: Arc::from([]),
+        domains: crate::domain_lists::DomainList::EMPTY,
     };
     lineage.0.hold(op, Some(write), gate);
     op

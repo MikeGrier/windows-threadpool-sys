@@ -115,26 +115,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   seal releases a prefix of them, so a per-lineage queue of distinct releases is a candidate shape; whether its length
   has a bound the capacities give, or the product must be declared, is the decision.
 
-- [ ] **DI-23.12.4** -- **Handles, tokens, descriptions and domain lists as fixed storage**
-  ([DI-D-108](DESIGN-NOTES.md#di-d-108)): lineage handles and failure tokens become an index and a generation into an
-  array of atomics the driver makes at construction and reaches through the home it supplies, sized from `lineages` and
-  `DI-23.12.3`'s failure bound, keeping DI-D-12's one live token; a lineage's description is the consumer's string, kept
-  and lent as `&str`; a target's domains become a range in a fixed table sized from `targets` and `domains`. Breaking:
-  `LineageHandle`, `FailureToken` and `LineageInfo` change shape, and the `Home` trait grows. Split 2026-10-24 when it
-  began into the steps below: the four share no storage, and the domain lists reach into the failures' reach, which the
-  others do not.
-
-- [x] **DI-23.12.4.1** -- A lineage handle is its home, its lineage and a slot of copy counts made when the instance is built, so minting, cloning and releasing one allocate nothing. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231241)
-
-- [x] **DI-23.12.4.2** -- A failure token is its failure and a slot of liveness words made at construction for the failure bound, so observing a failure and handing out a token allocate nothing. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231242)
-
-- [x] **DI-23.12.4.3** -- A lineage's description is the consumer's string, kept as given and lent as `&str` by the enumeration and by `close()`. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231243)
-
-- [ ] **DI-23.12.4.4** -- **A target's domains as a range in a fixed table** ([DI-D-108](DESIGN-NOTES.md#di-d-108)):
-  sized from `targets` and `domains`, the writes, spans, kept records and a commit failure's reach naming the range;
-  an import's reach in a table of its own sized from `imports` and `domains`. Proof obligation: a range is not reused
-  while a failure's reach names it -- a commit failure suspects a write to its file, which keeps the target from being
-  removed.
+- [x] **DI-23.12.4** -- Lineage handles, failure tokens, descriptions and domain lists are fixed storage made at construction: slots, a lent string, and rows. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23124)
 
 - [ ] **DI-23.12.5** -- **An abandoned epoch is forgotten once the mark passes it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)):
   above the mark it holds a place of the window until the mark passes it; at or below the mark `epoch_state` reports it as

@@ -210,16 +210,16 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-21: a failure reaches only the files whose declared domains intersect its own, and unknown files. Ignoring that over-reports, and an abandon then abandons epochs nothing put at risk. Caught by the reach tests, unit and I/O.",
-      "find": ["            .filter(|write| reach.reaches(&write.domains))\n"],
-      "replace": ["            .filter(|_| true)\n"]
+      "find": ["                .filter(|write| reach.reaches(&self.lists, self.lists.get(write.domains)))"],
+      "replace": ["                .filter(|_| true)"]
     },
     {
       "name": "DI-3.2.4: a write in flight is not suspected",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (b): suspicion is by push order, not completion; a write accepted before the failure can complete after it. Caught by the unit test with a write in flight at the failure.",
-      "find": ["            .filter(|write| reach.reaches(&write.domains))\n"],
-      "replace": ["            .filter(|write| reach.reaches(&write.domains) && write.stage != Stage::InFlight)\n"]
+      "find": ["                .filter(|write| reach.reaches(&self.lists, self.lists.get(write.domains)))"],
+      "replace": ["                .filter(|write| reach.reaches(&self.lists, self.lists.get(write.domains)) && write.stage != Stage::InFlight)"]
     },
     {
       "name": "DI-3.2.4: a covered write stays suspect",
@@ -530,8 +530,8 @@
       "file": "src/domains.rs",
       "expect": "caught",
       "why": "DI-D-19: ImportScope::Lineage narrows a failure to that lineage's writes. Widened, it would hold other lineages' marks for a failure the consumer placed in one. Caught by the ring test that imports into each of two lineages.",
-      "find": ["            (Reach::All, Some(lineage.seq), Vec::new())\n"],
-      "replace": ["            (Reach::All, None, Vec::new())\n"]
+      "find": ["            (Some(Reach::All), Some(lineage.seq), Vec::new())"],
+      "replace": ["            (Some(Reach::All), None, Vec::new())"]
     },
     {
       "name": "DI-3.2.5.1: retiring ignores a failure holding the lineage",
@@ -794,8 +794,8 @@
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "DI-D-27: a failure of domain D reaches the files whose domains contain D and the unknown ones. Reaching every file suspects writes in other domains, which is a wrong answer about what is at risk.",
-      "find": ["                let reach = Reach::Domains(tagged(tag::PROVIDERS_PROVIDED_REACH, || {", "                    Arc::from([domain])", "                }));"],
-      "replace": ["                let reach = Reach::All;"]
+      "find": ["                self.observe(cause, &Reach::Domain(domain), None, &mut due);"],
+      "replace": ["                self.observe(cause, &Reach::All, None, &mut due);"]
     },
     {
       "name": "DI-3.2.6: an answer for an ended lineage is applied",
@@ -914,8 +914,8 @@
       "file": "src/durability/suspects.rs",
       "expect": "caught",
       "why": "A failure holds a file only when its suspect set names a write to it; reporting the rest asks the consumer to resolve failures that do not concern the file.",
-      "find": ["        suspects(&self.writes, &self.kept, failure).any(|write| write.file == file)"],
-      "replace": ["        suspects(&self.writes, &self.kept, failure).any(|_| true)"]
+      "find": ["        suspects(&self.lists, &self.writes, &self.kept, failure).any(|write| write.file == file)"],
+      "replace": ["        suspects(&self.lists, &self.writes, &self.kept, failure).any(|_| true)"]
     },
     {
       "name": "DI-3.2.7: a completion never clears its file's last operation",
@@ -978,8 +978,8 @@
       "file": "src/domains.rs",
       "expect": "caught",
       "why": "DI-D-46: a domain the instance was never given is reported, so a misspelling is not silent.",
-      "find": ["                    None => tagged(tag::DOMAINS_IMPORT_REACH_UNMATCHED, || {", "                        unmatched.push(domain.clone());", "                    }),"],
-      "replace": ["                    None => {}"]
+      "find": ["                tagged(tag::DOMAINS_IMPORT_REACH_UNMATCHED, || {","                    unmatched.push(domain.clone());","                });"],
+      "replace": ["                let _ = (domain, &mut unmatched);"]
     },
     {
       "name": "DI-3.9.1: an inconsistency is not panicked on",
@@ -2440,8 +2440,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal that takes effect resolves its failure as an abandon does; its places must go with it.",
-      "find": ["                self.release_suspects(&failure);","            } else {"],
-      "replace": ["            } else {"]
+      "find": ["                self.release_suspects(&failure);","                self.release_reach(failure.reach);","            } else {"],
+      "replace": ["                self.release_reach(failure.reach);","            } else {"]
     },
     {
       "name": "DI-23.8.1: a write that is no longer uncovered keeps its place",
@@ -3272,8 +3272,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Releasing a failure's suspects lets go of the records its markings are read from, so they are read first.",
-      "find": ["                    let failure = self.failures.remove(index);","                    self.free_tokens.push(failure.token);","                    let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {","                        self.markings(&failure).collect()","                    });","                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);","                    let (writes, kept, lineages) = (&self.writes, &self.kept, &mut self.lineages);","                    for write in suspects(writes, kept, &failure) {","                        if let Some(state) = lineages.get_mut(&write.lineage) {","                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {","                                state.abandoned.insert(write.epoch);","                            });","                        }","                    }","                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {","                        due.events.push(Event::Abandoned {","                            failure: failure.id,","                            suspect,","                            markings,","                        });","                    });","                    self.abandon_held(&failure, &mut due);","                    self.release_suspects(&failure);"],
-      "replace": ["                    let failure = self.failures.remove(index);","                    self.free_tokens.push(failure.token);","                    self.release_suspects(&failure);","                    let markings: Vec<_> = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {","                        self.markings(&failure).collect()","                    });","                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);","                    let (writes, kept, lineages) = (&self.writes, &self.kept, &mut self.lineages);","                    for write in suspects(writes, kept, &failure) {","                        if let Some(state) = lineages.get_mut(&write.lineage) {","                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {","                                state.abandoned.insert(write.epoch);","                            });","                        }","                    }","                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {","                        due.events.push(Event::Abandoned {","                            failure: failure.id,","                            suspect,","                            markings,","                        });","                    });","                    self.abandon_held(&failure, &mut due);"]
+      "find": ["                    let failure = self.failures.remove(index);","                    self.free_tokens.push(failure.token);","                    let markings = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {","                        self.markings(&failure).collect()","                    });","                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);","                    let (lists, writes, kept) = (&self.lists, &self.writes, &self.kept);","                    let lineages = &mut self.lineages;","                    for write in suspects(lists, writes, kept, &failure) {","                        if let Some(state) = lineages.get_mut(&write.lineage) {","                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {","                                state.abandoned.insert(write.epoch);","                            });","                        }","                    }","                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {","                        due.events.push(Event::Abandoned {","                            failure: failure.id,","                            suspect,","                            markings,","                        });","                    });","                    self.abandon_held(&failure, &mut due);","                    self.release_suspects(&failure);"],
+      "replace": ["                    let failure = self.failures.remove(index);","                    self.free_tokens.push(failure.token);","                    self.release_suspects(&failure);","                    let markings: Vec<_> = tagged(tag::DURABILITY_RESOLVE_MARKINGS, || {","                        self.markings(&failure).collect()","                    });","                    let suspect = self.suspect_set(&failure, tag::DURABILITY_RESOLVE_SUSPECT);","                    let (lists, writes, kept) = (&self.lists, &self.writes, &self.kept);","                    let lineages = &mut self.lineages;","                    for write in suspects(lists, writes, kept, &failure) {","                        if let Some(state) = lineages.get_mut(&write.lineage) {","                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {","                                state.abandoned.insert(write.epoch);","                            });","                        }","                    }","                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {","                        due.events.push(Event::Abandoned {","                            failure: failure.id,","                            suspect,","                            markings,","                        });","                    });","                    self.abandon_held(&failure, &mut due);"]
     },
     {
       "name": "DI-23.12.3.2: a healed failure's markings are read after its writes are released",
@@ -3312,8 +3312,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A failure suspects only the writes to files its reach covers (DI-D-21).",
-      "find": ["            && self.reach.reaches(domains)\n"],
-      "replace": [""]
+      "find": ["            && self.reach.reaches(lists, lists.get(domains))"],
+      "replace": []
     },
     {
       "name": "DI-23.12.3.3: an ended lineage's writes stay nameable",
@@ -3458,6 +3458,54 @@
       "why": "The enumeration lends the description the lineage was minted with.",
       "find": ["                description: state.description.as_deref(),"],
       "replace": ["                description: None,"]
+    },
+    {
+      "name": "DI-23.12.4.4: a removed target keeps its domain list",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "A target lets its list go when it is removed, or targets added over the instance's life run out of rows.",
+      "find": ["            self.durability.lists_mut().release(record.domains);"],
+      "replace": []
+    },
+    {
+      "name": "DI-23.12.4.4: an abandoned import keeps its domain list",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "An import by domains lets its list go when it is resolved, abandoned as healed.",
+      "find": ["                    self.release_reach(failure.reach);"],
+      "replace": []
+    },
+    {
+      "name": "DI-23.12.4.4: a healed import keeps its domain list",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A heal that takes effect lets an import's list go as an abandon does.",
+      "find": ["                self.release_suspects(&failure);","                self.release_reach(failure.reach);"],
+      "replace": ["                self.release_suspects(&failure);"]
+    },
+    {
+      "name": "DI-23.12.4.4: a failed file's list is let go with the failure",
+      "file": "src/durability/lists.rs",
+      "expect": "caught",
+      "why": "A failed flush reaches by its file's own list, which the file holds; letting it go with the failure frees a row the target still names.",
+      "find": ["        if let Reach::Named(list) = reach {"],
+      "replace": ["        if let Reach::Named(list) | Reach::File(list) = reach {"]
+    },
+    {
+      "name": "DI-23.12.4.4: a list keeps a domain twice",
+      "file": "src/domain_lists.rs",
+      "expect": "caught",
+      "why": "A list names each domain once, so a row holds every list a declaration allows.",
+      "find": ["                Ok(_) => {}"],
+      "replace": ["                Ok(at) | Err(at) if len < cells.len() => {","                    cells.copy_within(at..len, at + 1);","                    cells[at] = id;","                    len += 1;","                }","                Ok(_) => {}"]
+    },
+    {
+      "name": "DI-23.12.4.4: a file declared with no domain escapes a failed file's reach",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A file declared with no domain is unknown and shares fate with every file (DI-D-21).",
+      "find": ["        file.is_empty() || file.iter().any(|domain| named.contains(domain))"],
+      "replace": ["        file.iter().any(|domain| named.contains(domain))"]
     }
   ]
 }

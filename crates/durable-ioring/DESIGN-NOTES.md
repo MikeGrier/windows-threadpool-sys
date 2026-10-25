@@ -2330,6 +2330,15 @@ notes when it is created.
   (DI-23.12.4.3): the `String` `mint_lineage` takes is kept as given, and `LineageInfo<'a, V>` lends it as `&'a str`
   for the visit; `Leftover` takes the same lifetime, since `close()` lends its lineages from the instance it is
   consuming. A consumer that keeps a description past the visit copies it.
+- **A target's domains are a row in a fixed table** (DI-23.12.4.4, decided with the item rather than in DI-23.10's
+  answers). As built: the durability core's `DomainLists` holds `targets` plus `imports` rows, each as wide as the
+  domains declared; a list is a row and a length, copied wherever a write, a span, a kept record or a failure's reach
+  names it. A target holds its row from `add_target` to `remove_target`; an import by domains holds one of its own
+  from its observation to its resolution, claimed only once the import is admitted, since at capacity every row may be
+  held; an empty list holds none; a failed provider part reaches by its one domain and needs none. A failed flush
+  reaches by its file's own row, which is not reused while the failure is unresolved: the failure suspects the write
+  the flush answered for, which keeps the target from being removed. The census checks in every change that nothing
+  names a free row.
 - **This is a breaking change to both crates**: `Failed`, `Abandoned` and `Healed`, `FailureInfo`, `SuspectSet`,
   `LineageHandle`, `FailureToken` and `LineageInfo` change shape. It is made in DI-23.12.
 

@@ -593,7 +593,7 @@ const CLEAN: &[(&str, u64)] = &[
     ("a busy lineage refused, and its holds named", 0),
     ("the minted lineage sealed", 0),
     ("the minted lineage ended", 0),
-    ("a target added", 1),
+    ("a target added", 0),
     ("the added target written", 0),
     ("a busy target refused, and its holds named", 0),
     ("the added target sealed", 0),
@@ -685,6 +685,11 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "durability::new::free_tokens",
         1,
     ),
+    (
+        "construction, with two targets",
+        "durability::new::lists",
+        2,
+    ),
     ("construction, with two targets", "durability::new::due", 4),
     (
         "construction, with two targets",
@@ -750,18 +755,12 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         1,
     ),
     ("construction, with two targets", "io_core::new::served", 1),
-    (
-        "construction, with two targets",
-        "domains::intern_all::shared",
-        2,
-    ),
     ("writes, first round", "io_core::issue::backend_push", 3),
     (
         "write completions, first round",
         "io_core::complete::queue",
         3,
     ),
-    ("a target added", "domains::intern_all::shared", 1),
 ];
 
 /// As [`CLEAN_TAGS`], for the failure paths.
@@ -833,6 +832,11 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "durability::new::free_tokens",
         1,
     ),
+    (
+        "construction, with two targets",
+        "durability::new::lists",
+        2,
+    ),
     ("construction, with two targets", "durability::new::due", 4),
     (
         "construction, with two targets",
@@ -898,11 +902,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         1,
     ),
     ("construction, with two targets", "io_core::new::served", 1),
-    (
-        "construction, with two targets",
-        "domains::intern_all::shared",
-        2,
-    ),
     (
         "writes before the failure",
         "io_core::issue::backend_push",
