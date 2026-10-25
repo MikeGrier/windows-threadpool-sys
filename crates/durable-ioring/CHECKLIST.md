@@ -120,7 +120,30 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   array of atomics the driver makes at construction and reaches through the home it supplies, sized from `lineages` and
   `DI-23.12.3`'s failure bound, keeping DI-D-12's one live token; a lineage's description is the consumer's string, kept
   and lent as `&str`; a target's domains become a range in a fixed table sized from `targets` and `domains`. Breaking:
-  `LineageHandle`, `FailureToken` and `LineageInfo` change shape, and the `Home` trait grows.
+  `LineageHandle`, `FailureToken` and `LineageInfo` change shape, and the `Home` trait grows. Split 2026-10-24 when it
+  began into the steps below: the four share no storage, and the domain lists reach into the failures' reach, which the
+  others do not.
+
+- [ ] **DI-23.12.4.1** -- **Lineage handles as slots** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a handle is its home,
+  its lineage and an index into the home's table of copy counts, made when the instance is built for `lineages`, the
+  lineage's number standing as the slot's generation; minting claims a slot, cloning and dropping count in it without
+  allocating, and the last drop ends the lineage as before. Proof obligation: a lineage with a copy out is one the core
+  holds, so a slot is free whenever the core admits a mint. Breaking: `LineageHandle::mint` can refuse, and `Home`
+  grows the table.
+
+- [ ] **DI-23.12.4.2** -- **Failure tokens as slots** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a token is an index into a
+  table of liveness flags made at construction for the failure bound, the failure's number standing as the generation;
+  DI-D-12's one live token kept. Breaking: `FailureToken`'s fields and its mint.
+
+- [ ] **DI-23.12.4.3** -- **A lineage's description kept and lent** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): the
+  consumer's `String` kept as given, and `LineageInfo` lending it as `&str` for the visitor's duration. Breaking:
+  `LineageInfo` gains a lifetime.
+
+- [ ] **DI-23.12.4.4** -- **A target's domains as a range in a fixed table** ([DI-D-108](DESIGN-NOTES.md#di-d-108)):
+  sized from `targets` and `domains`, the writes, spans, kept records and a commit failure's reach naming the range;
+  an import's reach in a table of its own sized from `imports` and `domains`. Proof obligation: a range is not reused
+  while a failure's reach names it -- a commit failure suspects a write to its file, which keeps the target from being
+  removed.
 
 - [ ] **DI-23.12.5** -- **An abandoned epoch is forgotten once the mark passes it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)):
   above the mark it holds a place of the window until the mark passes it; at or below the mark `epoch_state` reports it as
