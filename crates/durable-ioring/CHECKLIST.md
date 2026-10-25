@@ -98,7 +98,8 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 - [ ] **DI-23.12.3.4** -- **A failure's records lent by a scoped borrow** ([DI-D-108](DESIGN-NOTES.md#di-d-108)):
   `Failed`, `Abandoned`, `Healed` and `FailureInfo` carry the failure's identity, token, cause and stamp, and its suspect
   writes and markings are lent for the duration of a visitor; a resolved failure's records are kept until its `Abandoned`
-  or `Healed` is popped. Breaking for both crates; CONTRACT.md, the READMEs' examples, and the oracle follow.
+  or `Healed` is popped. Breaking for both crates; CONTRACT.md, the READMEs' examples, and the oracle follow. The
+  inventory itself -- `failures()` handing out a `Vec` of copied causes -- is `DI-23.12.3.7`.
 
 - [ ] **DI-23.12.3.5** -- **The completion queue and a change's entries within derived bounds**
   ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s third item): a `Marked` queued once per marked write and expanded at pop into one
@@ -114,6 +115,12 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   keeps the release values in a map made at the heal. Per lineage the pending releases are monotone in heal order, and a
   seal releases a prefix of them, so a per-lineage queue of distinct releases is a candidate shape; whether its length
   has a bound the capacities give, or the product must be declared, is the decision.
+
+- [ ] **DI-23.12.3.7** -- **The inventory as a visitor** ([DI-D-103](DESIGN-NOTES.md#di-d-103),
+  [DI-D-108](DESIGN-NOTES.md#di-d-108)): `failures()` gives each unresolved failure to a visitor, lending its cause, rather
+  than handing out a `Vec` of copies, as the lineages and the holds already are; `close()` lends its failures the same
+  way. Split from `DI-23.12.3.4` on 2026-10-24: the inventory's collection is independent of where a failure's records
+  live, and it changes every caller of `failures()`. Breaking for both crates.
 
 - [x] **DI-23.12.4** -- Lineage handles, failure tokens, descriptions and domain lists are fixed storage made at construction: slots, a lent string, and rows. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23124)
 
