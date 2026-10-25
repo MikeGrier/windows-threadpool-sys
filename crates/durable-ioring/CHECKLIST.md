@@ -84,7 +84,41 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   bounds, the entries list pushed onto within its room as the others are. Proof obligations: unresolved observed failures within `operations` times one plus the served domains, a
   provider's answer for an ended lineage included, and a test filling the table and the queue to their bounds. Breaking:
   `Failed`, `Abandoned`, `Healed`, `Marked`, `FailureInfo` and `SuspectSet` change shape in both crates, and the oracle
-  follows.
+  follows. Split 2026-10-24 when it began into the steps below, in dependency order: today a covered write's record is let
+  go at the moment its marking is made, which is why each failure keeps its own copies, so the records must outlive
+  coverage before a failure can be a rule over them, and the consumer-facing change comes last, over storage already in
+  place.
+
+- [ ] **DI-23.12.3.1** -- **The failure table on fixed storage, bounded by derivation**
+  ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s first item): the unresolved failures kept in observation order in a table made at
+  construction for `operations` times one plus the served domains, plus `imports`, a failure recorded past it an
+  inconsistency. Proof obligations: every observed failure answers one part of one seal and suspects that part's named
+  write, which holds a place until the failure is resolved, and a part answers once -- with a provider's answer, a flush's
+  answer and a refused commit for an ended lineage shown to observe nothing -- and a test filling the table to the bound.
+  Internal: a failure's own suspect list, markings and epochs still allocate until the steps below.
+
+- [ ] **DI-23.12.3.2** -- **Write records kept while a failure could name them, each with its marking once**
+  ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a write that stops being uncovered -- covered, nullified, or let go with its
+  lineage -- keeps its record, marked with where it stopped and, once, with its marking, for as long as an unresolved
+  failure suspects it; the table holds at most a record for each place, which the places already bound. A failure's
+  markings are read from its suspects' records in observation order, so `mark` writes one marking and none per failure.
+  Internal: the inventory and the resolution entries still copy the markings out until `DI-23.12.3.4`.
+
+- [ ] **DI-23.12.3.3** -- **The suspect set as the rule that made it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s second
+  item): a failure keeps its cut, its reach, its lineage if one was named, and what else observation filtered on, and a
+  write is its suspect when the records say so; the epochs it holds, which `blocking`, gates and abandoning read, and a
+  heal's pending lineages, read from the same records. Internal: `SuspectSet` is still built for the entries until
+  `DI-23.12.3.4`; the window's census and the oracle check that the rule names exactly the writes the old list did.
+
+- [ ] **DI-23.12.3.4** -- **A failure's records lent by a scoped borrow** ([DI-D-108](DESIGN-NOTES.md#di-d-108)):
+  `Failed`, `Abandoned`, `Healed` and `FailureInfo` carry the failure's identity, token, cause and stamp, and its suspect
+  writes and markings are lent for the duration of a visitor; a resolved failure's records are kept until its `Abandoned`
+  or `Healed` is popped. Breaking for both crates; CONTRACT.md, the READMEs' examples, and the oracle follow.
+
+- [ ] **DI-23.12.3.5** -- **The completion queue and a change's entries within derived bounds**
+  ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s third item): a `Marked` queued once per marked write and expanded at pop into one
+  entry per failure observed before the marking that suspects the write, in observation order; the queue and `Due`'s
+  entries list made for the derived bound and pushed onto within it; and a test filling the queue to the bound.
 
 - [ ] **DI-23.12.4** -- **Handles, tokens, descriptions and domain lists as fixed storage**
   ([DI-D-108](DESIGN-NOTES.md#di-d-108)): lineage handles and failure tokens become an index and a generation into an
