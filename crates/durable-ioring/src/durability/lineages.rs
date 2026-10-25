@@ -11,7 +11,6 @@ use super::{
     DEFAULT_LINEAGE, Due, Durability, Event, Key, LineageState, SealStage, Stage, Standing, V,
     tables, window,
 };
-use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::types::{LineageBusy, LineageInfo};
@@ -103,6 +102,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             .get_mut(&lineage)
             .expect("live, checked above");
         state.ended = true;
+        state.end_unpopped = true;
         state.leading = None;
         // No failure observed from now on names its writes, the ones it keeps included.
         let now = self.next_failure;
@@ -135,15 +135,32 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 pending.remove(&lineage);
             }
         }
-        tagged(tag::LINEAGES_END_EVENT, || {
-            due.events.push(Event::LineageEnded {
+        self.emit(
+            &mut due,
+            Event::LineageEnded {
                 lineage,
                 abandoned_through,
-            });
-        });
+            },
+        );
         self.end_held(lineage, &mut due);
         self.retire_if_drained(lineage);
         self.advance(due)
+    }
+
+    /// The consumer popped `lineage`'s `LineageEnded`: it counted until now (DI-D-112), and is
+    /// retired if nothing else holds it.
+    pub(crate) fn end_popped(&mut self, lineage: Key) {
+        match self.lineages.get_mut(&lineage) {
+            Some(state) if state.ended && state.end_unpopped => state.end_unpopped = false,
+            _ => {
+                self.inconsistent(
+                    "a LineageEnded was popped for a lineage not ended or already popped",
+                    format_args!("lineage {lineage}"),
+                );
+                return;
+            }
+        }
+        self.retire_if_drained(lineage);
     }
 
     /// Retire `lineage`, if nothing holds it: no write of it in flight, uncovered or held for a

@@ -33,6 +33,7 @@ mod lineages;
 mod lists;
 mod pairs;
 mod provider;
+mod queue;
 mod refusals;
 mod scripted;
 mod tables;

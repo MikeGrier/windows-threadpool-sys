@@ -73,13 +73,14 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     }
                     #[cfg(test)]
                     let snapshot = self.snapshot(&failure);
-                    tagged(tag::DURABILITY_RESOLVE_ABANDONED_EVENT, || {
-                        due.events.push(Event::Abandoned {
+                    self.emit(
+                        &mut due,
+                        Event::Abandoned {
                             failure: failure.id,
                             #[cfg(test)]
                             snapshot,
-                        });
-                    });
+                        },
+                    );
                     self.abandon_held(&failure, &mut due);
                     failure.standing = Standing::Resolved {
                         marks_before: self.kept.order(),

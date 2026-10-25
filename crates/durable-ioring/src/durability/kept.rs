@@ -127,6 +127,13 @@ impl<E: EpochId + 'static, I: Instant> Kept<E, I> {
         });
     }
 
+    /// The marking of the kept write pushed `seq`th, if it is kept and marked: its place in the
+    /// order observed, when, and what.
+    pub(super) fn marking_of(&self, seq: u64) -> Option<(u64, I, &MarkingKind)> {
+        let (order, observed, kind) = self.records.get(&seq)?.marking.as_ref()?;
+        Some((*order, *observed, kind))
+    }
+
     /// The kept write pushed `seq`th, if it is kept.
     pub(super) fn get(&self, seq: u64) -> Option<&Gone<E>> {
         self.records.get(&seq).map(|record| &record.write)

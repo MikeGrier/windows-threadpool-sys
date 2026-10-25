@@ -136,12 +136,10 @@ pub(crate) mod tag {
     pub(crate) const IO_CORE_NEW_UNPUSHED: Tag = Tag::new("io_core::new::unpushed");
     pub(crate) const IO_CORE_NEW_OUTGOING: Tag = Tag::new("io_core::new::outgoing");
     pub(crate) const IO_CORE_NEW_REQUESTS: Tag = Tag::new("io_core::new::requests");
-    pub(crate) const IO_CORE_COMPLETE_QUEUE: Tag = Tag::new("io_core::complete::queue");
+    pub(crate) const IO_CORE_NEW_QUEUE: Tag = Tag::new("io_core::new::queue");
     pub(crate) const IO_CORE_EPOCHS: Tag = Tag::new("io_core::epochs");
     pub(crate) const IO_CORE_ISSUE_BACKEND_CHECK: Tag = Tag::new("io_core::issue::backend_check");
     pub(crate) const IO_CORE_ISSUE_BACKEND_PUSH: Tag = Tag::new("io_core::issue::backend_push");
-    pub(crate) const IO_CORE_ACT_QUEUE: Tag = Tag::new("io_core::act::queue");
-    pub(crate) const IO_CORE_NEVER_ISSUED_QUEUE: Tag = Tag::new("io_core::never_issued::queue");
 
     // durability.rs
     pub(crate) const DURABILITY_NEW_LINEAGES: Tag = Tag::new("durability::new::lineages");
@@ -173,22 +171,12 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_SCRATCH_STEPS: Tag = Tag::new("durability::new::scratch_steps");
     pub(crate) const DURABILITY_NEW_SCRATCH_PAIRS: Tag = Tag::new("durability::new::scratch_pairs");
     pub(crate) const DURABILITY_RESOLVE_ABANDONED: Tag = Tag::new("durability::resolve::abandoned");
-    pub(crate) const DURABILITY_RESOLVE_ABANDONED_EVENT: Tag =
-        Tag::new("durability::resolve::abandoned_event");
     pub(crate) const DURABILITY_RESOLVE_HEAL_PENDING: Tag =
         Tag::new("durability::resolve::heal_pending");
     pub(crate) const DURABILITY_FAILURES_INFOS: Tag = Tag::new("durability::failures::infos");
     pub(crate) const DURABILITY_FAILURES_CAUSE: Tag = Tag::new("durability::failures::cause");
     pub(crate) const DURABILITY_FAILURES_INFO: Tag = Tag::new("durability::failures::info");
     pub(crate) const DURABILITY_OBSERVE_CAUSE: Tag = Tag::new("durability::observe::cause");
-    pub(crate) const DURABILITY_OBSERVE_EVENT: Tag = Tag::new("durability::observe::event");
-    pub(crate) const DURABILITY_MARK_EVENT: Tag = Tag::new("durability::mark::event");
-    pub(crate) const DURABILITY_RELEASE_HEALED_EVENT: Tag =
-        Tag::new("durability::release_healed::event");
-    pub(crate) const DURABILITY_ADVANCE_MARK_DURABLE: Tag =
-        Tag::new("durability::advance_mark::durable");
-    pub(crate) const DURABILITY_ADVANCE_MARK_BLOCKED: Tag =
-        Tag::new("durability::advance_mark::blocked");
     pub(crate) const DURABILITY_START_SEALS_DOMAINS: Tag =
         Tag::new("durability::start_seals::domains");
     pub(crate) const DURABILITY_END_SEAL_REPORT: Tag = Tag::new("durability::end_seal::report");
@@ -208,7 +196,6 @@ pub(crate) mod tag {
     pub(crate) const GATES_TRACE_CYCLE_WRITE: Tag =
         Tag::new("durability::gates::trace::cycle_write");
     pub(crate) const GATES_TRACE_UNFOUND: Tag = Tag::new("durability::gates::trace::unfound");
-    pub(crate) const GATES_STOP_HELD_EVENT: Tag = Tag::new("durability::gates::stop_held::event");
 
     // durability/providers.rs
     pub(crate) const PROVIDERS_NAME_PART: Tag = Tag::new("durability::providers::name::part");
@@ -217,7 +204,6 @@ pub(crate) mod tag {
     pub(crate) const PROVIDERS_NAME_FILE: Tag = Tag::new("durability::providers::name::file");
 
     // durability/lineages.rs
-    pub(crate) const LINEAGES_END_EVENT: Tag = Tag::new("durability::lineages::end::event");
 
     // io_core/provider.rs
     pub(crate) const IO_CORE_WITH_PROVIDER_NAMED: Tag = Tag::new("io_core::with_provider::named");

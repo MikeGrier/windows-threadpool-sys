@@ -8,9 +8,9 @@ use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::domains::DomainId;
 use crate::ids::{FailureId, InstanceId, Lineage, OpId};
+use crate::types::{Entry, Epoch, Failed, IoFault, IoTargetKey};
 #[cfg(test)]
-use crate::types::SuspectWrite;
-use crate::types::{Entry, Epoch, Failed, IoFault, IoTargetKey, Marking};
+use crate::types::{Marking, SuspectWrite};
 
 /// A failure's records as they stood when an event about it was made, for a test to compare: the
 /// entries carry none (DI-D-108).
@@ -57,9 +57,20 @@ pub(crate) enum Event<E: EpochId + 'static, I: Instant> {
         #[cfg(test)]
         snapshot: Snapshot<E, I>,
     },
+    /// A suspected write was marked (DI-D-109): queued once, and expanded when popped into a
+    /// `Marked` for each failure it goes to, read from the write's kept record.
     Marked {
-        failure: FailureId,
-        marking: Marking<V<E, I>>,
+        write: OpId,
+        /// The failures it goes to, in observation order, with the marking: what the expansion
+        /// must give, for a test to compare.
+        #[cfg(test)]
+        to: Vec<(FailureId, Marking<V<E, I>>)>,
+    },
+    /// An empty seal answered `Blocked` was replaced by a later one, which takes over its request:
+    /// its un-popped `Blocked` is withdrawn (DI-D-112).
+    Superseded {
+        lineage: Key,
+        through: E,
     },
     LineageEnded {
         lineage: Key,
@@ -73,19 +84,13 @@ pub(crate) enum Event<E: EpochId + 'static, I: Instant> {
     },
 }
 
-/// An operation never issued, with the abandoned epoch that stopped it.
-pub(crate) type NeverIssued<E> = (OpId, Gate<E>);
-
 impl<E: EpochId + 'static, I: Instant> Event<E, I> {
-    /// The entry this event is, for `instance`'s queue -- or, for an operation never issued, the
-    /// operation and the abandoned epoch, which only the holder of the operation can make an entry
-    /// of.
-    pub(crate) fn into_entry<B, C>(
-        self,
-        instance: InstanceId,
-    ) -> Result<Entry<V<E, I>, B, C>, NeverIssued<E>> {
+    /// The entry this event is, for `instance`'s queue, or the event handed back when it is not one
+    /// on its own: an operation never issued, which only the holder of the operation can make an
+    /// entry of; a marking, expanded when popped; and a seal superseded, which withdraws an entry.
+    pub(crate) fn into_entry<B, C>(self, instance: InstanceId) -> Arrival<E, I, B, C> {
         let name = |seq| Lineage { instance, seq };
-        Ok(match self {
+        Arrival::Entry(match self {
             Event::Durable { lineage, through } => Entry::Durable {
                 through: Epoch::new(name(lineage), through),
             },
@@ -100,7 +105,6 @@ impl<E: EpochId + 'static, I: Instant> Event<E, I> {
             Event::Failed { failed, .. } => Entry::Failed(failed),
             Event::Abandoned { failure, .. } => Entry::Abandoned { failure },
             Event::Healed { failure, .. } => Entry::Healed { failure },
-            Event::Marked { failure, marking } => Entry::Marked { failure, marking },
             Event::LineageEnded {
                 lineage,
                 abandoned_through,
@@ -108,9 +112,21 @@ impl<E: EpochId + 'static, I: Instant> Event<E, I> {
                 lineage: name(lineage),
                 abandoned_through,
             },
-            Event::NeverIssued { op, abandoned } => return Err((op, abandoned)),
+            event @ (Event::NeverIssued { .. }
+            | Event::Marked { .. }
+            | Event::Superseded { .. }) => {
+                return Arrival::Other(event);
+            }
         })
     }
+}
+
+/// What an event becomes on the I/O core's queue.
+pub(crate) enum Arrival<E: EpochId + 'static, I: Instant, B, C> {
+    /// An entry, as it is.
+    Entry(Entry<V<E, I>, B, C>),
+    /// An event the I/O core acts on itself.
+    Other(Event<E, I>),
 }
 
 /// How a write ended, as the core needs it. A target never completes a write short (DI-D-50), so a

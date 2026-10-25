@@ -526,6 +526,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     ) {
         let (lists, writes, kept) = (&self.lists, &self.writes, &self.kept);
         let (gated, held_by_epoch) = (&mut self.gated, &mut self.held_by_epoch);
+        let mut past = None;
         self.held.take_where(
             |_, held| stopped(lists, writes, kept, held).is_some(),
             |&seq, held| {
@@ -536,14 +537,21 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     gated.remove(&(write.lineage, write.epoch, seq));
                     tables::count_down(held_by_epoch, write.lineage, write.epoch);
                 }
-                tagged(tag::GATES_STOP_HELD_EVENT, || {
-                    due.events.push(Event::NeverIssued {
-                        op: held.op,
-                        abandoned,
-                    });
-                });
+                let event = Event::NeverIssued {
+                    op: held.op,
+                    abandoned,
+                };
+                if within(&mut due.events, event).is_err() {
+                    past.get_or_insert(held.op);
+                }
             },
         );
+        if let Some(op) = past {
+            self.inconsistent(
+                "a change made more entries due than the declaration bounds",
+                format_args!("operation {op:?} never issued"),
+            );
+        }
     }
 
     /// One held write of `lineage` at `epoch` is no longer held.

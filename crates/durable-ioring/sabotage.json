@@ -34,8 +34,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "One completion per operation (DI-D-24): nothing pushed would ever be reported. Every test that waits for a completion times out at its bound.",
-      "find": ["                    self.queue.push_back(Entry::Op(OpCompletion {\n                        id,\n                        kind,\n                        outcome,\n                        buffer,\n                        context,\n                    }));\n"],
-      "replace": ["                    drop::<Entry<V<E, K>, B, C>>(Entry::Op(OpCompletion {\n                        id,\n                        kind,\n                        outcome,\n                        buffer,\n                        context,\n                    }));\n"]
+      "find": ["                self.push_queued(Queued::Entry(Entry::Op(OpCompletion {"],
+      "replace": ["                drop::<Queued<V<E, K>, B, C>>(Queued::Entry(Entry::Op(OpCompletion {"]
     },
     {
       "name": "DI-3.2.2.1: the readiness event is set only when the queue was already non-empty",
@@ -258,8 +258,8 @@
       "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "DI-D-13: a request whose flushes succeeded but which a failure holds is answered Blocked, never left silent. Caught by the Blocked tests, unit and I/O.",
-      "find": ["                due.events.push(Event::Blocked {\n                    lineage,\n                    through,\n                    by,\n                });"],
-      "replace": ["                let _ = by;"]
+      "find": ["            self.emit(", "                due,", "                Event::Blocked {", "                    lineage,", "                    through,", "                    by,", "                },", "            );"],
+      "replace": ["            let _ = by;"]
     },
     {
       "name": "DI-3.2.4: a foreign token is resolved",
@@ -406,14 +406,6 @@
       "replace": ["                flushed: true,\n"]
     },
     {
-      "name": "DI-3.2.4.2: only the first failure suspecting a write is marked",
-      "file": "src/durability.rs",
-      "expect": "caught",
-      "why": "Failures and writes are many-to-many: a write two failures suspect belongs to both records, and each must say what happened to it.",
-      "find": ["            tagged(tag::DURABILITY_MARK_EVENT, || {", "                due.events.push(Event::Marked {", "                    failure: failure.id,", "                    marking,", "                });", "            });", "        }"],
-      "replace": ["            tagged(tag::DURABILITY_MARK_EVENT, || {", "                due.events.push(Event::Marked {", "                    failure: failure.id,", "                    marking,", "                });", "            });", "            break;", "        }"]
-    },
-    {
       "name": "DI-3.2.4.2: a marking finds only the first suspect write",
       "file": "src/durability/suspects.rs",
       "expect": "caught",
@@ -426,7 +418,7 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal's resolution is the entry the consumer pops to learn of it, and popping it is what lets the failure go; with no entry the failure is resolved in silence and held for ever.",
-      "find": ["            tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {", "                due.events.push(Event::Healed {", "                    failure,", "                    #[cfg(test)]", "                    snapshot,", "                });", "            });"],
+      "find": ["            self.emit(", "                due,", "                Event::Healed {", "                    failure,", "                    #[cfg(test)]", "                    snapshot,", "                },", "            );"],
       "replace": ["            #[cfg(test)]", "            drop(snapshot);", "            let _ = failure;"]
     },
     {
@@ -1298,8 +1290,8 @@
       "file": "src/io_core/lineages.rs",
       "expect": "caught",
       "why": "DI-D-40: a lineage is retired only once nothing holds it, and a refusal says what does.",
-      "find": ["            .map_err(RetireLineageRefusal::Busy)\n"],
-      "replace": ["            .or(Ok(()))\n"]
+      "find": ["            .map_err(RetireLineageRefusal::Busy)?;\n"],
+      "replace": ["            .ok();\n"]
     },
     {
       "name": "CONTROL: the core states a minted lineage's key type",
@@ -2237,11 +2229,11 @@
     },
     {
       "name": "DI-23.1: popping an entry allocates",
-      "file": "src/io_core.rs",
+      "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "The allocation test (tests/allocation.rs) pins how many allocations each phase of the core makes, so an allocation added to a path is seen. Without it the measurement DI-M23 lowers would not notice a new one. DI-D-97.",
-      "find": ["        let entry = self.queue.pop_front()?;\n"],
-      "replace": ["        std::hint::black_box(Vec::<u8>::with_capacity(1));\n        let entry = self.queue.pop_front()?;\n"]
+      "find": ["            let Queued::Marked { write, after, .. } = self.queue.front()? else {\n"],
+      "replace": ["            core::hint::black_box(alloc::vec::Vec::<u8>::with_capacity(1));\n            let Queued::Marked { write, after, .. } = self.queue.front()? else {\n"]
     },
     {
       "name": "DI-23.2: a tagged call sets no tag",
@@ -2336,8 +2328,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A seal covering no writes makes no record (DI-D-99); recording it keeps one record per seal, which a consumer sealing ever-higher empty epochs grows without bound, and answers every one it would have overwritten.",
-      "find": ["        let Some(op) = pin else {","            self.record_empty(lineage, Empty::new(seq, through, pair));"],
-      "replace": ["        let Some(op) = pin else {","            let _ = self.seals.insert((lineage, seq), Seal { seq, through, stage: SealStage::Waiting, answered: false, pair, trailing: None, pin: None });"]
+      "find": ["        let Some(op) = pin else {", "            let mut due = self.fresh();", "            self.record_empty(lineage, Empty::new(seq, through, pair), &mut due);"],
+      "replace": ["        let Some(op) = pin else {", "            let due = self.fresh();", "            let _ = self.seals.insert((lineage, seq), Seal { seq, through, stage: SealStage::Waiting, answered: false, pair, trailing: None, pin: None });"]
     },
     {
       "name": "DI-23.7: a seal with a write in its span is taken as empty",
@@ -2437,11 +2429,11 @@
     },
     {
       "name": "DI-23.8.1: popping an operation's completion lets go of nothing",
-      "file": "src/io_core.rs",
+      "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "An operation holds its place until its completion is popped; popping must let it go, or a consumer that pops everything still fills the window.",
-      "find": ["            Entry::Op(done) => self.durability.popped(done.id),"],
-      "replace": ["            Entry::Op(_) => {}"]
+      "find": ["                    Entry::Op(done) => self.durability.popped(done.id),"],
+      "replace": ["                    Entry::Op(_) => {}"]
     },
     {
       "name": "DI-23.8.1: a held operation takes no place",
@@ -2493,35 +2485,27 @@
     },
     {
       "name": "DI-23.9: a later Durable does not remove the older",
-      "file": "src/io_core.rs",
+      "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "A lineage has at most one un-popped Durable (DI-D-101); without the removal a consumer that pops slowly finds one per seal, and the queue grows with the seals a consumer makes.",
-      "find": ["            if let Some(at) = older {"],
-      "replace": ["            if let Some(at) = older.filter(|_| false) {"]
+      "find": ["                        older.lineage != through.lineage"],
+      "replace": ["                        let _ = older;", "                        true"]
     },
     {
       "name": "DI-23.9: the later Durable is written over the older in place",
-      "file": "src/io_core.rs",
+      "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "The later Durable goes to the tail and is never written in place: an entry queued between them -- a completion of a write the later one covers, or a Healed -- would then stand after a Durable that names it.",
-      "find": ["                self.queue.remove(at);"],
-      "replace": ["                self.queue[at] = entry;", "                return;"]
+      "find": ["                let through = *through;"],
+      "replace": ["                let through = *through;", "                let older = self.queue.iter().position(|queued| matches!(queued, Queued::Entry(Entry::Durable { through: older }) if older.lineage == through.lineage));", "                if let Some(at) = older {", "                    self.queue[at] = Queued::Entry(entry);", "                    return;", "                }"]
     },
     {
       "name": "DI-23.9: a Durable replaces the un-popped Durable of any lineage",
-      "file": "src/io_core.rs",
+      "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "At most one un-popped Durable is kept for each lineage; replacing another lineage's drops an answer its consumer was owed.",
-      "find": ["                |queued| matches!(queued, Entry::Durable { through } if through.lineage == lineage),"],
-      "replace": ["                |queued| matches!(queued, Entry::Durable { .. }),"]
-    },
-    {
-      "name": "DI-23.9: the newest un-popped Durable is looked for rather than the first",
-      "file": "src/io_core.rs",
-      "expect": "survives",
-      "why": "The control. A lineage has at most one un-popped Durable, so the first match and the last are the same entry; looking from the back changes nothing a test could see.",
-      "find": ["            let older = self.queue.iter().position("],
-      "replace": ["            let older = self.queue.iter().rposition("]
+      "find": ["                        older.lineage != through.lineage"],
+      "replace": ["                        let _ = older;", "                        false"]
     },
     {
       "name": "DI-23.5.2.1: an ended lineage lets go a write whose flush is out",
@@ -2616,8 +2600,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "The answer for a flush is found through the lineage; retiring it with the flush out loses the writes the answer lets go.",
-      "find": ["            .is_some_and(|state| state.ended && !in_flight && !sealing)\n"],
-      "replace": ["            .is_some_and(|state| state.ended && !in_flight && (!sealing || true))\n"]
+      "find": ["            .is_some_and(|state| state.ended && !state.end_unpopped && !in_flight && !sealing)\n"],
+      "replace": ["            .is_some_and(|state| state.ended && !state.end_unpopped && !in_flight && (!sealing || true))\n"]
     },
     {
       "name": "DI-23.5.2.1: a write kept for its flush out holds its file",
@@ -3176,8 +3160,8 @@
       "file": "src/durability/scratch.rs",
       "expect": "caught",
       "why": "Lists lent out are replaced by lists of the same sizes, an allocation and never a list too small: one with no room would refuse a change inside its bound.",
-      "find": ["            return tagged(tag::DURABILITY_FRESH_DUE, || Due::reserved(&self.capacity))\n                .unwrap_or_default();\n"],
-      "replace": ["            return Due::default();\n"]
+      "find": ["            return tagged(tag::DURABILITY_FRESH_DUE, || {", "                Due::reserved(&self.capacity, self.served_count)", "            })", "            .unwrap_or_default();"],
+      "replace": ["            return Due::default();"]
     },
     {
       "name": "DI-23.12.3.1: the failure table is made one short",
@@ -3477,19 +3461,19 @@
     },
     {
       "name": "DI-23.12.3.4: popping an Abandoned does not let the failure go",
-      "file": "src/io_core.rs",
+      "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "Popping a failure's Abandoned is what lets go of its records and what it held (DI-D-108); without it the failure is held for ever.",
-      "find": ["            Entry::Abandoned { failure } | Entry::Healed { failure } => {"],
-      "replace": ["            Entry::Healed { failure } => {"]
+      "find": ["                    Entry::Abandoned { failure } | Entry::Healed { failure } => {"],
+      "replace": ["                    Entry::Healed { failure } => {"]
     },
     {
       "name": "DI-23.12.3.4: popping a Healed does not let the failure go",
-      "file": "src/io_core.rs",
+      "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "As for an Abandoned: a healed failure is let go when its Healed is popped.",
-      "find": ["            Entry::Abandoned { failure } | Entry::Healed { failure } => {"],
-      "replace": ["            Entry::Abandoned { failure } => {"]
+      "find": ["                    Entry::Abandoned { failure } | Entry::Healed { failure } => {"],
+      "replace": ["                    Entry::Abandoned { failure } => {"]
     },
     {
       "name": "DI-23.12.3.4: a resolved failure is still marked",
@@ -3546,6 +3530,94 @@
       "why": "An Abandoned names a failure the stream reported and has not ended; one for any other is a resolution of nothing.",
       "find": ["            return Err(Violation::AbandonedUnknown { failure });"],
       "replace": ["            return Ok(());"]
+    },
+    {
+      "name": "DI-23.12.3.5: a Durable leaves its lineage's Blocked queued",
+      "file": "src/io_core/queue.rs",
+      "expect": "caught",
+      "why": "A Durable answers every request of its lineage at or below it, so a Blocked it leaves behind outlives its seal, which is what let the Blocked entries grow past the derived bound (DI-D-112).",
+      "find": ["                        held.lineage != through.lineage || held.id > through.id"],
+      "replace": ["                        let _ = held;", "                        true"]
+    },
+    {
+      "name": "DI-23.12.3.5: a LineageEnded leaves its lineage's Blocked queued",
+      "file": "src/io_core/queue.rs",
+      "expect": "caught",
+      "why": "A lineage's end answers its pending requests; its seals are gone, so a Blocked left queued names nothing (DI-D-112).",
+      "find": ["                        if through.lineage == lineage)"],
+      "replace": ["                        if through.lineage == lineage && false)"]
+    },
+    {
+      "name": "DI-23.12.3.5: a replaced empty seal leaves its Blocked queued",
+      "file": "src/durability/empties.rs",
+      "expect": "caught",
+      "why": "An empty seal replaced by a later one is answered by it; without the withdrawal, empty seals behind one failure queue a Blocked each with nothing held (DI-D-112).",
+      "find": ["            if old.answered {"],
+      "replace": ["            if old.answered && false {"]
+    },
+    {
+      "name": "DI-23.12.3.5: the I/O core ignores a superseded seal",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The withdrawal is the I/O core's to make; the durability core only says which seal was superseded.",
+      "find": ["                    self.withdraw_blocked(Epoch::new(self.name(lineage), through));"],
+      "replace": ["                    let _ = (lineage, through);"]
+    },
+    {
+      "name": "DI-23.12.3.5: retiring a live lineage leaves its Durable queued",
+      "file": "src/io_core/lineages.rs",
+      "expect": "caught",
+      "why": "A retired lineage no longer counts, so an entry naming it would be outside the bound; retiring withdraws its Durable (DI-D-112).",
+      "find": ["        self.withdraw_lineage(lineage);"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.3.5: an ended lineage retires before its LineageEnded is popped",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A lineage counts until its last entry is popped, or minting, sealing and ending lineages queues entries without bound while holding nothing (DI-D-112).",
+      "find": ["            .is_some_and(|state| state.ended && !state.end_unpopped && !in_flight && !sealing)"],
+      "replace": ["            .is_some_and(|state| state.ended && !in_flight && !sealing)"]
+    },
+    {
+      "name": "DI-23.12.3.5: popping a LineageEnded does not let the lineage go",
+      "file": "src/io_core/queue.rs",
+      "expect": "caught",
+      "why": "The pop is what lets an ended lineage's count go; without it the lineage counts for ever.",
+      "find": ["                    Entry::LineageEnded { lineage, .. } => self.durability.end_popped(lineage.seq),"],
+      "replace": ["                    Entry::LineageEnded { .. } => {}"]
+    },
+    {
+      "name": "DI-23.12.3.5: the expansion of a marking ignores when a failure was resolved",
+      "file": "src/durability.rs",
+      "expect": "survives",
+      "why": "The control. A failure resolved before a write was marked has its resolution entry ahead of the marking in the queue, and popping it forgets the failure, so when the marking is expanded every resolved failure still held was resolved after it: the cutoff holds at every pop, and dropping it changes nothing a test can see. Measured: a_marking_is_not_given_to_a_failure_resolved_before_it passes under it.",
+      "find": ["                Standing::Resolved { marks_before } => order < marks_before,"],
+      "replace": ["                Standing::Resolved { .. } => true,"]
+    },
+    {
+      "name": "DI-23.12.3.5: a queued marking ends after its first failure",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "One queued marking is popped as one Marked for each failure it goes to; ending it early loses the rest.",
+      "find": ["        Some((first.id, marking, to.next().is_some()))"],
+      "replace": ["        let _ = to.next();", "        Some((first.id, marking, false))"]
+    },
+    {
+      "name": "DI-23.12.3.5: a queued marking does not move past the failure it gave",
+      "file": "src/io_core/queue.rs",
+      "expect": "caught",
+      "why": "Each pop gives the next failure; without the cursor the first is given again.",
+      "find": ["                    *after = Some(failure.seq);"],
+      "replace": ["                    let _ = (after, failure);"]
+    },
+    {
+      "name": "DI-23.12.3.5: the completion queue is made with no room",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The queue is made for the derived bound at construction, so nothing after it allocates (DI-D-97).",
+      "find": ["            queue(\"the completion queue\", capacity.entries(served))"],
+      "replace": ["            queue(\"the completion queue\", capacity.entries(served).map(|_| 0))"]
     }
   ]
 }

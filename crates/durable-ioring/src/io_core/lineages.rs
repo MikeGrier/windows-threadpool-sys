@@ -19,7 +19,8 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// # Errors
     ///
     /// [`AtCapacity`] when the core holds as many lineages as it was built for, the default and
-    /// those ended and not yet retired among them (DI-D-107); nothing is minted.
+    /// those ended and not yet retired among them -- an ended one counts until its `LineageEnded`
+    /// is popped (DI-D-107, DI-D-112); nothing is minted.
     pub fn mint_lineage(&mut self, description: Option<String>) -> Result<Lineage, AtCapacity> {
         if self.durability.lineage_count() >= self.capacity.lineages {
             return Err(AtCapacity {
@@ -69,7 +70,9 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         Ok(self.act(due, was_empty))
     }
 
-    /// Retire `lineage` if nothing holds it, so it is no longer enumerated (DI-D-40).
+    /// Retire `lineage` if nothing holds it, so it is no longer enumerated (DI-D-40), and withdraw
+    /// its un-popped `Durable`: the consumer is done with it, and a lineage an entry names counts
+    /// against the lineages declared (DI-D-112).
     ///
     /// # Errors
     ///
@@ -88,6 +91,8 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         }
         self.durability
             .retire(lineage.seq)
-            .map_err(RetireLineageRefusal::Busy)
+            .map_err(RetireLineageRefusal::Busy)?;
+        self.withdraw_lineage(lineage);
+        Ok(())
     }
 }

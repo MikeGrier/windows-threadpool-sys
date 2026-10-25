@@ -23,7 +23,6 @@ use super::{
     Due, Durability, Event, Failure, Key, LineageState, Seal, SealStage, Standing, end_seal,
     tables, window,
 };
-use crate::alloc_tags::{tag, tagged};
 use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::correlation::CorrelationId;
@@ -268,8 +267,9 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     }
 
     /// Put an empty seal of `lineage` in its slot, ending the pair of the one it overwrites as
-    /// `Superseded`.
-    pub(super) fn record_empty(&mut self, lineage: Key, empty: Empty<E>) {
+    /// `Superseded`. The later seal takes over the earlier one's request, so one already answered
+    /// `Blocked` has that entry withdrawn (DI-D-112).
+    pub(super) fn record_empty(&mut self, lineage: Key, empty: Empty<E>, due: &mut Due<E, T, I>) {
         let Some(state) = self.lineages.get_mut(&lineage) else {
             return;
         };
@@ -282,6 +282,15 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
                 old.pair,
                 SealOutcome::Superseded,
             );
+            if old.answered {
+                self.emit(
+                    due,
+                    Event::Superseded {
+                        lineage,
+                        through: old.through,
+                    },
+                );
+            }
         }
     }
 
@@ -365,9 +374,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: crate::clock::StampClock<Ins
             // Only writes whose flush failed are left at or below a finished seal; once the mark
             // passes them, no later failure can reach back to them (guarantee 3).
             self.let_go(|write| write.lineage == lineage && write.epoch <= through);
-            tagged(tag::DURABILITY_ADVANCE_MARK_DURABLE, || {
-                due.events.push(Event::Durable { lineage, through });
-            });
+            self.emit(due, Event::Durable { lineage, through });
             self.release_through(lineage, through, due);
         }
         let mut next = Some(Place::Leading);
@@ -393,13 +400,14 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: crate::clock::StampClock<Ins
                 pair,
                 SealOutcome::Blocked,
             );
-            tagged(tag::DURABILITY_ADVANCE_MARK_BLOCKED, || {
-                due.events.push(Event::Blocked {
+            self.emit(
+                due,
+                Event::Blocked {
                     lineage,
                     through,
                     by,
-                });
-            });
+                },
+            );
         }
     }
 }

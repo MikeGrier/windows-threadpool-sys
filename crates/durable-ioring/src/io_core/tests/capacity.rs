@@ -349,7 +349,7 @@ fn a_mint_past_the_lineages_declared_is_refused_and_a_retire_lifts_it() {
 }
 
 #[test]
-fn an_ended_lineage_counts_until_it_is_retired() {
+fn an_ended_lineage_counts_until_it_has_drained_and_its_end_is_popped() {
     let script = FaultScript::new().on(When::any().op(ScriptOp::Commit), Fault::Hold);
     let mut rig = scripted_rig(declared(|c| c.lineages = 2), script);
     let minted = rig.core.mint_lineage(None).expect("room");
@@ -367,9 +367,15 @@ fn an_ended_lineage_counts_until_it_is_retired() {
     );
     rig.backend.release_all();
     rig.run();
+    assert_eq!(
+        rig.core.mint_lineage(None).err(),
+        Some(at(Limit::Lineages, 2)),
+        "drained, but its LineageEnded is not popped (DI-D-112)"
+    );
+    rig.entries();
     rig.core
         .mint_lineage(None)
-        .expect("the commit answered and the lineage retired");
+        .expect("drained and popped, and the lineage retired");
 }
 
 #[test]

@@ -2,7 +2,7 @@
 //! The durability core's per-call storage, made at construction and reused by every call (DI-D-97,
 //! DI-23.12.2): the lists a change makes due into, and the scratch its searches and walks collect
 //! into. Each list is reserved for a bound on what one call can put in it, stated beside it, and is
-//! pushed onto only through [`within`](crate::capacity::within), so a push past the bound is
+//! pushed onto only through [`within`], so a push past the bound is
 //! reported as an inconsistency rather than grown into.
 //!
 //! The lists a change makes due -- a [`Due`] -- are lent out by [`Durability::fresh`] and given
@@ -14,9 +14,9 @@
 
 use alloc::vec::Vec;
 
-use super::{Due, Durability, FlushPair, Gate, Key, MarkingKind, Part};
+use super::{Due, Durability, Event, FlushPair, Gate, Key, MarkingKind, Part};
 use crate::alloc_tags::{tag, tagged};
-use crate::capacity::{Capacity, ConstructionError, list};
+use crate::capacity::{Capacity, ConstructionError, list, within};
 use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::ids::OpId;
@@ -75,24 +75,16 @@ impl<E> Scratch<E> {
 }
 
 impl<E: EpochId + 'static, T, I: Instant> Due<E, T, I> {
-    /// Lists with room for what one change can make due, for a core built for `capacity`.
+    /// Lists with room for what one change can make due, for a core built for `capacity` with a
+    /// provider serving `served` domains.
     ///
     /// Flushes: one for each span entry a seal starts flushing, and entries are at most the
     /// operations declared. Releases: one for each held operation, at most the operations.
     /// Provider requests: one for each seal that starts, and recorded seals are at most the
-    /// operations (DI-D-110). Entries: on the clean paths, a `Durable` or a `Blocked` for each seal
-    /// the mark passes or holds -- recorded seals, and empty ones, one leading each lineage and one
-    /// trailing each recorded seal -- a `NeverIssued` for each held operation, and one
-    /// `LineageEnded`: three times the operations, plus the lineages, plus one. The entries a
-    /// failure makes are bounded with its storage (DI-23.12.3); until then a change making more is
-    /// let grow the list, under its tag.
-    pub(super) fn reserved(capacity: &Capacity) -> Result<Self, ConstructionError> {
+    /// operations (DI-D-110). Entries: [`Capacity::change_entries`], which argues it.
+    pub(super) fn reserved(capacity: &Capacity, served: usize) -> Result<Self, ConstructionError> {
         let operations = Some(capacity.operations);
-        let entries = capacity
-            .operations
-            .checked_mul(3)
-            .and_then(|n| n.checked_add(capacity.lineages))
-            .and_then(|n| n.checked_add(1));
+        let entries = capacity.change_entries(served);
         Ok(Self {
             flushes: list("the flushes a change makes due", operations)?,
             events: list("the entries a change makes due", entries)?,
@@ -115,8 +107,10 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// lists made now at the same sizes.
     pub(super) fn fresh(&mut self) -> Due<E, T, I> {
         if core::mem::replace(&mut self.due_out, true) {
-            return tagged(tag::DURABILITY_FRESH_DUE, || Due::reserved(&self.capacity))
-                .unwrap_or_default();
+            return tagged(tag::DURABILITY_FRESH_DUE, || {
+                Due::reserved(&self.capacity, self.served_count)
+            })
+            .unwrap_or_default();
         }
         core::mem::take(&mut self.spare)
     }
@@ -130,6 +124,17 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         due.clear();
         self.spare = due;
         self.due_out = false;
+    }
+
+    /// Put `event` on `due`'s entries, within the room [`Capacity::change_entries`] gives it: a
+    /// change past it is an inconsistency (DI-D-46), never growth.
+    pub(super) fn emit(&self, due: &mut Due<E, T, I>, event: Event<E, I>) {
+        if let Err(event) = within(&mut due.events, event) {
+            self.inconsistent(
+                "a change made more entries due than the declaration bounds",
+                format_args!("{event:?}"),
+            );
+        }
     }
 
     /// Whether the lists a change makes due into are back, as they are between calls.

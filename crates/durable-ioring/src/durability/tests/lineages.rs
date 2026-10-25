@@ -32,6 +32,17 @@ fn recorded(lineage: &Lineage, key: Key) -> bool {
     lineage.0.lineages.get(&key).is_some()
 }
 
+/// The consumer pops `key`'s `LineageEnded` once the lineage has drained, `why` saying why it has:
+/// it is recorded, and counted, until then, and retired at the pop (DI-D-112).
+fn retires_once_popped(lineage: &mut Lineage, key: Key, why: &str) {
+    assert!(
+        recorded(lineage, key),
+        "{why}, but its LineageEnded is not popped"
+    );
+    lineage.0.end_popped(key);
+    assert!(!recorded(lineage, key), "{why}, and popped");
+}
+
 /// Retire `key`, expecting the refusal `why` names, and report it by its counts and the sequence
 /// numbers of the failures the visitor names, checked against the count.
 fn busy(lineage: &mut Lineage, key: Key, why: &str) -> (usize, usize, usize, Vec<u64>) {
@@ -158,6 +169,8 @@ fn ending_abandons_everything_not_yet_durable_and_absorbs_its_flushes() {
         [Seen::LineageEnded(minted, Some(5))],
         "through the highest epoch written, above the seal"
     );
+    // Popped at once: what holds the lineage from here is its draining alone.
+    lineage.0.end_popped(minted);
     assert!(!lineage.is_live(minted));
     assert!(
         recorded(&lineage, minted),
@@ -188,10 +201,18 @@ fn an_ended_lineage_is_retired_when_its_last_flush_out_answers() {
         [flush_of(minted, 2, A), flush_of(minted, 2, B)]
     );
     lineage.end(minted);
+    lineage.0.end_popped(minted);
+    assert!(
+        recorded(&lineage, minted),
+        "its LineageEnded is popped, and both flushes are out"
+    );
     assert!(quiet(&lineage.0.flushed(minted, 2, A, Ok(()))));
     assert!(recorded(&lineage, minted), "B's flush is still out");
     assert!(quiet(&lineage.0.flushed(minted, 2, B, Ok(()))));
-    assert!(!recorded(&lineage, minted));
+    assert!(
+        !recorded(&lineage, minted),
+        "retired with the last flush, its end already popped"
+    );
 }
 
 #[test]
@@ -201,7 +222,7 @@ fn an_ended_lineage_with_no_flush_out_retires_at_once() {
     let write = ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
     lineage.completed(write, FULL);
     lineage.end(minted);
-    assert!(!recorded(&lineage, minted), "sealed nothing");
+    retires_once_popped(&mut lineage, minted, "sealed nothing");
 }
 
 #[test]
@@ -216,7 +237,7 @@ fn a_seal_whose_flushes_have_answered_is_not_a_flush_out() {
         [Seen::DurableIn(minted, 1)]
     );
     lineage.end(minted);
-    assert!(!recorded(&lineage, minted), "nothing is out");
+    retires_once_popped(&mut lineage, minted, "nothing is out");
 }
 
 #[test]
@@ -229,7 +250,7 @@ fn a_seal_waiting_for_a_write_in_flight_is_not_a_flush_out() {
     assert!(quiet(&submitted(lineage.0.seal(minted, 2))), "it waits");
     lineage.end(minted);
     assert!(quiet(&lineage.completed(flying, FULL)));
-    assert!(!recorded(&lineage, minted), "no flush was ever out");
+    retires_once_popped(&mut lineage, minted, "no flush was ever out");
 }
 
 #[test]
@@ -247,6 +268,8 @@ fn a_flush_answering_while_an_ended_lineage_drains_reports_nothing() {
         seen(&lineage.end(minted)),
         [Seen::LineageEnded(minted, Some(5))]
     );
+    // Popped at once: what holds the lineage from here is its draining alone.
+    lineage.0.end_popped(minted);
     assert!(recorded(&lineage, minted), "draining its write in flight");
     assert!(quiet(&lineage.0.flushed(minted, 2, A, Ok(()))));
     assert!(
@@ -254,7 +277,7 @@ fn a_flush_answering_while_an_ended_lineage_drains_reports_nothing() {
         "nor does one the seal never issued"
     );
     assert!(quiet(&lineage.completed(in_flight, FULL)));
-    assert!(!recorded(&lineage, minted));
+    assert!(!recorded(&lineage, minted), "drained");
 }
 
 #[test]
@@ -279,6 +302,8 @@ fn a_write_in_flight_at_the_end_is_let_go_and_the_lineage_retires_with_it() {
         seen(&lineage.end(minted)),
         [Seen::LineageEnded(minted, Some(1))]
     );
+    // Popped at once: what holds the lineage from here is its draining alone.
+    lineage.0.end_popped(minted);
     assert!(recorded(&lineage, minted), "draining");
     assert!(!lineage.is_live(minted), "and not live while it drains");
     assert!(quiet(&lineage.completed(write, FULL)));
@@ -363,7 +388,10 @@ fn retiring_is_refused_while_anything_holds_the_lineage() {
         .expect("abandon");
     lineage.retire(minted).expect("nothing holds it");
     assert!(!lineage.is_live(minted));
-    assert!(!recorded(&lineage, minted));
+    assert!(
+        !recorded(&lineage, minted),
+        "retired at once: it never ended"
+    );
     assert_eq!(listed(&lineage).len(), 1);
 }
 

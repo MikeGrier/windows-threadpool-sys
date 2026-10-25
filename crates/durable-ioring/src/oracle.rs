@@ -85,7 +85,9 @@
 //!   of popped entries cannot show; the core's own tests check it.
 //! - **That every request is answered** (guarantee 4): a seal that stays pending is legal while a
 //!   provider has not answered, and the stream cannot show that a provider has not; and one
-//!   answered by a later request's `Durable` has no entry of its own.
+//!   answered by a later request's `Durable` has no entry of its own, nor does one whose `Blocked`
+//!   was withdrawn by a later answer before it was popped (DI-D-112). That an un-popped `Blocked`
+//!   is withdrawn is, like the `Durable` rule, a property of the queue the core's tests check.
 //! - **Which writes a failure should have suspected.** That depends on the order the instance
 //!   observed things in and on the files' declared flush domains, neither of which the stream
 //!   carries; so the members are checked, not the set's extent.

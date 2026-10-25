@@ -4793,3 +4793,30 @@ allocates nothing, a new phase of the allocation test, and the failure paths now
 resolve. Sabotage: twelve entries added, eleven re-anchored, and four removed -- three healed twins of an abandoned entry,
 now that both let go at one site, and the oracle's final-record comparison, which is gone; all swept as declared, four
 only after the tests for a resolved failure's markings, its marking and its token were written.
+
+## Moved 2026-10-25 16:39:15 -04:00 -- DI-23.12.3.5: the completion queue within its derived bound
+
+### <a id="di-231235"></a>DI-23.12.3.5 -- The completion queue and a change's entries are made for a derived bound and pushed onto within it: a marking queued once per write, a Blocked withdrawn once a later entry answers its request, and a lineage counted until its LineageEnded is popped. *(completed 2026-10-25 16:39:15 -04:00)*
+
+**The completion queue and a change's entries within derived bounds**
+([DI-D-109](DESIGN-NOTES.md#di-d-109)'s third item): a `Marked` queued once per marked write and expanded at pop into one
+entry per failure observed before the marking that suspects the write, in observation order; the queue and `Due`'s
+entries list made for the derived bound and pushed onto within it; and a test filling the queue to the bound.
+
+Deriving the bound found two gaps, which the engineer settled on 2026-10-25 ("yes go ahead with your recommendations"),
+recorded as [DI-D-112](DESIGN-NOTES.md#di-d-112): entries about a lineage outlived its count, without bound, and `Blocked`
+outlived its seal, bounded only by a product. A lineage now counts until its `LineageEnded` is popped, retiring a live one
+withdraws its `Durable`, and a `Blocked` is withdrawn by its lineage's `Durable` at or above it, its `LineageEnded`, or
+the empty seal that replaced its own -- the last case found while building, and taken as within the rule. The queue is
+[io_core/queue.rs](src/io_core/queue.rs), made for `Capacity::entries`, which argues the bound; a change's entries list is
+made for `Capacity::change_entries`, and every push of either is within its room. The I/O core checks after every call that
+the queue is within its room, that every lineage an entry names counts, and that every `Blocked` names a seal above its
+lineage's mark; a popped marking is checked against what the marking found. The tests fill `Blocked` to twice the
+operations and the markings to the operations, and queue every kind at once; the terms are per kind and not reached
+together, which DI-D-112 says. Completions now allocate nothing, the queue's room made with the rest at construction. Eleven
+per-entry allocation tags went with the allocations they named. Sabotage: twelve entries added, one a
+control -- the expansion's resolution cutoff, which holds at every pop because a failure resolved before a marking is
+popped, and forgotten, ahead of it -- and fourteen re-anchored; two removed, one taken over by a new entry and one a control
+whose code went. All swept as declared, the drain tests rewritten first so that a lineage's flush, not its unpopped end, is
+what they see holding it.
+

@@ -1965,6 +1965,8 @@ at capacity and cleared by a seal, and one cleared by abandoning the failure tha
 
 ## <a id="di-d-101"></a>DI-D-101: an un-popped `Durable` is replaced by a later one, which goes to the tail
 
+**Extended by [DI-D-112](#di-d-112): a `Durable` also withdraws its lineage's un-popped `Blocked` at or below it.**
+
 **Implemented in DI-23.9.** The engineer, 2026-10-22: "ok so coalescing Durable is approved!"
 
 A seal's capacity is released when the high-water mark passes it, but its `Durable` entry waits for the consumer to pop it,
@@ -2384,7 +2386,9 @@ notes when it is created.
   with the list observation would have made, and the oracle checks the set the instance lends for each `Failed` (since
   DI-23.12.3.4; before it, the oracle compared each resolution entry's set with `Failed`'s).
 - **The completion queue is sized by derivation**: a `Marked` is queued once per marked write and expanded at pop into one
-  entry per failure observed before the marking that suspects the write, in observation order.
+  entry per failure observed before the marking that suspects the write, in observation order. **As built**
+  (DI-23.12.3.5): the derivation needed two rules the decision had not named, recorded as [DI-D-112](#di-d-112), and the
+  bound is there.
 - **An abandoned epoch is forgotten once the mark passes it.** A contract change: `epoch_state` reports an epoch at or
   below the mark as the mark means it, durable or abandoned, and the `Abandoned` entry is where the consumer learns which.
   Above the mark an abandoned epoch holds a place of the window until the mark passes it, so a refusal for its room lands on
@@ -2476,8 +2480,42 @@ construction allocates.
   [io_core/tests/lists.rs](src/io_core/tests/lists.rs) has one call reach each. A cycle search's work list is at most the
   operations, not twice them as first written: every gate on it is a distinct gated write's but a lone seed taken off
   first, since a search returns on reaching the sealed lineage's range rather than scanning it.
-- **Not bounded here: the entries a change makes.** On the clean paths they are at most three times the operations, plus
-  the lineages, plus one, and the list is made that large; the entries a failure makes are bounded with its storage, in
-  DI-23.12.3, and until then a change making more grows the list.
+- **The entries a change makes**, bounded since DI-23.12.3.5 ([DI-D-112](#di-d-112)): what the completion queue holds,
+  plus what the same change takes off it again, and a push past it is an inconsistency like any other list's.
 - **Not covered by this decision:** a provider request's own contents, and a gate cycle's report, are still allocated when
   made. Both reach the consumer, so their shape is the engineer's; they are queued as DI-23.12.8.
+
+## <a id="di-d-112"></a>DI-D-112: an entry is let go when a later one supersedes it, and a lineage counts until its last entry is popped
+
+**Decided and built in DI-23.12.3.5.** The engineer, 2026-10-25: "yes go ahead with your recommendations", over the
+assistant's two, in [the session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#di-231235-what-the-completion-queues-bound-rests-on-continued-2026-10-24-and-2026-10-25).
+Serves [DI-D-109](#di-d-109)'s queue sized by derivation, which needed both: without them, entries about a lineage, and
+`Blocked` entries, outlived everything that bounded them. A contract change, in [CONTRACT.md](CONTRACT.md)'s guarantee 4,
+"Capacity", the event table, and "Ending a lineage".
+
+- **A lineage counts against the lineages declared until its last entry is popped.** An ended lineage is retired once it
+  has drained and its `LineageEnded`, its last entry, has been popped; retiring a live lineage withdraws its un-popped
+  `Durable`, the consumer being done with it. So every lineage an entry names is counted, and `mint_lineage` can be
+  refused at capacity until the consumer pops a `LineageEnded`. The rule [DI-D-108](#di-d-108) applied to failures in
+  DI-23.12.3.4.
+- **An un-popped `Blocked` is withdrawn once a later entry answers its request**: a `Durable` of its lineage at or above
+  it; its lineage's `LineageEnded`; and, for a seal that covers no writes, the later such seal that replaced it in its slot
+  ([DI-D-99](#di-d-99)), which takes over its request. The last case was found while building, and taken as within the
+  rule: without it, empty seals behind one failure queued a `Blocked` each with nothing held. [DI-D-101](#di-d-101)'s
+  argument carries over: the later entry is the later answer to the same request, so a consumer behind on popping sees
+  it later, never a wrong one. Every queued `Blocked` then names a seal the mark has not passed.
+- **The bound** is [Capacity::entries](src/capacity.rs), which argues each term: completions and markings at most the
+  operations each; a failure's `Failed` and resolution entry, two for each failure the table can hold; a `Durable` and a
+  `LineageEnded` for each lineage; and `Blocked` at most twice the operations plus the lineages. The queue is made that
+  large and pushed onto within it, a push past it an inconsistency (DI-D-46); a change's own entries list is made for the
+  same plus what the change takes off again ([Capacity::change_entries](src/capacity.rs)).
+- **What the tests reach.** The terms are each a bound on one kind of entry and are not reached together: a completion
+  and a marking of one write share a place. [io_core/tests/queue.rs](src/io_core/tests/queue.rs) fills `Blocked` to twice
+  the operations (a recorded seal and the empty seal trailing it, for each write a seal pins) and the markings to the
+  operations, queues every kind at once in a small declaration, and the core checks after every call that the queue is
+  within its room, that every lineage an entry names counts, and that every `Blocked` names a seal above its lineage's mark.
+  The lineages term of `Blocked` is not reached: a leading empty seal answered `Blocked` needs a failure holding an
+  epoch no recorded seal pins, which takes a nullified suspect write and its own place. It is kept as a safe over-count
+  rather than tightened on that argument.
+- **Rejected**: holding a seal's place until its `Blocked` is popped, since an empty seal has no place; and one
+  `Blocked` per lineage, which loses which earlier seal was blocked, and by what, while it still is.

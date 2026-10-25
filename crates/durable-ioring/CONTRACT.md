@@ -124,7 +124,12 @@ Everything below either sharpens one word of that sentence or states a condition
    such request of its lineage, is answered by the later one's entry
    ([DI-D-99](DESIGN-NOTES.md#di-d-99)); and a `Durable` the consumer has not popped when a later
    one for its lineage is queued is replaced by it ([DI-D-101](DESIGN-NOTES.md#di-d-101)). A
-   `Durable { through: m }` with m above n says the mark has passed n too.
+   `Durable { through: m }` with m above n says the mark has passed n too. A request's `Blocked`
+   the consumer has not popped is withdrawn once a later entry answers the same request: a
+   `Durable` of its lineage at or above it, its lineage's `LineageEnded`, or, for a request whose
+   span holds no write, the `Blocked` of the later such request that replaced it
+   ([DI-D-112](DESIGN-NOTES.md#di-d-112)). A consumer behind on popping sees the later answer, never
+   a wrong one.
 5. **Durable follows the writes it covers.** `Durable { through: n }` is delivered after the
    completion of every write of n's lineage tagged at or below n. Nothing further is promised about
    order between lineages ([DI-D-18](DESIGN-NOTES.md#di-d-18)). A lineage has at most one `Durable`
@@ -511,7 +516,8 @@ capacity declares no lineage or fewer domains than the provider serves.
   each finishes and is answered `Blocked`, and keeps its place until the failure is resolved and the mark
   passes it.
 - **What counts until it is let go.** A lineage counts until it is retired, so an ended one counts until
-  its operations in flight have completed and the commits out for its sealed writes have answered; an
+  its operations in flight have completed, the commits out for its sealed writes have answered, and its
+  `LineageEnded` has been popped ([DI-D-112](DESIGN-NOTES.md#di-d-112)); an
   imported failure counts until it is resolved and its `Abandoned` or `Healed` entry is popped, a heal
   waiting for its seal included; a flush domain
   counts for the life of the instance, a removed target's included.
@@ -523,7 +529,10 @@ capacity declares no lineage or fewer domains than the provider serves.
   [another cleared by resolving a failure](../win-durable-ioring/README.md#refused-at-capacity-and-cleared-by-resolving-a-failure).
 - **Not declared:** the completion queue and the storage a failure holds. Both follow from the
   operations, lineages and failures above and are not counted separately; how they are laid out is
-  not part of this contract.
+  not part of this contract. The queue never refuses an entry: what the rules above let go of -- an
+  operation's completion, a failure's resolution, a lineage's end, each when popped -- and the
+  entries withdrawn when a later one supersedes them are what keep it within the room it was made with
+  ([DI-D-112](DESIGN-NOTES.md#di-d-112)).
 
 ## The completion queue
 
@@ -535,11 +544,11 @@ synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-
 |---|---|
 | `Durable { through: n }` | the high-water mark has reached n; at most one per lineage waits un-popped, a later replacing an older |
 | `Failed { failure, token, cause, observed }` | a durability failure was observed (a target's commit, or a provider's domain, failed; or an import) |
-| `Blocked { through: n, by: failure }` | a request's commits succeeded, but an unresolved failure at or below n prevents reporting it |
-| `Marked { failure, marking }` | a suspect write of an unresolved failure was nullified or covered |
+| `Blocked { through: n, by: failure }` | a request's commits succeeded, but an unresolved failure at or below n prevents reporting it; withdrawn if not yet popped when a later entry answers the request (guarantee 4) |
+| `Marked { failure, marking }` | a suspect write of an unresolved failure was nullified or covered; one for each failure suspecting it, in the order observed |
 | `Abandoned { failure }` | the consumer abandoned a failure; popping it lets go of the failure's records |
 | `Healed { failure }` | a heal took effect; popping it lets go of the failure's records |
-| `LineageEnded { lineage, abandoned_through }` | a lineage ended -- its last handle was released, or given to `end_lineage` -- and every epoch of it not yet durable is abandoned |
+| `LineageEnded { lineage, abandoned_through }` | a lineage ended -- its last handle was released, or given to `end_lineage` -- and every epoch of it not yet durable is abandoned; the lineage counts against the lineages declared until it is popped |
 
 ## The readiness signal
 
@@ -602,8 +611,9 @@ back -- while another copy is held ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
   completions are delivered. There is no lifetime or durability dependency to wait for, unlike
   ending an instance.
 - **It answers nothing more.** No handle to it remains, and the instance answers its name as one it
-  cannot answer for. It is retired once its operations in flight have drained and the commits out
-  for its sealed writes have answered; their completions are delivered, and a failure that already
+  cannot answer for. It is retired once its operations in flight have drained, the commits out
+  for its sealed writes have answered, and its `LineageEnded` has been popped
+  ([DI-D-112](DESIGN-NOTES.md#di-d-112)); their completions are delivered, and a failure that already
   suspected one of them still gains its marking.
 - **A failure shared with another lineage stays unresolved** for that lineage; ending one lineage
   resolves nothing on another's behalf. A heal waiting for the ended lineage's next seal no longer
@@ -615,7 +625,8 @@ refused -- handing the handle back, with everything still holding the lineage co
 among it named by a query -- unless nothing of it is in flight or uncovered and no unresolved
 failure holds it. Removing a target is refused the same way while anything holds it, the gates,
 uncovered epochs and failures holding it named by a query. A retired lineage is reported by no
-entry: nothing about it changed.
+entry: nothing about it changed. Its `Durable`, if the consumer has not popped it, is withdrawn: the
+consumer is done with the lineage, and it no longer counts ([DI-D-112](DESIGN-NOTES.md#di-d-112)).
 
 ## Gates
 

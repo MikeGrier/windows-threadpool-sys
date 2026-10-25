@@ -80,6 +80,47 @@ impl Capacity {
     pub(crate) fn failures(&self, served: usize) -> Option<usize> {
         self.flush_parts(served)?.checked_add(self.imports)
     }
+
+    /// The most entries the completion queue holds at once with a provider serving `served`
+    /// domains (DI-D-109, DI-D-112): four times the operations, twice the failures, and three times
+    /// the lineages. `None` if that is more than a `usize`.
+    ///
+    /// - **An operation's completion** holds its operation's place until it is popped: at most
+    ///   the operations.
+    /// - **A `Marked`** is queued once per marked write, and a write is marked once. Every failure
+    ///   it goes to was open when it was marked, so that failure's `Abandoned` or `Healed` is
+    ///   behind it, and the failure is held -- and with it the write's kept record and place --
+    ///   until that entry is popped (DI-D-108): at most the operations.
+    /// - **A failure's `Failed`, and its `Abandoned` or `Healed`**: a failure is held in the
+    ///   failure table from its `Failed` until its resolution entry is popped, so at most two
+    ///   for each failure the table holds.
+    /// - **A `Durable`**: at most one per lineage (DI-D-101). **A `LineageEnded`**: one per
+    ///   lineage, its last entry. A lineage counts against the lineages declared until its
+    ///   `LineageEnded` is popped, and retiring a live one withdraws its `Durable` (DI-D-112), so
+    ///   every lineage an entry names is counted: at most the lineages, each.
+    /// - **A `Blocked`** is withdrawn once its seal is gone -- the mark passed it, its lineage
+    ///   ended, or a later empty seal replaced it (DI-D-112) -- so each names a seal not yet passed:
+    ///   a recorded seal, which pins a write's place (DI-D-110), or an empty one, leading its
+    ///   lineage or trailing a recorded seal (DI-D-99). At most twice the operations, plus the
+    ///   lineages.
+    pub(crate) fn entries(&self, served: usize) -> Option<usize> {
+        self.operations
+            .checked_mul(4)?
+            .checked_add(self.failures(served)?.checked_mul(2)?)?
+            .checked_add(self.lineages.checked_mul(3)?)
+    }
+
+    /// The most entries one change makes due with a provider serving `served` domains: what the
+    /// queue holds, since every one goes on it, plus what the same change takes off it again -- a
+    /// `Durable` for each seal it passes, at most twice the operations plus the lineages, a later
+    /// one replacing it (DI-D-101), and one empty seal superseded by a seal. `None` if that is
+    /// more than a `usize`.
+    pub(crate) fn change_entries(&self, served: usize) -> Option<usize> {
+        self.entries(served)?
+            .checked_add(self.operations.checked_mul(2)?)?
+            .checked_add(self.lineages)?
+            .checked_add(1)
+    }
 }
 
 /// A table named `name`, empty, holding `entries` at least, its storage allocated now and never

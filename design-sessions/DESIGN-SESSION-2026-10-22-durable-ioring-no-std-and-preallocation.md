@@ -539,6 +539,39 @@ sabotage of it, so it was tightened to the operations.
 Two allocations were found that no step owned: a provider request's contents and a gate cycle's report. Both reach the
 consumer, so they were queued as DI-23.12.8 for the engineer rather than given a shape here.
 
+## DI-23.12.3.5: what the completion queue's bound rests on (continued 2026-10-24 and 2026-10-25)
+
+Deriving the queue's bound, which DI-D-109 left to DI-23.12, found three kinds of entry already bounded and two that were
+not. Bounded: a completion holds its operation's place until popped; a `Marked`, once queued per write, has every failure
+it goes to held until that failure's `Abandoned` or `Healed` -- behind it in the queue -- is popped, and with them the
+write's kept record and place; and a failure's own entries are at most two while the failure table holds it, which since
+DI-23.12.3.4 it does until its resolution entry is popped.
+
+Not bounded:
+
+1. **Entries about a lineage outlived its count.** A lineage stopped counting when it retired, and nothing waited for its
+   entries to be popped, so a consumer could mint a lineage, seal an empty epoch (a `Durable` at once), and end it (a
+   `LineageEnded`, and retirement at once), queuing two entries a cycle while holding nothing, without bound.
+2. **`Blocked` outlived its seal.** One is queued for each seal it answers, and stays once the mark passes the seal and
+   the seal's place is let go. Growth needs a fresh failure each time, so it was bounded, but only by the failures times
+   twice the operations plus the lineages: about 130,000 entries for 256 operations and four imports, against some 1,300
+   for everything else.
+
+The assistant recommended, the engineer 2026-10-25: "yes go ahead with your recommendations":
+
+- **A lineage counts until its last entry is popped**: an ended lineage retires once drained and its `LineageEnded`
+  popped, and retiring a live one withdraws its un-popped `Durable`. The same rule DI-23.12.3.4 applied to failures.
+- **A `Blocked` is withdrawn once a later entry answers its request**: a `Durable` of its lineage at or above it, or its
+  lineage's `LineageEnded` -- DI-D-101's argument, that a consumer behind on popping sees the answer later and never a
+  wrong one. Rejected: holding a seal's place until its `Blocked` is popped, since an empty seal has no place to hold;
+  and one `Blocked` per lineage, which would drop which earlier seal was blocked, and by what, while it still is.
+
+Building it found a third case of the same rule the recommendation had not named: an empty seal behind a failure is
+answered `Blocked`, and a later empty seal replaces it and is answered again, so a consumer sealing empty epochs behind
+one failure queued a `Blocked` each time with nothing held -- the second gap, unbounded. The replacing seal takes over
+the replaced one's request (DI-D-99: its `Durable` answers both), so the replaced one's `Blocked` is withdrawn too. The
+assistant took it as within the approved rule and recorded it so in DI-D-112.
+
 ## Working positions and open questions (not decisions)
 
 - **A portable `ErrorKind`**: not provided (DI-D-109); revisited if a stack generic over backends asks for it.

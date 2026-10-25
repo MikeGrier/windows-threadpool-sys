@@ -58,7 +58,8 @@ use crate::diagnostics::DiagnosticSink;
 use crate::domain_lists::DomainList;
 use crate::domains::{DomainId, epoch_state, intern, routing};
 use crate::durability::{
-    Accepted, DEFAULT_LINEAGE, Due, Durability, Gate, GateState, Key, Routing, Sealing, WriteEnd,
+    Accepted, Arrival, DEFAULT_LINEAGE, Due, Durability, Event, Gate, GateState, Key, Routing,
+    Sealing, WriteEnd,
 };
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::io_target::IoTargetDescription;
@@ -74,6 +75,9 @@ use crate::types::{
 mod failures;
 mod lineages;
 mod provider;
+mod queue;
+
+use queue::Queued;
 
 #[cfg(test)]
 mod tests;
@@ -204,7 +208,8 @@ pub struct DurableIoCore<E: EpochId + 'static, B, C, K: StampClock> {
     /// Consumer operations in flight, by target, as `remove_target` reports them; a target with
     /// none has no entry.
     per_target: HeapMap<IoTargetKey, usize>,
-    queue: VecDeque<Entry<V<E, K>, B, C>>,
+    /// The completion queue, made for [`Capacity::entries`] (DI-D-112).
+    queue: VecDeque<Queued<V<E, K>, B, C>>,
     /// Submissions the core originated that the backend refused for a retryable cause, emitted
     /// again with the next actions.
     unpushed: Vec<Submission<B>>,
@@ -282,6 +287,9 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         let requests = tagged(tag::IO_CORE_NEW_REQUESTS, || {
             queue("the provider's requests", operations)
         })?;
+        let completions = tagged(tag::IO_CORE_NEW_QUEUE, || {
+            queue("the completion queue", capacity.entries(served))
+        })?;
         Ok(Self {
             instance,
             capacity,
@@ -293,7 +301,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             in_flight,
             held,
             per_target,
-            queue: VecDeque::new(),
+            queue: completions,
             unpushed,
             outgoing,
             requests,
@@ -592,15 +600,13 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                     Ok(transferred) => Outcome::Transferred(transferred),
                     Err(fault) => Outcome::Failed(fault),
                 };
-                tagged(tag::IO_CORE_COMPLETE_QUEUE, || {
-                    self.queue.push_back(Entry::Op(OpCompletion {
-                        id,
-                        kind,
-                        outcome,
-                        buffer,
-                        context,
-                    }));
-                });
+                self.push_queued(Queued::Entry(Entry::Op(OpCompletion {
+                    id,
+                    kind,
+                    outcome,
+                    buffer,
+                    context,
+                })));
                 if write {
                     self.durability.completed(id, end)
                 } else {
@@ -699,23 +705,6 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         }
     }
 
-    /// The next entry, if there is one. Popping an operation's completion lets go of the place the
-    /// operation held in the submit window, and popping a failure's `Abandoned` or `Healed` lets go
-    /// of its records and what it held (DI-D-108).
-    pub fn pop(&mut self) -> Option<Entry<V<E, K>, B, C>> {
-        let entry = self.queue.pop_front()?;
-        match &entry {
-            Entry::Op(done) => self.durability.popped(done.id),
-            Entry::Abandoned { failure } | Entry::Healed { failure } => {
-                self.durability.forget(*failure);
-            }
-            _ => {}
-        }
-        #[cfg(test)]
-        self.check_window();
-        Some(entry)
-    }
-
     /// How many places of the submit window are held: each operation accepted and not yet popped,
     /// each write still uncovered, each write an unresolved failure suspects, and the write each
     /// seal the mark has not passed holds, counted once however many of those hold it (DI-D-100,
@@ -723,21 +712,6 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     #[must_use]
     pub fn window_places(&self) -> usize {
         self.durability.window_places()
-    }
-
-    /// That no lineage has two un-popped `Durable` entries (DI-D-101).
-    #[cfg(test)]
-    fn check_durables(&self) {
-        let mut seen = alloc::collections::BTreeSet::new();
-        for entry in &self.queue {
-            if let Entry::Durable { through } = entry {
-                assert!(
-                    seen.insert(through.lineage.seq),
-                    "two un-popped Durable entries for lineage {}",
-                    through.lineage.seq
-                );
-            }
-        }
     }
 
     /// Whether the places the core's tables account for are exactly those the window holds.
@@ -750,8 +724,8 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             }
         }
         operations.extend(self.held.keys().copied());
-        for entry in &self.queue {
-            if let Entry::Op(done) = entry {
+        for queued in &self.queue {
+            if let Queued::Entry(Entry::Op(done)) = queued {
                 operations.insert(done.id.seq);
             }
         }
@@ -1090,11 +1064,27 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     fn act(&mut self, mut due: Due<E, IoTargetKey, K::Instant>, was_empty: bool) -> CoreActions {
         for event in due.events.drain(..) {
             match event.into_entry(self.instance) {
-                Ok(entry) => self.enqueue(entry),
-                Err((op, abandoned)) => {
+                Arrival::Entry(entry) => self.enqueue(entry),
+                Arrival::Other(Event::NeverIssued { op, abandoned }) => {
                     let abandoned = Epoch::new(self.name(abandoned.lineage), abandoned.epoch);
                     self.never_issued(op, abandoned);
                 }
+                Arrival::Other(Event::Marked {
+                    write,
+                    #[cfg(test)]
+                    to,
+                }) => self.push_queued(Queued::Marked {
+                    write,
+                    after: None,
+                    #[cfg(test)]
+                    to: to.into(),
+                }),
+                Arrival::Other(Event::Superseded { lineage, through }) => {
+                    self.withdraw_blocked(Epoch::new(self.name(lineage), through));
+                }
+                Arrival::Other(other) => self
+                    .durability
+                    .inconsistent("an entry the queue cannot take", format_args!("{other:?}")),
             }
         }
         self.emit_unpushed();
@@ -1136,7 +1126,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         #[cfg(test)]
         {
             self.check_window();
-            self.check_durables();
+            self.check_queue();
             assert!(
                 self.durability.due_home(),
                 "a change's lists were not given back"
@@ -1145,25 +1135,6 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         CoreActions {
             deliver: was_empty && !self.queue.is_empty(),
         }
-    }
-
-    /// Append `entry` to the queue. A lineage has at most one un-popped `Durable` (DI-D-101): a
-    /// later one removes the older and goes to the tail, never written over it in place, since the
-    /// contract has a `Healed` come before the `Durable` its heal lets through, and one updated in
-    /// place could stand ahead of a `Healed` queued between them. `Durable { through: n }` means the
-    /// mark has reached n, so an older value skipped breaks no promise: a consumer behind on
-    /// popping sees the mark later, never earlier.
-    fn enqueue(&mut self, entry: Entry<V<E, K>, B, C>) {
-        if let Entry::Durable { through } = &entry {
-            let lineage = through.lineage;
-            let older = self.queue.iter().position(
-                |queued| matches!(queued, Entry::Durable { through } if through.lineage == lineage),
-            );
-            if let Some(at) = older {
-                self.queue.remove(at);
-            }
-        }
-        tagged(tag::IO_CORE_ACT_QUEUE, || self.queue.push_back(entry));
     }
 
     /// A held operation will never be issued: its completion goes on the queue, with its buffer
@@ -1176,15 +1147,13 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             );
             return;
         };
-        tagged(tag::IO_CORE_NEVER_ISSUED_QUEUE, || {
-            self.queue.push_back(Entry::Op(OpCompletion {
-                id: held.id,
-                kind: held.kind,
-                outcome: Outcome::NeverIssued { abandoned },
-                buffer: owned_op(held.op),
-                context: held.context,
-            }));
-        });
+        self.push_queued(Queued::Entry(Entry::Op(OpCompletion {
+            id: held.id,
+            kind: held.kind,
+            outcome: Outcome::NeverIssued { abandoned },
+            buffer: owned_op(held.op),
+            context: held.context,
+        })));
     }
 
     /// A held operation's gate is durable: emit it, recorded as in flight from now.

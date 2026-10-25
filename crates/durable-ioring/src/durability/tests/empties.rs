@@ -11,7 +11,7 @@ use super::{
 };
 use crate::diagnostics::tests::Recording;
 use crate::domains::DomainId;
-use crate::durability::Reach;
+use crate::durability::{DEFAULT_LINEAGE, Reach};
 use crate::test_support::ManualClock;
 use crate::types::{FailureCause, ImportScope, Resolution};
 
@@ -137,8 +137,8 @@ fn an_empty_seal_behind_a_failure_is_answered_blocked_and_so_is_its_replacement(
     assert_eq!(seen(&submitted(lineage.seal(3))), [Seen::Blocked(3, 0)]);
     assert_eq!(
         seen(&submitted(lineage.seal(5))),
-        [Seen::Blocked(5, 0)],
-        "the replacement is a seal of its own, and is answered"
+        [Seen::Superseded(DEFAULT_LINEAGE, 3), Seen::Blocked(5, 0)],
+        "the replacement takes over 3's request, whose Blocked is withdrawn, and is answered"
     );
     let due = lineage
         .resolve(vec![(token, Resolution::Abandon)])

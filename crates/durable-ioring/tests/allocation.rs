@@ -580,9 +580,9 @@ fn failures() -> Vec<Measured> {
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
-    ("construction, with two targets", 39),
+    ("construction, with two targets", 40),
     ("writes, first round", 3),
-    ("write completions, first round", 3),
+    ("write completions, first round", 0),
     ("pops, first round", 0),
     ("writes, second round", 0),
     ("write completions, second round", 0),
@@ -614,8 +614,8 @@ const CLEAN: &[(&str, u64)] = &[
 
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
-    ("construction, with two targets", 39),
-    ("writes before the failure", 6),
+    ("construction, with two targets", 40),
+    ("writes before the failure", 3),
     ("a commit failure observed", 0),
     ("failures queried", 1),
     ("a failure's suspects and markings read", 0),
@@ -765,13 +765,9 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "io_core::new::requests",
         1,
     ),
+    ("construction, with two targets", "io_core::new::queue", 1),
     ("construction, with two targets", "io_core::new::served", 1),
     ("writes, first round", "io_core::issue::backend_push", 3),
-    (
-        "write completions, first round",
-        "io_core::complete::queue",
-        3,
-    ),
 ];
 
 /// As [`CLEAN_TAGS`], for the failure paths.
@@ -912,13 +908,13 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "io_core::new::requests",
         1,
     ),
+    ("construction, with two targets", "io_core::new::queue", 1),
     ("construction, with two targets", "io_core::new::served", 1),
     (
         "writes before the failure",
         "io_core::issue::backend_push",
         3,
     ),
-    ("writes before the failure", "io_core::complete::queue", 3),
     ("failures queried", "durability::failures::infos", 1),
     ("a heal resolved", "durability::resolve::heal_pending", 1),
     ("an abandon resolved", "durability::resolve::abandoned", 1),

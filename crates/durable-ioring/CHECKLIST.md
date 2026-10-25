@@ -97,10 +97,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.3.4** -- A failure's suspect writes and markings are lent to a visitor from the instance's own records, held until its Abandoned or Healed is popped, and no entry or inventory row carries them. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231234)
 
-- [ ] **DI-23.12.3.5** -- **The completion queue and a change's entries within derived bounds**
-  ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s third item): a `Marked` queued once per marked write and expanded at pop into one
-  entry per failure observed before the marking that suspects the write, in observation order; the queue and `Due`'s
-  entries list made for the derived bound and pushed onto within it; and a test filling the queue to the bound.
+- [x] **DI-23.12.3.5** -- The completion queue and a change's entries are made for a derived bound and pushed onto within it: a marking queued once per write, a Blocked withdrawn once a later entry answers its request, and a lineage counted until its LineageEnded is popped. -> [completed 2026-10-25](COMPLETED-CHECKLIST.md#di-231235)
 
 - [ ] **DI-23.12.3.6** -- **A heal's releases in storage made at construction** -- **awaiting the engineer's decision
   on the bound.** A heal records, for each lineage it is pending on, `Release { after, through }`: that lineage's next

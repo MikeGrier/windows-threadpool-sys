@@ -277,6 +277,8 @@ enum Seen {
     Marked(u64, u64, MarkingKind),
     /// The operation never issued, and the lineage and epoch named abandoned.
     NeverIssued(u64, Key, u64),
+    /// An answered empty seal replaced: the lineage, and the seal whose `Blocked` is withdrawn.
+    Superseded(Key, u64),
 }
 
 fn seen(due: &Due<u64, &'static str, Stamp>) -> Vec<Seen> {
@@ -284,45 +286,53 @@ fn seen(due: &Due<u64, &'static str, Stamp>) -> Vec<Seen> {
         |writes: &[SuspectWrite<Ids>]| -> Vec<u64> { writes.iter().map(|w| w.op.seq).collect() };
     due.events
         .iter()
-        .map(|event| match event {
-            Event::Durable {
-                lineage: DEFAULT_LINEAGE,
-                through,
-            } => Seen::Durable(*through),
-            Event::Durable { lineage, through } => Seen::DurableIn(*lineage, *through),
-            Event::Blocked {
-                lineage: DEFAULT_LINEAGE,
-                through,
-                by,
-            } => Seen::Blocked(*through, by.seq),
-            Event::Blocked {
-                lineage,
-                through,
-                by,
-            } => Seen::BlockedIn(*lineage, *through, by.seq),
-            Event::LineageEnded {
-                lineage,
-                abandoned_through,
-            } => Seen::LineageEnded(*lineage, *abandoned_through),
-            Event::Failed { failed, snapshot } => {
-                Seen::Failed(failed.id.seq, ops(&snapshot.suspect))
-            }
-            Event::Abandoned { failure, snapshot } => Seen::Abandoned(
-                failure.seq,
-                ops(&snapshot.suspect),
-                marks(&snapshot.markings),
-            ),
-            Event::Healed { failure, snapshot } => Seen::Healed(
-                failure.seq,
-                ops(&snapshot.suspect),
-                marks(&snapshot.markings),
-            ),
-            Event::Marked { failure, marking } => {
-                Seen::Marked(failure.seq, marking.write.seq, marking.kind.clone())
-            }
-            Event::NeverIssued { op, abandoned } => {
-                Seen::NeverIssued(op.seq, abandoned.lineage, abandoned.epoch)
-            }
+        .flat_map(|event| -> Vec<Seen> {
+            vec![match event {
+                Event::Durable {
+                    lineage: DEFAULT_LINEAGE,
+                    through,
+                } => Seen::Durable(*through),
+                Event::Durable { lineage, through } => Seen::DurableIn(*lineage, *through),
+                Event::Blocked {
+                    lineage: DEFAULT_LINEAGE,
+                    through,
+                    by,
+                } => Seen::Blocked(*through, by.seq),
+                Event::Blocked {
+                    lineage,
+                    through,
+                    by,
+                } => Seen::BlockedIn(*lineage, *through, by.seq),
+                Event::LineageEnded {
+                    lineage,
+                    abandoned_through,
+                } => Seen::LineageEnded(*lineage, *abandoned_through),
+                Event::Failed { failed, snapshot } => {
+                    Seen::Failed(failed.id.seq, ops(&snapshot.suspect))
+                }
+                Event::Abandoned { failure, snapshot } => Seen::Abandoned(
+                    failure.seq,
+                    ops(&snapshot.suspect),
+                    marks(&snapshot.markings),
+                ),
+                Event::Healed { failure, snapshot } => Seen::Healed(
+                    failure.seq,
+                    ops(&snapshot.suspect),
+                    marks(&snapshot.markings),
+                ),
+                Event::Marked { to, .. } => {
+                    return to
+                        .iter()
+                        .map(|(failure, marking)| {
+                            Seen::Marked(failure.seq, marking.write.seq, marking.kind.clone())
+                        })
+                        .collect();
+                }
+                Event::Superseded { lineage, through } => Seen::Superseded(*lineage, *through),
+                Event::NeverIssued { op, abandoned } => {
+                    Seen::NeverIssued(op.seq, abandoned.lineage, abandoned.epoch)
+                }
+            }]
         })
         .collect()
 }

@@ -97,7 +97,7 @@ use suspects::suspects;
 use tables::{Counts, Seals};
 use window::Window;
 
-pub(crate) use exchange::{DomainPart, Due, Event, Flush, ProviderCall, WriteEnd};
+pub(crate) use exchange::{Arrival, DomainPart, Due, Event, Flush, ProviderCall, WriteEnd};
 pub(crate) use gates::GateState;
 #[cfg(test)]
 mod tests;
@@ -352,6 +352,10 @@ impl<E: EpochId + 'static, I: Instant> Failure<E, I> {
     }
 }
 
+/// The next `Marked` a queued marking expands to: the failure, the marking, and whether another
+/// follows.
+pub(crate) type NextMarking<E, I> = (FailureId, Marking<V<E, I>>, bool);
+
 /// One lineage's own state.
 struct LineageState<E> {
     /// The consumer's description, kept as it was given and lent by the enumeration (DI-D-108).
@@ -364,8 +368,11 @@ struct LineageState<E> {
     /// Every epoch an abandoned failure contained.
     abandoned: BTreeSet<E>,
     /// Ended (DI-D-30): it answers nothing more, and is retired once its writes in flight complete
-    /// and its flushes out have answered (DI-D-98).
+    /// and its flushes out have answered (DI-D-98), and its `LineageEnded` has been popped.
     ended: bool,
+    /// Its `LineageEnded` is queued and not yet popped: it counts against the lineages declared
+    /// until it is, so every lineage an entry names is counted (DI-D-112).
+    end_unpopped: bool,
     /// The highest epoch of any write pushed in this lineage, held or not: where a heal's
     /// [`Release`] must reach.
     pushed_through: Option<E>,
@@ -381,6 +388,7 @@ impl<E: EpochId> LineageState<E> {
             next_seal: 0,
             abandoned: BTreeSet::new(),
             ended: false,
+            end_unpopped: false,
             pushed_through: None,
         }
     }
@@ -480,6 +488,8 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     scratch: Scratch<E>,
     /// What the consumer declared, which sized them.
     capacity: Capacity,
+    /// How many domains the provider serves, which the bounds on a change's lists name.
+    served_count: usize,
 }
 
 /// An open flush pair: its id, and the seal it is part of.
@@ -622,7 +632,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
                 capacity.domains,
             )
         })?;
-        let spare = tagged(tag::DURABILITY_NEW_DUE, || Due::reserved(capacity))?;
+        let spare = tagged(tag::DURABILITY_NEW_DUE, || Due::reserved(capacity, served))?;
         let scratch = Scratch::new(capacity, served)?;
         Ok(Self {
             instance,
@@ -653,6 +663,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             due_out: false,
             scratch,
             capacity: *capacity,
+            served_count: served,
         })
     }
 
@@ -924,8 +935,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             });
         }
         let Some(op) = pin else {
-            self.record_empty(lineage, Empty::new(seq, through, pair));
-            let due = self.fresh();
+            let mut due = self.fresh();
+            self.record_empty(lineage, Empty::new(seq, through, pair), &mut due);
             return Sealing::Submitted(self.advance(due));
         };
         let recorded = self.seals.insert(
@@ -1103,8 +1114,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         self.hold_suspects(at);
         #[cfg(test)]
         let snapshot = self.snapshot(&self.failures[at]);
-        tagged(tag::DURABILITY_OBSERVE_EVENT, || {
-            due.events.push(Event::Failed {
+        self.emit(
+            due,
+            Event::Failed {
                 failed: Failed {
                     id,
                     token,
@@ -1113,14 +1125,15 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 },
                 #[cfg(test)]
                 snapshot,
-            });
-        });
+            },
+        );
         id
     }
 
     /// Mark `write`, which has just stopped being uncovered, if an unresolved failure suspects it
-    /// (DI-D-36): one reading of the clock, kept once with the write's record, and a `Marked` for
-    /// each failure suspecting it, in observation order.
+    /// (DI-D-36): one reading of the clock, kept once with the write's record, and one `Marked`
+    /// queued, which is expanded when popped into one for each failure suspecting it, in
+    /// observation order (DI-D-109).
     fn mark(&mut self, write: OpId, kind: MarkingKind, due: &mut Due<E, T, I>) {
         let open =
             |failure: &&Failure<E, I>| !matches!(failure.standing, Standing::Resolved { .. });
@@ -1136,24 +1149,62 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         if let Err(what) = self.kept.mark(write, observed, kind.clone()) {
             self.inconsistent(what, format_args!("write {write:?}, {kind:?}"));
         }
-        for failure in self
+        #[cfg(test)]
+        let to = self
             .failures
             .iter()
             .filter(open)
             .filter(|failure| self.suspects(failure, write))
-        {
-            let marking = Marking {
+            .map(|failure| {
+                let marking = Marking {
+                    write,
+                    observed,
+                    kind: kind.clone(),
+                };
+                (failure.id, marking)
+            })
+            .collect();
+        self.emit(
+            due,
+            Event::Marked {
                 write,
-                observed,
-                kind: kind.clone(),
-            };
-            tagged(tag::DURABILITY_MARK_EVENT, || {
-                due.events.push(Event::Marked {
-                    failure: failure.id,
-                    marking,
-                });
-            });
-        }
+                #[cfg(test)]
+                to,
+            },
+        );
+    }
+
+    /// The next `Marked` the queued marking of `write` expands to (DI-D-109): the first failure
+    /// after the one numbered `after`, in observation order, that suspects the write and was not
+    /// resolved before the marking was made, with the marking, and whether another follows. `None`
+    /// when none does -- the write is not kept, not marked, or every failure it went to has been
+    /// given it.
+    pub(crate) fn next_marking(
+        &self,
+        write: OpId,
+        after: Option<u64>,
+    ) -> Option<NextMarking<E, I>> {
+        let (order, observed, kind) = self.kept.marking_of(write.seq)?;
+        let mut to = self
+            .failures
+            .iter()
+            .filter(|failure| after.is_none_or(|after| failure.id.seq > after))
+            // The rule `failure_markings` reads by. At a pop it always holds: a failure resolved
+            // before the marking has its resolution entry ahead of the marking's in the queue, and
+            // popping that entry forgot it, so only failures resolved since remain. Kept so the two
+            // readings cannot drift; the sabotage dropping it is a control that survives.
+            .filter(|failure| match failure.standing {
+                Standing::Resolved { marks_before } => order < marks_before,
+                Standing::Open | Standing::Healing { .. } => true,
+            })
+            .filter(|failure| self.suspects(failure, write));
+        let first = to.next()?;
+        let marking = Marking {
+            write,
+            observed,
+            kind: kind.clone(),
+        };
+        Some((first.id, marking, to.next().is_some()))
     }
 
     /// Every marking `failure` has gained, in the order observed: its suspect writes', read from
@@ -1181,13 +1232,14 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             let failure = self.failures[at].id;
             #[cfg(test)]
             let snapshot = self.snapshot(&self.failures[at]);
-            tagged(tag::DURABILITY_RELEASE_HEALED_EVENT, || {
-                due.events.push(Event::Healed {
+            self.emit(
+                due,
+                Event::Healed {
                     failure,
                     #[cfg(test)]
                     snapshot,
-                });
-            });
+                },
+            );
             self.failures[at].standing = Standing::Resolved {
                 marks_before: self.kept.order(),
             };
@@ -1436,7 +1488,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         if self
             .lineages
             .get(&lineage)
-            .is_some_and(|state| state.ended && !in_flight && !sealing)
+            .is_some_and(|state| state.ended && !state.end_unpopped && !in_flight && !sealing)
         {
             self.lineages.remove(&lineage);
         }
