@@ -95,9 +95,10 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [ ] **DI-23.12.3.3** -- **The suspect set as the rule that made it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s second
   item): a failure keeps its cut, its reach, its lineage if one was named, and what else observation filtered on, and a
-  write is its suspect when the records say so; the epochs it holds, which `blocking`, gates and abandoning read, and a
-  heal's pending lineages, read from the same records. Internal: `SuspectSet` is still built for the entries until
-  `DI-23.12.3.4`; the window's census and the oracle check that the rule names exactly the writes the old list did.
+  write is its suspect when the records say so; the epochs it holds, which `blocking`, gates and abandoning read, and the
+  lineages a heal is pending on, read from the same records. Internal: `SuspectSet` is still built for the entries until
+  `DI-23.12.3.4`, and a heal's releases are still a map until `DI-23.12.3.6`; the window's census and the oracle check
+  that the rule names exactly the writes the old list did.
 
 - [ ] **DI-23.12.3.4** -- **A failure's records lent by a scoped borrow** ([DI-D-108](DESIGN-NOTES.md#di-d-108)):
   `Failed`, `Abandoned`, `Healed` and `FailureInfo` carry the failure's identity, token, cause and stamp, and its suspect
@@ -108,6 +109,16 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s third item): a `Marked` queued once per marked write and expanded at pop into one
   entry per failure observed before the marking that suspects the write, in observation order; the queue and `Due`'s
   entries list made for the derived bound and pushed onto within it; and a test filling the queue to the bound.
+
+- [ ] **DI-23.12.3.6** -- **A heal's releases in storage made at construction** -- **awaiting the engineer's decision
+  on the bound.** A heal records, for each lineage it is pending on, `Release { after, through }`: that lineage's next
+  seal number and highest pushed epoch at the moment of the heal (DI-D-41, DI-D-46). Unlike the failures and the kept
+  records, these have no derived bound below the failures times the lineages: one failure can suspect writes of every
+  lineage, and a pending (failure, lineage) pair is named by no place of its own, since many failures suspect one
+  write. Found 2026-10-24 while implementing `DI-23.12.3.3`, which reads the pending lineages from the records but still
+  keeps the release values in a map made at the heal. Per lineage the pending releases are monotone in heal order, and a
+  seal releases a prefix of them, so a per-lineage queue of distinct releases is a candidate shape; whether its length
+  has a bound the capacities give, or the product must be declared, is the decision.
 
 - [ ] **DI-23.12.4** -- **Handles, tokens, descriptions and domain lists as fixed storage**
   ([DI-D-108](DESIGN-NOTES.md#di-d-108)): lineage handles and failure tokens become an index and a generation into an
