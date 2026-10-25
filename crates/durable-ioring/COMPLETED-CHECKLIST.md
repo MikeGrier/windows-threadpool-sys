@@ -4641,3 +4641,21 @@ cycle search's work list was first sized at twice the operations and tightened t
 A provider request's contents and a gate cycle's report, found unowned, were queued as `DI-23.12.8` for the engineer. A
 win-durable-ioring test that read `CoreActions` directly was moved onto the engine first, in its own commit. Sabotage:
 nineteen entries re-anchored and sixteen added, swept with every entry on the files this rewrote.
+
+## Moved 2026-10-24 20:08:28 -04:00 -- DI-23.12.3.1: the failure table bounded by derivation
+
+### <a id="di-231231"></a>DI-23.12.3.1 -- The unresolved failures are kept in a table made at construction for the flush parts plus the imports, with the bound argued and filled by a test. *(completed 2026-10-24 20:08:28 -04:00)*
+
+**The failure table on fixed storage, bounded by derivation** ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s first item): the
+unresolved failures kept in observation order in a table made at construction for `operations` times one plus the served
+domains, plus `imports`, a failure recorded past it an inconsistency. Proof obligations: every observed failure answers one
+part of one seal and suspects that part's named write, which holds a place until the failure is resolved, and a part
+answers once -- with a provider's answer, a flush's answer and a refused commit for an ended lineage shown to observe
+nothing -- and a test filling the table to the bound. Internal: a failure's own suspect list, markings and epochs still
+allocate until the steps below.
+
+What was built is DI-D-109's "As built (DI-23.12.3.1)": `Capacity::failures` carries the argument, the table is a list
+pushed onto within its room, and [io_core/tests/tables.rs](src/io_core/tests/tables.rs) fills it with a failed commit and
+a failed provider answer for each operation and every import. A provider's failed or abandoned answer for an ended
+lineage is now shown to observe nothing; a flush's answer for one already was. Construction makes one more allocation and
+an observed failure one fewer. Sabotage: three entries added, swept with the ended-lineage entry they rest on.

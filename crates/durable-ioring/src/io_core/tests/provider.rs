@@ -186,6 +186,39 @@ fn an_abandoned_answer_is_the_providers_abandonment() {
 }
 
 #[test]
+fn a_failed_or_abandoned_answer_for_an_ended_lineage_observes_no_failure() {
+    // Part of the bound on unresolved failures (DI-D-109): only a part of a live lineage's seal
+    // observes one, so a failure is always held by its part's named write.
+    for outcome in [
+        DomainOutcome::Failed(crate::report_io_error(io::Error::other("lost"))),
+        DomainOutcome::Abandoned,
+    ] {
+        let mut rig = served(&["log"], &["log"]);
+        let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
+        rig.write_with(
+            KEY,
+            crate::types::Epoch::new(lineage, 1),
+            0,
+            b"x",
+            Default::default(),
+        )
+        .expect("accepted");
+        rig.seal_in(lineage, 1);
+        rig.run();
+        let request = rig.requests.pop().expect("a request");
+        let actions = rig.core.end_lineage(lineage).expect("live");
+        rig.act(actions);
+        rig.entries();
+        let actions = rig
+            .core
+            .provided(request.lineage, request.seal, &domain("log"), outcome);
+        assert!(rig.core.taken(actions).is_empty());
+        assert!(rig.entries().is_empty());
+        assert!(rig.core.failures().is_empty(), "nothing observed");
+    }
+}
+
+#[test]
 fn an_answer_for_an_ended_lineage_reports_nothing() {
     let mut rig = served(&["log"], &["log"]);
     let lineage = rig.core.mint_lineage(None).expect("room for a lineage");

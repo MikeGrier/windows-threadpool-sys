@@ -62,7 +62,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use fixed_hash_table::HeapMap;
 
 use crate::alloc_tags::{tag, tagged};
-use crate::capacity::{Capacity, ConstructionError, ordered, table, within};
+use crate::capacity::{Capacity, ConstructionError, list, ordered, table, within};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::correlation::CorrelationId;
@@ -558,6 +558,9 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         let served_names = tagged(tag::DURABILITY_NEW_SERVED_NAMES, || {
             table("the served domains' names", Some(served))
         })?;
+        let failures = tagged(tag::DURABILITY_NEW_FAILURES, || {
+            list("the unresolved failures", capacity.failures(served))
+        })?;
         let spare = tagged(tag::DURABILITY_NEW_DUE, || Due::reserved(capacity))?;
         let scratch = Scratch::new(capacity, served)?;
         Ok(Self {
@@ -571,7 +574,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             gated,
             spans,
             window,
-            failures: Vec::new(),
+            failures,
             next_failure: 0,
             held,
             served: tagged(tag::DURABILITY_NEW_SERVED, || Arc::from([])),
@@ -1166,9 +1169,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             epochs,
             standing: Standing::Open(live),
         };
-        tagged(tag::DURABILITY_OBSERVE_FAILURE, || {
-            self.failures.push(failure)
-        });
+        if within(&mut self.failures, failure).is_err() {
+            self.inconsistent(
+                "more failures were unresolved than the flush parts and the imports allow",
+                format_args!("failure {id:?}"),
+            );
+            return id;
+        }
         self.hold_suspects(&suspect);
         tagged(tag::DURABILITY_OBSERVE_EVENT, || {
             due.events.push(Event::Failed(Failed {

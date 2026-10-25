@@ -306,3 +306,72 @@ fn held_writes_stopped_by_their_lineage_ending_let_go_of_every_table_slot() {
     rig.entries();
     assert_eq!(rig.core.window_places(), 0);
 }
+
+#[test]
+fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
+    // A file declared with a served domain and an unserved one: each seal asks the default to
+    // flush it and the provider for the served domain, and both parts fail -- two observed failures
+    // for each operation -- and every import declared is made besides.
+    let capacity = declared(|c| {
+        c.operations = 4;
+        c.imports = 2;
+    });
+    let bound = capacity.failures(1).expect("small");
+    assert_eq!(bound, 10);
+    let core = Core::with_provider(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        capacity,
+        vec![domain("a")],
+    )
+    .expect("a valid capacity");
+    let mut rig = Rig::over(core);
+    rig.backend = MemoryBackend::new(nz(8), nz(16)).with_script(FaultScript::new().on(
+        COMMITS,
+        Fault::Fail(crate::memory::scripted_fault("the flush failed")),
+    ));
+    rig.attach(
+        KEY,
+        MemoryTarget::new().with_domains([domain("a"), domain("z")]),
+    );
+    for epoch in 1..=4 {
+        rig.write_to(KEY, epoch, epoch, b"x").expect("room");
+        rig.run();
+        rig.seal(epoch);
+        rig.run();
+    }
+    for request in std::mem::take(&mut rig.requests) {
+        let failed = DomainOutcome::Failed(crate::report_io_error(std::io::Error::other("no")));
+        let actions = rig
+            .core
+            .provided(request.lineage, request.seal, &domain("a"), failed);
+        rig.act(actions);
+    }
+    for _ in 0..2 {
+        let (_, actions) = rig
+            .core
+            .import_failure(crate::types::ImportScope::All)
+            .expect("room");
+        rig.act(actions);
+    }
+    assert_eq!(rig.core.failures().len(), bound, "every failure unresolved");
+    let tokens: Vec<_> = rig
+        .entries()
+        .into_iter()
+        .filter_map(|entry| match entry {
+            crate::types::Entry::Failed(failed) => Some(failed.token),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tokens.len(), bound);
+    let resolutions = tokens
+        .into_iter()
+        .map(|token| (token, crate::types::Resolution::Abandon))
+        .collect();
+    let actions = rig.core.resolve(resolutions).expect("resolved");
+    rig.act(actions);
+    rig.run();
+    rig.entries();
+    assert!(rig.core.failures().is_empty());
+    assert_eq!(rig.core.window_places(), 0);
+}

@@ -2319,7 +2319,11 @@ notes when it is created.
   observed failure answers one part of one seal, a part is issued only for that seal's named writes, and a write is named
   to one seal, so each observed failure suspects a write that holds its place until the failure is resolved
   ([DI-D-100](#di-d-100)). Unresolved observed failures are therefore at most `operations` times one plus the served
-  domains, and imported ones at most `imports`; the storage is sized from those.
+  domains, and imported ones at most `imports`; the storage is sized from those. **As built** (DI-23.12.3.1): the
+  failure table is a list made at construction for `Capacity::failures`, kept in observation order, a failure past it an
+  inconsistency; the argument is at that function, and an answer for a lineage no longer live -- a flush's, a provider's,
+  failed or abandoned -- observes nothing, which a test shows. Each failure's own suspect list, markings and epochs
+  still allocate, until DI-23.12.3.2 and DI-23.12.3.3.
 - **A failure's suspect set is the rule that made it** -- its cut, its reach, its lineage -- over write records that keep
   where they stopped being uncovered ([DI-D-108](#di-d-108)'s (c) as built).
 - **The completion queue is sized by derivation**: a `Marked` is queued once per marked write and expanded at pop into one

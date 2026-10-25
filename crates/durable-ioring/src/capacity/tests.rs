@@ -40,6 +40,27 @@ fn flush_parts_past_a_usize_are_none() {
 }
 
 #[test]
+fn unresolved_failures_are_the_flush_parts_and_the_imports() {
+    let mut capacity = with_operations(10);
+    capacity.imports = 3;
+    assert_eq!(capacity.failures(0), Some(13));
+    assert_eq!(capacity.failures(2), Some(33));
+    capacity.imports = 0;
+    assert_eq!(capacity.failures(1), Some(20), "no imports, only observed");
+    assert_eq!(with_operations(0).failures(4), Some(0));
+}
+
+#[test]
+fn unresolved_failures_past_a_usize_are_none() {
+    let mut capacity = with_operations(usize::MAX / 2);
+    capacity.imports = 1;
+    assert_eq!(capacity.failures(1), Some(usize::MAX));
+    capacity.imports = 2;
+    assert_eq!(capacity.failures(1), None, "the imports overflow it");
+    assert_eq!(with_operations(usize::MAX).failures(1), None);
+}
+
+#[test]
 fn a_list_has_room_for_the_items_asked_for_and_refuses_one_more_unchanged() {
     let mut made: Vec<u32> = list("made", Some(3)).expect("small");
     assert!(made.capacity() >= 3);

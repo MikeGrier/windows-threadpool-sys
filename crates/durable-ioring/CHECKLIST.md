@@ -89,13 +89,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   coverage before a failure can be a rule over them, and the consumer-facing change comes last, over storage already in
   place.
 
-- [ ] **DI-23.12.3.1** -- **The failure table on fixed storage, bounded by derivation**
-  ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s first item): the unresolved failures kept in observation order in a table made at
-  construction for `operations` times one plus the served domains, plus `imports`, a failure recorded past it an
-  inconsistency. Proof obligations: every observed failure answers one part of one seal and suspects that part's named
-  write, which holds a place until the failure is resolved, and a part answers once -- with a provider's answer, a flush's
-  answer and a refused commit for an ended lineage shown to observe nothing -- and a test filling the table to the bound.
-  Internal: a failure's own suspect list, markings and epochs still allocate until the steps below.
+- [x] **DI-23.12.3.1** -- The unresolved failures are kept in a table made at construction for the flush parts plus the imports, with the bound argued and filled by a test. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231231)
 
 - [ ] **DI-23.12.3.2** -- **Write records kept while a failure could name them, each with its marking once**
   ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a write that stops being uncovered -- covered, nullified, or let go with its

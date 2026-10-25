@@ -65,6 +65,21 @@ impl Capacity {
     pub(crate) fn flush_parts(&self, served: usize) -> Option<usize> {
         self.operations.checked_mul(served.checked_add(1)?)
     }
+
+    /// The most failures unresolved at once with a provider serving `served` domains (DI-D-109):
+    /// the observed ones, at most the flush parts, and the imported ones, at most `imports`.
+    ///
+    /// An observed failure is the answer of one part of one seal -- a file's flush, or a served
+    /// domain's request -- and a part is issued only for that seal's named writes, so the failure
+    /// suspects them; it holds the place of each until it is resolved (DI-D-100). A part answers
+    /// once, and a write is named to one seal, whose parts for its file are its flush and the
+    /// served domains among its file's: so naming each observed failure by its part and one of the
+    /// part's writes names each once, and the names are at most the places, at most the
+    /// operations, times one plus the served domains. An answer for a lineage no longer live
+    /// observes nothing. `None` if that is more than a `usize`.
+    pub(crate) fn failures(&self, served: usize) -> Option<usize> {
+        self.flush_parts(served)?.checked_add(self.imports)
+    }
 }
 
 /// A table named `name`, empty, holding `entries` at least, its storage allocated now and never

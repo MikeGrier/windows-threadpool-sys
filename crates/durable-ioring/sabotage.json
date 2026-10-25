@@ -3194,6 +3194,30 @@
       "why": "Lists lent out are replaced by lists of the same sizes, an allocation and never a list too small: one with no room would refuse a change inside its bound.",
       "find": ["            return tagged(tag::DURABILITY_FRESH_DUE, || Due::reserved(&self.capacity))\n                .unwrap_or_default();\n"],
       "replace": ["            return Due::default();\n"]
+    },
+    {
+      "name": "DI-23.12.3.1: the failure table is made one short",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "The unresolved failures reach the flush parts plus the imports, so the table is made for exactly that many; one short refuses inside the bound, an inconsistency.",
+      "find": ["            list(\"the unresolved failures\", capacity.failures(served))"],
+      "replace": ["            list(\"the unresolved failures\", capacity.failures(served).map(|n| n - 1))"]
+    },
+    {
+      "name": "DI-23.12.3.1: the failure bound leaves out the imports",
+      "file": "src/capacity.rs",
+      "expect": "caught",
+      "why": "An imported failure answers no part, so it is not among the flush parts and is counted against imports, which the bound adds.",
+      "find": ["        self.flush_parts(served)?.checked_add(self.imports)"],
+      "replace": ["        self.flush_parts(served)"]
+    },
+    {
+      "name": "DI-23.12.3.1: the failure bound leaves out the served domains",
+      "file": "src/capacity.rs",
+      "expect": "caught",
+      "why": "A write's parts are its file's flush and each served domain of its file, and each can fail once, so the observed failures are the places times one plus the served domains.",
+      "find": ["        self.flush_parts(served)?.checked_add(self.imports)"],
+      "replace": ["        self.flush_parts(0)?.checked_add(self.imports)"]
     }
   ]
 }
