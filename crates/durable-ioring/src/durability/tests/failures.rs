@@ -98,7 +98,7 @@ fn a_failed_flush_suspects_every_held_write_in_push_order() {
     );
     assert_eq!(blocked_by(lineage.state(1)), Some(0));
     assert_eq!(lineage.durable_through(), None);
-    let inventory = lineage.failures();
+    let inventory = lineage.failures_listed();
     assert_eq!(inventory.len(), 1);
     assert!(matches!(
         inventory[0].cause,
@@ -247,7 +247,7 @@ fn an_import_reaches_its_scope_with_the_same_rule() {
             "{reach:?}"
         );
     }
-    let inventory = lineage.failures();
+    let inventory = lineage.failures_listed();
     assert_eq!(inventory.len(), 4, "in observation order");
     assert!(
         inventory
@@ -320,7 +320,7 @@ fn a_heal_waits_for_a_seal_that_reaches_the_re_issue() {
         [Seen::Blocked(5, 0)],
         "5 stops short of the re-issue at 10, so the heal still holds 3"
     );
-    assert_eq!(lineage.failures().len(), 1);
+    assert_eq!(lineage.failures_listed().len(), 1);
 
     assert_eq!(submitted(lineage.seal(10)).flushes, [flush(10, A)]);
     assert_eq!(
@@ -366,9 +366,9 @@ fn a_heal_takes_effect_at_the_first_seal_after_it_that_reaches_the_re_issue() {
         .resolve(vec![(token.remove(0), Resolution::Heal)])
         .expect("heal");
     assert!(quiet(&due), "a heal waits for a seal");
-    let id = lineage.failures()[0].id;
+    let id = lineage.failures_listed()[0].id;
     assert!(
-        lineage.failures()[0].token_live,
+        lineage.failures_listed()[0].token_live,
         "the pending heal holds the token"
     );
     assert!(lineage.take_token(id).is_none());
@@ -389,7 +389,7 @@ fn a_heal_takes_effect_at_the_first_seal_after_it_that_reaches_the_re_issue() {
         ]
     );
     assert!(
-        lineage.failures().is_empty(),
+        lineage.failures_listed().is_empty(),
         "a resolved failure leaves no memory"
     );
     assert_eq!(lineage.state(41), State::Durable);
@@ -430,13 +430,17 @@ fn a_heal_waits_for_a_seal_that_succeeds() {
         "the first failure's write is still uncovered, so the second suspects it too"
     );
     let second = tokens(due).remove(0);
-    assert_eq!(lineage.failures().len(), 2, "the heal did not take effect");
+    assert_eq!(
+        lineage.failures_listed().len(),
+        2,
+        "the heal did not take effect"
+    );
 
     lineage
         .resolve(vec![(second, Resolution::Heal)])
         .expect("heal");
     assert_eq!(durable(&submitted(lineage.seal(3))), [1, 2, 3]);
-    assert!(lineage.failures().is_empty());
+    assert!(lineage.failures_listed().is_empty());
 }
 
 #[test]
@@ -464,7 +468,7 @@ fn abandoning_takes_effect_at_once_and_abandons_every_epoch_the_failure_contains
         State::Abandoned,
         "decided now, though 3 is open"
     );
-    assert!(lineage.failures().is_empty());
+    assert!(lineage.failures_listed().is_empty());
     assert_eq!(already(lineage.seal(1)), State::Abandoned);
     assert!(lineage.is_abandoned(1) && lineage.is_abandoned(3));
     assert!(!lineage.is_abandoned(2) && !lineage.is_abandoned(4));
@@ -535,8 +539,14 @@ fn a_refused_resolution_changes_nothing_and_hands_every_token_back() {
         [(0, Resolution::Abandon), (0, Resolution::Heal)],
         "in the order given"
     );
-    assert_eq!(lineage.state(1), State::Blocked(lineage.failures()[0].id));
-    assert!(lineage.failures()[0].token_live, "the token came back live");
+    assert_eq!(
+        lineage.state(1),
+        State::Blocked(lineage.failures_listed()[0].id)
+    );
+    assert!(
+        lineage.failures_listed()[0].token_live,
+        "the token came back live"
+    );
 }
 
 #[test]
@@ -546,7 +556,10 @@ fn the_inventory_hands_out_a_token_only_when_none_is_live() {
     let id = token.id();
     assert!(lineage.take_token(id).is_none(), "the Failed token is live");
     drop(token);
-    assert!(!lineage.failures()[0].token_live, "dropping it is close");
+    assert!(
+        !lineage.failures_listed()[0].token_live,
+        "dropping it is close"
+    );
     let again = lineage.take_token(id).expect("a closed failure's token");
     assert!(lineage.take_token(id).is_none());
     again.close();
@@ -567,5 +580,9 @@ fn the_inventory_hands_out_a_token_only_when_none_is_live() {
         lineage.take_token(id).is_none(),
         "the pending heal holds it"
     );
-    assert_eq!(lineage.failures().len(), 1, "unresolved until its seal");
+    assert_eq!(
+        lineage.failures_listed().len(),
+        1,
+        "unresolved until its seal"
+    );
 }

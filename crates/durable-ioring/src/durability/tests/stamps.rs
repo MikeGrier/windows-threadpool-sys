@@ -39,7 +39,7 @@ fn stamps(due: &Due<u64, &'static str, Stamp>) -> Vec<u64> {
 /// The inventory's stamps, in observation order.
 fn inventory<K: StampClocked>(lineage: &One<K>) -> Vec<u64> {
     lineage
-        .failures()
+        .failures_listed()
         .iter()
         .map(|failure| failure.observed)
         .collect()

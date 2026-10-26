@@ -398,7 +398,7 @@ fn an_import_past_the_imports_declared_is_refused_and_a_resolution_lifts_it() {
             declared: 2
         }))
     ));
-    assert_eq!(rig.core.failures().len(), 2, "nothing was recorded");
+    assert_eq!(rig.core.failures_listed().len(), 2, "nothing was recorded");
     let token = made.remove(0);
     let actions = rig
         .core
@@ -431,7 +431,7 @@ fn a_failure_that_was_not_imported_is_not_counted_against_the_imports() {
     rig.seal(1);
     rig.run();
     assert!(matches!(
-        rig.core.failures()[0].cause,
+        rig.core.failures_listed()[0].cause,
         FailureCause::Commit { .. }
     ));
     assert!(

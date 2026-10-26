@@ -363,8 +363,10 @@ pub trait DurableRing {
         scope: ImportScope<Self::Ids>,
     ) -> Result<Imported<Self::Ids>, ImportError<Self::Ids>>;
 
-    /// The unresolved failures, in the order they were observed.
-    fn failures(&self) -> Vec<FailureInfo<Self::Ids>>;
+    /// Give `visit` each unresolved failure, in the order observed (DI-D-103), its cause lent for
+    /// the visit: a visitor that keeps one clones it. The visitor runs under the instance's own
+    /// lock, if it has one, and must not call back into the instance.
+    fn failures(&self, visit: impl FnMut(FailureInfo<'_, Self::Ids>));
 
     /// Give `visit` each write `failure` put at risk -- its suspect set, frozen when it was observed
     /// -- in push order (DI-D-108). The writes are read from the instance's own records, lent for

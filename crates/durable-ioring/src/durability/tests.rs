@@ -481,7 +481,7 @@ fn the_core_reads_its_clock_once_for_each_failure_it_stamps() {
         };
         core.import(cause, &Reach::All, None);
     }
-    let stamps: Vec<u64> = core.failures().iter().map(|f| f.observed).collect();
+    let stamps: Vec<u64> = core.failures_listed().iter().map(|f| f.observed).collect();
     assert_eq!(stamps, [0, 1]);
 }
 

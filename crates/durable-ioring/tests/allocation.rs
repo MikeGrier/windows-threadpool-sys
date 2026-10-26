@@ -522,9 +522,9 @@ fn failures() -> Vec<Measured> {
         .expect("the failed commit's entry");
 
     let core = &rig.core;
-    let inventory = counted(|| core.failures());
-    assert_eq!(inventory.len(), 1, "the one failure");
-    drop(inventory);
+    let mut listed = 0_usize;
+    counted(|| core.failures(|_| listed += 1));
+    assert_eq!(listed, 1, "the one failure");
     rig.phase("failures queried");
     let core = &rig.core;
     let (mut suspects, mut markings) = (0_usize, 0_usize);
@@ -617,7 +617,7 @@ const FAILURES: &[(&str, u64)] = &[
     ("construction, with two targets", 40),
     ("writes before the failure", 3),
     ("a commit failure observed", 0),
-    ("failures queried", 1),
+    ("failures queried", 0),
     ("a failure's suspects and markings read", 0),
     ("writes re-issued", 0),
     ("a heal resolved", 0),
@@ -915,7 +915,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "io_core::issue::backend_push",
         3,
     ),
-    ("failures queried", "durability::failures::infos", 1),
     ("an abandon resolved", "durability::resolve::abandoned", 1),
 ];
 

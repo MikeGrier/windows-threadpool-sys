@@ -362,7 +362,11 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
             .expect("room");
         rig.act(actions);
     }
-    assert_eq!(rig.core.failures().len(), bound, "every failure unresolved");
+    assert_eq!(
+        rig.core.failures_listed().len(),
+        bound,
+        "every failure unresolved"
+    );
     let tokens: Vec<_> = rig
         .entries()
         .into_iter()
@@ -380,7 +384,7 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
     rig.act(actions);
     rig.run();
     rig.entries();
-    assert!(rig.core.failures().is_empty());
+    assert!(rig.core.failures_listed().is_empty());
     assert_eq!(rig.core.window_places(), 0);
 
     // The token slots the resolved failures held are free again (DI-D-108): two more failures,
@@ -392,7 +396,7 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
             .expect("room");
         rig.act(actions);
     }
-    let inventory = rig.core.failures();
+    let inventory = rig.core.failures_listed();
     assert_eq!(inventory.len(), 2);
     assert!(inventory.iter().all(|info| info.token_live));
 
@@ -415,7 +419,10 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
         let actions = rig.core.resolve(heals).expect("healed");
         rig.act(actions);
         rig.run();
-        assert!(rig.core.failures().is_empty(), "each heal took effect");
+        assert!(
+            rig.core.failures_listed().is_empty(),
+            "each heal took effect"
+        );
         // Popping the Healed entries lets the failures go (DI-D-108).
         rig.entries();
         for _ in 0..2 {
@@ -426,7 +433,7 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
             rig.act(actions);
         }
     }
-    assert_eq!(rig.core.failures().len(), 2);
+    assert_eq!(rig.core.failures_listed().len(), 2);
 }
 
 #[test]
@@ -454,7 +461,7 @@ fn kept_writes_fill_to_the_operations_declared() {
             _ => None,
         })
         .expect("the import's entry");
-    let failures = rig.core.failures();
+    let failures = rig.core.failures_listed();
     assert_eq!(
         super::markings_of(&rig.core, failures[0].id).len(),
         4,

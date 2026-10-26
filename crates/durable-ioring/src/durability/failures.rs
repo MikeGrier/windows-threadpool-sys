@@ -107,27 +107,25 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         }
     }
 
-    /// The unresolved failures, in observation order.
-    pub(crate) fn failures(&self) -> Vec<FailureInfo<V<E, I>>> {
-        let mut infos = tagged(tag::DURABILITY_FAILURES_INFOS, || {
-            Vec::with_capacity(self.failures.len())
-        });
-        self.failure_infos(|info| tagged(tag::DURABILITY_FAILURES_INFO, || infos.push(info)));
-        infos
+    /// The unresolved failures, in observation order, each copied out for a test to keep.
+    #[cfg(test)]
+    pub(crate) fn failures_listed(&self) -> Vec<crate::types::FailureListed<V<E, I>>> {
+        let mut listed = Vec::new();
+        self.failure_infos(|info| listed.push(info.into()));
+        listed
     }
 
-    /// Each unresolved failure, in observation order.
-    pub(crate) fn failure_infos(&self, mut visit: impl FnMut(FailureInfo<V<E, I>>)) {
+    /// Give `visit` each unresolved failure, in observation order, its cause lent (DI-D-103).
+    pub(crate) fn failure_infos(&self, mut visit: impl FnMut(FailureInfo<'_, V<E, I>>)) {
         for failure in &self.failures {
             let token_live = match &failure.standing {
                 Standing::Open => self.tokens.is_live(failure.token, failure.id),
                 Standing::Healing { .. } => true,
                 Standing::Resolved { .. } => continue,
             };
-            let cause = tagged(tag::DURABILITY_FAILURES_CAUSE, || failure.cause.clone());
             visit(FailureInfo {
                 id: failure.id,
-                cause,
+                cause: &failure.cause,
                 observed: failure.observed,
                 token_live,
             });

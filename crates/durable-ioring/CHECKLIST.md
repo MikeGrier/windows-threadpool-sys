@@ -101,11 +101,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.3.6** -- A heal records only when it was made; what it waits for in each lineage is read from the write records when a seal finishes, and a lineage keeps only the latest heal it released. -> [completed 2026-10-26](COMPLETED-CHECKLIST.md#di-231236)
 
-- [ ] **DI-23.12.3.7** -- **The inventory as a visitor** ([DI-D-103](DESIGN-NOTES.md#di-d-103),
-  [DI-D-108](DESIGN-NOTES.md#di-d-108)): `failures()` gives each unresolved failure to a visitor, lending its cause, rather
-  than handing out a `Vec` of copies, as the lineages and the holds already are; `close()` lends its failures the same
-  way. Split from `DI-23.12.3.4` on 2026-10-24: the inventory's collection is independent of where a failure's records
-  live, and it changes every caller of `failures()`. Breaking for both crates.
+- [x] **DI-23.12.3.7** -- The inventory gives each unresolved failure to a visitor, its cause lent for the visit, and close() lends its failures the same way, so neither allocates. -> [completed 2026-10-26](COMPLETED-CHECKLIST.md#di-231237)
 
 - [ ] **DI-23.12.3.8** -- **A failure observer given at construction** ([DI-D-113](DESIGN-NOTES.md#di-d-113)): a trait the
   consumer may implement and give the core and the Windows driver's setup when an instance is built, told of each failure

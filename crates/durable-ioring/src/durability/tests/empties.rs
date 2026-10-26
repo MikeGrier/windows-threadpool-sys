@@ -275,7 +275,7 @@ fn an_empty_seal_made_before_a_heal_does_not_release_it() {
     lineage.completed(second, FULL);
     lineage.flushed(2, A, Ok(()));
     assert_eq!(
-        lineage.failures().len(),
+        lineage.failures_listed().len(),
         1,
         "the seals through 2 and 3 were both made before the heal"
     );

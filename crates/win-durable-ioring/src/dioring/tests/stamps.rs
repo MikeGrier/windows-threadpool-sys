@@ -38,12 +38,10 @@ fn stamps_follow_the_clock_and_the_oracle_accepts_them_equal_or_rising() {
     clock.advance(25);
     seen.push(import(&mut harness).observed.ticks());
     assert_eq!(seen, [40, 40, 65]);
-    let inventory: Vec<u64> = harness
+    let mut inventory: Vec<u64> = Vec::new();
+    harness
         .ring
-        .failures()
-        .iter()
-        .map(|failure| failure.observed.ticks())
-        .collect();
+        .failures(|failure| inventory.push(failure.observed.ticks()));
     assert_eq!(inventory, seen, "the inventory reports each entry's stamp");
     harness.finish();
 }

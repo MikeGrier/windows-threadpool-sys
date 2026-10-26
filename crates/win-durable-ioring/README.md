@@ -442,7 +442,9 @@ ring.make_durable_through(tag(42)).expect("a seal");
 // <- Durable { through: 42 }                  // F1 healed; 41 and 42 durable
 pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == epoch(42)));
 assert_eq!(ring.epoch_state(epoch(41)), Ok(EpochState::Durable));
-assert!(ring.failures().is_empty());
+let mut unresolved = 0;
+ring.failures(|_| unresolved += 1);
+assert_eq!(unresolved, 0);
 # drop(ring);
 # std::fs::remove_file(&path)?;
 # Ok::<(), std::io::Error>(())

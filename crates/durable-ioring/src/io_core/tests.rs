@@ -19,9 +19,9 @@ use crate::oracle::ConformanceOracle;
 use crate::provider::ProviderRequest;
 use crate::test_support::{Listed, Ticks};
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, FailureCause, FailureInfo, FlushDomain,
-    HeldOperation, Hold, IoTargetKey, Leftover, OpKind, Outcome, PushError, PushRefusal,
-    ReadOptions, RemoveTargetError, SealError, WriteOptions,
+    DurabilityRequest, Entry, Epoch, EpochState, FailureCause, FlushDomain, HeldOperation, Hold,
+    IoTargetKey, Leftover, OpKind, Outcome, PushError, PushRefusal, ReadOptions, RemoveTargetError,
+    SealError, WriteOptions,
 };
 
 mod capacity;
@@ -95,7 +95,7 @@ fn lineage_holds(core: &Core, lineage: Lineage) -> Vec<Hold<V>> {
 /// What `close` gave, by kind.
 struct Closed {
     held: Vec<HeldOperation<V, Vec<u8>, &'static str>>,
-    failures: Vec<FailureInfo<V>>,
+    failures: Vec<crate::types::FailureListed<V>>,
     lineages: Vec<Listed<V>>,
 }
 
@@ -119,7 +119,7 @@ fn closed(core: Core) -> Closed {
                 closed.lineages.is_empty(),
                 "the failures come before the lineages"
             );
-            closed.failures.push(failure);
+            closed.failures.push(failure.into());
         }
         Leftover::Lineage(lineage) => closed.lineages.push(Listed::from(lineage)),
     });

@@ -461,8 +461,12 @@ its tokens back. Resolution is per failure ([DI-D-12](DESIGN-NOTES.md#di-d-12)).
 
 ### The inventory
 
-Unresolved failures can be enumerated and each queried for its identity, cause, the time it was
-observed, and whether its token is live.
+Unresolved failures can be enumerated, in the order observed: `failures` gives each to a visitor the
+consumer supplies, with its identity, the time it was observed, whether its token is live, and its
+cause, lent for the visit from the instance's own storage, so enumerating allocates nothing
+([DI-D-103](DESIGN-NOTES.md#di-d-103)). A consumer that keeps a cause clones it. The visitor runs under
+the instance's lock and must not call back into it. `close()` gives what is left of each the same
+way.
 
 **A failure's records are read, not carried** ([DI-D-108](DESIGN-NOTES.md#di-d-108)). Its suspect set
 and its markings are not copied into any entry: the instance lends them, one at a time to a visitor

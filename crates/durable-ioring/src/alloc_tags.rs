@@ -171,9 +171,6 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_SCRATCH_STEPS: Tag = Tag::new("durability::new::scratch_steps");
     pub(crate) const DURABILITY_NEW_SCRATCH_PAIRS: Tag = Tag::new("durability::new::scratch_pairs");
     pub(crate) const DURABILITY_RESOLVE_ABANDONED: Tag = Tag::new("durability::resolve::abandoned");
-    pub(crate) const DURABILITY_FAILURES_INFOS: Tag = Tag::new("durability::failures::infos");
-    pub(crate) const DURABILITY_FAILURES_CAUSE: Tag = Tag::new("durability::failures::cause");
-    pub(crate) const DURABILITY_FAILURES_INFO: Tag = Tag::new("durability::failures::info");
     pub(crate) const DURABILITY_OBSERVE_CAUSE: Tag = Tag::new("durability::observe::cause");
     pub(crate) const DURABILITY_START_SEALS_DOMAINS: Tag =
         Tag::new("durability::start_seals::domains");

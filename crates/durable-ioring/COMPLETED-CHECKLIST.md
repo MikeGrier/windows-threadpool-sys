@@ -4848,3 +4848,22 @@ released heal taken as the latest without the max, which no test can see because
 still healing -- and ten re-anchored to the derivation, one of them, the empty seal's number, moved to the seal clock it
 now protects; three new ones dropped as duplicates of entries already there. All swept as declared.
 
+## Moved 2026-10-26 13:51:12 -04:00 -- DI-23.12.3.7: the inventory as a visitor
+
+### <a id="di-231237"></a>DI-23.12.3.7 -- The inventory gives each unresolved failure to a visitor, its cause lent for the visit, and close() lends its failures the same way, so neither allocates. *(completed 2026-10-26 13:51:12 -04:00)*
+
+**The inventory as a visitor** ([DI-D-103](DESIGN-NOTES.md#di-d-103),
+[DI-D-108](DESIGN-NOTES.md#di-d-108)): `failures()` gives each unresolved failure to a visitor, lending its cause, rather
+than handing out a `Vec` of copies, as the lineages and the holds already are; `close()` lends its failures the same
+way. Split from `DI-23.12.3.4` on 2026-10-24: the inventory's collection is independent of where a failure's records
+live, and it changes every caller of `failures()`. Breaking for both crates.
+
+What was built is [DI-D-103](DESIGN-NOTES.md#di-d-103)'s "As built (DI-23.12.3.7)": `FailureInfo<'a, V>` lends its cause as
+`&'a FailureCause`, `failures(visit)` on the ring trait, the core, the delivery wrapper and the fake, and
+`Leftover::Failure` carries the lent form. The "failures queried" phase of the allocation test now allocates nothing,
+and its three tags are gone. The core's tests read the inventory through a test-only `failures_listed()` copying each
+out, so their assertions kept their shape; win-durable-ioring's count it, and its close helper keeps identities.
+[CONTRACT.md](CONTRACT.md)'s "The inventory" and win-durable-ioring's README example say how it is read. Sabotage: one
+entry added, the core's inventory visiting nothing, which win-durable-ioring's tests catch since the core's own read
+the inventory through `failures_listed`; the two existing inventory entries re-swept; all as declared.
+

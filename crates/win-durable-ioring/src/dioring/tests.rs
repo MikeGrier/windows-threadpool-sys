@@ -17,7 +17,7 @@ use durable_ioring::Capacity;
 use durable_ioring::DurableRing;
 use durable_ioring::backend::IoBackend;
 use durable_ioring::{DurabilityProvider, FlushRequest};
-use durable_ioring::{FailureInfo, HeldOperation, Hold, Identities, Leftover, LineageInfo};
+use durable_ioring::{HeldOperation, Hold, Identities, Leftover, LineageInfo};
 use durable_ioring::{FlushDomain, IoTargetKey};
 use durable_ioring::{LineageHandle, StampClock};
 
@@ -82,6 +82,13 @@ impl<V: Identities> From<LineageInfo<'_, V>> for Listed<V> {
     }
 }
 
+/// How many unresolved failures `ring` reports.
+pub(crate) fn unresolved(ring: &impl DurableRing) -> usize {
+    let mut count = 0;
+    ring.failures(|_| count += 1);
+    count
+}
+
 /// Each live lineage `ring` gives its visitor.
 pub(crate) fn listed<D: DurableRing>(ring: &D) -> Vec<Listed<D::Ids>> {
     let mut listed = Vec::new();
@@ -99,7 +106,7 @@ pub(crate) fn holds<D: DurableRing>(ring: &D, key: IoTargetKey) -> Vec<Hold<D::I
 /// What `close` gave, by kind.
 pub(crate) struct Closed<V: Identities, B, C> {
     pub(crate) held: Vec<HeldOperation<V, B, C>>,
-    pub(crate) failures: Vec<FailureInfo<V>>,
+    pub(crate) failures: Vec<<V as Identities>::FailureId>,
     pub(crate) lineages: Vec<Listed<V>>,
 }
 
@@ -127,7 +134,7 @@ impl<V: Identities, B, C> Closed<V, B, C> {
                     self.lineages.is_empty(),
                     "the failures come before the lineages"
                 );
-                self.failures.push(failure);
+                self.failures.push(failure.id);
             }
             Leftover::Lineage(lineage) => self.lineages.push(Listed::from(lineage)),
             _ => panic!("a leftover these tests do not know"),

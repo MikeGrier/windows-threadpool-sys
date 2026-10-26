@@ -235,7 +235,7 @@ fn an_import_past_the_imports_declared_is_refused() {
         ring.import_failure(ImportScope::All).err(),
         Some(ImportError::AtCapacity(at(Limit::Imports, 1)))
     );
-    assert_eq!(ring.failures().len(), 1, "nothing was recorded");
+    assert_eq!(super::unresolved(&ring), 1, "nothing was recorded");
 }
 
 #[test]

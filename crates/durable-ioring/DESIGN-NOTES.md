@@ -2050,7 +2050,11 @@ with the storage a failure holds ([DI-D-100](#di-d-100)), since settled by [DI-D
   having been refused. They walk the core's tables with no scratch storage, at a cost in time proportional to lineages
   times operations, on a path that is a consumer's question rather than I/O.
 - **Failures in `close`** are built as `failures()` builds them, one by one, so a close with none allocates nothing; with
-  some, each `FailureInfo` still copies its markings, which is DI-23.12's.
+  some, each `FailureInfo` still copies its markings, which is DI-23.12's. **As built** (DI-23.12.3.7): the inventory is a
+  visitor too. `failures(visit)`, on the ring trait and the core, gives each unresolved failure as a `FailureInfo<'a, V>`
+  whose cause is lent for the visit, as `LineageInfo` lends a description; `close`'s `Leftover::Failure` lends it the
+  same way. Neither the inventory nor a close with failures allocates; querying the inventory left the failure paths of
+  the allocation test. The core's tests read it through a test-only `failures_listed()` that copies each out.
 - **What it measured**, in the clean path of [tests/allocation.rs](tests/allocation.rs): `lineages` and `close` no
   longer allocate, and a refused `remove_target` or `retire_lineage`, with its holds queried, allocates nothing.
 

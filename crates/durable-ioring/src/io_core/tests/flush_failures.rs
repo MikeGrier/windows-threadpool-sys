@@ -168,7 +168,7 @@ fn a_failed_flush_is_reported_with_its_cause_and_holds_the_mark() {
         rig.seal(1),
         DurabilityRequest::AlreadySealed(EpochState::Blocked(failed.id))
     );
-    let inventory = rig.core.failures();
+    let inventory = rig.core.failures_listed();
     assert_eq!(inventory.len(), 1);
     assert_eq!(inventory[0].id, failed.id);
     assert!(inventory[0].token_live);
@@ -217,7 +217,7 @@ fn a_healed_failure_is_passed_at_the_first_seal_after_the_heal() {
         other => panic!("expected Durable through 2, got {other:?}"),
     }
     assert!(nothing_more(&mut rig), "no Durable through 1");
-    assert!(rig.core.failures().is_empty());
+    assert!(rig.core.failures_listed().is_empty());
     assert_eq!(state(&rig, 1), EpochState::Durable);
     finish(rig);
 }
@@ -307,7 +307,7 @@ fn a_resolution_naming_another_instances_failure_is_refused_whole() {
     assert!(matches!(error.reason, ResolveRefusal::Foreign(id) if id == theirs.id));
     assert_eq!(error.returned.len(), 2);
     assert!(nothing_more(&mut rig), "nothing was abandoned");
-    assert_eq!(rig.core.failures().len(), 1);
+    assert_eq!(rig.core.failures_listed().len(), 1);
     finish(rig);
 }
 
@@ -318,7 +318,7 @@ fn a_closed_failure_stays_and_its_token_can_be_taken_again() {
     let failed = failed_seal(&mut rig);
     assert!(rig.core.take_token(failed.id).is_none(), "live");
     failed.token.close();
-    assert!(!rig.core.failures()[0].token_live);
+    assert!(!rig.core.failures_listed()[0].token_live);
     let token = rig.core.take_token(failed.id).expect("closed");
     resolve(&mut rig, vec![(token, Resolution::Abandon)]);
     assert!(matches!(next_entry(&mut rig), Entry::Abandoned { .. }));
@@ -471,7 +471,11 @@ fn a_failure_spanning_two_lineages_heals_in_each_at_its_own_seal() {
         Entry::Durable { through } => assert_eq!(through, rig.epoch(2)),
         other => panic!("expected Durable through 2, got {other:?}"),
     }
-    assert_eq!(rig.core.failures().len(), 1, "it still holds the other");
+    assert_eq!(
+        rig.core.failures_listed().len(),
+        1,
+        "it still holds the other"
+    );
     assert_eq!(
         rig.core.epoch_state(Epoch::new(minted, 1)),
         Ok(EpochState::Open)
@@ -492,7 +496,7 @@ fn a_failure_spanning_two_lineages_heals_in_each_at_its_own_seal() {
         Entry::Durable { through } => assert_eq!(through, Epoch::new(minted, 1)),
         other => panic!("expected Durable through the minted lineage's 1, got {other:?}"),
     }
-    assert!(rig.core.failures().is_empty());
+    assert!(rig.core.failures_listed().is_empty());
     finish(rig);
 }
 
@@ -639,7 +643,7 @@ fn an_instance_given_a_clock_stamps_a_failed_flush_with_its_reading_when_observe
         other => panic!("expected Failed, got {other:?}"),
     };
     assert_eq!(failed.observed, 10_000);
-    let inventory = rig.core.failures();
+    let inventory = rig.core.failures_listed();
     assert_eq!(inventory.len(), 1);
     assert_eq!(inventory[0].observed, failed.observed);
     rig.oracle.finish().expect("every operation completed");

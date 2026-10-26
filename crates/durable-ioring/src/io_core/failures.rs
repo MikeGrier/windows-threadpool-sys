@@ -73,10 +73,16 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         Ok((Imported { failure, unmatched }, self.act(due, was_empty)))
     }
 
-    /// The unresolved failures, in observation order.
-    #[must_use]
-    pub fn failures(&self) -> Vec<FailureInfo<V<E, K>>> {
-        self.durability.failures()
+    /// Give `visit` each unresolved failure, in observation order, its cause lent for the visit
+    /// (DI-D-103).
+    pub fn failures(&self, visit: impl FnMut(FailureInfo<'_, V<E, K>>)) {
+        self.durability.failure_infos(visit);
+    }
+
+    /// The unresolved failures, in observation order, each copied out for a test to keep.
+    #[cfg(test)]
+    pub(crate) fn failures_listed(&self) -> Vec<crate::types::FailureListed<V<E, K>>> {
+        self.durability.failures_listed()
     }
 
     /// Give `visit` each write `failure` suspects, in push order (DI-D-108).

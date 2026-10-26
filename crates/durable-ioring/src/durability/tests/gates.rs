@@ -504,7 +504,11 @@ fn a_seal_a_pending_heal_waits_for_can_close_a_cycle() {
     );
     let due = submitted(lineage.0.seal(minted, 4));
     assert!(due.flushes.is_empty(), "nothing at or below 4 to flush");
-    assert_eq!(lineage.failures().len(), 0, "the heal took effect at 4");
+    assert_eq!(
+        lineage.failures_listed().len(),
+        0,
+        "the heal took effect at 4"
+    );
 }
 
 /// A held write is part of the re-issue a heal waits for (DI-D-46): the releasing seal must reach
@@ -524,7 +528,7 @@ fn a_held_write_is_part_of_the_re_issue_a_heal_waits_for() {
 
     assert_eq!(seen(&submitted(lineage.seal(5))), [Seen::Blocked(5, 0)]);
     assert_eq!(
-        lineage.failures().len(),
+        lineage.failures_listed().len(),
         1,
         "5 stops short of the held write at 8"
     );

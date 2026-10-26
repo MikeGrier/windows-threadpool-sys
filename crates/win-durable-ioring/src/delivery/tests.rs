@@ -235,7 +235,9 @@ fn a_failure_resolved_through_the_handle_is_delivered_with_what_follows_it() {
         std::mem::forget(delivery);
         panic!("expected the write, then its failure, abandonment and Durable: {op:?} {rest:?}");
     }
-    assert!(delivery.failures().is_empty());
+    let mut unresolved = 0;
+    delivery.failures(|_| unresolved += 1);
+    assert_eq!(unresolved, 0);
     assert_eq!(delivery.epoch_state(epoch), Ok(EpochState::Abandoned));
 }
 

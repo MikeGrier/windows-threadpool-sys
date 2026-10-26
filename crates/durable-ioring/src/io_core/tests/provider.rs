@@ -214,7 +214,7 @@ fn a_failed_or_abandoned_answer_for_an_ended_lineage_observes_no_failure() {
             .provided(request.lineage, request.seal, &domain("log"), outcome);
         assert!(rig.core.taken(actions).is_empty());
         assert!(rig.entries().is_empty());
-        assert!(rig.core.failures().is_empty(), "nothing observed");
+        assert!(rig.core.failures_listed().is_empty(), "nothing observed");
     }
 }
 

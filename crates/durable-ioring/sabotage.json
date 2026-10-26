@@ -3658,6 +3658,14 @@
       "why": "A healing failure holds a lineage until the seal its heal waits for; the cycle search must count that seal as a dependency (DI-D-43).",
       "find": ["                    .find(|&(made, through)| self.releases(target.lineage, made, through, at))"],
       "replace": ["                    .find(|&(made, through)| { let _ = (made, at); through >= target.epoch })"]
+    },
+    {
+      "name": "DI-23.12.3.7: the core's inventory gives nothing",
+      "file": "src/io_core/failures.rs",
+      "expect": "caught",
+      "why": "The inventory is how a consumer finds a failure whose token it dropped; one that visits nothing hides every unresolved failure. The core's own tests read it through failures_listed, so the drivers' tests are what catch this.",
+      "find": ["        self.durability.failure_infos(visit);"],
+      "replace": ["        let _ = visit;"]
     }
   ]
 }

@@ -264,7 +264,7 @@ fn a_provider_failure_reaches_the_files_in_its_domain_and_every_unknown_file() {
         [Seen::Failed(0, vec![in_one.seq, unknown.seq])],
         "B is in domain 2 alone; C declared no domain"
     );
-    let inventory = lineage.failures();
+    let inventory = lineage.failures_listed();
     assert!(
         matches!(
             &inventory[0].cause,
@@ -297,7 +297,7 @@ fn a_completion_dropped_unanswered_is_a_failure_of_its_domain() {
     let due = lineage.provided(DEFAULT_LINEAGE, seal, DomainId(1), Err(abandoned));
     assert_eq!(seen(&due), [Seen::Failed(0, vec![write.seq])]);
     assert!(matches!(
-        &lineage.failures()[0].cause,
+        &lineage.failures_listed()[0].cause,
         FailureCause::ProviderAbandoned { domain } if domain.bytes() == b"one"
     ));
     assert!(matches!(lineage.state(1), State::Blocked(by) if by.seq == 0));
@@ -338,7 +338,7 @@ fn an_answer_for_a_lineage_that_has_ended_reports_nothing() {
     let failure = Err(provider_failure(1));
     assert!(quiet(&lineage.provided(minted, seal, DomainId(1), failure)));
     assert!(
-        lineage.failures().is_empty(),
+        lineage.failures_listed().is_empty(),
         "an ended lineage's answer is not observed: it is late, not inconsistent"
     );
 }
@@ -377,7 +377,7 @@ fn an_answer_no_request_asked_for_is_inconsistent() {
         failed(&mut lineage, seal, 1)
     });
     assert!(
-        lineage.failures().is_empty(),
+        lineage.failures_listed().is_empty(),
         "the second answer is not observed"
     );
 

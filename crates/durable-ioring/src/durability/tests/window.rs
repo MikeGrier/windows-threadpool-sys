@@ -153,7 +153,7 @@ fn a_healed_failure_lets_go_when_the_heal_takes_effect_and_not_when_it_is_asked_
     submitted(lineage.seal(1));
     assert_eq!(lineage.window_places(), 1, "the seal's flush is out");
     lineage.flushed(1, A, Ok(()));
-    assert!(lineage.failures().is_empty(), "the heal took effect");
+    assert!(lineage.failures_listed().is_empty(), "the heal took effect");
     assert_eq!(
         lineage.window_places(),
         1,
@@ -237,7 +237,7 @@ fn a_flush_out_that_fails_lets_go_of_an_ended_lineages_places_all_the_same() {
     assert!(super::quiet(&lineage.0.flushed(minted, 1, A, Err(fault))));
     assert_eq!(lineage.window_places(), 0);
     assert!(
-        lineage.failures().is_empty(),
+        lineage.failures_listed().is_empty(),
         "an ended lineage reports nothing"
     );
 }

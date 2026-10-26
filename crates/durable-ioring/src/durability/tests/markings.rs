@@ -180,7 +180,7 @@ fn a_heal_taking_effect_reports_healed_with_the_record_before_any_durable() {
             Seen::Durable(2),
         ]
     );
-    assert!(lineage.failures().is_empty());
+    assert!(lineage.failures_listed().is_empty());
 }
 
 #[test]

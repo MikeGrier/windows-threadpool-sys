@@ -120,7 +120,7 @@ fn an_import_suspects_what_its_scope_reaches() {
         assert!(matches!(failed.cause, FailureCause::Imported { scope: ref s } if *s == scope));
         assert_eq!(suspects(&harness, &failed), expected, "{scope:?}");
     }
-    assert_eq!(harness.ring.failures().len(), 4);
+    assert_eq!(super::unresolved(&harness.ring), 4);
     harness.finish();
 }
 

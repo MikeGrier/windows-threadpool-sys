@@ -894,8 +894,8 @@ where
         Ok(imported)
     }
 
-    fn failures(&self) -> Vec<FailureInfo<Self::Ids>> {
-        self.engine().core.failures()
+    fn failures(&self, visit: impl FnMut(FailureInfo<'_, Self::Ids>)) {
+        self.engine().core.failures(visit);
     }
 
     fn failure_suspects(

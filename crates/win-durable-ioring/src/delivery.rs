@@ -324,8 +324,8 @@ impl<D: DurableRing> DeliveryHandle<D> {
     }
 
     /// [`DurableRing::failures`].
-    pub fn failures(&self) -> Vec<FailureInfo<D::Ids>> {
-        self.with(|ring| ring.failures())
+    pub fn failures(&self, visit: impl FnMut(FailureInfo<'_, D::Ids>)) {
+        self.with(|ring| ring.failures(visit));
     }
 
     /// [`DurableRing::take_token`].

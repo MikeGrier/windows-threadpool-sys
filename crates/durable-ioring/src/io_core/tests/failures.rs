@@ -45,7 +45,7 @@ fn an_import_suspects_the_uncovered_writes_in_scope() {
     assert_eq!(failed.id, imported.failure);
     assert!(matches!(failed.cause, FailureCause::Imported { .. }));
     assert_eq!(rig.suspected[&failed.id.seq].len(), 1);
-    let listed = rig.core.failures();
+    let listed = rig.core.failures_listed();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, imported.failure);
 }
@@ -58,7 +58,12 @@ fn a_failure_is_stamped_from_the_cores_clock() {
     rig.act(first.1);
     let second = rig.core.import_failure(ImportScope::All).expect("in scope");
     rig.act(second.1);
-    let stamps: Vec<u64> = rig.core.failures().iter().map(|f| f.observed).collect();
+    let stamps: Vec<u64> = rig
+        .core
+        .failures_listed()
+        .iter()
+        .map(|f| f.observed)
+        .collect();
     assert_eq!(stamps, [0, 1]);
 }
 
@@ -117,7 +122,7 @@ fn an_import_naming_a_lineage_not_live_is_refused() {
             .import_failure(ImportScope::Lineage(other.default_lineage()))
             .is_err()
     );
-    assert!(rig.core.failures().is_empty());
+    assert!(rig.core.failures_listed().is_empty());
 }
 
 #[test]
@@ -140,7 +145,7 @@ fn abandoning_a_failure_abandons_its_epochs() {
     );
     let refused = rig.write(1, 0, b"z").expect_err("abandoned");
     assert!(matches!(refused.reason, PushRefusal::EpochAbandoned { .. }));
-    assert!(rig.core.failures().is_empty());
+    assert!(rig.core.failures_listed().is_empty());
 }
 
 #[test]
@@ -159,7 +164,7 @@ fn a_heal_takes_effect_with_the_next_successful_seal() {
             .any(|line| line.starts_with("blocked 1")),
         "{shown_before:?}"
     );
-    let healed = rig.core.failures()[0].id;
+    let healed = rig.core.failures_listed()[0].id;
     let actions = rig
         .core
         .resolve(vec![(token, Resolution::Heal)])
@@ -175,7 +180,7 @@ fn a_heal_takes_effect_with_the_next_successful_seal() {
         "{after:?}"
     );
     assert_eq!(after.last().map(String::as_str), Some("durable 2"));
-    assert!(rig.core.failures().is_empty());
+    assert!(rig.core.failures_listed().is_empty());
 }
 
 #[test]
@@ -202,7 +207,7 @@ fn a_foreign_token_refuses_the_whole_resolution_and_hands_every_token_back() {
         .expect_err("a foreign token");
     assert!(matches!(refused.reason, ResolveRefusal::Foreign(_)));
     assert_eq!(refused.returned.len(), 2);
-    assert_eq!(rig.core.failures().len(), 1, "nothing was resolved");
+    assert_eq!(rig.core.failures_listed().len(), 1, "nothing was resolved");
 }
 
 #[test]
@@ -223,5 +228,5 @@ fn a_dropped_token_can_be_taken_again_and_a_held_one_cannot() {
         .resolve(vec![(again, Resolution::Abandon)])
         .expect("our token");
     rig.act(actions);
-    assert!(rig.core.failures().is_empty());
+    assert!(rig.core.failures_listed().is_empty());
 }

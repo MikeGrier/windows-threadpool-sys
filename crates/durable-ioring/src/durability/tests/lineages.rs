@@ -425,7 +425,7 @@ fn a_failure_spanning_two_lineages_holds_each_and_heals_in_each_separately() {
         [Seen::Marked(0, own.seq, super::COVERED), Seen::Durable(1)],
         "the heal took effect in the default lineage, and the failure still holds the other"
     );
-    assert_eq!(lineage.failures().len(), 1);
+    assert_eq!(lineage.failures_listed().len(), 1);
     assert_eq!(lineage.0.state(minted, 1), Some(State::Open));
 
     assert_eq!(
@@ -444,7 +444,7 @@ fn a_failure_spanning_two_lineages_holds_each_and_heals_in_each_separately() {
             Seen::DurableIn(minted, 1),
         ]
     );
-    assert!(lineage.failures().is_empty());
+    assert!(lineage.failures_listed().is_empty());
 }
 
 #[test]
@@ -481,7 +481,7 @@ fn a_failure_spanning_two_lineages_is_blocked_in_each_until_its_heal_reaches_it(
 
 /// The one unresolved failure's identity.
 fn own_failure(lineage: &Lineage) -> FailureId {
-    lineage.failures()[0].id
+    lineage.failures_listed()[0].id
 }
 
 #[test]
@@ -498,7 +498,11 @@ fn ending_a_lineage_a_heal_waits_for_lets_the_heal_take_effect() {
         .expect("heal");
     submitted(lineage.seal(1));
     lineage.flushed(1, A, Ok(()));
-    assert_eq!(lineage.failures().len(), 1, "waiting for the other lineage");
+    assert_eq!(
+        lineage.failures_listed().len(),
+        1,
+        "waiting for the other lineage"
+    );
 
     assert_eq!(
         seen(&lineage.end(minted)),
@@ -511,7 +515,7 @@ fn ending_a_lineage_a_heal_waits_for_lets_the_heal_take_effect() {
             ),
         ]
     );
-    assert!(lineage.failures().is_empty());
+    assert!(lineage.failures_listed().is_empty());
 }
 
 #[test]
@@ -526,7 +530,7 @@ fn a_failure_suspecting_nothing_holds_no_lineage_and_heals_at_once() {
         ),
         [Seen::Healed(0, vec![], vec![])]
     );
-    assert!(lineage.failures().is_empty());
+    assert!(lineage.failures_listed().is_empty());
 }
 
 #[test]

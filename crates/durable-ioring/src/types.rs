@@ -690,18 +690,41 @@ pub struct ResolveError<V: Identities> {
     pub returned: Vec<(V::FailureToken, Resolution)>,
 }
 
-/// One unresolved failure, as the inventory reports it. Its suspect writes and markings are lent
-/// by the instance's `failure_suspects` and `failure_markings` (DI-D-108).
-#[derive(Clone, Debug)]
-pub struct FailureInfo<V: Identities> {
+/// One unresolved failure, as the inventory lends it to a visitor (DI-D-103): its cause is the
+/// instance's own, lent for the visit, so a visitor that keeps it clones it. Its suspect writes and
+/// markings are lent by the instance's `failure_suspects` and `failure_markings` (DI-D-108).
+#[derive(Clone, Copy, Debug)]
+pub struct FailureInfo<'a, V: Identities> {
     /// The failure's identity.
     pub id: V::FailureId,
-    /// Why it exists.
-    pub cause: FailureCause<V>,
+    /// Why it exists, lent for the visit.
+    pub cause: &'a FailureCause<V>,
     /// When the instance observed it: the same stamp its `Failed` entry carried.
     pub observed: V::Instant,
     /// Whether its token is held somewhere; if not, the inventory can hand one out.
     pub token_live: bool,
+}
+
+/// A [`FailureInfo`] with its cause copied out, for a test to keep past the visit.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct FailureListed<V: Identities> {
+    pub(crate) id: V::FailureId,
+    pub(crate) cause: FailureCause<V>,
+    pub(crate) observed: V::Instant,
+    pub(crate) token_live: bool,
+}
+
+#[cfg(test)]
+impl<V: Identities> From<FailureInfo<'_, V>> for FailureListed<V> {
+    fn from(info: FailureInfo<'_, V>) -> Self {
+        Self {
+            id: info.id,
+            cause: info.cause.clone(),
+            observed: info.observed,
+            token_live: info.token_live,
+        }
+    }
 }
 
 /// An operation held for its gate and never issued, handed back by `close()` (DI-2.7).
@@ -728,8 +751,8 @@ pub struct HeldOperation<V: Identities, B, C> {
 pub enum Leftover<'a, V: Identities, B, C> {
     /// A gated operation the kernel never saw.
     Held(HeldOperation<V, B, C>),
-    /// A failure still unresolved.
-    Failure(FailureInfo<V>),
+    /// A failure still unresolved, its cause lent for the visit.
+    Failure(FailureInfo<'a, V>),
     /// A lineage, carrying its final high-water mark.
     Lineage(LineageInfo<'a, V>),
 }

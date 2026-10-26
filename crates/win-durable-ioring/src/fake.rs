@@ -220,9 +220,7 @@ impl DurableRing for Fake {
         unimplemented!("the fake observes no failures")
     }
 
-    fn failures(&self) -> Vec<FailureInfo<V>> {
-        Vec::new()
-    }
+    fn failures(&self, _visit: impl FnMut(FailureInfo<'_, V>)) {}
 
     fn failure_suspects(
         &self,
