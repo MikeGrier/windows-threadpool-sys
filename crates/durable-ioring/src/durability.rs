@@ -57,6 +57,8 @@
 
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
+
+use crate::observer::FailureObserver;
 use core::fmt;
 use core::ops::Bound;
 use fixed_hash_table::HeapMap;
@@ -83,6 +85,7 @@ mod heals;
 mod kept;
 mod lineages;
 mod lists;
+mod observer;
 mod providers;
 mod scratch;
 mod spans;
@@ -477,6 +480,8 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     /// Where an inconsistency is reported before the panic (DI-D-51), and the seal and flush pairs
     /// (DI-D-80).
     diagnostics: Arc<dyn DiagnosticSink>,
+    /// The consumer's failure observer, if it gave one when the instance was built (DI-D-113).
+    observer: Option<Arc<dyn FailureObserver<V<E, I>>>>,
     /// Each part of a seal's flush whose pair is open, kept only while the sink wants the pair, and
     /// removed as the pair ends (DI-D-87).
     flush_pairs: HeapMap<(Key, u64, Part), FlushPair<E>>,
@@ -661,6 +666,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             served: tagged(tag::DURABILITY_NEW_SERVED, || Arc::from([])),
             clock,
             diagnostics,
+            observer: None,
             flush_pairs,
             served_names,
             spare,
@@ -1121,6 +1127,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         }
         let at = self.failures.len() - 1;
         self.hold_suspects(at);
+        self.tell_failed(at);
         #[cfg(test)]
         let snapshot = self.snapshot(&self.failures[at]);
         self.emit(
@@ -1158,21 +1165,29 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         if let Err(what) = self.kept.mark(write, observed, kind.clone()) {
             self.inconsistent(what, format_args!("write {write:?}, {kind:?}"));
         }
+        // The observer is told once for each failure the marking goes to (DI-D-113); a test keeps
+        // the same list, to compare with what the queued marking expands to.
         #[cfg(test)]
-        let to = self
-            .failures
-            .iter()
-            .filter(open)
-            .filter(|failure| self.suspects(failure, write))
-            .map(|failure| {
+        let mut to = Vec::new();
+        if self.observer.is_some() || cfg!(test) {
+            for failure in self
+                .failures
+                .iter()
+                .filter(open)
+                .filter(|failure| self.suspects(failure, write))
+            {
                 let marking = Marking {
                     write,
                     observed,
                     kind: kind.clone(),
                 };
-                (failure.id, marking)
-            })
-            .collect();
+                if let Some(observer) = &self.observer {
+                    observer.marked(failure.id, &marking);
+                }
+                #[cfg(test)]
+                to.push((failure.id, marking));
+            }
+        }
         self.emit(
             due,
             Event::Marked {

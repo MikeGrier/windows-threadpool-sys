@@ -63,6 +63,7 @@ use crate::durability::{
 };
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::io_target::IoTargetDescription;
+use crate::observer::FailureObserver;
 use crate::ordered::Ordered;
 use crate::provider::ProviderRequest;
 use crate::types::{
@@ -308,6 +309,26 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             next_op: 0,
             next_token: 0,
         })
+    }
+
+    /// Give the core the consumer's failure observer (DI-D-113), as it is built: chained onto
+    /// the constructor, before any operation is pushed. A core given one after it has pushed an
+    /// operation or observed a failure, or given a second, is an inconsistency (DI-D-46): the
+    /// observer would have missed what came before.
+    #[must_use]
+    pub fn observed_by(mut self, observer: Arc<dyn FailureObserver<V<E, K>>>) -> Self {
+        if self.next_op > 0 || self.durability.has_observed() {
+            self.durability.inconsistent(
+                "a failure observer was given to a core already in use",
+                format_args!("instance {:?}", self.instance),
+            );
+        } else if !self.durability.observed_by(observer) {
+            self.durability.inconsistent(
+                "a failure observer was given twice",
+                format_args!("instance {:?}", self.instance),
+            );
+        }
+        self
     }
 
     /// The default lineage, which every core has and which never ends.

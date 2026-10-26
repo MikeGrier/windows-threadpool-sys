@@ -17,8 +17,8 @@ use durable_ioring::Capacity;
 use durable_ioring::DurableRing;
 use durable_ioring::backend::IoBackend;
 use durable_ioring::{DurabilityProvider, FlushRequest};
-use durable_ioring::{HeldOperation, Hold, Identities, Leftover, LineageInfo};
 use durable_ioring::{FlushDomain, IoTargetKey};
+use durable_ioring::{HeldOperation, Hold, Identities, Leftover, LineageInfo};
 use durable_ioring::{LineageHandle, StampClock};
 
 // Pushes, completions and the readiness signal: DI-3.2.2.1.
@@ -175,6 +175,7 @@ fn setup(
         provider,
         capacity: CAPACITY,
         diagnostics: None,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(None),
     }
 }
@@ -493,6 +494,7 @@ fn an_instance_is_built_with_any_epoch_id_and_context_type() {
         provider: None,
         capacity: CAPACITY,
         diagnostics: None,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(None),
     })
     .expect("build")
@@ -522,6 +524,7 @@ fn an_instance_delivers_on_the_pool_its_environment_names() {
         provider: None,
         capacity: CAPACITY,
         diagnostics: None,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(Some(&mut env)),
     })
     .expect("build")

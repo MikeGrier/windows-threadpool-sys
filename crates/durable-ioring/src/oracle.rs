@@ -116,6 +116,9 @@
 //! `win-durable-ioring`'s `check_readiness`.
 
 use alloc::collections::BTreeSet;
+
+mod observed;
+pub use observed::ObservedFailures;
 use std::collections::{HashMap, HashSet};
 
 use crate::contract::{DurableRing, EntryOf, Identities};

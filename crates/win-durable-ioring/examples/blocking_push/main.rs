@@ -207,6 +207,7 @@ pub fn build(delivery: Delivery, scratch: &Scratch, queue: u32) -> Ring {
             domains: 4,
         },
         diagnostics: None,
+        failure_observer: None,
         delivery: delivery.mode(),
     })
     .expect("build an instance")

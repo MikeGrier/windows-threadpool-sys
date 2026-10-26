@@ -4867,3 +4867,25 @@ out, so their assertions kept their shape; win-durable-ioring's count it, and it
 entry added, the core's inventory visiting nothing, which win-durable-ioring's tests catch since the core's own read
 the inventory through `failures_listed`; the two existing inventory entries re-swept; all as declared.
 
+## Moved 2026-10-26 18:34:50 -04:00 -- DI-23.12.3.8: the failure observer
+
+### <a id="di-231238"></a>DI-23.12.3.8 -- A failure observer given at construction is told of each failure, its suspect writes in push order before its Failed can be popped, and each marking for each failure it goes to, beside the lending it will replace. *(completed 2026-10-26 18:34:50 -04:00)*
+
+**A failure observer given at construction** ([DI-D-113](DESIGN-NOTES.md#di-d-113)): a trait the
+consumer may implement and give the core and the Windows driver's setup when an instance is built, told of each failure
+as it is observed -- identity, cause and stamp, lent -- then each write it suspects in push order, before its `Failed` is
+poppable, and of each marking once for each failure it goes to, as made; called under the lock, not to call back in, its
+locks a leaf (DI-D-90). Built beside the lending, which stays until DI-23.12.3.9: the conformance oracle becomes an
+observer, and the core's tests compare what it is told with what the lending reads. Breaking for both crates.
+
+What was built is [DI-D-113](DESIGN-NOTES.md#di-d-113)'s "As built (DI-23.12.3.8)", and [CONTRACT.md](CONTRACT.md) has a
+section for it. `FailureObserver<V>` is in [observer.rs](src/observer.rs); the core takes it by `observed_by`, chained onto
+its constructor, which refuses as an inconsistency a core already in use or one given an observer twice, and the Windows
+driver by `Setup::failure_observer`. The oracle module's `ObservedFailures` keeps what it is told: the core's test rig
+gives one to every core and checks, at each `Failed` and `Marked` popped, that it matches what the lending reads, so
+every rig-driven test compares the two. [io_core/tests/observer.rs](src/io_core/tests/observer.rs) tests the order of
+telling, a failure suspecting nothing, a resolved failure told nothing more, and the three misuses; a driver test gives
+one through the setup. The allocation test's core has a counting observer, told on the failure paths, and no table moved.
+Sabotage: six entries, one in win-durable-ioring's manifest; all swept as declared, one only after its patch was
+corrected to compile without the call it removes.
+

@@ -49,6 +49,7 @@ fn raw_instance(disk: OpenedDisk<Unbuffered>) -> (DiskRing, LineageHandle) {
         provider: None,
         capacity: crate::dioring::tests::CAPACITY,
         diagnostics: None,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(None),
     })
     .expect("build an instance over the raw disk")

@@ -478,6 +478,25 @@ the instance. A consumer that wants them after that keeps its own copy.
 Resolved failures leave no other memory. Because identities are never reused, an identity no longer
 in the inventory means resolved.
 
+### The failure observer
+
+A consumer may give an instance a **failure observer** when it is built, and only then
+([DI-D-113](DESIGN-NOTES.md#di-d-113)): one observer, implementing `FailureObserver`, whose fan-out
+to several subscribers is the consumer's. The instance tells it what happens, as it happens:
+
+- **Each failure as it is observed**: its identity, its cause, lent for the call, and the stamp its
+  `Failed` entry carries; then **each write it suspects**, in push order. All of this before the
+  failure's `Failed` can be popped, so a consumer that pops it can find its own record.
+- **Each marking as it is made**, once for each failure it goes to, in the order the failures were
+  observed. A failure already resolved is told nothing more.
+
+The observer is called synchronously, while the instance's lock is held: it must not call back into
+the instance, and any lock it takes is a leaf beneath the instance's
+([DI-D-90](DESIGN-NOTES.md#di-d-90)). What it is lent it copies if it keeps it. Through it a consumer
+can attribute a failure to its own operations, lineages and epochs in its own storage; the instance
+keeps only what its own answers need. A consumer that gives no observer cannot learn later what a
+failure suspected or what became of those writes once their records are let go.
+
 ### Importing a failure
 
 The consumer can tell an instance that a failure happened outside it -- another writer's failed

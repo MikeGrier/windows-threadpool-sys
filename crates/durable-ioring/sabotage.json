@@ -3666,6 +3666,46 @@
       "why": "The inventory is how a consumer finds a failure whose token it dropped; one that visits nothing hides every unresolved failure. The core's own tests read it through failures_listed, so the drivers' tests are what catch this.",
       "find": ["        self.durability.failure_infos(visit);"],
       "replace": ["        let _ = visit;"]
+    },
+    {
+      "name": "DI-23.12.3.8: a failure is not told to the observer",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "The observer is told of each failure as it is observed (DI-D-113); without it a consumer keeping its own records never learns of one.",
+      "find": ["        self.tell_failed(at);"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.3.8: a failure's suspect writes are not told",
+      "file": "src/durability/observer.rs",
+      "expect": "caught",
+      "why": "The suspect writes are what the observer is for: what a failure put at risk, which the ring will not lend once DI-23.12.3.9 is done.",
+      "find": ["        self.visit_suspects(failure, |write| observer.suspected(failure.id, write));"],
+      "replace": ["        let _ = observer;"]
+    },
+    {
+      "name": "DI-23.12.3.8: a marking is not told",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "Each marking is told once for each failure it goes to, as it is made (DI-D-113).",
+      "find": ["                    observer.marked(failure.id, &marking);"],
+      "replace": ["                    let _: (_, _, &Marking<V<E, I>>) = (observer, failure, &marking);"]
+    },
+    {
+      "name": "DI-23.12.3.8: an observer may be given to a core in use",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "An observer given after the core is in use has missed what came before; given at construction is checked, not only documented.",
+      "find": ["        if self.next_op > 0 || self.durability.has_observed() {"],
+      "replace": ["        if false {"]
+    },
+    {
+      "name": "DI-23.12.3.8: an observer may be given twice",
+      "file": "src/durability/observer.rs",
+      "expect": "caught",
+      "why": "One observer, its fan-out the consumer's (DI-D-113); a second given would silently replace the first.",
+      "find": ["        if self.observer.is_some() {"],
+      "replace": ["        if false {"]
     }
   ]
 }

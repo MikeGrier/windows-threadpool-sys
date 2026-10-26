@@ -38,10 +38,28 @@ use durable_ioring::memory::{
     Fault, FaultScript, MemoryBackend, MemoryTarget, ScriptOp, When, scripted_fault,
 };
 use durable_ioring::{
-    Capacity, CoreActions, DioringIds, DurabilityRequest, DurableIoCore, Entry, Epoch, ImportScope,
-    IoTarget, IoTargetKey, Lineage, NoDiagnostics, ReadOptions, Resolution, StampClock,
-    WriteOptions,
+    Capacity, CoreActions, DioringIds, DurabilityRequest, DurableIoCore, Entry, Epoch,
+    FailureCause, FailureObserver, ImportScope, IoTarget, IoTargetKey, Lineage, Marking,
+    NoDiagnostics, ReadOptions, Resolution, StampClock, SuspectWrite, WriteOptions,
 };
+
+/// A failure observer that only counts what it is told, so it allocates nothing itself.
+#[derive(Default)]
+struct TallyObserver(AtomicU64);
+
+impl FailureObserver<V> for TallyObserver {
+    fn failed(&self, _: <V as durable_ioring::Identities>::FailureId, _: &FailureCause<V>, _: u64) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn suspected(&self, _: <V as durable_ioring::Identities>::FailureId, _: SuspectWrite<V>) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn marked(&self, _: <V as durable_ioring::Identities>::FailureId, _: &Marking<V>) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 thread_local! {
     /// Whether this thread is inside a call into the core.
@@ -258,14 +276,23 @@ struct Rig {
     core: Core,
     backend: MemoryBackend,
     phases: Vec<Measured>,
+    /// The core's failure observer, to show it was told.
+    told: Arc<TallyObserver>,
 }
 
 impl Rig {
     /// Build the core over `backend`, with `KEY` and `OTHER` attached: the first phase.
     fn new(mut backend: MemoryBackend) -> Self {
         let diagnostics = Arc::new(NoDiagnostics);
-        let mut core = counted(|| Core::new(Ticks::default(), diagnostics, CAPACITY))
-            .expect("a valid capacity");
+        // Made before anything is counted: what is measured is the core telling it, which the
+        // failure paths do (DI-D-113).
+        let told = Arc::new(TallyObserver::default());
+        let observer: Arc<dyn FailureObserver<V>> = told.clone();
+        let mut core = counted(|| {
+            Core::new(Ticks::default(), diagnostics, CAPACITY)
+                .map(|core| core.observed_by(observer))
+        })
+        .expect("a valid capacity");
         for key in [KEY, OTHER] {
             let target = MemoryTarget::new();
             let description = target.describe();
@@ -276,6 +303,7 @@ impl Rig {
             core,
             backend,
             phases: Vec::new(),
+            told,
         };
         rig.phase("construction, with two targets");
         rig
@@ -573,6 +601,10 @@ fn failures() -> Vec<Measured> {
     rig.act(actions);
     rig.drain();
     rig.phase("an abandon resolved");
+    assert!(
+        rig.told.0.load(Ordering::Relaxed) >= 4,
+        "the observer was told of both failures, a suspect write and a marking"
+    );
 
     rig.phases
 }

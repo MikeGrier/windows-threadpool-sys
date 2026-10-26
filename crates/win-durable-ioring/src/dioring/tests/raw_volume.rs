@@ -51,6 +51,7 @@ fn raw_instance(volume: OpenedVolume<Unbuffered>) -> (RawRing, LineageHandle) {
         provider: None,
         capacity: crate::dioring::tests::CAPACITY,
         diagnostics: None,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(None),
     })
     .expect("build an instance over the raw volume")

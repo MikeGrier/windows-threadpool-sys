@@ -43,6 +43,7 @@ fn instance(temp: &TempFile, buffers: Vec<Vec<u8>>) -> Ring {
         provider: None,
         capacity: crate::dioring::tests::CAPACITY,
         diagnostics: None,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(None),
     })
     .expect("build an instance")

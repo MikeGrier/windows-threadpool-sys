@@ -35,6 +35,7 @@ fn setup(
             domains: 4,
         },
         diagnostics,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(None),
     }
 }

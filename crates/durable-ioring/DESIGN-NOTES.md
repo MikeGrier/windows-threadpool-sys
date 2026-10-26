@@ -2532,7 +2532,7 @@ Serves [DI-D-109](#di-d-109)'s queue sized by derivation, which needed both: wit
 
 ## <a id="di-d-113"></a>DI-D-113: a failure's detail is dispatched to an observer given at construction; the ring keeps only what its own answers need
 
-**Decided, not yet implemented: scheduled as DI-23.12.3.8 and DI-23.12.3.9 in [CHECKLIST.md](CHECKLIST.md).** The engineer's
+**Decided; the observer built in DI-23.12.3.8, the withdrawal of what it replaces scheduled as DI-23.12.3.9 in [CHECKLIST.md](CHECKLIST.md).** The engineer's
 proposal, 2026-10-25: "What if we have the ability for clients of a ring to subscribe for errors to be dispatched to them
 as they occur ... Then, we are only responsible for the aggregated success / failure resolutions." On the assistant's
 three questions, 2026-10-26: "1: yes 2: yes at construction 3: leaves the queue entirely." The evaluation is in
@@ -2560,6 +2560,18 @@ Amends [DI-D-36](#di-d-36), [DI-D-108](#di-d-108), [DI-D-109](#di-d-109) and [DI
   writes. The inventory reports a failure's identity, cause, stamp and whether its token is live.
 - **Sequencing**: the observer is added beside the lending first (DI-23.12.3.8), so every commit builds and the stream is
   proven against the records it replaces; the lending, `Marked` and the kept markings are then withdrawn (DI-23.12.3.9).
+- **As built** (DI-23.12.3.8, the assistant's, 2026-10-26): [observer.rs](src/observer.rs)'s `FailureObserver<V>` --
+  `failed(failure, &cause, observed)`, `suspected(failure, write)`, `marked(failure, &marking)` -- `Send + Sync`, held
+  as an `Arc` as the diagnostic sink is. The core takes it by `DurableIoCore::observed_by`, chained onto the constructor;
+  given to a core that has pushed an operation or observed a failure, or given twice, it is an inconsistency (DI-D-46), so
+  "at construction" is checked rather than only documented, and the many constructors are unchanged. The Windows driver
+  takes it as `Setup::failure_observer`. The core tells it from [durability/observer.rs](src/durability/observer.rs) as a
+  failure enters the table, before the `Failed` is queued, and from `mark` for each open failure suspecting the write,
+  the same failures the queued marking expands to. Telling it allocates nothing: the allocation test gives its core a
+  counting observer and the tables did not move. The oracle module's `ObservedFailures` is an observer that keeps what
+  it is told, for a harness; the core's test rig gives one to every core and checks, as each `Failed` and `Marked` is
+  popped, that it was told exactly what the lending reads -- across every rig-driven test, not only the observer's own.
+  The oracle's `suspects` and `observe_from` still read the lending until DI-23.12.3.9.
 
 ## <a id="di-d-114"></a>DI-D-114: what a heal waits for is read from the write records, and a lineage keeps only the latest heal it released
 

@@ -10,7 +10,7 @@ use windows_ioring_sys::IoRingErrorExt;
 use super::pushes::{ADDED, GIVEN, Harness, Ring, given, instance, temp};
 use super::{empty, file, setup};
 use durable_ioring::DurableRing;
-use durable_ioring::oracle::{ConformanceOracle, Violation};
+use durable_ioring::oracle::{ConformanceOracle, ObservedFailures, Violation};
 use durable_ioring::{
     DurabilityRequest, Entry, Failed, FailureCause, ImportError, ImportScope, UnknownLineage,
 };
@@ -224,3 +224,45 @@ fn the_oracle_refuses_a_failed_whose_suspects_the_ring_will_not_lend() {
     harness.finish();
     other.finish();
 }
+
+/// An observer given in the setup is told of a failure and the writes it suspects before its
+/// `Failed` can be popped, and of what becomes of them as it happens -- what the ring lends
+/// (DI-D-113).
+#[test]
+fn an_observer_given_in_the_setup_is_told_what_the_ring_lends() {
+    let temp = temp(&[0; 64]);
+    let told = std::sync::Arc::new(ObservedFailures::new());
+    let ring = Ring::new(crate::dioring::Setup {
+        failure_observer: Some(told.clone()),
+        ..setup(vec![given(GIVEN, &temp)], Vec::new(), None)
+    })
+    .expect("an instance")
+    .0;
+    let mut harness = Harness::new(ring);
+    let write = harness.write(GIVEN, 0, b"x", 2, 1);
+    harness.next();
+    let imported = harness
+        .ring
+        .import_failure(ImportScope::All)
+        .expect("import");
+    let suspect: Vec<_> = told
+        .suspects(imported.failure)
+        .expect("told before its Failed is popped")
+        .iter()
+        .map(|w| w.op)
+        .collect();
+    assert_eq!(suspect, [write]);
+    let failed = next_failed(&mut harness);
+    assert_eq!(harness.suspects(failed.id), suspect, "what the ring lends");
+    assert_eq!(harness.seal(2), DurabilityRequest::Submitted);
+    assert!(matches!(harness.next_entry(), Entry::Marked { .. }));
+    let mut lent = Vec::new();
+    harness
+        .ring
+        .failure_markings(failed.id, |marking| lent.push(marking))
+        .expect("held");
+    assert_eq!(told.markings(failed.id), Some(lent));
+    assert!(matches!(harness.next_entry(), Entry::Blocked { .. }));
+    harness.finish();
+}
+

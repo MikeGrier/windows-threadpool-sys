@@ -103,6 +103,7 @@ let (ring, _default) = Dioring::<Vec<u8>>::new(Setup {
         domains: 4,
     },
     diagnostics: None,
+    failure_observer: None,
     delivery: DeliveryMode::Pool(None),
 })
 .expect("an instance");
@@ -403,6 +404,7 @@ flush of a file report the error given whatever the device answered. Setting up 
 #     provider: None,
 #     capacity: Capacity { operations: 256, lineages: 4, imports: 4, targets: 4, domains: 4 },
 #     diagnostics: None,
+#     failure_observer: None,
 #     delivery: DeliveryMode::Pool(None),
 # })
 # .expect("an instance");
@@ -493,6 +495,7 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 #     provider: None,
 #     capacity: Capacity { operations: 256, lineages: 4, imports: 4, targets: 4, domains: 4 },
 #     diagnostics: None,
+#     failure_observer: None,
 #     delivery: DeliveryMode::Pool(None),
 # })
 # .expect("an instance");
@@ -587,6 +590,7 @@ fails as never issued.
 #     provider: None,
 #     capacity: Capacity { operations: 256, lineages: 4, imports: 4, targets: 4, domains: 4 },
 #     diagnostics: None,
+#     failure_observer: None,
 #     delivery: DeliveryMode::Pool(None),
 # })
 # .expect("an instance");
@@ -665,6 +669,7 @@ let (mut ring, lineage) = Ring::new(Setup {
 #     provider: None,
     capacity: Capacity { operations: 2, lineages: 4, imports: 4, targets: 4, domains: 4 },
 #     diagnostics: None,
+#     failure_observer: None,
 #     delivery: DeliveryMode::Pool(None),
 })
 .expect("an instance");
@@ -746,6 +751,7 @@ let (mut ring, lineage) = Ring::new(Setup {
 #     provider: None,
     capacity: Capacity { operations: 3, lineages: 4, imports: 4, targets: 4, domains: 4 },
 #     diagnostics: None,
+#     failure_observer: None,
 #     delivery: DeliveryMode::Pool(None),
 })
 .expect("an instance");

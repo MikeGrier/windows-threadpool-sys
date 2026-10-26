@@ -103,12 +103,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.3.7** -- The inventory gives each unresolved failure to a visitor, its cause lent for the visit, and close() lends its failures the same way, so neither allocates. -> [completed 2026-10-26](COMPLETED-CHECKLIST.md#di-231237)
 
-- [ ] **DI-23.12.3.8** -- **A failure observer given at construction** ([DI-D-113](DESIGN-NOTES.md#di-d-113)): a trait the
-  consumer may implement and give the core and the Windows driver's setup when an instance is built, told of each failure
-  as it is observed -- identity, cause and stamp, lent -- then each write it suspects in push order, before its `Failed` is
-  poppable, and of each marking once for each failure it goes to, as made; called under the lock, not to call back in, its
-  locks a leaf (DI-D-90). Built beside the lending, which stays until DI-23.12.3.9: the conformance oracle becomes an
-  observer, and the core's tests compare what it is told with what the lending reads. Breaking for both crates.
+- [x] **DI-23.12.3.8** -- A failure observer given at construction is told of each failure, its suspect writes in push order before its Failed can be popped, and each marking for each failure it goes to, beside the lending it will replace. -> [completed 2026-10-26](COMPLETED-CHECKLIST.md#di-231238)
 
 - [ ] **DI-23.12.3.9** -- **Withdraw what the observer replaces** ([DI-D-113](DESIGN-NOTES.md#di-d-113)): `failure_suspects` and
   `failure_markings`; `Marked` as an entry, with the expansion at pop and the markings term of `Capacity::entries`; the

@@ -31,6 +31,7 @@ mod flush_failures;
 mod gates;
 mod lineages;
 mod lists;
+mod observer;
 mod pairs;
 mod provider;
 mod queue;
@@ -136,6 +137,9 @@ struct Rig {
     oracle: ConformanceOracle<V, &'static str>,
     /// Each failure's suspect set, as the core lent it when its `Failed` was popped (DI-D-108).
     suspected: std::collections::HashMap<u64, Vec<crate::types::SuspectWrite<V>>>,
+    /// What the core's failure observer was told (DI-D-113), compared with what it lends as each
+    /// `Failed` and `Marked` is popped.
+    told: Arc<crate::oracle::ObservedFailures<V>>,
 }
 
 impl Rig {
@@ -172,10 +176,13 @@ impl Rig {
         rig
     }
 
-    /// `core`, with no target, over a backend with room to spare.
+    /// `core`, with no target, over a backend with room to spare, given a failure observer that
+    /// keeps what it is told.
     fn over(core: Core) -> Self {
+        let told = Arc::new(crate::oracle::ObservedFailures::new());
         Self {
-            core,
+            core: core.observed_by(told.clone()),
+            told,
             backend: MemoryBackend::new(nz(8), nz(16)),
             requests: Vec::new(),
             oracle: ConformanceOracle::new(),
@@ -356,10 +363,22 @@ impl Rig {
             .expect("the oracle accepts the entry");
         if let Entry::Failed(failed) = &entry {
             let suspect = suspects_of(&self.core, failed.id);
+            assert_eq!(
+                self.told.suspects(failed.id).as_ref(),
+                Some(&suspect),
+                "the observer was told a suspect set other than the one the core lends"
+            );
             self.oracle
                 .suspects(failed.id, &suspect)
                 .expect("the oracle accepts the suspect set");
             self.suspected.insert(failed.id.seq, suspect);
+        }
+        if let Entry::Marked { failure, .. } = &entry {
+            assert_eq!(
+                self.told.markings(*failure),
+                Some(markings_of(&self.core, *failure)),
+                "the observer was told markings other than the ones the core lends"
+            );
         }
         Some(entry)
     }

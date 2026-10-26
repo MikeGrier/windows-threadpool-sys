@@ -39,6 +39,7 @@ mod io_target;
 mod key;
 mod lock_watch;
 pub mod memory;
+mod observer;
 pub mod oracle;
 mod ordered;
 mod provider;
@@ -73,6 +74,7 @@ pub use io_target::{
     Capabilities, Geometry, GeometryError, IoTarget, IoTargetDescription, WarrantyClass,
 };
 pub use key::{Key, ReadKey, TargetKey, WriteKey};
+pub use observer::FailureObserver;
 pub use provider::{
     DomainCompletion, DomainOutcome, DomainRequest, DurabilityProvider, FlushRequest,
     IoTargetWrites, ProviderPart, ProviderRequest,

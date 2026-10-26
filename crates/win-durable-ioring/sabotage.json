@@ -2253,6 +2253,14 @@
       "why": "A ring that lends no suspect set for the Failed it just popped breaks DI-D-108; reading that as an empty set would pass every per-write check.",
       "find": ["            .map_err(|_| Violation::SuspectsNotLent { failure: failed.id })?;"],
       "replace": ["            .ok();"]
+    },
+    {
+      "name": "DI-23.12.3.8: the setup's failure observer is not given to the core",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The driver takes the observer in its setup and must hand it to the core; otherwise a consumer that gave one is told nothing.",
+      "find": ["            Some(observer) => core.observed_by(observer),"],
+      "replace": ["            Some(_) => core,"]
     }
   ]
 }

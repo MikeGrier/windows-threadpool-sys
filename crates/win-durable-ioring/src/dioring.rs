@@ -58,9 +58,9 @@ use durable_ioring::driver::{Home, LineageSlots};
 use durable_ioring::{
     Access, AddTargetCause, AddTargetError, AtCapacity, Capacity, ConstructionError,
     DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState, FailureInfo,
-    FlushDomain, Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover,
-    LineageInfo, ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
-    RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
+    FailureObserver, FlushDomain, Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey,
+    Leftover, LineageInfo, ReadOptions, RemoveTargetError, Resolution, ResolveError,
+    RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 use durable_ioring::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle};
 use durable_ioring::{
@@ -157,6 +157,10 @@ pub struct Setup<'env, 'pool, E: EpochId + 'static, R> {
     /// is when none is. Any sink can be given in its place, [`NoDiagnostics`](durable_ioring::NoDiagnostics) among them.
     /// Building an instance with the default registers the provider for the process, if no instance has.
     pub diagnostics: Option<Arc<dyn DiagnosticSink>>,
+    /// Told of each failure the instance observes, its suspect writes, and what becomes of them, as
+    /// it happens (DI-D-113): a consumer that wants a failure's detail keeps it there. Given only
+    /// here, as the instance is built. `None` tells no one.
+    pub failure_observer: Option<Arc<dyn FailureObserver<WindowsIds<E>>>>,
     /// How the instance's completions are drained (DI-D-52, DI-D-55).
     pub delivery: DeliveryMode<'env, 'pool>,
 }
@@ -369,6 +373,7 @@ where
             provider,
             capacity,
             diagnostics,
+            failure_observer,
             delivery,
         } = setup;
         let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::new()));
@@ -423,7 +428,7 @@ where
             DurableIoCore::new(clock, Arc::clone(&diagnostics), capacity)
         };
         let made = built.and_then(|core| Ok((core, LineageSlots::new(capacity.lineages)?)));
-        let (mut core, slots) = match made {
+        let (core, slots) = match made {
             Ok(made) => made,
             Err(refused) => {
                 return Err(SetupError {
@@ -433,6 +438,10 @@ where
                     provider,
                 });
             }
+        };
+        let mut core = match failure_observer {
+            Some(observer) => core.observed_by(observer),
+            None => core,
         };
         let keys: Vec<IoTargetKey> = files.iter().map(|f| f.key).collect();
         // Kept so that a failed construction hands the files back as they were given.

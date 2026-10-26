@@ -43,6 +43,7 @@ fn instance_with(temp: &TempFile, options: FileOptions<ReadWrite>) -> (AlignedRi
         provider: None,
         capacity: crate::dioring::tests::CAPACITY,
         diagnostics: None,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(None),
     })
     .expect("build an instance over an unbuffered file")
