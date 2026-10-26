@@ -115,6 +115,18 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   way. Split from `DI-23.12.3.4` on 2026-10-24: the inventory's collection is independent of where a failure's records
   live, and it changes every caller of `failures()`. Breaking for both crates.
 
+- [ ] **DI-23.12.3.8** -- **A failure observer given at construction** ([DI-D-113](DESIGN-NOTES.md#di-d-113)): a trait the
+  consumer may implement and give the core and the Windows driver's setup when an instance is built, told of each failure
+  as it is observed -- identity, cause and stamp, lent -- then each write it suspects in push order, before its `Failed` is
+  poppable, and of each marking once for each failure it goes to, as made; called under the lock, not to call back in, its
+  locks a leaf (DI-D-90). Built beside the lending, which stays until DI-23.12.3.9: the conformance oracle becomes an
+  observer, and the core's tests compare what it is told with what the lending reads. Breaking for both crates.
+
+- [ ] **DI-23.12.3.9** -- **Withdraw what the observer replaces** ([DI-D-113](DESIGN-NOTES.md#di-d-113)): `failure_suspects` and
+  `failure_markings`; `Marked` as an entry, with the expansion at pop and the markings term of `Capacity::entries`; the
+  markings kept on the write records, their order and `Standing::Resolved`'s cutoff; and the oracle's owed suspect set.
+  CONTRACT.md, the READMEs' examples, and the allocation records follow. Breaking for both crates.
+
 - [x] **DI-23.12.4** -- Lineage handles, failure tokens, descriptions and domain lists are fixed storage made at construction: slots, a lent string, and rows. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23124)
 
 - [ ] **DI-23.12.5** -- **An abandoned epoch is forgotten once the mark passes it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)):

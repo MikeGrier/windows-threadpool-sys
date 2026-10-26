@@ -572,6 +572,26 @@ one failure queued a `Blocked` each time with nothing held -- the second gap, un
 the replaced one's request (DI-D-99: its `Durable` answers both), so the replaced one's `Blocked` is withdrawn too. The
 assistant took it as within the approved rule and recorded it so in DI-D-112.
 
+## A failure's detail as a stream (continued 2026-10-25 and 2026-10-26)
+
+The engineer asked whether storing and presenting failures was being considered "somewhat incorrectly": let clients
+subscribe to failures as they occur and attribute them in their own context, and keep the ring responsible only for the
+aggregated resolutions.
+
+The assistant's evaluation: valid, and better for the per-write detail. Markings change nothing the ring decides
+(DI-D-36), and a suspect list is read back only to present it, so streaming both removes the lending APIs, the markings
+kept on write records, `Marked` in the queue with its expansion and bound term, and the oracle's owed-set protocol. It
+removes less than it first appears: the ring still needs the epochs each failure holds, for blocking, abandoning, gates
+and heal releases, which it reads from the kept write records; the places those writes hold, which bound the epochs; and
+a failure held until its resolution is popped, which bounds the queue rather than the records. An epoch interval per
+lineage in place of the records would abandon epochs the failure never suspected. Proposed shape: one observer given at
+construction, called synchronously under the lock with the diagnostic sink's rules, told of a failure's suspect writes
+before its `Failed` is poppable. Cost to consumers: without an observer, the detail is gone.
+
+Three questions, answered 2026-10-26 "1: yes 2: yes at construction 3: leaves the queue entirely": the stream carries the
+suspect writes at observation as well as the markings; the observer is given at construction, not subscribed at run
+time; and `Marked` leaves the completion queue entirely. Recorded as DI-D-113.
+
 ## Working positions and open questions (not decisions)
 
 - **A portable `ErrorKind`**: not provided (DI-D-109); revisited if a stack generic over backends asks for it.
