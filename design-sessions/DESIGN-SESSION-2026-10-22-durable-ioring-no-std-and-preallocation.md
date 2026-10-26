@@ -592,6 +592,29 @@ Three questions, answered 2026-10-26 "1: yes 2: yes at construction 3: leaves th
 suspect writes at observation as well as the markings; the observer is given at construction, not subscribed at run
 time; and `Marked` leaves the completion queue entirely. Recorded as DI-D-113.
 
+## A heal's releases, read from the records (continued 2026-10-26)
+
+The engineer asked whether DI-23.12.3.6's queue of a heal's releases could be intrusive, so it needs no allocation of its
+own. The assistant: not in the textbook sense. An intrusive queue threads links through nodes that exist anyway, and the
+elements are (failure, lineage) pairs: a failure entry is one per failure but pending in several lineages, a lineage's
+state one per lineage with several heals pending, and a write record one per write that several healing failures may
+suspect. A node per pair is the allocation itself.
+
+What does work is keeping nothing: the release's two halves are derivable. "A seal made after the heal" compares a seal
+clock stamped on each seal with the value a heal records; "reaching the highest epoch pushed by then" becomes reaching
+every write pushed before the heal still to be committed, which the write records hold, since anything at or below an
+earlier seal point is reached by any later seal. The heals a seal releases are a prefix in heal order, so a lineage keeps
+only the latest released. One change of behaviour: a re-issued write that failed, at the highest such epoch, is no longer
+waited for. Building it found a second case of the same kind -- a write a seal covered, though that seal failed on another
+file -- which the assistant took as within the same principle: nothing left to commit.
+
+The engineer asked whether a client subscribed to failures would still learn of the failed write. Not through the
+observer, which hears of durability failures, their suspect writes and markings; through the write's own completion,
+which every write has and which carries its fault, identity and epoch. Offered to have the observer also report every
+failed completion, he declined: "no, no need to duplicate, I want to ensure that if the client really needs that level of
+accuracy, they can construct it. Go ahead with your plan here, ensure this design is well documented." Recorded as
+DI-D-114.
+
 ## Working positions and open questions (not decisions)
 
 - **A portable `ErrorKind`**: not provided (DI-D-109); revisited if a stack generic over backends asks for it.

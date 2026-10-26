@@ -8,8 +8,7 @@
 //! (DI-D-98); the lineage is retired once the last has.
 
 use super::{
-    DEFAULT_LINEAGE, Due, Durability, Event, Key, LineageState, SealStage, Stage, Standing, V,
-    tables, window,
+    DEFAULT_LINEAGE, Due, Durability, Event, Key, LineageState, SealStage, Stage, V, tables, window,
 };
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
@@ -129,11 +128,6 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         });
         if let Some(what) = lost {
             self.inconsistent(what, format_args!("lineage {lineage}, ending"));
-        }
-        for failure in &mut self.failures {
-            if let Standing::Healing { pending } = &mut failure.standing {
-                pending.remove(&lineage);
-            }
         }
         self.emit(
             &mut due,

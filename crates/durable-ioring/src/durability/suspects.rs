@@ -123,7 +123,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         lineage: Key,
         epochs: impl RangeBounds<E>,
     ) -> bool {
-        failure.pending(lineage)
+        self.pending_on(failure, lineage)
             && suspects(&self.lists, &self.writes, &self.kept, failure)
                 .any(|write| write.lineage == lineage && epochs.contains(&write.epoch))
     }

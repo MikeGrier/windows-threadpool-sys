@@ -37,6 +37,7 @@ mod markings;
 mod lineages;
 // Gates, and the cycles a push or a seal would close: DI-3.2.5.2.
 mod gates;
+mod heals;
 // The consumer's durability provider: DI-3.2.6.
 mod providers;
 // What holds a file, for `remove_target`: DI-3.2.7.

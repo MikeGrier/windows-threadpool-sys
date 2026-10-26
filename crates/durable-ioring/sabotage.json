@@ -170,8 +170,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "Guarantee 4: every request is answered. The state still changes, so only the queue shows it; every seal and failure test waits for its entry and times out.",
-      "find": ["                Ok(entry) => self.enqueue(entry),"],
-      "replace": ["                Ok(entry) => drop::<Entry<V<E, K>, B, C>>(entry),"]
+      "find": ["                Arrival::Entry(entry) => self.enqueue(entry),"],
+      "replace": ["                Arrival::Entry(entry) => drop::<Entry<V<E, K>, B, C>>(entry),"]
     },
     {
       "name": "DI-3.2.3: the oracle accepts a write at or below the seal",
@@ -231,11 +231,11 @@
     },
     {
       "name": "DI-3.2.4: a heal takes effect at a seal made before it",
-      "file": "src/durability.rs",
+      "file": "src/durability/heals.rs",
       "expect": "caught",
       "why": "DI-D-12 (c): only a seal made after the heal covers what was re-issued before it. Caught by the unit test whose seal predates the heal.",
-      "find": ["        seq >= self.after && self.through.is_none_or(|reach| through >= reach)\n"],
-      "replace": ["        self.through.is_none_or(|reach| through >= reach)\n"]
+      "find": ["        made >= at.seals"],
+      "replace": ["        true"]
     },
     {
       "name": "DI-3.2.4: abandoning does not abandon the failure's epochs",
@@ -479,27 +479,27 @@
     },
     {
       "name": "DI-3.2.5.1: a heal takes effect in every lineage at the first one's seal",
-      "file": "src/durability/empties.rs",
+      "file": "src/durability/heals.rs",
       "expect": "caught",
       "why": "DI-D-41: each lineage's re-issued writes are committed only by its own next seal, so one lineage's seal ending the failure everywhere lets another's mark pass epochs it has not committed -- a wrong answer. Caught by the core and ring tests of a failure spanning two lineages, whose Healed must wait for the second seal.",
-      "find": ["            pending.remove(&lineage);"],
-      "replace": ["            pending.clear();"]
+      "find": ["                .get(&lineage)"],
+      "replace": ["                .values().next()"]
     },
     {
       "name": "DI-3.2.5.1: a heal never releases a lineage it reached",
-      "file": "src/durability.rs",
+      "file": "src/durability/heals.rs",
       "expect": "caught",
       "why": "DI-D-41: once a lineage's next seal succeeds after the heal, the failure stops holding that lineage, whose mark may pass it before the failure is healed everywhere. Caught by the tests whose first lineage reports Durable while the failure still holds the second.",
-      "find": ["            Standing::Healing { pending } => pending.contains_key(&lineage),"],
-      "replace": ["            Standing::Healing { .. } => true,"]
+      "find": ["            Standing::Healing { at } => self"],
+      "replace": ["            Standing::Healing { at } => true || self"]
     },
     {
       "name": "DI-3.2.5.1: ending a lineage does not release a heal waiting for it",
-      "file": "src/durability/lineages.rs",
+      "file": "src/durability/heals.rs",
       "expect": "caught",
       "why": "DI-D-42: a lineage that ends will never seal again, so a heal waiting for its seal would wait forever. Caught by the core and ring tests that end the lineage a heal still waits for.",
-      "find": ["                pending.remove(&lineage);\n"],
-      "replace": ["                let _ = pending;\n"]
+      "find": ["                .is_some_and(|state| !state.ended && state.released.is_none_or(|done| done < at)),"],
+      "replace": ["                .is_some_and(|state| state.released.is_none_or(|done| done < at)),"]
     },
     {
       "name": "DI-3.2.5.1: a failure observed after the end suspects the ended lineage's writes",
@@ -935,27 +935,27 @@
     },
     {
       "name": "DI-3.9.1: a heal is released by a seal that stops short of the re-issue",
-      "file": "src/durability.rs",
+      "file": "src/durability/heals.rs",
       "expect": "caught",
       "why": "DI-D-46: the releasing seal must reach the highest epoch pushed when the heal was made, or the mark passes the failed epoch while the re-issued writes are not committed.",
-      "find": ["        seq >= self.after && self.through.is_none_or(|reach| through >= reach)\n"],
-      "replace": ["        seq >= self.after\n"]
+      "find": ["                .is_none_or(|reach| through >= reach)"],
+      "replace": ["                .is_none_or(|_| true)"]
     },
     {
       "name": "DI-3.9.1: a write in flight is not part of the re-issue",
       "file": "src/durability.rs",
       "expect": "caught",
-      "why": "DI-D-46: the re-issue is every write pushed before the heal. Without the pushed one, a seal short of it releases the heal.",
-      "find": ["        state.pushed_through = state.pushed_through.max(Some(epoch));\n"],
+      "why": "DI-D-46, DI-D-114: the re-issue is every write pushed before the heal still to be committed. A write's push not counted leaves it out of what the heal waits for, and a seal short of it releases the heal.",
+      "find": ["            self.next_push = self.next_push.max(op.seq + 1);\n"],
       "replace": [""]
     },
     {
       "name": "DI-3.9.1: a held write is not part of the re-issue",
-      "file": "src/durability/gates.rs",
+      "file": "src/durability/heals.rs",
       "expect": "caught",
-      "why": "DI-D-46: a held write counts as pushed, so the releasing seal waits for it to be released and complete.",
-      "find": ["            state.pushed_through = state.pushed_through.max(Some(write.epoch));\n"],
-      "replace": [""]
+      "why": "DI-D-46, DI-D-114: a held write counts as pushed and still to be committed, so the releasing seal waits for it to be released and complete.",
+      "find": ["        recorded.chain(held).max()"],
+      "replace": ["        recorded.chain(held.filter(|_| false)).max()"]
     },
     {
       "name": "DI-3.9.1: an unmatched import domain is not reported",
@@ -2328,8 +2328,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A seal covering no writes makes no record (DI-D-99); recording it keeps one record per seal, which a consumer sealing ever-higher empty epochs grows without bound, and answers every one it would have overwritten.",
-      "find": ["        let Some(op) = pin else {", "            let mut due = self.fresh();", "            self.record_empty(lineage, Empty::new(seq, through, pair), &mut due);"],
-      "replace": ["        let Some(op) = pin else {", "            let due = self.fresh();", "            let _ = self.seals.insert((lineage, seq), Seal { seq, through, stage: SealStage::Waiting, answered: false, pair, trailing: None, pin: None });"]
+      "find": ["        let Some(op) = pin else {", "            let mut due = self.fresh();", "            self.record_empty(lineage, Empty::new(made, through, pair), &mut due);"],
+      "replace": ["        let Some(op) = pin else {", "            let due = self.fresh();", "            let _ = self.seals.insert((lineage, seq), Seal { seq, made, through, stage: SealStage::Waiting, answered: false, pair, trailing: None, pin: None });"]
     },
     {
       "name": "DI-23.7: a seal with a write in its span is taken as empty",
@@ -2376,16 +2376,16 @@
       "file": "src/durability/empties.rs",
       "expect": "caught",
       "why": "A heal is released by the first seal made after it that reaches the re-issue (DI-D-41, DI-D-46), empty or not; an empty seal releasing nothing leaves the heal held until a recorded seal comes.",
-      "find": ["                release_heals(failures, lineage, empty.seq, empty.through);"],
-      "replace": [""]
+      "find": ["                last = Some((empty.made, empty.through));"],
+      "replace": ["                let _ = empty.made;"]
     },
     {
-      "name": "DI-23.7: an empty seal takes no sequence number",
+      "name": "DI-23.7: an empty seal takes no stamp of the seal clock",
       "file": "src/durability.rs",
       "expect": "caught",
-      "why": "A heal is released by a seal made after it, known by its sequence number; an empty seal that took none would share the next seal's, so one made before a heal would release it.",
-      "find": ["        state.next_seal += 1;"],
-      "replace": ["        state.next_seal += u64::from(pin.is_some());"]
+      "why": "A heal is released by a seal made after it, known by the seal clock (DI-D-114); an empty seal that took no stamp would share the next seal's, so one made before a heal would release it.",
+      "find": ["        self.seals_made += 1;"],
+      "replace": ["        self.seals_made += u64::from(pin.is_some());"]
     },
     {
       "name": "DI-23.7: finishing empty seals looks past a seal not started",
@@ -3301,11 +3301,11 @@
     },
     {
       "name": "DI-23.12.3.3: a heal is pending on no lineage",
-      "file": "src/durability/failures.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal holds each live lineage its suspects belong to until that lineage's release (DI-D-41), read from the records.",
-      "find": ["                                pending.insert(write.lineage, release);\n"],
-      "replace": [""]
+      "find": ["                    .any(|write| self.pending_on(failure, write.lineage))"],
+      "replace": ["                    .any(|_| false)"]
     },
     {
       "name": "DI-23.12.3.3: an abandon stops no held operation",
@@ -3618,6 +3618,46 @@
       "why": "The queue is made for the derived bound at construction, so nothing after it allocates (DI-D-97).",
       "find": ["            queue(\"the completion queue\", capacity.entries(served))"],
       "replace": ["            queue(\"the completion queue\", capacity.entries(served).map(|_| 0))"]
+    },
+    {
+      "name": "DI-23.12.3.6: a held write's push is not counted",
+      "file": "src/durability/gates.rs",
+      "expect": "caught",
+      "why": "A held write is pushed when it is held; without counting it, a heal made after it does not wait for it.",
+      "find": ["            self.next_push = self.next_push.max(op.seq + 1);\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-23.12.3.6: a write pushed after the heal is waited for",
+      "file": "src/durability/heals.rs",
+      "expect": "caught",
+      "why": "A heal waits for what was re-issued before it; one that also waits for later writes is held back by writes the consumer pushed after asserting the heal (DI-D-41).",
+      "find": ["            .filter(|write| write.lineage == lineage && write.op.seq < at.pushes)"],
+      "replace": ["            .filter(|write| write.lineage == lineage)"]
+    },
+    {
+      "name": "DI-23.12.3.6: a lineage keeps only the heal its latest seal released",
+      "file": "src/durability/heals.rs",
+      "expect": "survives",
+      "why": "The control. A later successful seal of a lineage is made later and reaches further than an earlier one, and what a heal waits for only shrinks, so it releases again every still-healing heal the earlier one did; a heal healed since reads nothing. Taking the latest without the max changes nothing a test can see. Measured: survived the DI-23.12.3.6 sweep.",
+      "find": ["            state.released = state.released.max(latest);"],
+      "replace": ["            state.released = latest;"]
+    },
+    {
+      "name": "DI-23.12.3.6: a recorded seal releases no heal",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "A recorded seal finishing successfully is what releases a heal in the common case.",
+      "find": ["                last = Some((seal.made, seal.through));"],
+      "replace": ["                let _ = seal.made;"]
+    },
+    {
+      "name": "DI-23.12.3.6: the gate search ignores what a heal waits for",
+      "file": "src/durability/gates.rs",
+      "expect": "caught",
+      "why": "A healing failure holds a lineage until the seal its heal waits for; the cycle search must count that seal as a dependency (DI-D-43).",
+      "find": ["                    .find(|&(made, through)| self.releases(target.lineage, made, through, at))"],
+      "replace": ["                    .find(|&(made, through)| { let _ = (made, at); through >= target.epoch })"]
     }
   ]
 }

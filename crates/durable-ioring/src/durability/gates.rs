@@ -8,8 +8,8 @@
 //! until it does. So "`L` reaching `y`" needs every held write of `L` up to the **extent** of `y`:
 //! the furthest epoch whose writes `L` must complete before its mark passes `y`. That is `y` itself,
 //! raised to the first seal at or above `y`, and -- while a healing failure holds an epoch of `L` at
-//! or below `y` -- to the seal its heal waits for: the first made after the heal that reaches the
-//! highest epoch `L` had been pushed then (DI-D-41, DI-D-46). A seal not yet made is no dependency:
+//! or below `y` -- to the seal its heal waits for: the first made after the heal that reaches every
+//! write of `L` pushed before it that is still to be committed (DI-D-41, DI-D-46, DI-D-114). A seal not yet made is no dependency:
 //! the seal that will cover `y` is checked when it is made, which is why a seal can be refused.
 //!
 //! **The search, flattened** (the engineer's direction, 2026-10-08: the success case fast, the
@@ -201,10 +201,10 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         }
         let considered = extra
             .filter(|seal| seal.lineage == target.lineage)
-            .map(|seal| (state.next_seal, seal.epoch));
+            .map(|seal| (self.seals_made, seal.epoch));
         let seals = state
             .seal_points(&self.seals, target.lineage)
-            .map(|seal| (seal.seq, seal.through))
+            .map(|seal| (seal.made, seal.through))
             .chain(considered);
         let mut extent = target.epoch;
         if let Some((_, through)) = seals.clone().find(|&(_, through)| through >= target.epoch) {
@@ -212,12 +212,12 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         }
         let lower = mark.map_or(Bound::Unbounded, Bound::Excluded);
         for failure in &self.failures {
-            let Standing::Healing { pending } = &failure.standing else {
+            let Standing::Healing { at } = failure.standing else {
                 continue;
             };
-            let Some(release) = pending.get(&target.lineage) else {
+            if !self.pending_on(failure, target.lineage) {
                 continue;
-            };
+            }
             let holds = suspects(&self.lists, &self.writes, &self.kept, failure).any(|write| {
                 write.lineage == target.lineage
                     && (lower, Bound::Included(target.epoch)).contains(&write.epoch)
@@ -225,7 +225,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             if holds
                 && let Some((_, through)) = seals
                     .clone()
-                    .find(|&(seq, through)| release.by(seq, through))
+                    .find(|&(made, through)| self.releases(target.lineage, made, through, at))
             {
                 extent = extent.max(through);
             }
@@ -373,8 +373,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             return;
         }
         if let Some(write) = &write {
-            let state = self.lineages.get_mut(&write.lineage).expect("live");
-            state.pushed_through = state.pushed_through.max(Some(write.epoch));
+            self.next_push = self.next_push.max(op.seq + 1);
             let gated = self
                 .gated
                 .insert((write.lineage, write.epoch, op.seq), gate)

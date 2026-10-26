@@ -99,15 +99,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.3.5** -- The completion queue and a change's entries are made for a derived bound and pushed onto within it: a marking queued once per write, a Blocked withdrawn once a later entry answers its request, and a lineage counted until its LineageEnded is popped. -> [completed 2026-10-25](COMPLETED-CHECKLIST.md#di-231235)
 
-- [ ] **DI-23.12.3.6** -- **A heal's releases in storage made at construction** -- **awaiting the engineer's decision
-  on the bound.** A heal records, for each lineage it is pending on, `Release { after, through }`: that lineage's next
-  seal number and highest pushed epoch at the moment of the heal (DI-D-41, DI-D-46). Unlike the failures and the kept
-  records, these have no derived bound below the failures times the lineages: one failure can suspect writes of every
-  lineage, and a pending (failure, lineage) pair is named by no place of its own, since many failures suspect one
-  write. Found 2026-10-24 while implementing `DI-23.12.3.3`, which reads the pending lineages from the records but still
-  keeps the release values in a map made at the heal. Per lineage the pending releases are monotone in heal order, and a
-  seal releases a prefix of them, so a per-lineage queue of distinct releases is a candidate shape; whether its length
-  has a bound the capacities give, or the product must be declared, is the decision.
+- [x] **DI-23.12.3.6** -- A heal records only when it was made; what it waits for in each lineage is read from the write records when a seal finishes, and a lineage keeps only the latest heal it released. -> [completed 2026-10-26](COMPLETED-CHECKLIST.md#di-231236)
 
 - [ ] **DI-23.12.3.7** -- **The inventory as a visitor** ([DI-D-103](DESIGN-NOTES.md#di-d-103),
   [DI-D-108](DESIGN-NOTES.md#di-d-108)): `failures()` gives each unresolved failure to a visitor, lending its cause, rather

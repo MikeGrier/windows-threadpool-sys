@@ -4820,3 +4820,31 @@ popped, and forgotten, ahead of it -- and fourteen re-anchored; two removed, one
 whose code went. All swept as declared, the drain tests rewritten first so that a lineage's flush, not its unpopped end, is
 what they see holding it.
 
+## Moved 2026-10-26 13:21:04 -04:00 -- DI-23.12.3.6: a heal's releases read from the records
+
+### <a id="di-231236"></a>DI-23.12.3.6 -- A heal records only when it was made; what it waits for in each lineage is read from the write records when a seal finishes, and a lineage keeps only the latest heal it released. *(completed 2026-10-26 13:21:04 -04:00)*
+
+**A heal's releases in storage made at construction** -- **awaiting the engineer's decision
+on the bound.** A heal records, for each lineage it is pending on, `Release { after, through }`: that lineage's next
+seal number and highest pushed epoch at the moment of the heal (DI-D-41, DI-D-46). Unlike the failures and the kept
+records, these have no derived bound below the failures times the lineages: one failure can suspect writes of every
+lineage, and a pending (failure, lineage) pair is named by no place of its own, since many failures suspect one
+write. Found 2026-10-24 while implementing `DI-23.12.3.3`, which reads the pending lineages from the records but still
+keeps the release values in a map made at the heal. Per lineage the pending releases are monotone in heal order, and a
+seal releases a prefix of them, so a per-lineage queue of distinct releases is a candidate shape; whether its length
+has a bound the capacities give, or the product must be declared, is the decision.
+
+The engineer asked, 2026-10-26, whether the releases could be an intrusive queue; the assistant's answer, that the
+elements are (failure, lineage) pairs with no node of their own to thread through but that the releases can be read from
+records already kept, was taken, and is [DI-D-114](DESIGN-NOTES.md#di-d-114). No bound is needed because nothing is kept
+for each lineage a heal waits on: a heal records `HealAt` (the push sequence and the seal clock), each seal its `made`
+stamp, and each lineage the latest heal released, which is enough because the heals a seal releases are a prefix in heal
+order. One change of behaviour, stated in [CONTRACT.md](CONTRACT.md): a heal no longer waits for a write pushed before it
+that has nothing left to commit -- one that failed, or one a seal covered though that seal failed elsewhere. The logic is
+[durability/heals.rs](src/durability/heals.rs); [durability/tests/heals.rs](src/durability/tests/heals.rs) tests the rule,
+both changed cases, and the prefix. Every existing heal test passed unchanged. Resolving a heal now allocates nothing,
+and its allocation tag is gone. Sabotage: five entries added, one a control -- a lineage's
+released heal taken as the latest without the max, which no test can see because a later seal re-releases every heal
+still healing -- and ten re-anchored to the derivation, one of them, the empty seal's number, moved to the seal clock it
+now protects; three new ones dropped as duplicates of entries already there. All swept as declared.
+

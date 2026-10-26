@@ -3,10 +3,9 @@
 //! A failure's resolution and the inventory (DI-D-12, DI-D-34, DI-D-41): importing a failure,
 //! resolving failures, handing out a token, and listing the unresolved ones.
 
-use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use super::{Due, Durability, Event, Key, Reach, Release, Standing, V, suspects};
+use super::{Due, Durability, Event, Key, Reach, Standing, V, suspects};
 use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
@@ -88,27 +87,10 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     self.failures.insert(index, failure);
                 }
                 Resolution::Heal => {
-                    let lineages = &self.lineages;
-                    let failure = &self.failures[index];
-                    let pending = tagged(tag::DURABILITY_RESOLVE_HEAL_PENDING, || {
-                        let mut pending = BTreeMap::new();
-                        for write in suspects(&self.lists, &self.writes, &self.kept, failure) {
-                            if pending.contains_key(&write.lineage) {
-                                continue;
-                            }
-                            if let Some(state) =
-                                lineages.get(&write.lineage).filter(|state| !state.ended)
-                            {
-                                let release = Release {
-                                    after: state.next_seal,
-                                    through: state.pushed_through,
-                                };
-                                pending.insert(write.lineage, release);
-                            }
-                        }
-                        pending
-                    });
-                    self.failures[index].standing = Standing::Healing { pending };
+                    // What it waits for in each lineage is read when a seal finishes (DI-D-114).
+                    self.failures[index].standing = Standing::Healing {
+                        at: self.heal_now(),
+                    };
                 }
             }
         }

@@ -30,9 +30,10 @@
 //! one transition with the cause as data (DI-1.2 Q4). A failure belongs to every lineage it
 //! suspects a write of, and holds each: an epoch passes its lineage's mark only when no failure
 //! holds it. Abandoning makes its epochs abandoned at once. A heal takes effect per lineage
-//! (DI-D-41, DI-D-46): the failure stops holding lineage L once L's first seal made after the heal
-//! that reaches the highest epoch L had been pushed then finishes with every part successful, and
-//! is healed once it holds none.
+//! (DI-D-41, DI-D-46, DI-D-114): the failure stops holding lineage L once L's first seal made after
+//! the heal that reaches every write of L pushed before it that is still to be committed finishes
+//! with every part successful, and is healed once it holds none. What it waits for is read from
+//! the write records, as its suspects are; see the `heals` module.
 //!
 //! **Inconsistencies** (DI-D-46). A state the core cannot be in is reported to the diagnostic sink
 //! (DI-D-51) and panicked on where it is found, in every build; see [`inconsistent`].
@@ -54,7 +55,7 @@
 //! domain through [`providers`]; a failed or abandoned domain is observed as a failed flush is, with
 //! its own reach: the files whose declared domains contain it, and every file declared with none.
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
 use core::fmt;
 use core::ops::Bound;
@@ -78,6 +79,7 @@ mod exchange;
 mod failures;
 mod files;
 mod gates;
+mod heals;
 mod kept;
 mod lineages;
 mod lists;
@@ -89,7 +91,7 @@ mod tables;
 mod window;
 
 use crate::ordered::Ordered;
-use empties::{Empty, release_heals};
+use empties::Empty;
 use kept::Kept;
 use scratch::Scratch;
 use spans::{Span, SpanFile, Spans};
@@ -256,8 +258,11 @@ enum SealStage {
 }
 
 struct Seal<E> {
-    /// Counts the lineage's seals, so a heal knows which seals come after it.
+    /// Counts the lineage's seals.
     seq: u64,
+    /// The instance's seal clock when it was made, so a heal knows whether it came after
+    /// (DI-D-114).
+    made: u64,
     through: E,
     stage: SealStage,
     /// Answered on the queue already, by `Failed` or `Blocked`; `Durable` is appended regardless.
@@ -272,13 +277,13 @@ struct Seal<E> {
 }
 
 /// Where an unresolved failure stands.
-enum Standing<E> {
+enum Standing {
     /// Open to resolution; whether its token is live is read from its token slot.
     Open,
-    /// Healed, and still holding the lineages named here, each until its [`Release`] (DI-D-41,
-    /// DI-D-46). Healed once it names none. The heal holds the token, so the inventory does not
-    /// hand out another.
-    Healing { pending: BTreeMap<Key, Release<E>> },
+    /// Healed at `at`, and still holding each lineage of its suspects' that has not released the
+    /// heal (DI-D-41, DI-D-46, DI-D-114). Healed once it holds none. The heal holds the token, so
+    /// the inventory does not hand out another.
+    Healing { at: HealAt },
     /// Abandoned, or healed and the heal taken effect, and its `Abandoned` or `Healed` entry not yet
     /// popped: it holds what it held, and lends its records, until then (DI-D-108). Its markings
     /// are those made before `marks_before` in the order observed: a suspect write marked since,
@@ -286,22 +291,22 @@ enum Standing<E> {
     Resolved { marks_before: u64 },
 }
 
-/// What releases a healing failure from one lineage (DI-D-41, DI-D-46): the lineage's first seal
-/// made after the heal -- numbered `after` or later -- that reaches `through`, the highest epoch
-/// the lineage had been pushed when it was healed, finishing with every part successful. The
-/// consumer re-issues before it heals (DI-D-12 (c)), so every re-issued write is at or below
-/// `through`, and that seal waits for and commits them. `None` when nothing had been pushed.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Release<E> {
-    after: u64,
-    through: Option<E>,
-}
-
-impl<E: Ord + Copy> Release<E> {
-    /// Whether seal `seq` through `through`, finished successfully, releases the heal.
-    pub(super) fn by(&self, seq: u64, through: E) -> bool {
-        seq >= self.after && self.through.is_none_or(|reach| through >= reach)
-    }
+/// When a heal was made (DI-D-114): the push sequence and the seal clock then, so the writes pushed
+/// before it and the seals made after it can be told apart. Two heals compare in the order they
+/// were made: both numbers only grow, so the order of the first, then the second, is that order.
+///
+/// A heal is released in a lineage by the lineage's first seal made after it -- its `made` at or
+/// above `seals` -- that finishes with every part successful and reaches every write of the
+/// lineage pushed before it -- numbered below `pushes` -- that is still to be committed: in
+/// flight, uncovered, or held for a gate (DI-D-41, DI-D-46). A write already covered, or that
+/// failed, has nothing left to commit; one at or below an earlier seal point is reached by any
+/// later seal. The consumer re-issues before it heals (DI-D-12 (c)), so that seal waits for and
+/// commits what it re-issued. Nothing is kept per lineage for a heal: what it must reach is read
+/// from the write records, as a failure's suspects are (DI-23.12.3.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct HealAt {
+    pub(super) pushes: u64,
+    pub(super) seals: u64,
 }
 
 /// An unresolved failure. Its suspect writes are not listed: they are the ones its rule names
@@ -314,7 +319,7 @@ struct Failure<E: EpochId + 'static, I: Instant> {
     /// The lineage it was confined to, if one was named.
     only: Option<Key>,
     observed: I,
-    standing: Standing<E>,
+    standing: Standing,
     /// Its slot in the token slots, held until it is resolved.
     token: u32,
     /// The suspect writes as observation listed them, for the census to compare the rule with.
@@ -340,16 +345,6 @@ impl<E: EpochId + 'static, I: Instant> Failure<E, I> {
             && self.only.is_none_or(|only| only == lineage)
             && self.reach.reaches(lists, lists.get(domains))
     }
-
-    /// Whether this failure still holds `lineage`'s epochs among its suspects': open, or healing
-    /// and pending on it.
-    fn pending(&self, lineage: Key) -> bool {
-        match &self.standing {
-            Standing::Open => true,
-            Standing::Healing { pending } => pending.contains_key(&lineage),
-            Standing::Resolved { .. } => false,
-        }
-    }
 }
 
 /// The next `Marked` a queued marking expands to: the failure, the marking, and whether another
@@ -373,9 +368,11 @@ struct LineageState<E> {
     /// Its `LineageEnded` is queued and not yet popped: it counts against the lineages declared
     /// until it is, so every lineage an entry names is counted (DI-D-112).
     end_unpopped: bool,
-    /// The highest epoch of any write pushed in this lineage, held or not: where a heal's
-    /// [`Release`] must reach.
-    pushed_through: Option<E>,
+    /// The latest heal released in this lineage (DI-D-114). A seal that releases a heal releases
+    /// every heal made before it, which waited for no more than it did and was made no later, so
+    /// the heals released in a lineage are those made up to this one, and nothing is kept for
+    /// each.
+    released: Option<HealAt>,
 }
 
 impl<E: EpochId> LineageState<E> {
@@ -389,7 +386,7 @@ impl<E: EpochId> LineageState<E> {
             abandoned: BTreeSet::new(),
             ended: false,
             end_unpopped: false,
-            pushed_through: None,
+            released: None,
         }
     }
 }
@@ -467,6 +464,11 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     /// The failure clock: the number the next failure observed takes. A write record reads it when
     /// it is recorded and when it stops being nameable, which is what a failure's rule compares.
     next_failure: u64,
+    /// One past the last write pushed, held or not: what a heal's `pushes` reads (DI-D-114).
+    next_push: u64,
+    /// The seal clock: how many seals have been made, in every lineage, which a heal and each seal
+    /// read (DI-D-114).
+    seals_made: u64,
     /// The operations held for their gates, by push order.
     held: Ordered<u64, HeldOp<E, T>>,
     /// The domains the consumer's provider serves, sorted; empty without one.
@@ -653,6 +655,8 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             #[cfg(test)]
             test_lists: Vec::new(),
             next_failure: 0,
+            next_push: 0,
+            seals_made: 0,
             held,
             served: tagged(tag::DURABILITY_NEW_SERVED, || Arc::from([])),
             clock,
@@ -810,7 +814,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             was_held || state.sealed_through.is_none_or(|sealed| epoch > sealed),
             "a write at or below the seal"
         );
-        state.pushed_through = state.pushed_through.max(Some(epoch));
+        if !was_held {
+            self.next_push = self.next_push.max(op.seq + 1);
+        }
         if tables::count_up(&mut self.in_flight_by_epoch, lineage, epoch).is_err() {
             self.inconsistent(
                 "an epoch in flight was counted past the operations declared",
@@ -923,6 +929,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         state.sealed_through = Some(through);
         let seq = state.next_seal;
         state.next_seal += 1;
+        let made = self.seals_made;
+        self.seals_made += 1;
         let pair = CorrelationId::for_pair(&*self.diagnostics, DiagnosticKind::Seal);
         if let Some(id) = pair {
             tagged(tag::DURABILITY_SEAL_REPORT, || {
@@ -936,13 +944,14 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         }
         let Some(op) = pin else {
             let mut due = self.fresh();
-            self.record_empty(lineage, Empty::new(seq, through, pair), &mut due);
+            self.record_empty(lineage, Empty::new(made, through, pair), &mut due);
             return Sealing::Submitted(self.advance(due));
         };
         let recorded = self.seals.insert(
             (lineage, seq),
             Seal {
                 seq,
+                made,
                 through,
                 stage: SealStage::Waiting,
                 answered: false,
@@ -1225,7 +1234,10 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// `Healed` entry (DI-D-41); it keeps what it holds until that entry is popped (DI-D-108).
     fn release_healed(&mut self, due: &mut Due<E, T, I>) {
         for at in 0..self.failures.len() {
-            if !matches!(&self.failures[at].standing, Standing::Healing { pending } if pending.is_empty())
+            let failure = &self.failures[at];
+            if !matches!(failure.standing, Standing::Healing { .. })
+                || suspects(&self.lists, &self.writes, &self.kept, failure)
+                    .any(|write| self.pending_on(failure, write.lineage))
             {
                 continue;
             }
@@ -1456,9 +1468,10 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     }
 
     /// Mark every seal of `lineage` whose flushes have all answered as done. One whose flushes all
-    /// succeeded releases, in this lineage, every heal it is the [`Release`] of (DI-D-41, DI-D-46);
-    /// a failure is healed once that has happened in every lineage it held.
+    /// succeeded releases, in this lineage, every heal it is the release of (DI-D-41, DI-D-46,
+    /// DI-D-114); a failure is healed once that has happened in every lineage it held.
     fn finish_seals(&mut self, lineage: Key) {
+        let mut last = None;
         for (_, seal) in tables::seals_of_mut(&mut self.seals, lineage) {
             let SealStage::Flushing {
                 unanswered,
@@ -1472,11 +1485,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 continue;
             }
             let succeeded = !*failed;
-            let (seq, through) = (seal.seq, seal.through);
             seal.stage = SealStage::Done { succeeded };
             if succeeded {
-                release_heals(&mut self.failures, lineage, seq, through);
+                last = Some((seal.made, seal.through));
             }
+        }
+        if let Some((made, through)) = last {
+            self.release_heals(lineage, made, through);
         }
     }
 

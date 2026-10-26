@@ -620,7 +620,7 @@ const FAILURES: &[(&str, u64)] = &[
     ("failures queried", 1),
     ("a failure's suspects and markings read", 0),
     ("writes re-issued", 0),
-    ("a heal resolved", 1),
+    ("a heal resolved", 0),
     ("the heal taking effect at the next seal", 0),
     ("writes before the import", 0),
     ("a failure imported", 0),
@@ -916,7 +916,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         3,
     ),
     ("failures queried", "durability::failures::infos", 1),
-    ("a heal resolved", "durability::resolve::heal_pending", 1),
     ("an abandon resolved", "durability::resolve::abandoned", 1),
 ];
 

@@ -19,10 +19,7 @@ use core::iter;
 use core::ops::{Bound, RangeBounds};
 
 use super::tables::Seals;
-use super::{
-    Due, Durability, Event, Failure, Key, LineageState, Seal, SealStage, Standing, end_seal,
-    tables, window,
-};
+use super::{Due, Durability, Event, Key, LineageState, Seal, SealStage, end_seal, tables, window};
 use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::correlation::CorrelationId;
@@ -30,7 +27,8 @@ use crate::diagnostics::SealOutcome;
 
 /// An empty seal, in its slot.
 pub(super) struct Empty<E> {
-    seq: u64,
+    /// The instance's seal clock when it was made (DI-D-114).
+    made: u64,
     through: E,
     /// Every write at or below it is out of flight, and every seal before it has started.
     finished: bool,
@@ -42,9 +40,9 @@ pub(super) struct Empty<E> {
 
 impl<E: Copy> Empty<E> {
     /// An empty seal just made.
-    pub(super) fn new(seq: u64, through: E, pair: Option<CorrelationId>) -> Self {
+    pub(super) fn new(made: u64, through: E, pair: Option<CorrelationId>) -> Self {
         Self {
-            seq,
+            made,
             through,
             finished: false,
             answered: false,
@@ -54,7 +52,7 @@ impl<E: Copy> Empty<E> {
 
     fn point(&self) -> SealPoint<E> {
         SealPoint {
-            seq: self.seq,
+            made: self.made,
             through: self.through,
             finished: self.finished,
         }
@@ -64,7 +62,8 @@ impl<E: Copy> Empty<E> {
 /// A seal the mark has not passed, recorded or empty, as the queries over seals see it.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SealPoint<E> {
-    pub(super) seq: u64,
+    /// The instance's seal clock when it was made (DI-D-114).
+    pub(super) made: u64,
     pub(super) through: E,
     /// Done, for a recorded seal; finished, for an empty one.
     pub(super) finished: bool,
@@ -108,7 +107,7 @@ impl<E: EpochId> LineageState<E> {
             .map(Empty::point)
             .chain(tables::seals_of(seals, lineage).flat_map(|(_, seal)| {
                 iter::once(SealPoint {
-                    seq: seal.seq,
+                    made: seal.made,
                     through: seal.through,
                     finished: matches!(seal.stage, SealStage::Done { .. }),
                 })
@@ -202,25 +201,6 @@ impl<E> Empty<E> {
     }
 }
 
-/// Release, in `lineage`, every heal that seal `seq` through `through`, finished successfully, is
-/// the release of (DI-D-41, DI-D-46).
-pub(super) fn release_heals<E: EpochId + 'static, I: Instant>(
-    failures: &mut [Failure<E, I>],
-    lineage: Key,
-    seq: u64,
-    through: E,
-) {
-    for failure in failures {
-        if let Standing::Healing { pending } = &mut failure.standing
-            && pending
-                .get(&lineage)
-                .is_some_and(|release| release.by(seq, through))
-        {
-            pending.remove(&lineage);
-        }
-    }
-}
-
 impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// The oldest epoch of `lineage` with a write in flight or held for its gate: a seal at or
     /// above it waits.
@@ -302,11 +282,12 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             return;
         };
         let ready = |through: E| oldest.is_none_or(|oldest| oldest > through);
-        let failures = &mut self.failures;
+        // The latest made, and the furthest: it releases every heal an earlier one would.
+        let mut last = None;
         let mut finish = |empty: &mut Empty<E>| {
             if !empty.finished && ready(empty.through) {
                 empty.finished = true;
-                release_heals(failures, lineage, empty.seq, empty.through);
+                last = Some((empty.made, empty.through));
             }
         };
         if let Some(empty) = &mut state.leading {
@@ -321,6 +302,9 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             if let Some(empty) = &mut seal.trailing {
                 finish(empty);
             }
+        }
+        if let Some((made, through)) = last {
+            self.release_heals(lineage, made, through);
         }
     }
 }

@@ -334,8 +334,9 @@ pub trait DurableRing {
     ) -> Result<EpochState<Self::Ids>, UnknownLineage<Self::Ids>>;
 
     /// Resolve one or more failures, each by its token: `Heal`, effective in each lineage the
-    /// failure holds when that lineage's first seal made after this call that reaches the highest
-    /// epoch the lineage had been pushed by then finishes successfully (DI-D-41, DI-D-46), or
+    /// failure holds when that lineage's first seal made after this call that reaches every write of
+    /// the lineage pushed before it that is still to be committed finishes successfully (DI-D-41,
+    /// DI-D-46, DI-D-114), or
     /// `Abandon`, effective at once (DI-D-12 (c)). The
     /// call is validated whole and applied at one point in observation order.
     ///

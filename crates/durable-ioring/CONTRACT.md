@@ -430,11 +430,15 @@ dioring's own observation that the provider never answered.
 
 - **Heal.** The consumer asserts it has re-issued what it needs, under tags above everything already
   sealed (guarantee 6 forces that). The heal takes effect **in each lineage the failure holds
-  separately**, when that lineage's **first seal made after the heal that reaches the highest epoch
-  the lineage had been pushed by then** finishes with every part successful. That seal waits for
-  everything re-issued there before the heal, and commits it ([DI-D-41](DESIGN-NOTES.md#di-d-41),
-  [DI-D-46](DESIGN-NOTES.md#di-d-46)); a seal made after the heal that stops short of it releases
-  nothing. From then the failure no longer holds that lineage, whose high-water mark may pass it.
+  separately**, when that lineage's **first seal made after the heal that reaches every write of
+  the lineage pushed before the heal that is still to be committed** finishes with every part
+  successful. That seal waits for everything re-issued there before the heal, and commits it
+  ([DI-D-41](DESIGN-NOTES.md#di-d-41), [DI-D-46](DESIGN-NOTES.md#di-d-46),
+  [DI-D-114](DESIGN-NOTES.md#di-d-114)); a seal made after the heal that stops short of it releases
+  nothing. A write still to be committed is one in flight, completed and not yet covered, or held
+  for its gate: one that failed, or that a seal has already covered, has nothing left to commit and
+  is not waited for. The consumer learns of a failed write from its own completion, and of a
+  suspect write's fate from the failure observer, if it gave one. From then the failure no longer holds that lineage, whose high-water mark may pass it.
   Once it holds none -- at once, for a failure that belongs to no lineage -- it is resolved as
   healed, and a `Healed` entry reports it, before any `Durable` that the last lineage's seal lets
   through. A lineage that ends no longer holds a heal back.
