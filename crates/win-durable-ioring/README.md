@@ -652,7 +652,8 @@ ring.make_durable_through(tag(44)).expect("a seal");
 // <- Durable { through: 44 }                  // "durable through 44" means durable or abandoned
 pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == epoch(44)));
 assert_eq!(ring.durable_through(lineage.lineage()), Ok(Some(44)));
-assert_eq!(ring.epoch_state(epoch(43)), Ok(EpochState::Abandoned));
+// The mark answers for 43 now: abandoned or durable, the Abandoned entry said which.
+assert_eq!(ring.epoch_state(epoch(43)), Ok(EpochState::Durable));
 # drop(ring);
 # std::fs::remove_file(&path)?;
 # Ok::<(), std::io::Error>(())
