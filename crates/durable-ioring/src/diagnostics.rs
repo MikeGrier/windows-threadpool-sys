@@ -5,7 +5,9 @@
 //! each one-to-one, and a sink that prints formats them as it likes. A sink states which kinds it
 //! wants, and the core asks before it builds an event, so a sink that wants nothing costs a branch.
 
+use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt;
 
 use crate::alloc_tags::{tag, tagged};

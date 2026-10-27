@@ -12,17 +12,24 @@
 //! backend, whose notification is the ring's completion event, and the in-memory one, whose
 //! notification is a count, alike.
 
-use alloc::sync::Arc;
 use core::time::Duration;
-use std::sync::Mutex;
 
-use crate::alloc_tags::{tag, tagged};
-use crate::backend::IoBackend;
-use crate::clock::StampClock;
-use crate::contract::EpochId;
-use crate::engine::{Engine, EngineGuard, Slot, lock, present_watched};
-use crate::lock_watch::{ENGINE_LOCK, LockWatch, WatchedGuard};
 use crate::types::IoFault;
+// The delivery drains the engine, which is joined to its backend under a lock, and a lock is
+// `std`'s (DI-D-97); without the feature there is no engine to deliver, and what is left is the
+// notification a delivery waits on.
+#[cfg(feature = "std")]
+use {
+    crate::alloc_tags::{tag, tagged},
+    crate::backend::IoBackend,
+    crate::clock::StampClock,
+    crate::contract::EpochId,
+    crate::engine::{Engine, EngineGuard, Slot, lock, present_watched},
+    crate::lock_watch::{ENGINE_LOCK, LockWatch, WatchedGuard},
+    alloc::boxed::Box,
+    alloc::sync::Arc,
+    std::sync::Mutex,
+};
 
 #[cfg(test)]
 mod tests;
@@ -56,10 +63,12 @@ pub struct Pumped {
 }
 
 /// A failed construction: why, and the engine it was given.
+#[cfg(feature = "std")]
 pub type PumpedSetup<E, Bk, C, K> =
     Result<PumpedDelivery<E, Bk, C, K>, (IoFault, Box<Engine<E, Bk, C, K>>)>;
 
 /// The engine, drained by the consumer's own thread when it calls [`pump`](Self::pump).
+#[cfg(feature = "std")]
 pub struct PumpedDelivery<E, Bk, C, K>
 where
     E: EpochId + 'static,
@@ -73,6 +82,7 @@ where
     watch: Option<LockWatch>,
 }
 
+#[cfg(feature = "std")]
 impl<E, Bk, C, K> PumpedDelivery<E, Bk, C, K>
 where
     E: EpochId + 'static,
@@ -141,6 +151,7 @@ where
     }
 }
 
+#[cfg(feature = "std")]
 impl<E, Bk, C, K> PumpedDelivery<E, Bk, C, K>
 where
     E: EpochId + 'static,

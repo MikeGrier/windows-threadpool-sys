@@ -19,6 +19,9 @@
 //! for a real reason -- an unknown target, an access or geometry the target does not admit, a full
 //! queue -- is refused for that reason, before the script is consulted, and is not counted.
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::backend::{RefusalCause, SubmissionOp, SubmissionToken};
 use crate::types::{IoFault, IoTargetKey};
 

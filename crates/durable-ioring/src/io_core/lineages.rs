@@ -12,6 +12,7 @@ use crate::contract::EpochId;
 use crate::durability::DEFAULT_LINEAGE;
 use crate::ids::Lineage;
 use crate::types::{EndLineageRefusal, Hold, LineageInfo, RetireLineageRefusal};
+use alloc::string::String;
 
 impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// Mint a lineage, described by `description`.

@@ -2,6 +2,7 @@
 //! The consumer's durability provider (DI-2.12, DI-D-27).
 
 use alloc::sync::Weak;
+use alloc::vec::Vec;
 use core::fmt::{self, Debug};
 
 use rc_errors::ErrorReport;

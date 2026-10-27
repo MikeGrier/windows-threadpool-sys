@@ -14,6 +14,7 @@ use crate::types::SuspectWrite;
 use crate::types::{
     FailureCause, FailureInfo, ImportError, ImportScope, Imported, Resolution, ResolveError,
 };
+use alloc::vec::Vec;
 
 /// What an import recorded and made due, or why it was refused.
 type ImportAnswer<E, K> = Result<(Imported<V<E, K>>, CoreActions), ImportError<V<E, K>>>;

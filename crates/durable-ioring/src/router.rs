@@ -11,9 +11,11 @@
 //! came, so its answer goes straight back to the instance; the router answers nothing itself. A
 //! domain no provider serves is a caller breaking the protocol, and is panicked on (DI-D-46).
 
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::collections::btree_map::Entry;
+use alloc::vec::Vec;
 use core::fmt;
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 
 use crate::alloc_tags::{tag, tagged};
 use crate::contract::Identities;
@@ -55,7 +57,7 @@ impl<V: Identities> RouterBuilder<V> {
     /// and each one's domains in the order it gave them. The providers already read are dropped
     /// with the builder, and those after it are not asked for their domains.
     pub fn build(self) -> Result<RoutingProvider<V>, RoutedTwice> {
-        let mut owners: HashMap<FlushDomain, usize> = HashMap::new();
+        let mut owners: BTreeMap<FlushDomain, usize> = BTreeMap::new();
         let mut routes = tagged(tag::ROUTER_BUILD_ROUTES, || {
             Vec::with_capacity(self.providers.len())
         });
@@ -118,7 +120,7 @@ impl<V: Identities> fmt::Debug for RouterBuilder<V> {
 pub struct RoutingProvider<V: Identities> {
     routes: Vec<Route<V>>,
     /// Each domain's registration.
-    owners: HashMap<FlushDomain, usize>,
+    owners: BTreeMap<FlushDomain, usize>,
 }
 
 /// One registration: the provider and the domains it declared when the router was built.

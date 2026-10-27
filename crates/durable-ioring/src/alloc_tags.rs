@@ -230,16 +230,25 @@ pub(crate) mod tag {
     pub(crate) const ROUTER_MAKE_DURABLE_PROVIDER: Tag = Tag::new("router::make_durable::provider");
 
     // engine.rs
+    #[cfg(feature = "std")]
     pub(crate) const ENGINE_PUSH_BACKEND: Tag = Tag::new("engine::push::backend");
+    #[cfg(feature = "std")]
     pub(crate) const ENGINE_PUSH_SUBMIT: Tag = Tag::new("engine::push::submit");
+    #[cfg(feature = "std")]
     pub(crate) const ENGINE_PUSH_BACKEND_AGAIN: Tag = Tag::new("engine::push::backend_again");
+    #[cfg(feature = "std")]
     pub(crate) const ENGINE_RING_SUBMIT: Tag = Tag::new("engine::ring::submit");
+    #[cfg(feature = "std")]
     pub(crate) const ENGINE_DRAIN_POP: Tag = Tag::new("engine::drain::pop");
 
     // pump.rs
+    #[cfg(feature = "std")]
     pub(crate) const PUMP_NEW_NOTIFICATION: Tag = Tag::new("pump::new::notification");
+    #[cfg(feature = "std")]
     pub(crate) const PUMP_NEW_HANDED_BACK: Tag = Tag::new("pump::new::handed_back");
+    #[cfg(feature = "std")]
     pub(crate) const PUMP_WITH_NOTIFICATION_SLOT: Tag = Tag::new("pump::with_notification::slot");
+    #[cfg(feature = "std")]
     pub(crate) const PUMP_PUMP_WAIT: Tag = Tag::new("pump::pump::wait");
 
     // ids.rs
@@ -256,7 +265,9 @@ pub(crate) mod tag {
     pub(crate) const IO_TARGET_DESCRIBE_DOMAINS: Tag = Tag::new("io_target::describe::domains");
 
     // lock_watch.rs
+    #[cfg(feature = "std")]
     pub(crate) const LOCK_WATCH_LOCK_BEGAN: Tag = Tag::new("lock_watch::lock::began");
+    #[cfg(feature = "std")]
     pub(crate) const LOCK_WATCH_LOCK_ENDED: Tag = Tag::new("lock_watch::lock::ended");
 
     // correlation.rs

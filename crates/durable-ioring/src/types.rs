@@ -3,6 +3,7 @@
 //! implementation's [`Identities`]; the rest are plain.
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
 
@@ -20,7 +21,7 @@ mod tests;
 
 /// The consumer's identity for a file, supplied when the file is given to dioring and used in
 /// every report, so a report stays meaningful after the file's handle is gone (DI-D-11).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IoTargetKey(pub u64);
 
 /// An epoch: an epoch id within a lineage, by the lineage's plain name. What the API reports, and
@@ -198,7 +199,7 @@ pub struct Imported<V: Identities> {
 /// Named by the consumer's exact identifier bytes, so two instances or processes name one
 /// domain alike. dioring interns each distinct domain into a word-sized value of its own, so
 /// comparisons after declaration are cheap, and reports return the bytes.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FlushDomain(Arc<[u8]>);
 
 impl FlushDomain {

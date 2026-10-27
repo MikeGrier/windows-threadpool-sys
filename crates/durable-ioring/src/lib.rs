@@ -10,6 +10,10 @@
 // that crate, never written here.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+// DI-D-97: without the `std` feature the crate is `no_std` and uses `alloc`. Its own tests keep
+// `std`'s prelude, so they need no imports from `alloc`; what only `std` provides is behind the
+// feature, and a build for a target without `std` is what shows nothing else slipped through.
+#![cfg_attr(not(any(feature = "std", test)), no_std)]
 
 // The core names `alloc` and `core` paths wherever `std` has an equivalent (DI-D-97), so what still
 // needs `std` is what is spelled `std::`.
@@ -30,6 +34,7 @@ mod domain_lists;
 mod domains;
 pub mod driver;
 mod durability;
+#[cfg(feature = "std")]
 mod engine;
 mod error_code;
 mod fault_report;
@@ -37,9 +42,11 @@ mod ids;
 mod io_core;
 mod io_target;
 mod key;
+#[cfg(feature = "std")]
 mod lock_watch;
 pub mod memory;
 mod observer;
+#[cfg(feature = "std")]
 pub mod oracle;
 mod ordered;
 mod provider;

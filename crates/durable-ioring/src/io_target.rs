@@ -6,6 +6,7 @@
 //! capabilities and data access. The driver hands the target itself to the backend, which runs its
 //! I/O, and its [`IoTargetDescription`] to the core, which decides with it (DI-D-52).
 
+use alloc::vec::Vec;
 use core::fmt;
 
 use crate::access::Access;

@@ -54,7 +54,9 @@
 //! domain through [`providers`]; a failed or abandoned domain is observed as a failed flush is, with
 //! its own reach: the files whose declared domains contain it, and every file declared with none.
 
+use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use crate::observer::FailureObserver;
 use core::fmt;
@@ -687,7 +689,8 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
 /// with `detail` naming what was in hand: the bookkeeping is wrong, and nothing reported afterwards
 /// could be trusted. On a pool thread the panic aborts the process. While the thread is already
 /// unwinding it is reported only, because a second panic would abort and lose the first; the caller
-/// then leaves the state as it found it.
+/// then leaves the state as it found it. Without the `std` feature nothing can say whether the
+/// thread is unwinding, so it always panics, and a double panic aborts (DI-D-97).
 #[cold]
 #[track_caller]
 pub fn inconsistent(
@@ -707,7 +710,11 @@ pub fn inconsistent(
             });
         });
     }
-    if !std::thread::panicking() {
+    #[cfg(feature = "std")]
+    let unwinding = std::thread::panicking();
+    #[cfg(not(feature = "std"))]
+    let unwinding = false;
+    if !unwinding {
         panic!(
             "dioring instance {instance:?} found its own state inconsistent: {what} ({detail}). \
              This is a defect in dioring, or the kernel broke its contract (DI-D-46)."

@@ -962,7 +962,7 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-46: an inconsistency is panicked on where it is found, in every build; carrying on would report from bookkeeping known to be wrong.",
-      "find": ["    if !std::thread::panicking() {\n        panic!(\n"],
+      "find": ["    if !unwinding {\n        panic!(\n"],
       "replace": ["    if false {\n        panic!(\n"]
     },
     {
@@ -970,7 +970,7 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-46 and the ring crate's D-79: a second panic while unwinding aborts the process and loses the first. The test binary aborts, which the harness counts as caught.",
-      "find": ["    if !std::thread::panicking() {\n        panic!(\n"],
+      "find": ["    if !unwinding {\n        panic!(\n"],
       "replace": ["    if true {\n        panic!(\n"]
     },
     {
@@ -3762,6 +3762,14 @@
       "why": "The refusal is part of what a fault says, so it is part of what makes two equal.",
       "find": ["            && self.code == other.code", "            && self.refusal == other.refusal"],
       "replace": ["            && self.code == other.code"]
+    },
+    {
+      "name": "DI-23.12.7: the first repeat is the first value met",
+      "file": "src/domains.rs",
+      "expect": "caught",
+      "why": "first_repeat is an ordered set of what was seen (a hasher being std's, DI-D-97): a value is a repeat when inserting it finds it there, so reporting on a fresh insert names the first value of any list.",
+      "find": ["        if !tagged(tag::DOMAINS_FIRST_REPEAT_SEEN, || seen.insert(copy)) {"],
+      "replace": ["        if tagged(tag::DOMAINS_FIRST_REPEAT_SEEN, || seen.insert(copy)) {"]
     }
   ]
 }

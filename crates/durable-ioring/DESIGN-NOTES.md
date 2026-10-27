@@ -2434,6 +2434,23 @@ notes when it is created.
   supplies; a target's domains are a range in a fixed table.
 - **Without `std`**: the driver's locking (`engine.rs`, `lock_watch.rs`) and the `thread::panicking()` guard on an
   inconsistency are behind the `std` feature; without it an inconsistency panics unconditionally, a double panic aborting.
+  **As built** (DI-23.12.7, the assistant's, 2026-10-27): the crate is `#![cfg_attr(not(any(feature = "std", test)), no_std)]`,
+  so its own tests keep `std`'s prelude and every other build names `alloc` and `core` paths. Behind `std`: the engine, the
+  lock watch and `PumpedDelivery` (so `driver` loses them without it; `Waitable` and `Pumped` stay), the oracle and its
+  recorder (`ObservedFailures` shares state under a `Mutex`, and `core` and `alloc` have none), `StderrDiagnostics`, the
+  `io::Error` conversions, `MemoryNotification::wait_past`, and the `thread::panicking()` guard. **Three things were not
+  simply moved.** A hasher is `std`'s, so the three hash maps and sets that remained became ordered ones: the router's
+  owners and the in-memory backend's targets are `BTreeMap`s, and `driver::first_repeat` takes `T: Ord + Clone` where it took
+  `Eq + Hash + Clone`, which is breaking for a caller whose type is hashable and not ordered; `IoTargetKey` and
+  `FlushDomain` gained `Ord` so the callers in this repository still qualify. **The in-memory notification** parks a thread
+  on a `Condvar` with `std` and counts raisings in an atomic without it, where a wait only asks and returns at once, there
+  being no thread to park. `io-buffers`, which named no `std` path but was not `no_std`, is now.
+  **Verified** by `cargo build -p durable-ioring --no-default-features --target x86_64-unknown-none` (and clippy likewise);
+  a host build proves nothing, because the crate's own dev-dependency on itself turns `std` on for any build that has
+  tests, so what runs in `cargo test` is the `std` path. **The no-`std` notification is therefore built but not run.**
+  **Target:** `thumbv7em-none-eabi`, the one `wtf-string` is built for, cannot be used: `rc-errors` counts references in an
+  `AtomicU64`, which that target lacks, so `x86_64-unknown-none` is the one used. Whether `rc-errors` should serve a target
+  without 64-bit atomics is a decision for that crate, not this one, and is raised with the engineer rather than assumed.
 - **A refusal carrying a backend fault passes the backend's report through**, with its cause beside it in `IoFault` as
   `ErrorCode` is, so nothing is allocated; amends [DI-D-54](#di-d-54). **As built** (DI-23.12.6, the assistant's,
   2026-10-27): `IoFault` gained `refusal: Option<RefusalKind>`, where `RefusalKind` is the payload-free classification of a

@@ -10,6 +10,8 @@
 //! intersection with the failed file's whole set (DI-D-21).
 
 use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use super::{
     DomainPart, Due, Durability, Key, MarkingKind, Part, Reach, SealStage, Span, Stage, V, Write,

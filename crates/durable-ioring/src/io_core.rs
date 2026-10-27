@@ -40,6 +40,7 @@
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use fixed_hash_table::HeapMap;
 

@@ -6,6 +6,8 @@
 //! as the implementation does: it carries only the operations dioring implements, never a
 //! method that cannot yet be called.
 
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::hash::Hash;
 

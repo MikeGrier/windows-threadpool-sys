@@ -28,9 +28,12 @@ fixed-hash-table = { version = "0.0.1", path = "../fixed-hash-table", features =
 
 [features]
 default = ["std"]
-# What the core needs `std` for (DI-D-97), on by default. The rest of the core names `core` and
-# `alloc` paths, so what this feature covers is what is spelled `std::`; today that is only
-# `StderrDiagnostics`, standard error being `std`'s.
+# What needs `std` (DI-D-97), on by default; without it the crate is `no_std` and uses `alloc`. The
+# rest of the core names `core` and `alloc` paths, so what this feature covers is what is spelled
+# `std::`: the driver's locking (the engine, its lock watch and the pumped delivery), the
+# conformance oracle and its recorder, which share state under a lock, `StderrDiagnostics`, the
+# conversions to and from `io::Error`, the in-memory notification's parking wait, and the
+# `thread::panicking()` guard on an inconsistency.
 std = []
 # Every call in the core that can allocate names itself with a tag; this feature keeps the thread's
 # current tag so an allocator can read it (DI-D-104). Only the allocation test turns it on, through

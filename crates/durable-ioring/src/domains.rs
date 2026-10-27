@@ -1,8 +1,9 @@
 // Copyright (c) 2026 Mike Grier
 // Split from dioring.rs at f13cd814.
 
+use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
-use std::collections::HashSet;
+use alloc::vec::Vec;
 
 use fixed_hash_table::{Full, HeapMap};
 
@@ -95,11 +96,10 @@ pub(crate) fn epoch_state<E: EpochId + 'static, I: Instant>(
     }
 }
 
-/// The first value `values` yields twice.
-pub fn first_repeat<T: Eq + core::hash::Hash + Clone>(
-    values: impl IntoIterator<Item = T>,
-) -> Option<T> {
-    let mut seen = HashSet::new();
+/// The first value `values` yields twice. Ordered rather than hashed, a hasher being `std`'s
+/// (DI-D-97).
+pub fn first_repeat<T: Ord + Clone>(values: impl IntoIterator<Item = T>) -> Option<T> {
+    let mut seen = BTreeSet::new();
     for value in values {
         let copy = tagged(tag::DOMAINS_FIRST_REPEAT_COPY, || value.clone());
         if !tagged(tag::DOMAINS_FIRST_REPEAT_SEEN, || seen.insert(copy)) {

@@ -13,11 +13,14 @@
 //! not yet popped as the completion queue holds -- so a completion always has room -- and with
 //! [`RefusalCause::SubmitAndDrainNeeded`] when both hold.
 
-use alloc::collections::{TryReserveError, VecDeque};
+use alloc::collections::{BTreeMap, TryReserveError, VecDeque};
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::num::NonZeroU32;
+#[cfg(not(feature = "std"))]
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
-use std::collections::HashMap;
+#[cfg(feature = "std")]
 use std::sync::{Condvar, Mutex, PoisonError};
 
 use rc_errors::{ErrorReport, StaticError};
@@ -204,9 +207,16 @@ impl IoTarget for MemoryTarget {
 /// raisings its own waits have seen, which starts at none -- so a raising before a notification's
 /// first wait is seen by it, as the Windows ring's setup signal makes one that was raised before
 /// the wait began seen.
+///
+/// A wait parks the thread, which only `std` can do (DI-D-97): without the `std` feature a wait
+/// only asks whether it was raised, and returns at once, and [`wait_past`](Self::wait_past) is not
+/// there.
 #[derive(Clone, Debug, Default)]
 pub struct MemoryNotification {
+    #[cfg(feature = "std")]
     count: Arc<(Mutex<u64>, Condvar)>,
+    #[cfg(not(feature = "std"))]
+    count: Arc<AtomicUsize>,
     /// The count at the end of the last [`Waitable::wait`] that saw a raising.
     seen: u64,
 }
@@ -215,16 +225,28 @@ impl MemoryNotification {
     /// How many times it has been raised.
     #[must_use]
     pub fn raised(&self) -> u64 {
+        self.load()
+    }
+
+    #[cfg(feature = "std")]
+    fn load(&self) -> u64 {
         *self.count.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    #[cfg(not(feature = "std"))]
+    fn load(&self) -> u64 {
+        u64::try_from(self.count.load(Ordering::Acquire)).unwrap_or(u64::MAX)
+    }
+
     /// Wait up to `timeout` for it to have been raised more than `seen` times; the count then.
+    #[cfg(feature = "std")]
     #[must_use]
     pub fn wait_past(&self, seen: u64, timeout: Duration) -> u64 {
         self.count_past(seen, Some(timeout))
     }
 
     /// [`wait_past`](Self::wait_past), with no limit for `None`.
+    #[cfg(feature = "std")]
     fn count_past(&self, seen: u64, timeout: Option<Duration>) -> u64 {
         let (count, raised) = &*self.count;
         let guard = count.lock().unwrap_or_else(PoisonError::into_inner);
@@ -242,10 +264,22 @@ impl MemoryNotification {
         *guard
     }
 
+    /// The count now, without waiting: there is no thread to park.
+    #[cfg(not(feature = "std"))]
+    fn count_past(&self, _seen: u64, _timeout: Option<Duration>) -> u64 {
+        self.raised()
+    }
+
+    #[cfg(feature = "std")]
     fn raise(&self) {
         let (count, raised) = &*self.count;
         *count.lock().unwrap_or_else(PoisonError::into_inner) += 1;
         raised.notify_all();
+    }
+
+    #[cfg(not(feature = "std"))]
+    fn raise(&self) {
+        self.count.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -262,7 +296,7 @@ impl Waitable for MemoryNotification {
 /// read's the most it transfers.
 #[derive(Debug)]
 pub struct MemoryBackend {
-    targets: HashMap<IoTargetKey, MemoryTarget>,
+    targets: BTreeMap<IoTargetKey, MemoryTarget>,
     registered: Vec<Vec<u8>>,
     queued: VecDeque<Submission<Vec<u8>>>,
     completed: VecDeque<Completion<Vec<u8>>>,
@@ -288,7 +322,7 @@ impl MemoryBackend {
     #[must_use]
     pub fn new(submission_queue_size: NonZeroU32, completion_queue_size: NonZeroU32) -> Self {
         Self {
-            targets: HashMap::new(),
+            targets: BTreeMap::new(),
             registered: Vec::new(),
             queued: VecDeque::new(),
             completed: VecDeque::new(),

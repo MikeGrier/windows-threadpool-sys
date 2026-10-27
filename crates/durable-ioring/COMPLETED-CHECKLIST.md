@@ -4968,3 +4968,14 @@ they downcast.
 
 As built: `IoFault::refusal: Option<RefusalKind>`, `RefusalKind` being the payload-free classification of a
 `RefusalCause` (it cannot be the cause, which carries an `IoFault`); the as-built notes are in DI-D-109.
+
+## Moved 2026-10-27 16:14:32 -04:00 -- DI-23.12.7: the crate builds without `std`
+
+### <a id="di-23127"></a>DI-23.12.7 -- The crate is `no_std` without its `std` feature, builds for `x86_64-unknown-none`, and what only `std` provides is behind the feature or moved to `alloc` and `core`. *(completed 2026-10-27 16:14:32 -04:00)*
+
+**The crate builds without `std`** ([DI-D-97](DESIGN-NOTES.md#di-d-97), [DI-D-109](DESIGN-NOTES.md#di-d-109)): `no_std` unless
+the `std` feature is on; the driver's locking (`engine.rs`, `lock_watch.rs`) and the `thread::panicking()` guard behind
+`std`, an inconsistency without it panicking unconditionally; and every other use of `std` the crate still has moved to
+`core` or `alloc`, or behind the feature. Built here locally for a target without `std`; CI is `DI-23.13`.
+
+As built: the as-built notes are in DI-D-109. `io-buffers` became `no_std` too, as the crate cannot build without it.

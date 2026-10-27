@@ -11,6 +11,7 @@ use crate::ids::{FailureId, InstanceId, Lineage, OpId};
 #[cfg(test)]
 use crate::types::SuspectWrite;
 use crate::types::{Entry, Epoch, Failed, IoFault, IoTargetKey};
+use alloc::vec::Vec;
 
 /// A failure's suspect writes as they stood when an event about it was made, for a test to
 /// compare: the entries carry none (DI-D-108).

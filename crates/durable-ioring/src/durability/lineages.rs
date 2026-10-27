@@ -13,6 +13,7 @@ use super::{
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::types::{LineageBusy, LineageInfo};
+use alloc::string::String;
 
 impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     Durability<E, T, I, K>

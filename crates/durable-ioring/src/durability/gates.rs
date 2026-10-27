@@ -22,6 +22,8 @@
 //! cycle, [`Durability::trace`] repeats the search with a parent per step to name it. A push with
 //! no gate, and a seal over no held write, never search at all.
 
+use alloc::vec;
+use alloc::vec::Vec;
 use core::ops::{Bound, RangeBounds};
 
 use super::kept::Kept;

@@ -8,6 +8,7 @@
 //! answer inside its call, is the driver's.
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use super::{CoreActions, DurableIoCore, V};
 use crate::alloc_tags::{tag, tagged};

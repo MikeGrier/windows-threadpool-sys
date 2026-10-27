@@ -100,11 +100,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.6** -- A refusal carrying a backend fault passes the backend's report through, its cause named in a field of `IoFault` beside the code, so `Unusable` and `Unknown` allocate nothing. -> [completed 2026-10-27](COMPLETED-CHECKLIST.md#di-23126)
 
-- [ ] **DI-23.12.7** -- **The crate builds without `std`** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
-  [DI-D-109](DESIGN-NOTES.md#di-d-109)): `no_std` unless the `std` feature is on; the driver's locking (`engine.rs`,
-  `lock_watch.rs`) and the `thread::panicking()` guard behind `std`, an inconsistency without it panicking
-  unconditionally; and every other use of `std` the crate still has moved to `core` or `alloc`, or behind the feature.
-  Built here locally for a target without `std`; CI is `DI-23.13`.
+- [x] **DI-23.12.7** -- The crate is `no_std` without its `std` feature, builds for `x86_64-unknown-none`, and what only `std` provides is behind the feature or moved to `alloc` and `core`. -> [completed 2026-10-27](COMPLETED-CHECKLIST.md#di-23127)
 
 - [ ] **DI-23.12.8** -- **A provider request's contents and a gate cycle's report allocate nothing after construction**
   ([DI-D-97](DESIGN-NOTES.md#di-d-97)): both reach the consumer, a request through the provider and a cycle in
@@ -133,7 +129,9 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   tables become an assertion that every phase after construction allocates nothing, construction's allocations staying
   recorded. Closes `DI-23.12`.
 
-- [ ] **DI-23.13** -- **Build without `std` in CI**: this crate with `--no-default-features` for a target that has no `std`.
+- [ ] **DI-23.13** -- **Build without `std` in CI**: this crate with `--no-default-features` for a target that has no `std`
+  and has 64-bit atomics, `x86_64-unknown-none` (not `thumbv7em-none-eabi`; see
+  [DI-D-109](DESIGN-NOTES.md#di-d-109), DI-23.12.7), beside the portable job's other builds.
 
 ## DI-M21 -- A sample log on durable-ioring
 
