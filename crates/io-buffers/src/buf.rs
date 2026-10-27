@@ -29,7 +29,9 @@
 //! freed memory long after the call that started it returned. Implementing
 //! these traits is asserting that cannot happen.
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 /// An owned buffer an operation reads bytes **from** (a write).
 ///
