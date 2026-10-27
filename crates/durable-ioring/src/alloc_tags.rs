@@ -137,7 +137,6 @@ pub(crate) mod tag {
     pub(crate) const IO_CORE_NEW_OUTGOING: Tag = Tag::new("io_core::new::outgoing");
     pub(crate) const IO_CORE_NEW_REQUESTS: Tag = Tag::new("io_core::new::requests");
     pub(crate) const IO_CORE_NEW_QUEUE: Tag = Tag::new("io_core::new::queue");
-    pub(crate) const IO_CORE_EPOCHS: Tag = Tag::new("io_core::epochs");
     pub(crate) const IO_CORE_ISSUE_BACKEND_CHECK: Tag = Tag::new("io_core::issue::backend_check");
     pub(crate) const IO_CORE_ISSUE_BACKEND_PUSH: Tag = Tag::new("io_core::issue::backend_push");
 
@@ -169,7 +168,6 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_SCRATCH_WORK: Tag = Tag::new("durability::new::scratch_work");
     pub(crate) const DURABILITY_NEW_SCRATCH_BOUNDS: Tag =
         Tag::new("durability::new::scratch_bounds");
-    pub(crate) const DURABILITY_NEW_SCRATCH_STEPS: Tag = Tag::new("durability::new::scratch_steps");
     pub(crate) const DURABILITY_NEW_SCRATCH_PAIRS: Tag = Tag::new("durability::new::scratch_pairs");
     pub(crate) const DURABILITY_OBSERVE_CAUSE: Tag = Tag::new("durability::observe::cause");
     pub(crate) const DURABILITY_START_SEALS_DOMAINS: Tag =
@@ -185,12 +183,6 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_MARK_CLOCK: Tag = Tag::new("durability::mark::clock");
     pub(crate) const DURABILITY_START_SEALS_REPORT: Tag =
         Tag::new("durability::start_seals::report");
-
-    // durability/gates.rs
-    pub(crate) const GATES_TRACE_CYCLE_GATE: Tag = Tag::new("durability::gates::trace::cycle_gate");
-    pub(crate) const GATES_TRACE_CYCLE_WRITE: Tag =
-        Tag::new("durability::gates::trace::cycle_write");
-    pub(crate) const GATES_TRACE_UNFOUND: Tag = Tag::new("durability::gates::trace::unfound");
 
     // durability/providers.rs
     pub(crate) const PROVIDERS_NAME_PART: Tag = Tag::new("durability::providers::name::part");

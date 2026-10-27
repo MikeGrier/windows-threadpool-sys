@@ -577,9 +577,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 self.act(Due::default(), was_empty),
             )),
             Sealing::Submitted(due) => Ok((DurabilityRequest::Submitted, self.act(due, was_empty))),
-            Sealing::Cycle(cycle) => Err(SealError::GateCycle {
-                cycle: self.epochs(cycle),
-            }),
+            Sealing::Cycle => Err(SealError::GateCycle),
         }
     }
 
@@ -822,16 +820,6 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         }
     }
 
-    /// A cycle in the core's terms, as the contract reports it.
-    fn epochs(&self, cycle: Vec<Gate<E>>) -> Vec<Epoch<V<E, K>>> {
-        tagged(tag::IO_CORE_EPOCHS, || {
-            cycle
-                .into_iter()
-                .map(|gate| Epoch::new(self.name(gate.lineage), gate.epoch))
-                .collect()
-        })
-    }
-
     /// Refuse another core's lineage, which this one has no answer for.
     fn ours(&self, lineage: Lineage) -> Result<(), UnknownLineage<V<E, K>>> {
         if lineage.instance == self.instance {
@@ -979,11 +967,10 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                     lineage: epoch.lineage.seq,
                     epoch: epoch.id,
                 });
-                match write.and_then(|write| self.durability.write_cycle(write, at)) {
-                    None => Ok(Some(at)),
-                    Some(cycle) => Err(PushRefusal::GateCycle {
-                        cycle: self.epochs(cycle),
-                    }),
+                if write.is_some_and(|write| self.durability.write_cycle(write, at)) {
+                    Err(PushRefusal::GateCycle)
+                } else {
+                    Ok(Some(at))
                 }
             }
             GateState::Abandoned => Err(PushRefusal::GateAbandoned { gate }),

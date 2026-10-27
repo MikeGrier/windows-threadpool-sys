@@ -869,9 +869,9 @@ pub enum PushRefusal<V: Identities> {
     /// The gate names an epoch already abandoned, so the operation could never be released.
     GateAbandoned { gate: Epoch<V> },
     /// The gate would close a cycle: releasing it already depends on this write's own epoch
-    /// becoming durable ([DI-D-23](DESIGN-NOTES.md#di-d-23)). `cycle` names the epochs involved,
-    /// starting at the write's own and ending at the gate.
-    GateCycle { cycle: Vec<Epoch<V>> },
+    /// becoming durable ([DI-D-23](DESIGN-NOTES.md#di-d-23)). The cycle is not named
+    /// ([DI-D-115](DESIGN-NOTES.md#di-d-115)): the consumer, whose pushes made it, can rebuild it.
+    GateCycle,
     /// No file was given to the instance under this key.
     UnknownFile(FileKey),
     /// A registered-span operation on an instance built without registered buffers.

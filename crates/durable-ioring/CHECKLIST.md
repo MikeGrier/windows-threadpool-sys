@@ -110,12 +110,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   them, since it runs no provider and closes no cycle. Split 2026-10-27 when the engineer decided the cycle's half
   ([DI-D-115](DESIGN-NOTES.md#di-d-115)); the two halves are independent.
 
-- [ ] **DI-23.12.8.1** -- **A gate cycle is refused without naming it** ([DI-D-115](DESIGN-NOTES.md#di-d-115), amending
-  [DI-D-23](DESIGN-NOTES.md#di-d-23) and [DI-D-43](DESIGN-NOTES.md#di-d-43)): `PushRefusal::GateCycle` and
-  `SealError::GateCycle` carry nothing; `Sealing::Cycle`, `write_cycle` and `seal_cycle` answer only whether; the
-  naming search (`trace`, `trace_in`) and `io_core`'s `epochs` go. CONTRACT.md's "Gates" ("the error names the cycle"),
-  the types' docs and `Display`, and the tests that compared traced cycles follow; the detection tests keep proving the
-  refusal both ways. The allocation test gains a refused gated push and a refused seal, at zero. Breaking for both crates.
+- [x] **DI-23.12.8.1** -- A gate cycle is refused without naming it: `PushRefusal::GateCycle` and `SealError::GateCycle` carry nothing, and the naming search goes. -> [completed 2026-10-27](COMPLETED-CHECKLIST.md#di-231281)
 
 - [ ] **DI-23.12.8.2** -- **A provider request's contents onto storage made at construction**, **once the engineer decides
   its shape**: a seal's domain parts and the write lists in them, and the `ProviderRequest` built from them. Unlike a

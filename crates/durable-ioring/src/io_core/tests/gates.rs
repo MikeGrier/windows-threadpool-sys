@@ -246,10 +246,7 @@ fn a_write_closing_a_gate_cycle_is_refused() {
     let refused = rig
         .write_with(KEY, Epoch::new(b, 1), 0, b"b", gated(Epoch::new(a, 1)))
         .expect_err("a cycle");
-    let PushRefusal::GateCycle { cycle } = refused.reason else {
-        panic!("a cycle: {:?}", refused.reason);
-    };
-    assert_eq!(cycle.first(), Some(&Epoch::new(b, 1)));
+    assert!(matches!(refused.reason, PushRefusal::GateCycle));
     assert_eq!(refused.buffer.as_deref(), Some(b"b".as_slice()));
 }
 

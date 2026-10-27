@@ -21,8 +21,6 @@ use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::ids::OpId;
 
-use super::gates::Step;
-
 /// The scratch a call collects into, emptied when the call is done with it.
 pub(super) struct Scratch<E> {
     /// The live lineages `advance` walks: at most the lineages declared.
@@ -37,9 +35,6 @@ pub(super) struct Scratch<E> {
     pub(super) work: Vec<Gate<E>>,
     /// A cycle search's bound for each lineage it reached: at most the lineages declared.
     pub(super) bounds: Vec<(Key, E)>,
-    /// A traced cycle's steps: the first, and each gated write at most once -- at most the
-    /// operations declared, plus one.
-    pub(super) steps: Vec<Step<E>>,
     /// The flush pairs `end_pairs` ends, sorted before they are: at most the flush parts.
     pub(super) pairs: Vec<((Key, u64, Part), FlushPair<E>)>,
 }
@@ -60,9 +55,6 @@ impl<E> Scratch<E> {
             })?,
             bounds: tagged(tag::DURABILITY_NEW_SCRATCH_BOUNDS, || {
                 list("a cycle search's bounds", Some(capacity.lineages))
-            })?,
-            steps: tagged(tag::DURABILITY_NEW_SCRATCH_STEPS, || {
-                list("a traced cycle's steps", operations.checked_add(1))
             })?,
             pairs: tagged(tag::DURABILITY_NEW_SCRATCH_PAIRS, || {
                 list(

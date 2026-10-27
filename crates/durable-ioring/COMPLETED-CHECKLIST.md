@@ -4979,3 +4979,16 @@ the `std` feature is on; the driver's locking (`engine.rs`, `lock_watch.rs`) and
 `core` or `alloc`, or behind the feature. Built here locally for a target without `std`; CI is `DI-23.13`.
 
 As built: the as-built notes are in DI-D-109. `io-buffers` became `no_std` too, as the crate cannot build without it.
+
+## Moved 2026-10-27 16:46:48 -04:00 -- DI-23.12.8.1: a gate cycle is refused without naming it
+
+### <a id="di-231281"></a>DI-23.12.8.1 -- A gate cycle is refused without naming it: `PushRefusal::GateCycle` and `SealError::GateCycle` carry nothing, and the naming search goes. *(completed 2026-10-27 16:46:48 -04:00)*
+
+**A gate cycle is refused without naming it** ([DI-D-115](DESIGN-NOTES.md#di-d-115), amending
+[DI-D-23](DESIGN-NOTES.md#di-d-23) and [DI-D-43](DESIGN-NOTES.md#di-d-43)): `PushRefusal::GateCycle` and
+`SealError::GateCycle` carry nothing; `Sealing::Cycle`, `write_cycle` and `seal_cycle` answer only whether; the naming
+search (`trace`, `trace_in`) and `io_core`'s `epochs` go. CONTRACT.md's "Gates" ("the error names the cycle"), the types'
+docs and `Display`, and the tests that compared traced cycles follow; the detection tests keep proving the refusal both
+ways. The allocation test gains a refused gated push and a refused seal, at zero. Breaking for both crates.
+
+As built: the as-built notes are in DI-D-115.

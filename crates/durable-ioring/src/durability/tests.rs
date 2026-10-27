@@ -514,7 +514,7 @@ fn submitted(sealing: Sealing<u64, &'static str, Stamp>) -> Due<u64, &'static st
     match sealing {
         Sealing::Submitted(due) => due,
         Sealing::AlreadySealed(state) => panic!("expected a new seal, got {state:?}"),
-        Sealing::Cycle(cycle) => panic!("expected a new seal, got a cycle {cycle:?}"),
+        Sealing::Cycle => panic!("expected a new seal, got a cycle"),
     }
 }
 
@@ -522,7 +522,7 @@ fn already(sealing: Sealing<u64, &'static str, Stamp>) -> State {
     match sealing {
         Sealing::AlreadySealed(state) => state,
         Sealing::Submitted(due) => panic!("expected a request below the seal, got {due:?}"),
-        Sealing::Cycle(cycle) => panic!("expected a request below the seal, got {cycle:?}"),
+        Sealing::Cycle => panic!("expected a request below the seal, got a cycle"),
     }
 }
 

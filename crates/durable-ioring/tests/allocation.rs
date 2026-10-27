@@ -40,7 +40,8 @@ use durable_ioring::memory::{
 use durable_ioring::{
     Capacity, CoreActions, DioringIds, DurabilityRequest, DurableIoCore, Entry, Epoch,
     FailureCause, FailureObserver, ImportScope, IoTarget, IoTargetKey, Lineage, Marking,
-    NoDiagnostics, ReadOptions, Resolution, StampClock, SuspectWrite, WriteOptions,
+    NoDiagnostics, PushRefusal, ReadOptions, Resolution, SealError, StampClock, SuspectWrite,
+    WriteOptions,
 };
 
 /// A failure observer that only counts what it is told, so it allocates nothing itself.
@@ -366,6 +367,26 @@ impl Rig {
             .expect("accepted");
     }
 
+    /// A write the core refuses, as the refusal.
+    fn write_refused(
+        &mut self,
+        key: IoTargetKey,
+        epoch: Epoch<V>,
+        options: WriteOptions<V>,
+    ) -> PushRefusal<V> {
+        let data = SubmissionData::Owned(vec![0x5A; 8]);
+        let (core, backend) = (&mut self.core, &mut self.backend);
+        counted(|| core.write(key, 0, data, epoch, "write", options, backend))
+            .expect_err("refused")
+            .reason
+    }
+
+    /// A seal the core refuses, as the refusal.
+    fn seal_refused(&mut self, lineage: Lineage, through: u64) -> SealError<V> {
+        let core = &mut self.core;
+        counted(|| core.make_durable_through(Epoch::new(lineage, through))).expect_err("refused")
+    }
+
     fn read(&mut self, key: IoTargetKey, offset: u64) {
         let data = SubmissionData::Owned(vec![0; 8]);
         let (core, backend) = (&mut self.core, &mut self.backend);
@@ -488,6 +509,50 @@ fn clean() -> Vec<Measured> {
     rig.drain();
     rig.phase("the minted lineage ended");
 
+    // A gate cycle across two lineages: a write at `a:4` waiting for `b:9`, and then what would
+    // close the cycle -- a write at `b:9` gated on `a:4`, and a seal of `a` through 5.
+    let (a, b) = {
+        let core = &mut rig.core;
+        let a = counted(|| core.mint_lineage(None)).expect("room for a lineage");
+        let b = counted(|| core.mint_lineage(None)).expect("room for a lineage");
+        (a, b)
+    };
+    rig.phase("two lineages minted");
+    let waits_for_b = WriteOptions::new().gate(Epoch::new(b, 9));
+    rig.write(KEY, Epoch::new(a, 4), 0, waits_for_b);
+    rig.phase("a gated write held");
+    let closing = WriteOptions::new().gate(Epoch::new(a, 4));
+    let refusal = rig.write_refused(KEY, Epoch::new(b, 9), closing);
+    assert!(matches!(refusal, PushRefusal::GateCycle), "{refusal:?}");
+    rig.phase("a gated push refused for a cycle");
+    let waits_for_a = WriteOptions::new().gate(Epoch::new(a, 3));
+    rig.write(KEY, Epoch::new(b, 9), 8, waits_for_a);
+    rig.phase("a second gated write held");
+    let refusal = rig.seal_refused(a, 5);
+    assert_eq!(refusal, SealError::GateCycle);
+    rig.phase("a seal refused for a cycle");
+    // Sealing lower first releases the gates that were in the way.
+    assert_eq!(rig.seal(a, 3), DurabilityRequest::Submitted);
+    rig.run();
+    rig.drain();
+    rig.phase("the lower seal releasing a gated write");
+    assert_eq!(rig.seal(b, 9), DurabilityRequest::Submitted);
+    rig.run();
+    rig.drain();
+    rig.phase("the other lineage sealed, releasing the first gated write");
+    assert_eq!(rig.seal(a, 5), DurabilityRequest::Submitted);
+    rig.run();
+    rig.drain();
+    rig.phase("the first lineage sealed through its held write");
+    for lineage in [a, b] {
+        let core = &mut rig.core;
+        let actions = counted(|| core.end_lineage(lineage)).expect("a live lineage");
+        rig.act(actions);
+    }
+    rig.run();
+    rig.drain();
+    rig.phase("two lineages ended");
+
     let target = MemoryTarget::new();
     let description = target.describe();
     let core = &mut rig.core;
@@ -602,7 +667,7 @@ fn failures() -> Vec<Measured> {
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
-    ("construction, with two targets", 40),
+    ("construction, with two targets", 39),
     ("writes, first round", 3),
     ("write completions, first round", 0),
     ("pops, first round", 0),
@@ -625,6 +690,18 @@ const CLEAN: &[(&str, u64)] = &[
     ("a busy lineage refused, and its holds named", 0),
     ("the minted lineage sealed", 0),
     ("the minted lineage ended", 0),
+    ("two lineages minted", 0),
+    ("a gated write held", 0),
+    ("a gated push refused for a cycle", 0),
+    ("a second gated write held", 0),
+    ("a seal refused for a cycle", 0),
+    ("the lower seal releasing a gated write", 0),
+    (
+        "the other lineage sealed, releasing the first gated write",
+        0,
+    ),
+    ("the first lineage sealed through its held write", 0),
+    ("two lineages ended", 0),
     ("a target added", 0),
     ("the added target written", 0),
     ("a busy target refused, and its holds named", 0),
@@ -636,7 +713,7 @@ const CLEAN: &[(&str, u64)] = &[
 
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
-    ("construction, with two targets", 40),
+    ("construction, with two targets", 39),
     ("writes before the failure", 3),
     ("a commit failure observed", 0),
     ("failures queried", 0),
@@ -746,11 +823,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
     (
         "construction, with two targets",
         "durability::new::scratch_bounds",
-        1,
-    ),
-    (
-        "construction, with two targets",
-        "durability::new::scratch_steps",
         1,
     ),
     (
@@ -894,11 +966,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     (
         "construction, with two targets",
         "durability::new::scratch_bounds",
-        1,
-    ),
-    (
-        "construction, with two targets",
-        "durability::new::scratch_steps",
         1,
     ),
     (

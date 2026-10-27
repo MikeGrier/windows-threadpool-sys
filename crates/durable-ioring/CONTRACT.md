@@ -693,13 +693,16 @@ A gate holds an operation until an epoch is durable -- release-after-durable
   ([DI-D-109](DESIGN-NOTES.md#di-d-109)): the instance no longer tells them apart, and the
   consumer, which popped the `Abandoned` entry, does. So is a gated
   write that would close a **cycle**: one whose gate's lineage reaching it already needs this write
-  to complete. The error names the cycle.
+  to complete. **The refusal does not name the cycle** ([DI-D-115](DESIGN-NOTES.md#di-d-115)): every edge of it
+  is the consumer's own -- each held write's epoch and gate were given at its push, it is held because the consumer has
+  not seen it complete, and a heal a seal's cycle passes through is one the consumer made -- so a consumer that wants the
+  cycle rebuilds it from the gated writes it kept.
 - **A seal can close a cycle too, and is refused.** Which held writes a lineage must complete to
   reach an epoch depends on the seal that will cover it -- a seal through n waits for every write
   at or below n, and a pending heal waits for the next seal made after it. So
   `make_durable_through` refuses a seal whose writes include a held write that, transitively,
-  waits for the seal itself; nothing is sealed, and the error names the cycle. Sealing lower first
-  releases the gates that were in the way.
+  waits for the seal itself; nothing is sealed, and the error, which names nothing either, is `SealError::GateCycle`.
+  Sealing lower first releases the gates that were in the way.
 - **Reads take no part in durability**, so a gated read is on no cycle.
 
 Only gates dioring holds are seen. A consumer that waits in its own code for one lineage before

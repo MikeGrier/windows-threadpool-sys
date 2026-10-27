@@ -2519,8 +2519,8 @@ construction allocates.
   durability core's own tests do, since they drive it without the I/O core. The I/O core's tests check after every call
   that the set came back.
 - **The scratch a call collects into** -- the live lineages a change walks, the writes a seal's answers cover, a cycle
-  search's work and bounds, a traced cycle's steps, and the flush pairs an end closes -- is made at construction and
-  emptied after use.
+  search's work and bounds, and the flush pairs an end closes -- is made at construction and emptied after use. (A traced
+  cycle's steps were another, until [DI-D-115](#di-d-115).)
 - **Every list is made for a stated bound, and a push past it is an inconsistency** (DI-D-46), never growth: the bounds are
   in [durability/scratch.rs](src/durability/scratch.rs) and [io_core.rs](src/io_core.rs), and
   [io_core/tests/lists.rs](src/io_core/tests/lists.rs) has one call reach each. A cycle search's work list is at most the
@@ -2670,7 +2670,7 @@ Amends [DI-D-41](#di-d-41) and [DI-D-46](#di-d-46); [CONTRACT.md](CONTRACT.md)'s
 
 ## <a id="di-d-115"></a>DI-D-115: a gate cycle is refused without naming it; the consumer who wants the cycle traces it from its own pushes
 
-**Decided; queued as DI-23.12.8.1 in [CHECKLIST.md](CHECKLIST.md).** The engineer, 2026-10-27, on the first half of
+**Decided, and built as DI-23.12.8.1 (see "As built" below).** The engineer, 2026-10-27, on the first half of
 DI-23.12.8: "yes drop the cycle trace. The caller who cares can do it themselves." The exchange is in
 [the session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#a-gate-cycles-report-continued-2026-10-27).
 Amends [DI-D-23](#di-d-23) and [DI-D-43](#di-d-43), which had the refusal name the cycle.
@@ -2696,3 +2696,12 @@ Amends [DI-D-23](#di-d-23) and [DI-D-43](#di-d-43), which had the refusal name t
 - **Not covered**: a provider request's contents, the other half of DI-23.12.8. Which writes are named to which seal is
   the instance's choice, by its seal cut and when each write completes, so a consumer could only approximate it; that
   half waits for the engineer as DI-23.12.8.2.
+- **As built** (DI-23.12.8.1, the assistant's, 2026-10-27): `PushRefusal::GateCycle` and `SealError::GateCycle` are unit
+  variants, so the types lose a `Vec` and `SealError` a field `Display` printed; `Durability::write_cycle` and `seal_cycle`
+  answer `bool` and `Sealing::Cycle` carries nothing. `trace`, `trace_in`, `Step`, the scratch list for them, `io_core`'s
+  `epochs` and five allocation tags are gone, and construction makes one list fewer (the allocation test's construction
+  count falls by one). The seal's search is otherwise as it was, including the quick test and the write-by-write
+  confirmation after it: a positive quick test does not mean a cycle, so `seal_cycle` still tests each write in epoch
+  order, and only stops naming the first it finds. The allocation test gained a gated write held, a push refused for a
+  cycle, a second gated write held and a seal refused for one, then the lower seal that untangles them, each at zero.
+  Breaking for both crates where they matched on the cycle.

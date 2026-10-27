@@ -495,12 +495,10 @@ pub enum PushRefusal<V: Identities> {
         gate: Epoch<V>,
     },
     /// The gate would close a cycle: its lineage reaching it already needs, transitively, this
-    /// write to complete (DI-D-23).
-    GateCycle {
-        /// The cycle, as [`SealError::GateCycle`] lists one, starting at this write's epoch and
-        /// its gate.
-        cycle: Vec<Epoch<V>>,
-    },
+    /// write to complete (DI-D-23). The cycle is not named: every edge of it is the consumer's own
+    /// -- each held write's epoch and gate were given at its push -- so a consumer that wants it
+    /// rebuilds it from the pushes it kept (DI-D-115).
+    GateCycle,
     /// No target was given to the instance under this key.
     UnknownFile(IoTargetKey),
     /// The instance holds as many operations as it was built for (DI-D-107). Nothing was
@@ -624,13 +622,9 @@ pub enum SealError<V: Identities> {
     UnknownLineage(V::Lineage),
     /// The seal would close a gate cycle (DI-D-43): the writes it must wait for include a held
     /// write whose gate's lineage reaching it needs, transitively, the seal to finish. Seal lower
-    /// first, so the gates can be released.
-    GateCycle {
-        /// The cycle: each held write's epoch followed by the gate it waits for. Each gate's
-        /// lineage reaching it needs the next write to complete, and the last gate's needs the
-        /// first's.
-        cycle: Vec<Epoch<V>>,
-    },
+    /// first, so the gates can be released. The cycle is not named, as for
+    /// [`PushRefusal::GateCycle`] (DI-D-115).
+    GateCycle,
 }
 
 impl<V: Identities> fmt::Display for SealError<V> {
@@ -642,9 +636,7 @@ impl<V: Identities> fmt::Display for SealError<V> {
                     "{lineage:?} is not a lineage this instance can answer for"
                 )
             }
-            Self::GateCycle { cycle } => {
-                write!(f, "sealing would close a gate cycle: {cycle:?}")
-            }
+            Self::GateCycle => f.write_str("sealing would close a gate cycle"),
         }
     }
 }

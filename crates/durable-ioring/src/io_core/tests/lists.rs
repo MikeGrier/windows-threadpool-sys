@@ -148,7 +148,7 @@ fn a_cycle_search_visits_a_gate_for_every_operation_and_every_lineage() {
 }
 
 #[test]
-fn a_traced_cycle_takes_a_step_for_every_operation_and_one_more() {
+fn a_cycle_is_refused_with_every_operation_held_and_every_lineage_reached() {
     let mut rig = rig_with(declared(|c| c.lineages = 2), 1);
     let minted = gated_on_the_default(&mut rig);
     let refused = rig
@@ -160,18 +160,7 @@ fn a_traced_cycle_takes_a_step_for_every_operation_and_one_more() {
             WriteOptions::new().gate(Epoch::new(minted, 1)),
         )
         .expect_err("a cycle");
-    let PushRefusal::GateCycle { cycle } = refused.reason else {
-        panic!("a cycle: {:?}", refused.reason);
-    };
-    assert_eq!(
-        cycle,
-        [
-            rig.epoch(1),
-            Epoch::new(minted, 1),
-            Epoch::new(minted, 1),
-            rig.epoch(2)
-        ]
-    );
+    assert!(matches!(refused.reason, PushRefusal::GateCycle));
 }
 
 #[test]

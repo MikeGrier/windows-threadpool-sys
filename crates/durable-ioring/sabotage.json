@@ -634,16 +634,16 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-43: a seal whose writes include one waiting, transitively, for the seal itself is refused. Accepted, nothing it covers can ever finish. Caught by the core and ring seal-cycle tests.",
-      "find": ["        if let Some(cycle) = self.seal_cycle(lineage, through) {\n"],
-      "replace": ["        if let Some(cycle) = self.seal_cycle(lineage, through).filter(|_| false) {\n"]
+      "find": ["        if self.seal_cycle(lineage, through) {\n"],
+      "replace": ["        if self.seal_cycle(lineage, through) && false {\n"]
     },
     {
       "name": "DI-3.2.5.2: the quick test is trusted as the answer",
       "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "DI-D-43: the search from every held write under a seal together can need the lowest of them without any being on a cycle, so a positive is confirmed write by write. Trusted, it refuses a seal that closes nothing. Caught by the core test of a seal the quick test suspects.",
-      "find": ["            .find(|&(write, gate)| {\n                work.clear();\n                bounds.clear();\n                self.seed(work, gate) && self.needs(work, bounds, write, extra)\n            })"],
-      "replace": ["            .find(|_| true)"]
+      "find": ["            .any(|(write, gate)| {\n                work.clear();\n                bounds.clear();\n                self.seed(work, gate) && self.needs(work, bounds, write, extra)\n            })"],
+      "replace": ["            .any(|_| true)"]
     },
     {
       "name": "CONTROL: a seal is searched write by write without the quick test",
@@ -1250,8 +1250,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-43: a write whose gate needs, transitively, the write itself would wait forever.",
-      "find": ["                match write.and_then(|write| self.durability.write_cycle(write, at)) {\n"],
-      "replace": ["                match write.and(None::<Vec<Gate<E>>>) {\n"]
+      "find": ["                if write.is_some_and(|write| self.durability.write_cycle(write, at)) {\n"],
+      "replace": ["                if write.is_some_and(|write| self.durability.write_cycle(write, at) && false) {\n"]
     },
     {
       "name": "DI-3.10.3.5.3: a gate in another core is taken for this one's",
@@ -2247,9 +2247,9 @@
       "name": "DI-23.2 control: a tag no scenario reaches is renamed",
       "file": "src/alloc_tags.rs",
       "expect": "survives",
-      "why": "A control, and a limit stated: the allocation test pins only the tags its scenarios reach. A gate cycle the search found and the trace did not is never reached, so its tag's name is seen by nothing. The rules hold for the paths exercised; the static pass is what covers the rest.",
-      "find": ["Tag::new(\"durability::gates::trace::unfound\")"],
-      "replace": ["Tag::new(\"durability::gates::trace::unfound_renamed\")"]
+      "why": "A control, and a limit stated: the allocation test pins only the tags its scenarios reach. A provider-routed seal is not run by any scenario, so its tag's name is seen by nothing. The rules hold for the paths exercised; the static pass is what covers the rest.",
+      "find": ["Tag::new(\"durability::providers::name::part\")"],
+      "replace": ["Tag::new(\"durability::providers::name::part_renamed\")"]
     },
     {
       "name": "DI-23.4.2: a shared report ignores the allocator it was given",
@@ -3076,14 +3076,6 @@
       "replace": ["                list(\"a cycle search's bounds\", Some(capacity.lineages - 1))"]
     },
     {
-      "name": "DI-23.12.2: a traced cycle's steps is made one short",
-      "file": "src/durability/scratch.rs",
-      "expect": "caught",
-      "why": "Each per-call list is made for a bound on what one call can put in it, and a test makes one call reach it; one short refuses inside the bound, an inconsistency.",
-      "find": ["                list(\"a traced cycle's steps\", operations.checked_add(1))"],
-      "replace": ["                list(\"a traced cycle's steps\", Some(operations))"]
-    },
-    {
       "name": "DI-23.12.2: the flush pairs an end closes is made one short",
       "file": "src/durability/scratch.rs",
       "expect": "caught",
@@ -3770,6 +3762,22 @@
       "why": "first_repeat is an ordered set of what was seen (a hasher being std's, DI-D-97): a value is a repeat when inserting it finds it there, so reporting on a fresh insert names the first value of any list.",
       "find": ["        if !tagged(tag::DOMAINS_FIRST_REPEAT_SEEN, || seen.insert(copy)) {"],
       "replace": ["        if tagged(tag::DOMAINS_FIRST_REPEAT_SEEN, || seen.insert(copy)) {"]
+    },
+    {
+      "name": "DI-23.12.8.1: a refused gated push allocates",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "A gate cycle is refused without naming it (DI-D-115), so the refusal costs nothing after construction: the allocation test refuses a gated push and records zero.",
+      "find": ["                    Err(PushRefusal::GateCycle)\n"],
+      "replace": ["                    {\n                        core::mem::forget(alloc::vec![0_u8]);\n                        Err(PushRefusal::GateCycle)\n                    }\n"]
+    },
+    {
+      "name": "DI-23.12.8.1: a refused seal allocates",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "As for a push: the allocation test refuses a seal for a cycle and records zero.",
+      "find": ["            Sealing::Cycle => Err(SealError::GateCycle),"],
+      "replace": ["            Sealing::Cycle => {\n                core::mem::forget(alloc::vec![0_u8]);\n                Err(SealError::GateCycle)\n            }"]
     }
   ]
 }

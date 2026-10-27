@@ -180,11 +180,12 @@ pub(crate) enum Sealing<E: EpochId + 'static, T, I: Instant> {
     Submitted(Due<E, T, I>),
     /// At or below the seal point: the epoch's state, and nothing changes.
     AlreadySealed(State),
-    /// Refused, and nothing changes: the seal would close this gate cycle (DI-D-43).
-    Cycle(Vec<Gate<E>>),
+    /// Refused, and nothing changes: the seal would close a gate cycle (DI-D-43), which is not
+    /// named (DI-D-115).
+    Cycle,
 }
 
-/// An epoch of a lineage, in the core's terms: what a gate names, and what a cycle lists.
+/// An epoch of a lineage, in the core's terms: what a gate names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Gate<E> {
     pub(crate) lineage: Key,
@@ -921,8 +922,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             let answer = self.state(lineage, through).unwrap_or(State::Pending);
             return Sealing::AlreadySealed(answer);
         }
-        if let Some(cycle) = self.seal_cycle(lineage, through) {
-            return Sealing::Cycle(cycle);
+        if self.seal_cycle(lineage, through) {
+            return Sealing::Cycle;
         }
         let pin = self.pinned_by(lineage, through);
         let state = self

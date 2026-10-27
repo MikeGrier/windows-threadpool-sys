@@ -47,7 +47,7 @@ impl Ops {
 /// no cycle.
 fn hold_write(lineage: &mut Lineage, ops: &mut Ops, own: Gate<u64>, gate: Gate<u64>) -> OpId {
     assert_eq!(lineage.gate_state(gate), GateState::Waiting, "{gate:?}");
-    assert_eq!(lineage.write_cycle(own, gate), None, "{own:?} on {gate:?}");
+    assert!(!lineage.write_cycle(own, gate), "{own:?} on {gate:?}");
     let op = ops.mint();
     let write = Accepted {
         op,
@@ -85,9 +85,10 @@ fn import(lineage: &mut Lineage) -> Due<u64, &'static str, Stamp> {
     lineage.0.import(cause, &Reach::All, None).1
 }
 
-fn cycle(sealing: Sealing<u64, &'static str, Stamp>) -> Vec<Gate<u64>> {
+/// Assert `sealing` is the refusal for a gate cycle, which names nothing (DI-D-115).
+fn refused_as_a_cycle(sealing: Sealing<u64, &'static str, Stamp>) {
     match sealing {
-        Sealing::Cycle(cycle) => cycle,
+        Sealing::Cycle => {}
         Sealing::Submitted(due) => panic!("expected a cycle, got a seal: {due:?}"),
         Sealing::AlreadySealed(state) => panic!("expected a cycle, got {state:?}"),
     }
@@ -364,39 +365,27 @@ fn issuing_what_was_never_held_or_not_yet_released_is_inconsistent() {
 #[test]
 fn a_gate_on_the_writes_own_lineage_at_or_above_its_epoch_is_a_cycle() {
     let mut lineage = lineage();
-    assert_eq!(
-        lineage.write_cycle(at(D, 3), at(D, 3)),
-        Some(vec![at(D, 3), at(D, 3)])
-    );
-    assert_eq!(
-        lineage.write_cycle(at(D, 3), at(D, 5)),
-        Some(vec![at(D, 3), at(D, 5)])
-    );
-    assert_eq!(lineage.write_cycle(at(D, 3), at(D, 2)), None);
+    assert!(lineage.write_cycle(at(D, 3), at(D, 3)));
+    assert!(lineage.write_cycle(at(D, 3), at(D, 5)));
+    assert!(!lineage.write_cycle(at(D, 3), at(D, 2)));
 }
 
 #[test]
-fn a_gate_back_across_two_lineages_is_a_cycle_and_names_it() {
+fn a_gate_back_across_two_lineages_is_a_cycle() {
     let (mut lineage, minted) = two();
     let mut ops = Ops::new();
     hold_write(&mut lineage, &mut ops, at(minted, 4), at(D, 9));
-    assert_eq!(
-        lineage.write_cycle(at(D, 9), at(minted, 4)),
-        Some(vec![at(D, 9), at(minted, 4), at(minted, 4), at(D, 9)])
-    );
-    assert_eq!(
+    assert!(lineage.write_cycle(at(D, 9), at(minted, 4)));
+    assert!(
         lineage.write_cycle(at(D, 8), at(minted, 4)),
-        Some(vec![at(D, 8), at(minted, 4), at(minted, 4), at(D, 9)]),
         "the default reaching 9 needs its write at 8"
     );
-    assert_eq!(
-        lineage.write_cycle(at(D, 10), at(minted, 4)),
-        None,
+    assert!(
+        !lineage.write_cycle(at(D, 10), at(minted, 4)),
         "nothing reaching 9 waits for 10"
     );
-    assert_eq!(
-        lineage.write_cycle(at(D, 9), at(minted, 3)),
-        None,
+    assert!(
+        !lineage.write_cycle(at(D, 9), at(minted, 3)),
         "reaching 3 needs only the writes at or below 3"
     );
 }
@@ -408,32 +397,21 @@ fn a_seal_already_made_widens_what_reaching_an_epoch_needs() {
     ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
     hold_write(&mut lineage, &mut ops, at(minted, 4), at(D, 9));
     submitted(lineage.0.seal(minted, 5));
-    assert_eq!(
+    assert!(
         lineage.write_cycle(at(D, 9), at(minted, 3)),
-        Some(vec![at(D, 9), at(minted, 3), at(minted, 4), at(D, 9)]),
         "reaching 3 now needs the seal through 5 to finish"
     );
 }
 
 #[test]
-fn a_cycle_through_three_lineages_is_found_and_named_whole() {
+fn a_cycle_through_three_lineages_is_found() {
     let (mut lineage, keys) = minted(2);
     let (l1, l2) = (keys[0], keys[1]);
     let mut ops = Ops::new();
     hold_write(&mut lineage, &mut ops, at(D, 5), at(l1, 5));
     hold_write(&mut lineage, &mut ops, at(l1, 5), at(l2, 5));
-    assert_eq!(
-        lineage.write_cycle(at(l2, 5), at(D, 5)),
-        Some(vec![
-            at(l2, 5),
-            at(D, 5),
-            at(D, 5),
-            at(l1, 5),
-            at(l1, 5),
-            at(l2, 5)
-        ])
-    );
-    assert_eq!(lineage.write_cycle(at(l2, 6), at(D, 5)), None);
+    assert!(lineage.write_cycle(at(l2, 5), at(D, 5)));
+    assert!(!lineage.write_cycle(at(l2, 6), at(D, 5)));
 }
 
 #[test]
@@ -445,9 +423,8 @@ fn gates_in_both_directions_that_close_no_cycle_are_accepted() {
     hold_write(&mut lineage, &mut ops, at(data, 1), at(D, 10));
     hold_write(&mut lineage, &mut ops, at(data, 2), at(D, 11));
     hold_write(&mut lineage, &mut ops, at(D, 20), at(data, 2));
-    assert_eq!(
+    assert!(
         lineage.write_cycle(at(D, 11), at(data, 2)),
-        Some(vec![at(D, 11), at(data, 2), at(data, 2), at(D, 11)]),
         "a checkpoint at or below a page's record is the one that cannot be written"
     );
 }
@@ -458,11 +435,8 @@ fn a_seal_that_would_close_a_cycle_is_refused_and_a_lower_one_is_not() {
     let mut ops = Ops::new();
     let w1 = hold_write(&mut lineage, &mut ops, at(minted, 4), at(D, 9));
     let w2 = hold_write(&mut lineage, &mut ops, at(D, 9), at(minted, 3));
-    assert_eq!(
-        cycle(lineage.0.seal(minted, 5)),
-        [at(minted, 4), at(D, 9), at(D, 9), at(minted, 3)],
-        "reaching 3 would need the seal through 5, which waits for the write at 4"
-    );
+    // reaching 3 would need the seal through 5, which waits for the write at 4
+    refused_as_a_cycle(lineage.0.seal(minted, 5));
     assert_eq!(
         lineage.0.sealed_through(minted),
         Some(None),
@@ -498,11 +472,8 @@ fn a_seal_a_pending_heal_waits_for_can_close_a_cycle() {
         .expect("heal");
     hold_write(&mut lineage, &mut ops, at(minted, 6), at(D, 9));
     hold_write(&mut lineage, &mut ops, at(D, 9), at(minted, 2));
-    assert_eq!(
-        cycle(lineage.0.seal(minted, 6)),
-        [at(minted, 6), at(D, 9), at(D, 9), at(minted, 2)],
-        "the heal makes reaching 2 wait for this seal, which waits for the write at 6"
-    );
+    // the heal makes reaching 2 wait for this seal, which waits for the write at 6
+    refused_as_a_cycle(lineage.0.seal(minted, 6));
     let due = submitted(lineage.0.seal(minted, 4));
     assert!(due.flushes.is_empty(), "nothing at or below 4 to flush");
     assert_eq!(
@@ -574,10 +545,7 @@ fn a_push_is_refused_when_the_seal_releasing_a_heal_closes_a_cycle() {
     hold_write(&mut lineage, &mut ops, at(D, 8), at(minted, 1));
     submitted(lineage.seal(10));
 
-    assert_eq!(
-        lineage.write_cycle(at(minted, 1), at(D, 3)),
-        Some(vec![at(minted, 1), at(D, 3), at(D, 8), at(minted, 1)])
-    );
+    assert!(lineage.write_cycle(at(minted, 1), at(D, 3)));
 }
 
 #[test]
