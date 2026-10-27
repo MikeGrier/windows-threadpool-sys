@@ -30,6 +30,14 @@ investigated and proposed. Decisions that resulted, all in
   until the mark passes it (continued 2026-10-24).
 - [DI-D-111](../crates/durable-ioring/DESIGN-NOTES.md#di-d-111) -- what a call makes due stays in the core, in storage
   made at construction (continued 2026-10-24).
+- [DI-D-112](../crates/durable-ioring/DESIGN-NOTES.md#di-d-112) -- an entry is let go when a later one supersedes it, and
+  a lineage counts until its last entry is popped (continued 2026-10-25).
+- [DI-D-113](../crates/durable-ioring/DESIGN-NOTES.md#di-d-113) -- a failure's detail is dispatched to an observer given
+  at construction (continued 2026-10-26).
+- [DI-D-114](../crates/durable-ioring/DESIGN-NOTES.md#di-d-114) -- what a heal waits for is read from the write records
+  (continued 2026-10-26).
+- [DI-D-115](../crates/durable-ioring/DESIGN-NOTES.md#di-d-115) -- a gate cycle is refused without naming it (continued
+  2026-10-27).
 
 The work is queued as DI-M23 in [CHECKLIST.md](../crates/durable-ioring/CHECKLIST.md). The prior art behind these
 decisions is in [DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md](DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md).
@@ -614,6 +622,26 @@ which every write has and which carries its fault, identity and epoch. Offered t
 failed completion, he declined: "no, no need to duplicate, I want to ensure that if the client really needs that level of
 accuracy, they can construct it. Go ahead with your plan here, ensure this design is well documented." Recorded as
 DI-D-114.
+
+## A gate cycle's report (continued 2026-10-27)
+
+The engineer, on DI-23.12.8: "the case here is to report a cycle, presumably for a case where the client is not aware of
+all of the content that has been pushed into the ring or has forgotten it? Can we not just make them responsible for
+remembering the content themselves?"
+
+The assistant: yes for the cycle, and the refusal itself stays. An accepted cycle never releases, and only the instance
+sees every held write and pending heal at once, so detecting one is the instance's. The search already runs on storage
+made at construction; the allocation is the traced `Vec` of epochs, made by a second search run only to name the cycle.
+Every edge of a cycle is the consumer's own -- a held write's epoch and gate given at its push, held because it has not
+seen it complete, and a heal it made -- so nothing in it is known only to the instance. The case where a consumer may
+not know: components owning different lineages of one instance, where the refused one may not hold the other's gated
+writes; that is their coordination, as waiting on oneself in one's own code already is. Proposed: `GateCycle` carries
+nothing, with at most one `Copy` pointer in the seal refusal to the held write in the sealed range that closes the cycle;
+and, as an option only, the trace told edge by edge to the diagnostic sink. The other half of DI-23.12.8, a provider
+request's contents, is not consumer state in the same way: which writes are named to which seal is the instance's choice.
+
+The engineer, 2026-10-27: "yes drop the cycle trace. The caller who cares can do it themselves." Read as dropping the
+seal's pointer too. Recorded as DI-D-115; the provider request stays open.
 
 ## Working positions and open questions (not decisions)
 

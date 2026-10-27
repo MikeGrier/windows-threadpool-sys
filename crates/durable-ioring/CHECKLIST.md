@@ -113,17 +113,28 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   unconditionally; and every other use of `std` the crate still has moved to `core` or `alloc`, or behind the feature.
   Built here locally for a target without `std`; CI is `DI-23.13`.
 
-- [ ] **DI-23.12.8** -- **A provider request's contents and a gate cycle's report onto storage made at construction**
-  ([DI-D-97](DESIGN-NOTES.md#di-d-97)), **once the engineer decides their shape**: both reach the consumer, a request through
-  the provider and a cycle in `PushRefusal::GateCycle` and `SealError::GateCycle`. Each is allocated where it is made: a
-  seal's domain parts and the write lists in them, the `ProviderRequest` built from them, and the traced cycle's `Vec` of
-  epochs. Found 2026-10-24 implementing `DI-23.12.2`, which moved the lists that carry these but not the contents; no step
-  owned them, and the allocation test cannot see them, since it runs no provider and closes no cycle, so it gains a
-  provider-routed seal and a refused cycle here. The assistant's recommendation, for the engineer: lend each by a scoped
-  borrow of fixed storage, as a failure's records were lent ([DI-D-108](DESIGN-NOTES.md#di-d-108), since replaced by
-  the observer of [DI-D-113](DESIGN-NOTES.md#di-d-113)) -- a request's parts sized
-  from the recorded seals and the served domains, and a cycle, at most the operations plus one steps long, read through the
-  refusal for the duration of a visitor. A contract change for both crates.
+- [ ] **DI-23.12.8** -- **A provider request's contents and a gate cycle's report allocate nothing after construction**
+  ([DI-D-97](DESIGN-NOTES.md#di-d-97)): both reach the consumer, a request through the provider and a cycle in
+  `PushRefusal::GateCycle` and `SealError::GateCycle`. Each was allocated where it is made: a seal's domain parts and the
+  write lists in them, the `ProviderRequest` built from them, and the traced cycle's `Vec` of epochs. Found 2026-10-24
+  implementing `DI-23.12.2`, which moved the lists that carry these but not the contents; the allocation test cannot see
+  them, since it runs no provider and closes no cycle. Split 2026-10-27 when the engineer decided the cycle's half
+  ([DI-D-115](DESIGN-NOTES.md#di-d-115)); the two halves are independent.
+
+- [ ] **DI-23.12.8.1** -- **A gate cycle is refused without naming it** ([DI-D-115](DESIGN-NOTES.md#di-d-115), amending
+  [DI-D-23](DESIGN-NOTES.md#di-d-23) and [DI-D-43](DESIGN-NOTES.md#di-d-43)): `PushRefusal::GateCycle` and
+  `SealError::GateCycle` carry nothing; `Sealing::Cycle`, `write_cycle` and `seal_cycle` answer only whether; the
+  naming search (`trace`, `trace_in`) and `io_core`'s `epochs` go. CONTRACT.md's "Gates" ("the error names the cycle"),
+  the types' docs and `Display`, and the tests that compared traced cycles follow; the detection tests keep proving the
+  refusal both ways. The allocation test gains a refused gated push and a refused seal, at zero. Breaking for both crates.
+
+- [ ] **DI-23.12.8.2** -- **A provider request's contents onto storage made at construction**, **once the engineer decides
+  its shape**: a seal's domain parts and the write lists in them, and the `ProviderRequest` built from them. Unlike a
+  cycle, which writes are named to which seal is the instance's choice (its seal cut and when each write completes), so a
+  consumer could only approximate them ([DI-D-115](DESIGN-NOTES.md#di-d-115)'s "Not covered"). The assistant's
+  recommendation: lend the request by a scoped borrow of fixed storage, its parts sized from the recorded seals and the
+  served domains, for the duration of the provider's call. The allocation test gains a provider-routed seal. A contract
+  change for both crates.
 
 - [ ] **DI-23.12.9** -- **The allocation test asserts zero after construction in every phase** (`DI-23.1`): the recorded
   tables become an assertion that every phase after construction allocates nothing, construction's allocations staying
