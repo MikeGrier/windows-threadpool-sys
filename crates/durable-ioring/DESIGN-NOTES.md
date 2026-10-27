@@ -2696,6 +2696,28 @@ Amends [DI-D-23](#di-d-23) and [DI-D-43](#di-d-43), which had the refusal name t
 - **Not covered**: a provider request's contents, the other half of DI-23.12.8. Which writes are named to which seal is
   the instance's choice, by its seal cut and when each write completes, so a consumer could only approximate it; that
   half waits for the engineer as DI-23.12.8.2.
+- **Sizing a provider request's storage** (the assistant's analysis, 2026-10-27; a working position, not a decision: the
+  shape of the storage, lent or recycled, is the engineer's to decide, and nothing here is built). **The size is computable
+  when the core is built**, from `operations` and the number of served domains, both known to `with_provider`, so no new
+  declared capacity is needed. It is the same product [capacity.rs](src/capacity.rs)'s `flush_parts` already uses.
+  - **Parts at most `operations * served`.** Every recorded seal pins one write's place and the seal table is made for
+    `operations` ([DI-D-110](#di-d-110)), and a seal has at most one part for each served domain it touched.
+  - **Write ids at most `operations * served`.** Each write is named by exactly one seal, and `providers::name` adds it to
+    each served domain its file declares, so it appears at most once per served domain, the argument `Capacity::failures`
+    already makes.
+  - **Target entries at most `operations * served`**, since an entry exists only if it names a write, and at most `targets`
+    in any one part.
+  - **So three tables, each of `operations * served`**: the parts, the target entries in them, and the write ids in those.
+    They replace the nested `Vec`s of `DomainPart`, `ProviderPart` and `IoTargetWrites`, and the `Vec<SealDomain>` of
+    `SealStage::Flushing` has the same bound and could share the first. With no provider (`served == 0`) the reservation is
+    zero. They are shared across seals, a request being a range in each, because a seal's size is not known in advance.
+  - **It is a worst case, and has to be.** A seal is never refused for capacity ([DI-D-98](#di-d-98)), so the tables cover
+    every recorded seal at once. The ids are needed only until the provider call returns, but a driver can fall behind
+    while seals keep being made, so a lease does not lower the worst case.
+  - **Open, and part of the shape decision:** the provider is called without the engine's lock ([DI-D-44](#di-d-44)), so two
+    threads can be inside `make_durable` at once and ranges can be released out of order, which needs a free list and not a
+    ring. A view that iterates the writes table instead of copying would need no storage, but can be read only under the
+    lock, which that call does not hold.
 - **As built** (DI-23.12.8.1, the assistant's, 2026-10-27): `PushRefusal::GateCycle` and `SealError::GateCycle` are unit
   variants, so the types lose a `Vec` and `SealError` a field `Display` printed; `Durability::write_cycle` and `seal_cycle`
   answer `bool` and `Sealing::Cycle` carries nothing. `trace`, `trace_in`, `Step`, the scratch list for them, `io_core`'s

@@ -116,9 +116,11 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   its shape**: a seal's domain parts and the write lists in them, and the `ProviderRequest` built from them. Unlike a
   cycle, which writes are named to which seal is the instance's choice (its seal cut and when each write completes), so a
   consumer could only approximate them ([DI-D-115](DESIGN-NOTES.md#di-d-115)'s "Not covered"). The assistant's
-  recommendation: lend the request by a scoped borrow of fixed storage, its parts sized from the recorded seals and the
-  served domains, for the duration of the provider's call. The allocation test gains a provider-routed seal. A contract
-  change for both crates.
+  recommendation: lend the request by a scoped borrow of fixed storage, for the duration of the provider's call. The
+  storage is sized when the core is built, from `operations` and the served domains, as [DI-D-115](DESIGN-NOTES.md#di-d-115)'s
+  "Sizing a provider request's storage" derives it; the decision it leaves is lent or recycled, and the free list for
+  out-of-order release. The allocation test gains a provider-routed seal, from a core built with `with_provider`. A
+  contract change for both crates.
 
 - [ ] **DI-23.12.9** -- **The allocation test asserts zero after construction in every phase** (`DI-23.1`): the recorded
   tables become an assertion that every phase after construction allocates nothing, construction's allocations staying
