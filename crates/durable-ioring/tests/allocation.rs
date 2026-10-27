@@ -602,7 +602,7 @@ fn failures() -> Vec<Measured> {
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
-    ("construction, with two targets", 39),
+    ("construction, with two targets", 40),
     ("writes, first round", 3),
     ("write completions, first round", 0),
     ("pops, first round", 0),
@@ -636,7 +636,7 @@ const CLEAN: &[(&str, u64)] = &[
 
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
-    ("construction, with two targets", 39),
+    ("construction, with two targets", 40),
     ("writes before the failure", 3),
     ("a commit failure observed", 0),
     ("failures queried", 0),
@@ -645,7 +645,7 @@ const FAILURES: &[(&str, u64)] = &[
     ("the heal taking effect at the next seal", 0),
     ("writes before the import", 0),
     ("a failure imported", 0),
-    ("an abandon resolved", 1),
+    ("an abandon resolved", 0),
 ];
 
 /// Each phase's allocations by tag, as last recorded, in the order the tags were first seen.
@@ -707,6 +707,11 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         1,
     ),
     ("construction, with two targets", "durability::new::kept", 1),
+    (
+        "construction, with two targets",
+        "durability::new::abandoned",
+        1,
+    ),
     (
         "construction, with two targets",
         "durability::new::tokens",
@@ -852,6 +857,11 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     ("construction, with two targets", "durability::new::kept", 1),
     (
         "construction, with two targets",
+        "durability::new::abandoned",
+        1,
+    ),
+    (
+        "construction, with two targets",
         "durability::new::tokens",
         2,
     ),
@@ -936,7 +946,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "io_core::issue::backend_push",
         3,
     ),
-    ("an abandon resolved", "durability::resolve::abandoned", 1),
 ];
 
 /// Each phase's total.

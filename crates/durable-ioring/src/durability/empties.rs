@@ -358,6 +358,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: crate::clock::StampClock<Ins
             // Only writes whose flush failed are left at or below a finished seal; once the mark
             // passes them, no later failure can reach back to them (guarantee 3).
             self.let_go(|write| write.lineage == lineage && write.epoch <= through);
+            // The mark answers for an abandoned epoch it passed (DI-D-109).
+            self.forget_abandoned(lineage, Some(through));
             self.emit(due, Event::Durable { lineage, through });
             self.release_through(lineage, through, due);
         }

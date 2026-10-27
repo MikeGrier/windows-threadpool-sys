@@ -62,7 +62,9 @@
 //! - **A gated operation waits for its gate** (guarantee 9): it completes, other than as never
 //!   issued, only once the stream has reported its gate's lineage durable through the gate, and
 //!   the gate not abandoned; and no failure suspects a gated write before then, since it has not
-//!   been issued.
+//!   been issued. A gate the stream had already reported abandoned when the push was reported was
+//!   accepted only because the instance's mark had passed it, which answers for it as reached
+//!   (DI-D-109): such an operation is checked as an ungated one.
 //! - **Never issued means abandoned** (guarantee 9, DI-D-43): `NeverIssued` comes only for a gated
 //!   operation, naming its gate or -- for a write -- its own epoch, which the stream has already
 //!   reported abandoned: by an `Abandoned` entry suspecting it, or by `LineageEnded` above its
@@ -530,6 +532,10 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             }
             self.writes.insert(op, epoch);
         }
+        // A gate on an epoch the stream already reported abandoned was accepted only because the
+        // instance's mark had passed it, which answers for it as reached (DI-D-109): it holds
+        // nothing, as an ungated push does not.
+        let gate = gate.filter(|&gate| !self.is_reported_abandoned(gate));
         if let (OpKind::Write { .. }, Some(gate)) = (kind, gate) {
             self.gates.insert(op, gate);
         }
@@ -823,14 +829,19 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
     /// Whether the stream has reported `epoch` abandoned: by an `Abandoned` entry suspecting it,
     /// or by `LineageEnded` while it was above its lineage's mark.
     fn is_abandoned(&self, epoch: Epoch<V>) -> bool {
-        self.abandoned
-            .get(&epoch.lineage)
-            .is_some_and(|ids| ids.contains(&epoch.id))
+        self.is_reported_abandoned(epoch)
             || (self.ended_lineages.contains(&epoch.lineage)
                 && self
                     .durable
                     .get(&epoch.lineage)
                     .is_none_or(|&durable| epoch.id > durable))
+    }
+
+    /// Whether an `Abandoned` entry the stream reported suspected a write of `epoch`.
+    fn is_reported_abandoned(&self, epoch: Epoch<V>) -> bool {
+        self.abandoned
+            .get(&epoch.lineage)
+            .is_some_and(|ids| ids.contains(&epoch.id))
     }
 
     /// How many pushed operations have not completed.

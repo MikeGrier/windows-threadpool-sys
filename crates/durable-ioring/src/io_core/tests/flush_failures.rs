@@ -258,7 +258,11 @@ fn without_the_heal_a_later_seal_is_answered_blocked() {
         other => panic!("expected Durable through 2, got {other:?}"),
     }
     assert!(nothing_more(&mut rig), "no Durable through 1");
-    assert_eq!(state(&rig, 1), EpochState::Abandoned);
+    assert_eq!(
+        state(&rig, 1),
+        EpochState::Durable,
+        "abandoned, and below the mark, which answers for it (DI-D-109)"
+    );
     assert_eq!(state(&rig, 2), EpochState::Durable);
     finish(rig);
 }

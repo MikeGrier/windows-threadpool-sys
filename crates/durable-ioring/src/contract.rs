@@ -324,7 +324,8 @@ pub trait DurableRing {
         lineage: Lin<Self>,
     ) -> Result<Option<EpochIdOf<Self>>, UnknownLineage<Self::Ids>>;
 
-    /// An epoch's state.
+    /// An epoch's state. One at or below its lineage's high-water mark is reported as the mark
+    /// means it, `Durable` standing for durable or abandoned (DI-D-109).
     ///
     /// # Errors
     ///

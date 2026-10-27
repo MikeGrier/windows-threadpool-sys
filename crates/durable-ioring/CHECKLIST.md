@@ -96,11 +96,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.4** -- Lineage handles, failure tokens, descriptions and domain lists are fixed storage made at construction: slots, a lent string, and rows. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23124)
 
-- [ ] **DI-23.12.5** -- **An abandoned epoch is forgotten once the mark passes it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)):
-  above the mark it holds a place of the window until the mark passes it; at or below the mark `epoch_state` reports it as
-  the mark means it. A contract change: CONTRACT.md's epoch states, and win-durable-ioring's README example asserting
-  `Abandoned` below the mark. Proof obligation: how far the table can be taken past `operations` where another failure
-  still holds the abandoned writes, and a test reaching it.
+- [x] **DI-23.12.5** -- An abandoned epoch is kept above the mark in a table made for the operations, pinning one of its writes' places, and forgotten once the mark passes it, where `epoch_state` reports it as the mark means it. -> [completed 2026-10-27](COMPLETED-CHECKLIST.md#di-23125)
 
 - [ ] **DI-23.12.6** -- **A refusal carrying a backend fault passes the backend's report through**
   ([DI-D-109](DESIGN-NOTES.md#di-d-109), amending [DI-D-54](DESIGN-NOTES.md#di-d-54)): the cause carried beside the report

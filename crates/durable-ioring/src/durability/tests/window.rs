@@ -107,7 +107,17 @@ fn a_failure_holds_the_place_of_a_write_that_failed_after_it_suspected_it() {
         .resolve(vec![(token, Resolution::Abandon)])
         .expect("abandon");
     popped(&mut lineage, id);
-    assert_eq!(lineage.window_places(), 0);
+    assert_eq!(
+        lineage.window_places(),
+        1,
+        "abandoned epoch 1 is above the mark, and keeps the place of its write (DI-D-109)"
+    );
+    submitted(lineage.seal(1));
+    assert_eq!(
+        lineage.window_places(),
+        0,
+        "the mark passed 1, which is forgotten"
+    );
 }
 
 #[test]

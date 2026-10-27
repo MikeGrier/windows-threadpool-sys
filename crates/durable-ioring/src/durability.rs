@@ -54,7 +54,6 @@
 //! domain through [`providers`]; a failed or abandoned domain is observed as a failed flush is, with
 //! its own reach: the files whose declared domains contain it, and every file declared with none.
 
-use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
 
 use crate::observer::FailureObserver;
@@ -75,6 +74,7 @@ use crate::domains::DomainId;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId, TokenSlots};
 use crate::types::{Failed, FailureCause, FlushDomain, IoFault, IoTargetKey, Marking, MarkingKind};
 
+mod abandoned;
 mod empties;
 mod exchange;
 mod failures;
@@ -356,8 +356,6 @@ struct LineageState<E> {
     /// The latest empty seal made with no recorded seal queued before it (DI-D-99).
     leading: Option<Empty<E>>,
     next_seal: u64,
-    /// Every epoch an abandoned failure contained.
-    abandoned: BTreeSet<E>,
     /// Ended (DI-D-30): it answers nothing more, and is retired once its writes in flight complete
     /// and its flushes out have answered (DI-D-98), and its `LineageEnded` has been popped.
     ended: bool,
@@ -379,7 +377,6 @@ impl<E: EpochId> LineageState<E> {
             durable_through: None,
             leading: None,
             next_seal: 0,
-            abandoned: BTreeSet::new(),
             ended: false,
             end_unpopped: false,
             released: None,
@@ -446,8 +443,10 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     window: Window,
     /// The unresolved failures, in observation order.
     failures: Vec<Failure<E, I>>,
-    /// Writes no longer uncovered that an unresolved failure still suspects, with their markings.
+    /// Writes no longer uncovered that an unresolved failure still suspects.
     kept: Kept<E>,
+    /// The epochs abandoned above their lineage's mark, each pinning a write's place (DI-D-109).
+    abandoned: abandoned::Abandoned<E>,
     /// Whether each unresolved failure's token is live (DI-D-108), shared with the tokens.
     tokens: Arc<TokenSlots>,
     /// The token slots no unresolved failure holds.
@@ -615,6 +614,9 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             list("the unresolved failures", capacity.failures(served))
         })?;
         let kept = tagged(tag::DURABILITY_NEW_KEPT, || Kept::new(capacity.operations))?;
+        let abandoned = tagged(tag::DURABILITY_NEW_ABANDONED, || {
+            ordered("the abandoned epochs above the mark", operations)
+        })?;
         let tokens = tagged(tag::DURABILITY_NEW_TOKENS, || {
             TokenSlots::new(capacity.failures(served)).map(Arc::new)
         })?;
@@ -647,6 +649,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             window,
             failures,
             kept,
+            abandoned,
             tokens,
             free_tokens,
             lists,
@@ -746,19 +749,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             .filter(|&sealed| epoch <= sealed)
     }
 
-    /// Whether an abandoned failure contained `lineage`'s `epoch`, so that no write may join it
-    /// (DI-D-35).
-    pub(crate) fn is_abandoned(&self, lineage: Key, epoch: E) -> bool {
-        self.live(lineage)
-            .is_some_and(|state| state.abandoned.contains(&epoch))
-    }
-
     /// An epoch's state; `None` for a lineage not live. Abandonment is decided when the failure is
-    /// abandoned, so it is reported from then on, before the mark passes the epoch and whether or
-    /// not the epoch is sealed.
+    /// abandoned, so it is reported from then on, whether or not the epoch is sealed, until the mark
+    /// passes the epoch; at or below the mark an epoch is reported as the mark means it, durable or
+    /// abandoned, as `Durable` (DI-D-109).
     pub(crate) fn state(&self, lineage: Key, epoch: E) -> Option<State> {
         let state = self.live(lineage)?;
-        if state.abandoned.contains(&epoch) {
+        if self.abandoned.get(&(lineage, epoch)).is_some() {
             return Some(State::Abandoned);
         }
         if state.sealed_through.is_none_or(|sealed| epoch > sealed) {
@@ -1253,8 +1250,13 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         #[cfg(test)]
         assert!(
             self.window_agrees(),
-            "the window's places disagree with the uncovered writes, the failures and the seals, \
-             or a failure's rule with what observation listed"
+            "the window's places disagree with the uncovered writes, the failures, the seals and the \
+             abandoned epochs, or a failure's rule with what observation listed"
+        );
+        #[cfg(test)]
+        assert!(
+            self.abandoned_above_marks(),
+            "an abandoned epoch was kept at or below its lineage's mark, or of a lineage not live"
         );
         due
     }

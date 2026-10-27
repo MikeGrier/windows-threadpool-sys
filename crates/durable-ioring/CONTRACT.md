@@ -141,10 +141,12 @@ Everything below either sharpens one word of that sentence or states a condition
    lineage is an API violation, refused before anything is reserved; nothing reaches the backend and
    the buffer is returned. Likewise, once an epoch is abandoned, a write tagged with it is refused,
    open or sealed: its writes were declared lost, and none may join them
-   ([DI-D-35](DESIGN-NOTES.md#di-d-35)).
+   ([DI-D-35](DESIGN-NOTES.md#di-d-35)). Once the mark passes it, the epoch is sealed, and the write
+   is refused as sealed.
 7. **Asking again about a sealed epoch reports its state.** `make_durable_through(m)` for m at or
    below an already-sealed number is a no-op that reports m's current state -- durable, pending,
-   failed, or abandoned.
+   failed, or abandoned -- an epoch at or below the high-water mark being reported as the mark
+   means it: durable, standing for durable or abandoned ("What resolution does to epochs").
 8. **Failures are reported, inventoried, and left to the consumer.** Every durability failure is
    delivered as a `Failed` event, whose suspect set a failure observer given at construction is told
    ([DI-D-113](DESIGN-NOTES.md#di-d-113)), stays in the inventory until resolved, and
@@ -152,9 +154,10 @@ Everything below either sharpens one word of that sentence or states a condition
    repair was sufficient.
 9. **Gated operations wait for durability, not for resolution.** A gated operation on epoch n is
    released when the high-water mark of n's lineage reaches n and n is durable. The gate may name
-   any lineage of the instance, including another than the operation's own. If n is abandoned, the
-   operation fails with an error saying it was never issued, so the consumer knows no bytes were
-   written. The rules in full are under "Gates" below.
+   any lineage of the instance, including another than the operation's own. If n is abandoned while
+   the operation is held, the operation fails with an error saying it was never issued, so the
+   consumer knows no bytes were written; a gate on an epoch abandoned and already passed by the mark
+   is answered by the mark, as reached. The rules in full are under "Gates" below.
 
 ## What this contract does not guarantee
 
@@ -461,6 +464,11 @@ its tokens back. Resolution is per failure ([DI-D-12](DESIGN-NOTES.md#di-d-12)).
 - A request left `Blocked` by a failure receives its `Durable` as soon as the failure is resolved.
 - Gated operations on an abandoned epoch fail (guarantee 9), and a write tagged with one is refused
   (guarantee 6).
+- **An abandoned epoch is forgotten once the mark passes it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)).
+  Above the mark, `epoch_state` reports it abandoned, decided when its failure is abandoned, open or
+  sealed. At or below the mark it reports it `Durable`, as the mark means it: durable or abandoned,
+  and the `Abandoned` entry is where the consumer learned which. A consumer that needs to know later
+  keeps what that entry told it, and what its failure observer was told.
 
 ### The inventory
 
@@ -539,7 +547,12 @@ capacity declares no lineage or fewer domains than the provider serves.
   - **a seal the high-water mark has not passed**, which holds the place of the first write it covers
     ([DI-D-110](DESIGN-NOTES.md#di-d-110)) from when it is made until the mark passes it or its lineage
     ends. The place is one the write already holds, so a seal adds none; it keeps the place after the
-    write is covered or fails.
+    write is covered or fails;
+  - **an abandoned epoch above the high-water mark**, which holds the place of one of its writes
+    ([DI-D-109](DESIGN-NOTES.md#di-d-109)) from when its failure is abandoned until the mark passes
+    it or its lineage ends or is retired. The place is one the failure already holds, so this adds
+    none; it keeps the place after the failure's `Abandoned` entry is popped. An abandoned epoch the
+    consumer never seals past therefore keeps a place for as long.
 
   **Unresolved failures therefore shrink the submit window**: a consumer that leaves failures unresolved
   is refused at submit for capacity, however many completions it has popped, until it heals or abandons
@@ -670,12 +683,15 @@ A gate holds an operation until an epoch is durable -- release-after-durable
 - **A held write is a write of its lineage.** A seal at or above its epoch waits for it as for a
   write in flight, so `Durable` still follows every write it covers (guarantee 5). It is not
   suspected by a failure until it has been released, because until then nothing was written.
-- **Never issued.** A held operation whose gate is abandoned first ends as never issued, naming the
+- **Never issued.** A held operation whose gate is abandoned while it is held ends as never issued, naming the
   gate, with its buffer and context; so does a held write whose own epoch is abandoned first, since
   no write may join an abandoned epoch (guarantee 6), naming that epoch. When both are, the gate
   is named.
 - **Refused.** A gate naming a lineage the instance cannot answer for -- another instance's, or
-  one ended or retired -- is refused, as is a gate on an epoch already abandoned. So is a gated
+  one ended or retired -- is refused, as is a gate on an epoch abandoned and above its lineage's
+  mark. A gate on an epoch the mark has passed is already reached, abandoned or not
+  ([DI-D-109](DESIGN-NOTES.md#di-d-109)): the instance no longer tells them apart, and the
+  consumer, which popped the `Abandoned` entry, does. So is a gated
   write that would close a **cycle**: one whose gate's lineage reaching it already needs this write
   to complete. The error names the cycle.
 - **A seal can close a cycle too, and is refused.** Which held writes a lineage must complete to

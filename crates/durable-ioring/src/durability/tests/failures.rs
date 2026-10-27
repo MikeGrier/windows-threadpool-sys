@@ -138,7 +138,11 @@ fn a_suspect_set_is_frozen_and_a_later_seal_it_holds_is_answered_blocked() {
             Seen::Durable(2)
         ]
     );
-    assert_eq!(lineage.state(1), State::Abandoned);
+    assert_eq!(
+        lineage.state(1),
+        State::Durable,
+        "the mark passed 1, which is reported as the mark means it (DI-D-109)"
+    );
     assert_eq!(lineage.state(2), State::Durable);
 }
 
@@ -458,21 +462,32 @@ fn abandoning_takes_effect_at_once_and_abandons_every_epoch_the_failure_contains
         seen(&due),
         [Seen::Abandoned(0, vec![0, 1]), Seen::Durable(1)]
     );
-    assert_eq!(lineage.state(1), State::Abandoned);
+    assert_eq!(
+        lineage.state(1),
+        State::Durable,
+        "the mark passed 1 at once, and answers for it (DI-D-109)"
+    );
     assert_eq!(lineage.state(2), State::Open);
     assert_eq!(
         lineage.state(3),
         State::Abandoned,
-        "decided now, though 3 is open"
+        "decided now, though 3 is open, and above the mark"
     );
     assert!(lineage.failures_listed().is_empty());
-    assert_eq!(already(lineage.seal(1)), State::Abandoned);
-    assert!(lineage.is_abandoned(1) && lineage.is_abandoned(3));
+    assert_eq!(already(lineage.seal(1)), State::Durable);
+    assert!(
+        !lineage.is_abandoned(1),
+        "forgotten once the mark passed it"
+    );
+    assert!(lineage.is_abandoned(3));
     assert!(!lineage.is_abandoned(2) && !lineage.is_abandoned(4));
+    assert_eq!(lineage.abandoned_kept(), 1, "3 alone is kept");
 
     assert_eq!(submitted(lineage.seal(3)).flushes, [flush(3, A)]);
     assert_eq!(durable(&lineage.flushed(3, A, Ok(()))), [3]);
-    assert_eq!(lineage.state(3), State::Abandoned);
+    assert_eq!(lineage.state(3), State::Durable);
+    assert!(!lineage.is_abandoned(3));
+    assert_eq!(lineage.abandoned_kept(), 0, "the mark passed every one");
 }
 
 /// CONTRACT.md's "Failures and epochs are many-to-many", second ending, without I/O.
@@ -507,7 +522,8 @@ fn one_abandonment_abandons_an_epoch_that_still_waits_for_every_failure_containi
 
     assert_eq!(submitted(lineage.seal(44)).flushes, [flush(44, A)]);
     assert_eq!(durable(&lineage.flushed(44, A, Ok(()))), [41, 44]);
-    assert_eq!(lineage.state(41), State::Abandoned);
+    assert_eq!(lineage.state(41), State::Durable, "the mark answers for it");
+    assert_eq!(lineage.abandoned_kept(), 0);
 }
 
 #[test]

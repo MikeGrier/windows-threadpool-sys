@@ -2,7 +2,7 @@
 //! The submit window's places (DI-D-100, DI-D-107): one per operation, held until its last holder
 //! lets go.
 //!
-//! An operation has up to four holders. **The operation** holds its place from its push, held for
+//! An operation has up to five holders. **The operation** holds its place from its push, held for
 //! a gate included, until its completion entry is popped. **The write** holds it while it is
 //! uncovered: the core keeps its record until a seal covers it, it fails, or its lineage ends.
 //! **Each failure suspecting it** holds it until the failure is healed or abandoned and its
@@ -10,8 +10,10 @@
 //! and markings, lent until then, within the places it holds. **A
 //! recorded seal** holds the place of one write it covers, from when it is made until the mark
 //! passes it or its lineage ends (DI-D-110), which is what bounds the seals behind a mark an
-//! unresolved failure holds. A place is one, however many holders it has, so the count is of
-//! operations and not of holds.
+//! unresolved failure holds. **An abandoned epoch** above its lineage's mark holds the place of one
+//! of its writes until the mark passes it or its lineage ends or is retired (DI-D-109), which is
+//! what bounds the epochs a push into is refused for. A place is one, however many holders it has,
+//! so the count is of operations and not of holds.
 //!
 //! Nothing here refuses: the count is what [`Durability::window_places`] reports, and the capacity
 //! it is compared with is declared at construction (DI-23.5.2). The table is made at that capacity,
@@ -40,6 +42,8 @@ pub(super) enum Holder {
     Suspect,
     /// A recorded seal covering the write, until the mark passes the seal.
     Seal,
+    /// An abandoned epoch the write is of, until the mark passes it.
+    Abandoned,
 }
 
 /// What holds one operation's place.
@@ -52,11 +56,14 @@ struct Holds {
     /// A recorded seal covering the write holds it: a seal holds one write's place, and no two
     /// seals cover the same write.
     sealed: bool,
+    /// An abandoned epoch above the mark holds it: one write's place for each such epoch, and a
+    /// write is of one epoch.
+    abandoned: bool,
 }
 
 impl Holds {
     fn is_held(&self) -> bool {
-        self.operation || self.uncovered || self.suspected > 0 || self.sealed
+        self.operation || self.uncovered || self.suspected > 0 || self.sealed || self.abandoned
     }
 }
 
@@ -111,6 +118,13 @@ impl Window {
                 holds.sealed = true;
                 Ok(())
             }
+            Holder::Abandoned if holds.abandoned => {
+                Err("two abandoned epochs held one write's place")
+            }
+            Holder::Abandoned => {
+                holds.abandoned = true;
+                Ok(())
+            }
         }
     }
 
@@ -134,6 +148,7 @@ impl Window {
                 None => false,
             },
             Holder::Seal => core::mem::take(&mut holds.sealed),
+            Holder::Abandoned => core::mem::take(&mut holds.abandoned),
         };
         if !held {
             return Err("a place was released by a holder that did not hold it");
@@ -162,6 +177,7 @@ impl Window {
                     Holder::Uncovered => u32::from(holds.uncovered),
                     Holder::Suspect => holds.suspected,
                     Holder::Seal => u32::from(holds.sealed),
+                    Holder::Abandoned => u32::from(holds.abandoned),
                 };
                 (count > 0).then_some((op, count))
             })
@@ -181,7 +197,8 @@ pub(super) fn unpin(window: &mut Window, pin: Option<u64>) -> Result<(), &'stati
 impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// How many places of the submit window are held: the operations that have been admitted and
     /// whose completion has not been popped, plus the writes still uncovered, plus the writes an
-    /// unresolved failure suspects, plus the write each recorded seal holds, each counted once.
+    /// unresolved failure suspects, plus the write each recorded seal holds, plus the write each
+    /// abandoned epoch above the mark holds, each counted once.
     pub(crate) fn window_places(&self) -> usize {
         self.window.places()
     }
@@ -309,6 +326,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         self.window.held_by(Holder::Uncovered) == uncovered
             && self.window.held_by(Holder::Suspect) == suspected
             && self.window.held_by(Holder::Seal) == pinned
+            && self.window.held_by(Holder::Abandoned) == self.abandoned_pins()
             && self.kept.ops().collect::<std::collections::BTreeSet<_>>() == kept
             && ruled
     }

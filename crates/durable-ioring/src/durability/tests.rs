@@ -49,6 +49,8 @@ mod spans;
 mod empties;
 // The submit window's places: DI-23.8.1.
 mod window;
+// Abandoned epochs above the mark: DI-23.12.5.
+mod abandoned;
 
 /// The core, answering for its default lineage: the one every test here exercises unless it mints
 /// another. Every other method is the core's own, through `Deref`. It is built with an observer

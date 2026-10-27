@@ -433,7 +433,10 @@ pub enum Entry<V: Identities, B, C> {
     },
 }
 
-/// An epoch's state as the instance sees it.
+/// An epoch's state as the instance sees it. At or below its lineage's high-water mark an epoch is
+/// reported as the mark means it -- `Durable`, standing for durable or abandoned -- since an
+/// abandoned epoch is forgotten once the mark passes it (DI-D-109); the `Abandoned` entry told the
+/// consumer which.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EpochState<V: Identities> {
     /// Not sealed; writes may still join it.
@@ -442,9 +445,9 @@ pub enum EpochState<V: Identities> {
     Pending,
     /// Sealed, its flushes done, held back by an unresolved failure.
     Blocked(V::FailureId),
-    /// Reported durable.
+    /// At or below the high-water mark: durable, or abandoned and forgotten.
     Durable,
-    /// Abandoned by the consumer.
+    /// Abandoned by the consumer, and above the high-water mark.
     Abandoned,
 }
 
@@ -476,7 +479,8 @@ pub enum PushRefusal<V: Identities> {
     /// The write's lineage, or the gate's, is not one the instance can answer for: another
     /// instance's, or one ended or retired (DI-D-40, DI-D-43).
     UnknownLineage(V::Lineage),
-    /// The gate names an epoch already abandoned, so the operation could never be released.
+    /// The gate names an epoch abandoned and above its lineage's mark, so the operation could
+    /// never be released. Once the mark passes it, a gate on it is answered as reached (DI-D-109).
     GateAbandoned {
         /// The gate.
         gate: Epoch<V>,

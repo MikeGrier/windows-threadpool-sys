@@ -4934,3 +4934,25 @@ Closed with its last step, `DI-23.12.3.9`. Two of the shapes named above were su
 [DI-D-113](DESIGN-NOTES.md#di-d-113): the failure's records are not lent but told to a failure observer given at
 construction, and `Marked` is no entry, so there is no queued marking to expand. The steps are each archived under their
 own anchors.
+
+## Moved 2026-10-27 13:26:22 -04:00 -- DI-23.12.5: an abandoned epoch forgotten once the mark passes it
+
+### <a id="di-23125"></a>DI-23.12.5 -- An abandoned epoch is kept above the mark in a table made for the operations, pinning one of its writes' places, and forgotten once the mark passes it, where `epoch_state` reports it as the mark means it. *(completed 2026-10-27 13:26:22 -04:00)*
+
+**An abandoned epoch is forgotten once the mark passes it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)):
+above the mark it holds a place of the window until the mark passes it; at or below the mark `epoch_state` reports it as
+the mark means it. A contract change: CONTRACT.md's epoch states, and win-durable-ioring's README example asserting
+`Abandoned` below the mark. Proof obligation: how far the table can be taken past `operations` where another failure
+still holds the abandoned writes, and a test reaching it.
+
+What was built is [DI-D-109](DESIGN-NOTES.md#di-d-109)'s "As built (DI-23.12.5)". The per-lineage `BTreeSet`, which
+allocated at each abandon, is replaced by [durability/abandoned.rs](src/durability/abandoned.rs)'s table made at
+construction, each epoch pinning a write's place as a fifth holder of the window; the mark forgets what it passes, and
+ending or retiring a lineage forgets all of its. The proof obligation's answer is that the table cannot pass
+`operations` at all, since each epoch takes over a place its failure already held; the test fills it to `operations`
+with a second failure suspecting every write. One consequence the item did not name, recorded in the decision: a gate on
+an abandoned epoch the mark has passed is answered as reached, and the oracle checks such an operation as ungated.
+[CONTRACT.md](CONTRACT.md)'s guarantees 6, 7 and 9, "What resolution does to epochs", "Capacity" and "Gates" say so, as do
+`EpochState`'s and `epoch_state`'s docs; win-durable-ioring's README example and a delivery test assert `Durable` below
+the mark. The allocation records were re-recorded: "an abandon resolved" now allocates nothing, construction one more.
+Sabotage: the abandoning entry re-anchored, seven added.

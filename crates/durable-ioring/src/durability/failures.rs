@@ -5,8 +5,7 @@
 
 use alloc::vec::Vec;
 
-use super::{Due, Durability, Event, Key, Reach, Standing, V, suspects};
-use crate::alloc_tags::{tag, tagged};
+use super::{Due, Durability, Event, Key, Reach, Standing, V};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::ids::{FailureId, FailureToken};
@@ -61,15 +60,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     // Out of the table while it is read and its holds are acted on, and back in its
                     // place once resolved: it holds what it held until its entry is popped.
                     let mut failure = self.failures.remove(index);
-                    let (lists, writes, kept) = (&self.lists, &self.writes, &self.kept);
-                    let lineages = &mut self.lineages;
-                    for write in suspects(lists, writes, kept, &failure) {
-                        if let Some(state) = lineages.get_mut(&write.lineage) {
-                            tagged(tag::DURABILITY_RESOLVE_ABANDONED, || {
-                                state.abandoned.insert(write.epoch);
-                            });
-                        }
-                    }
+                    self.abandon_epochs(&failure);
                     #[cfg(test)]
                     let snapshot = self.snapshot(&failure);
                     self.emit(

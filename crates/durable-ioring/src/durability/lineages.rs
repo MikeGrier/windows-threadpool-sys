@@ -103,6 +103,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         state.ended = true;
         state.end_unpopped = true;
         state.leading = None;
+        self.forget_abandoned(lineage, None);
         // No failure observed from now on names its writes, the ones it keeps included.
         let now = self.next_failure;
         for write in self.writes.values_mut() {
@@ -188,6 +189,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 failures,
             });
         }
+        self.forget_abandoned(lineage, None);
         self.lineages.remove(&lineage);
         Ok(())
     }

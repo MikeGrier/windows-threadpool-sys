@@ -242,8 +242,8 @@
       "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "DI-D-12 (f): an epoch is abandoned if any failure containing it was. Reported Durable instead, the consumer would believe lost writes are on the media. Caught by the state assertions, unit, I/O and the worked examples.",
-      "find": ["                                state.abandoned.insert(write.epoch);"],
-      "replace": ["                                let _ = (state, write);"]
+      "find": ["                    self.abandon_epochs(&failure);"],
+      "replace": ["                    let _ = &failure;"]
     },
     {
       "name": "DI-3.2.4: no failure holds the high-water mark",
@@ -3674,6 +3674,62 @@
       "why": "A failure and its suspect writes are told before its Failed can be popped (DI-D-113), so a Failed with nothing told names a failure whose suspects nothing could check.",
       "find": ["        let Some(suspect) = self.told.suspects(failure) else {", "            return Err(Violation::FailureNotTold { failure });", "        };"],
       "replace": ["        let suspect = self.told.suspects(failure).unwrap_or_default();"]
+    },
+    {
+      "name": "DI-23.12.5: the mark forgets no abandoned epoch it passes",
+      "file": "src/durability/empties.rs",
+      "expect": "caught",
+      "why": "An abandoned epoch holds a place of the window until the mark passes it (DI-D-109); one never forgotten keeps its place for ever, and the abandoned epochs grow without bound.",
+      "find": ["            self.forget_abandoned(lineage, Some(through));"],
+      "replace": ["            let _ = through;"]
+    },
+    {
+      "name": "DI-23.12.5: the mark forgets every abandoned epoch of its lineage, passed or not",
+      "file": "src/durability/abandoned.rs",
+      "expect": "caught",
+      "why": "Only an epoch the mark passed is answered by it; one above the mark must still refuse a write and a gate.",
+      "find": ["            if of != lineage || through.is_some_and(|through| epoch > through) {"],
+      "replace": ["            if of != lineage {"]
+    },
+    {
+      "name": "DI-23.12.5: an abandoned epoch does not pin its write's place",
+      "file": "src/durability/abandoned.rs",
+      "expect": "caught",
+      "why": "The pin is what bounds the epochs kept by the operations: without it a consumer who never seals past an abandoned epoch is not refused at submit for it, and the census of the window disagrees.",
+      "find": ["        if let Err(what) = window.hold(op, Holder::Abandoned) {"],
+      "replace": ["        if let Err(what) = Ok::<(), &str>(()) {"]
+    },
+    {
+      "name": "DI-23.12.5: ending a lineage keeps its abandoned epochs",
+      "file": "src/durability/lineages.rs",
+      "expect": "caught",
+      "why": "An ended lineage answers for nothing (DI-D-30); its abandoned epochs would keep their places for ever.",
+      "find": ["        state.leading = None;", "        self.forget_abandoned(lineage, None);"],
+      "replace": ["        state.leading = None;"]
+    },
+    {
+      "name": "DI-23.12.5: retiring a lineage keeps its abandoned epochs",
+      "file": "src/durability/lineages.rs",
+      "expect": "caught",
+      "why": "A retired lineage is gone; its abandoned epochs would keep their places for ever.",
+      "find": ["        self.forget_abandoned(lineage, None);", "        self.lineages.remove(&lineage);"],
+      "replace": ["        self.lineages.remove(&lineage);"]
+    },
+    {
+      "name": "DI-23.12.5: an epoch abandoned twice is kept twice",
+      "file": "src/durability/abandoned.rs",
+      "expect": "caught",
+      "why": "One epoch is one entry: a second abandon of the same epoch, by another failure, pins nothing more.",
+      "find": ["        if !above || abandoned.get(&key).is_some() {"],
+      "replace": ["        if !above {"]
+    },
+    {
+      "name": "DI-23.12.5: the oracle holds a gate on an epoch already reported abandoned",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "A gate on an abandoned epoch the instance's mark has passed is answered as reached (DI-D-109); the oracle, which saw the Abandoned entry, checks such an operation as ungated.",
+      "find": ["        let gate = gate.filter(|&gate| !self.is_reported_abandoned(gate));"],
+      "replace": ["        let gate = gate.filter(|_| true);"]
     }
   ]
 }

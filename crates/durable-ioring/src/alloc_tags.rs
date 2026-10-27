@@ -160,6 +160,7 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_FREE_TOKENS: Tag = Tag::new("durability::new::free_tokens");
     pub(crate) const DURABILITY_NEW_LISTS: Tag = Tag::new("durability::new::lists");
     pub(crate) const DURABILITY_NEW_KEPT: Tag = Tag::new("durability::new::kept");
+    pub(crate) const DURABILITY_NEW_ABANDONED: Tag = Tag::new("durability::new::abandoned");
     pub(crate) const DURABILITY_NEW_DUE: Tag = Tag::new("durability::new::due");
     pub(crate) const DURABILITY_FRESH_DUE: Tag = Tag::new("durability::fresh::due");
     pub(crate) const DURABILITY_NEW_SCRATCH_LIVE: Tag = Tag::new("durability::new::scratch_live");
@@ -170,7 +171,6 @@ pub(crate) mod tag {
         Tag::new("durability::new::scratch_bounds");
     pub(crate) const DURABILITY_NEW_SCRATCH_STEPS: Tag = Tag::new("durability::new::scratch_steps");
     pub(crate) const DURABILITY_NEW_SCRATCH_PAIRS: Tag = Tag::new("durability::new::scratch_pairs");
-    pub(crate) const DURABILITY_RESOLVE_ABANDONED: Tag = Tag::new("durability::resolve::abandoned");
     pub(crate) const DURABILITY_OBSERVE_CAUSE: Tag = Tag::new("durability::observe::cause");
     pub(crate) const DURABILITY_START_SEALS_DOMAINS: Tag =
         Tag::new("durability::start_seals::domains");

@@ -140,6 +140,47 @@ fn a_gate_on_an_abandoned_epoch_is_refused() {
     assert!(matches!(refused.reason, PushRefusal::GateAbandoned { .. }));
 }
 
+/// Once the mark passes an abandoned epoch it is forgotten, and a gate on it is answered by the
+/// mark: the operation is pushed at once, as for a gate already durable (DI-D-109). The consumer
+/// learned it was abandoned from the `Abandoned` entry; the oracle, which saw that entry, checks
+/// the operation as ungated.
+#[test]
+fn a_gate_on_an_abandoned_epoch_the_mark_has_passed_holds_nothing() {
+    let mut rig = Rig::new();
+    rig.write(1, 0, b"x").expect("accepted");
+    rig.run();
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All)
+        .expect("all is always in scope");
+    rig.act(actions);
+    let token = only_failure(&mut rig);
+    let actions = rig
+        .core
+        .resolve(vec![(token, Resolution::Abandon)])
+        .expect("our token");
+    rig.act(actions);
+    rig.seal(1);
+    rig.run();
+    let drained = shown(&mut rig);
+    assert_eq!(
+        drained.last().map(String::as_str),
+        Some("durable 1"),
+        "{drained:?}"
+    );
+    let gate = rig.epoch(1);
+    assert_eq!(
+        rig.core.epoch_state(gate),
+        Ok(crate::types::EpochState::Durable),
+        "the mark answers for it"
+    );
+    rig.write_with(KEY, rig.epoch(2), 0, b"y", gated(gate))
+        .expect("pushed at once");
+    assert_eq!(rig.backend.queued(), 1, "nothing held");
+    rig.run();
+    assert_eq!(shown(&mut rig), ["op1 write@2 1 write"]);
+}
+
 #[test]
 fn a_held_operation_whose_gate_is_abandoned_never_issues() {
     let mut rig = Rig::new();
