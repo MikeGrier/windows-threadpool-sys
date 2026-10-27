@@ -77,6 +77,7 @@ impl IoBackend for Scripted {
             return Err(IoFault {
                 source: "test",
                 code: None,
+                refusal: None,
                 error: crate::report_io_error(io::Error::other(format!(
                     "pop {}",
                     self.pops_failed

@@ -4956,3 +4956,15 @@ an abandoned epoch the mark has passed is answered as reached, and the oracle ch
 `EpochState`'s and `epoch_state`'s docs; win-durable-ioring's README example and a delivery test assert `Durable` below
 the mark. The allocation records were re-recorded: "an abandon resolved" now allocates nothing, construction one more.
 Sabotage: the abandoning entry re-anchored, seven added.
+
+## Moved 2026-10-27 15:53:06 -04:00 -- DI-23.12.6: a refusal carrying a backend fault passes the backend's report through
+
+### <a id="di-23126"></a>DI-23.12.6 -- A refusal carrying a backend fault passes the backend's report through, its cause named in a field of `IoFault` beside the code, so `Unusable` and `Unknown` allocate nothing. *(completed 2026-10-27 15:53:06 -04:00)*
+
+**A refusal carrying a backend fault passes the backend's report through** ([DI-D-109](DESIGN-NOTES.md#di-d-109), amending
+[DI-D-54](DESIGN-NOTES.md#di-d-54)): the cause carried beside the report in `IoFault`, as `ErrorCode` is, so `Unusable`
+and `Unknown` allocate nothing; their cause is read from that field rather than downcast. Breaking for both crates where
+they downcast.
+
+As built: `IoFault::refusal: Option<RefusalKind>`, `RefusalKind` being the payload-free classification of a
+`RefusalCause` (it cannot be the cause, which carries an `IoFault`); the as-built notes are in DI-D-109.

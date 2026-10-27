@@ -10,7 +10,7 @@ use rc_errors::ErrorReport;
 
 use crate::access::Access;
 use crate::alloc_tags::{tag, tagged};
-use crate::backend::RefusalCause;
+use crate::backend::{RefusalCause, RefusalKind};
 use crate::capacity::AtCapacity;
 use crate::contract::Identities;
 use crate::error_code::ErrorCode;
@@ -216,7 +216,7 @@ impl FlushDomain {
 /// A fault, as the layer that observed it reported it (DI-D-50): what failed an operation or a
 /// commit, relayed with where it came from.
 ///
-/// Two faults are equal when they name the same source and code and carry the same report: an
+/// Two faults are equal when they name the same source, code and refusal and carry the same report: an
 /// [`ErrorReport`] compares by identity, the static it names or the block it shares, as a marking
 /// and the completion it records share one (DI-D-105). Cloning a fault allocates nothing.
 #[derive(Clone, Debug)]
@@ -226,14 +226,22 @@ pub struct IoFault {
     /// The layer's code for it, where it gives one. Its meaning is the source's: an `HRESULT` from
     /// the Windows backend, which always gives one.
     pub code: Option<ErrorCode>,
+    /// Why the backend refused the submission this fault ends, where it did (DI-D-54): the cause
+    /// is carried here, beside the code, so a consumer reads it rather than downcasting the report
+    /// and nothing is allocated to carry it (DI-D-109). `None` for a fault no refusal caused.
+    pub refusal: Option<RefusalKind>,
     /// The layer's own report: a static error, or a shared one (DI-D-105). The core's own reports
-    /// are static; what a backend or provider reports is theirs to allocate or not.
+    /// are static; what a backend or provider reports is theirs to allocate or not. For a refusal
+    /// of [`RefusalKind::Unusable`] or [`RefusalKind::Unknown`] it is the backend's own.
     pub error: ErrorReport,
 }
 
 impl PartialEq for IoFault {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source && self.code == other.code && self.error == other.error
+        self.source == other.source
+            && self.code == other.code
+            && self.refusal == other.refusal
+            && self.error == other.error
     }
 }
 
@@ -246,7 +254,7 @@ impl fmt::Display for IoFault {
 }
 
 /// So a driver can hand a fault to a consumer as the `source` of an error of its own that downcasts
-/// back to it, as a [`RefusalCause`] does. Its source is the error its report holds.
+/// back to it. Its source is the error its report holds.
 impl core::error::Error for IoFault {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&*self.error)

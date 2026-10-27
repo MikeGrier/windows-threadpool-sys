@@ -47,6 +47,7 @@ fn a_fault_becomes_an_io_error_that_holds_it() {
     let fault = IoFault {
         source: "test",
         code: None,
+        refusal: None,
         error: ErrorReport::from_static(&FALLBACK),
     };
     let error = std::io::Error::from(fault.clone());
@@ -69,6 +70,7 @@ fn a_fault_reporting_an_io_error_keeps_its_kind_as_an_io_error() {
         let fault = IoFault {
             source: "test",
             code: None,
+            refusal: None,
             error: crate::report_io_error(std::io::Error::new(kind, "below")),
         };
         let error = std::io::Error::from(fault.clone());

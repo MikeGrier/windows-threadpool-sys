@@ -245,7 +245,6 @@ pub(crate) mod tag {
     // ids.rs
 
     // backend.rs
-    pub(crate) const BACKEND_REFUSAL_FAULT_SHARED: Tag = Tag::new("backend::refusal_fault::shared");
 
     // types.rs
     pub(crate) const TYPES_FLUSH_DOMAIN_NEW: Tag = Tag::new("types::flush_domain::new");

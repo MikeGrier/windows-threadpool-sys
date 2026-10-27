@@ -28,6 +28,7 @@ fn fake_fault(error: &'static StaticError) -> IoFault {
     IoFault {
         source: "fake",
         code: None,
+        refusal: None,
         error: ErrorReport::from_static(error),
     }
 }

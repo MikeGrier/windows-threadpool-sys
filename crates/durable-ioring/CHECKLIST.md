@@ -98,10 +98,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.5** -- An abandoned epoch is kept above the mark in a table made for the operations, pinning one of its writes' places, and forgotten once the mark passes it, where `epoch_state` reports it as the mark means it. -> [completed 2026-10-27](COMPLETED-CHECKLIST.md#di-23125)
 
-- [ ] **DI-23.12.6** -- **A refusal carrying a backend fault passes the backend's report through**
-  ([DI-D-109](DESIGN-NOTES.md#di-d-109), amending [DI-D-54](DESIGN-NOTES.md#di-d-54)): the cause carried beside the report
-  in `IoFault`, as `ErrorCode` is, so `Unusable` and `Unknown` allocate nothing; their cause is read from that field rather
-  than downcast. Breaking for both crates where they downcast.
+- [x] **DI-23.12.6** -- A refusal carrying a backend fault passes the backend's report through, its cause named in a field of `IoFault` beside the code, so `Unusable` and `Unknown` allocate nothing. -> [completed 2026-10-27](COMPLETED-CHECKLIST.md#di-23126)
 
 - [ ] **DI-23.12.7** -- **The crate builds without `std`** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
   [DI-D-109](DESIGN-NOTES.md#di-d-109)): `no_std` unless the `std` feature is on; the driver's locking (`engine.rs`,

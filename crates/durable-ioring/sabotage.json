@@ -1527,7 +1527,7 @@
       "name": "DI-3.10.3.5.6.2.1: a refusal fault does not carry its cause",
       "file": "src/backend.rs",
       "expect": "caught",
-      "why": "The REFUSED fault's error is the RefusalCause itself -- a static of it for a cause that carries nothing (DI-D-105) -- so a consumer recovers it by downcasting rather than parsing a message. Naming another cause's static reports the wrong one.",
+      "why": "A cause that carries nothing is reported by a static of itself (DI-D-109), so the report's words are the cause's. Naming another cause's static reports the wrong one.",
       "find": ["        RefusalCause::UnknownTarget => named(&UNKNOWN_TARGET),"],
       "replace": ["        RefusalCause::UnknownTarget => named(&BUSY),"]
     },
@@ -1536,8 +1536,8 @@
       "file": "src/backend.rs",
       "expect": "caught",
       "why": "A cause carrying the backend's report keeps its code on the fault, as every fault the backend reports itself does.",
-      "find": ["            let code = fault.code;"],
-      "replace": ["            let code = None;"]
+      "find": ["        RefusalCause::Unusable(fault) | RefusalCause::Unknown(fault) => (fault.code, fault.error),"],
+      "replace": ["        RefusalCause::Unusable(fault) | RefusalCause::Unknown(fault) => (None, fault.error),"]
     },
     {
       "name": "DI-3.10.3.5.6.2.1: the engine does not act on what a refusal makes due",
@@ -1711,7 +1711,7 @@
       "name": "DI-13.9: a refusal for access ends an operation with some other cause",
       "file": "src/backend.rs",
       "expect": "caught",
-      "why": "The fault a refused operation of the core's own ends with carries the cause, and a refusal for access is AccessDenied, not another cause the downcast would find.",
+      "why": "The fault a refused operation of the core's own ends with names the cause, and a refusal for access is AccessDenied, not another cause's static.",
       "find": ["        RefusalCause::AccessDenied => named(&ACCESS_DENIED),"],
       "replace": ["        RefusalCause::AccessDenied => named(&INVALID),"]
     },
@@ -2250,14 +2250,6 @@
       "why": "A control, and a limit stated: the allocation test pins only the tags its scenarios reach. A gate cycle the search found and the trace did not is never reached, so its tag's name is seen by nothing. The rules hold for the paths exercised; the static pass is what covers the rest.",
       "find": ["Tag::new(\"durability::gates::trace::unfound\")"],
       "replace": ["Tag::new(\"durability::gates::trace::unfound_renamed\")"]
-    },
-    {
-      "name": "DI-23.4.2: a refusal carrying a fault reports the backend's report and not its cause",
-      "file": "src/backend.rs",
-      "expect": "caught",
-      "why": "Unusable and Unknown carry the backend's fault, so their cause is shared rather than static (DI-D-105); the backend's own report is only the fallback when that allocation fails. Reporting it always loses the downcast to RefusalCause that DI-D-54 promises.",
-      "find": ["            (code, shared.map_or(backends, ErrorReport::Shared))"],
-      "replace": ["            (code, { drop(shared); backends })"]
     },
     {
       "name": "DI-23.4.2: a shared report ignores the allocator it was given",
@@ -3730,6 +3722,46 @@
       "why": "A gate on an abandoned epoch the instance's mark has passed is answered as reached (DI-D-109); the oracle, which saw the Abandoned entry, checks such an operation as ungated.",
       "find": ["        let gate = gate.filter(|&gate| !self.is_reported_abandoned(gate));"],
       "replace": ["        let gate = gate.filter(|_| true);"]
+    },
+    {
+      "name": "DI-23.12.6: a refusal carrying a fault reports a static in place of the backend's report",
+      "file": "src/backend.rs",
+      "expect": "caught",
+      "why": "Unusable and Unknown pass the backend's own code and report through (DI-D-109), so a consumer reads what the backend said. Reporting a static of some cause loses it.",
+      "find": ["        RefusalCause::Unusable(fault) | RefusalCause::Unknown(fault) => (fault.code, fault.error),"],
+      "replace": ["        RefusalCause::Unusable(fault) | RefusalCause::Unknown(fault) => named(&UNSUPPORTED),"]
+    },
+    {
+      "name": "DI-23.12.6: a refusal fault names no cause",
+      "file": "src/backend.rs",
+      "expect": "caught",
+      "why": "The cause is carried in the fault's refusal field (DI-D-109), where a consumer reads it; without it a consumer is left to parse the report.",
+      "find": ["    let refusal = Some(cause.kind());"],
+      "replace": ["    let refusal = None;"]
+    },
+    {
+      "name": "DI-23.12.6: an unusable backend is named as one of unknown cause",
+      "file": "src/backend.rs",
+      "expect": "caught",
+      "why": "The two causes carry a fault alike and are told apart only by their kind: a backend that can take nothing more is not one that could not say why.",
+      "find": ["            Self::Unusable(_) => RefusalKind::Unusable,"],
+      "replace": ["            Self::Unusable(_) => RefusalKind::Unknown,"]
+    },
+    {
+      "name": "DI-23.12.6: a backend of unknown cause is named as an unusable one",
+      "file": "src/backend.rs",
+      "expect": "caught",
+      "why": "The other direction of the pair above: an unknown cause may clear, and calling it unusable ends a driver's retries for good.",
+      "find": ["            Self::Unknown(_) => RefusalKind::Unknown,"],
+      "replace": ["            Self::Unknown(_) => RefusalKind::Unusable,"]
+    },
+    {
+      "name": "DI-23.12.6: two faults differing only in the refusal are equal",
+      "file": "src/types.rs",
+      "expect": "caught",
+      "why": "The refusal is part of what a fault says, so it is part of what makes two equal.",
+      "find": ["            && self.code == other.code", "            && self.refusal == other.refusal"],
+      "replace": ["            && self.code == other.code"]
     }
   ]
 }

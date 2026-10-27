@@ -107,6 +107,7 @@ pub(crate) fn transfer(
                 Err(IoFault {
                     source: WINDOWS_IORING,
                     code: None,
+                    refusal: None,
                     error: durable_ioring::report_io_error(io::Error::other(format!(
                         "the write completed short: {transferred} of {requested} bytes"
                     ))),

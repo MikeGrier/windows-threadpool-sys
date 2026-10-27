@@ -5,7 +5,9 @@
 //! being emitted again.
 
 use super::{KEY, OTHER, Rig, V, closed, shown};
-use crate::backend::{IoBackend, REFUSED, RefusalCause, RegisteredRegion, SubmissionData};
+use crate::backend::{
+    IoBackend, REFUSED, RefusalCause, RefusalKind, RegisteredRegion, SubmissionData,
+};
 use crate::io_target::Geometry;
 use crate::memory::MemoryTarget;
 use crate::types::{
@@ -23,13 +25,10 @@ const REGION: RegisteredRegion = RegisteredRegion {
     length: 4,
 };
 
-/// The cause a `REFUSED` fault carries, checked to be one.
-fn refusal(fault: &IoFault) -> &RefusalCause {
+/// The cause a `REFUSED` fault names, checked to name one.
+fn refusal(fault: &IoFault) -> RefusalKind {
     assert_eq!(fault.source, REFUSED);
-    fault
-        .error
-        .downcast_ref::<RefusalCause>()
-        .expect("a REFUSED fault carries its cause")
+    fault.refusal.expect("a REFUSED fault names its cause")
 }
 
 #[test]
@@ -213,7 +212,7 @@ fn a_released_write_the_backend_refuses_for_good_completes_as_failed_and_is_null
     let Outcome::Failed(fault) = &released.outcome else {
         panic!("failed: {:?}", released.outcome);
     };
-    assert_eq!(*refusal(fault), RefusalCause::UnknownTarget);
+    assert_eq!(refusal(fault), RefusalKind::UnknownTarget);
     assert!(
         matches!(fault.error, rc_errors::ErrorReport::Static(_)),
         "a cause carrying nothing is reported by a static"
@@ -253,7 +252,7 @@ fn a_released_read_the_backend_refuses_for_good_completes_as_failed() {
     let Outcome::Failed(fault) = &read.outcome else {
         panic!("failed: {:?}", read.outcome);
     };
-    assert_eq!(*refusal(fault), RefusalCause::UnknownTarget);
+    assert_eq!(refusal(fault), RefusalKind::UnknownTarget);
     assert_eq!(read.buffer.as_deref(), Some([0; 4].as_slice()));
     assert!(rig.retried().is_empty());
 }
@@ -279,7 +278,7 @@ fn a_commit_the_backend_refuses_for_good_fails_its_seals_flush() {
         panic!("a commit's failure: {:?}", failed.cause);
     };
     assert_eq!(*target, KEY);
-    assert_eq!(*refusal(fault), RefusalCause::UnknownTarget);
+    assert_eq!(refusal(fault), RefusalKind::UnknownTarget);
     assert_eq!(rig.suspected[&failed.id.seq].len(), 1);
     assert!(matches!(
         rig.core.epoch_state(rig.epoch(1)),
@@ -321,6 +320,53 @@ fn a_retryable_refusal_is_kept_and_any_other_ends_the_submission() {
         assert_eq!(
             failed, !kept,
             "{cause}: ended means the seal's flush failed"
+        );
+    }
+}
+
+#[test]
+fn a_refusal_carrying_the_backends_fault_ends_the_submission_with_the_backends_own_report() {
+    use crate::error_code::ErrorCode;
+    use rc_errors::{ErrorReport, StaticError};
+
+    static REPORTED: StaticError = StaticError::new("the backend's own words");
+
+    for kind in [RefusalKind::Unusable, RefusalKind::Unknown] {
+        let backends = IoFault {
+            source: "backend",
+            code: Some(ErrorCode::from_hresult(1117)),
+            refusal: None,
+            error: ErrorReport::from_static(&REPORTED),
+        };
+        let cause = match kind {
+            RefusalKind::Unusable => RefusalCause::Unusable(backends.clone()),
+            _ => RefusalCause::Unknown(backends.clone()),
+        };
+        let mut rig = Rig::new();
+        rig.write(1, 0, b"x").expect("accepted");
+        rig.seal(1);
+        rig.backend.submit().expect("submit");
+        let write = rig.backend.pop().expect("never fails").expect("the write");
+        let actions = rig.completed(write);
+        let commit = actions.submit.into_iter().next().expect("the commit");
+        let due = rig.core.refused(crate::backend::Refused {
+            cause,
+            submission: commit,
+        });
+        rig.core.taken(due);
+        assert!(rig.retried().is_empty(), "{kind:?}: ended, not kept");
+        let entries = rig.entries();
+        let Some(Entry::Failed(failed)) = entries.last() else {
+            panic!("a failure: {entries:?}");
+        };
+        let FailureCause::Commit { fault, .. } = &failed.cause else {
+            panic!("a commit's failure: {:?}", failed.cause);
+        };
+        assert_eq!(refusal(fault), kind);
+        assert_eq!(fault.code, backends.code, "{kind:?}: the backend's code");
+        assert_eq!(
+            fault.error, backends.error,
+            "{kind:?}: the backend's report"
         );
     }
 }

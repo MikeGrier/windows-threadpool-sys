@@ -54,6 +54,7 @@ fn memory_fault(error: ErrorReport) -> IoFault {
     IoFault {
         source: MEMORY,
         code: None,
+        refusal: None,
         error,
     }
 }

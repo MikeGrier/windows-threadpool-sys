@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Mike Grier
 //! What a refusal cause tells its caller to do.
 
-use rc_errors::{ErrorReport, Refusing, StaticError};
+use rc_errors::{ErrorReport, StaticError};
 
-use super::RefusalCause;
+use super::{RefusalCause, RefusalKind};
 use crate::types::IoFault;
 
 static TOLD: StaticError = StaticError::new("told");
@@ -12,6 +12,7 @@ fn fault() -> IoFault {
     IoFault {
         source: "test",
         code: None,
+        refusal: None,
         error: ErrorReport::from_static(&TOLD),
     }
 }
@@ -65,15 +66,47 @@ fn a_cause_carrying_a_fault_shows_what_the_backend_said() {
     assert!(RefusalCause::Unknown(fault()).to_string().ends_with("told"));
 }
 
+/// A report shared from the global allocator, as a backend that allocates its reports gives one.
+fn shared_report() -> ErrorReport {
+    static UNSHARED: StaticError = StaticError::new("unshared");
+    crate::fault_report::shared_or(StaticError::new("shared"), &UNSHARED)
+}
+
 #[test]
-fn a_refusal_fault_carries_its_cause_and_the_backends_code() {
+fn every_cause_has_its_own_kind() {
+    let kinds = [
+        (RefusalCause::SubmitNeeded, RefusalKind::SubmitNeeded),
+        (RefusalCause::DrainNeeded, RefusalKind::DrainNeeded),
+        (
+            RefusalCause::SubmitAndDrainNeeded,
+            RefusalKind::SubmitAndDrainNeeded,
+        ),
+        (RefusalCause::Busy, RefusalKind::Busy),
+        (RefusalCause::UnknownTarget, RefusalKind::UnknownTarget),
+        (RefusalCause::Unsupported, RefusalKind::Unsupported),
+        (RefusalCause::Invalid, RefusalKind::Invalid),
+        (RefusalCause::AccessDenied, RefusalKind::AccessDenied),
+        (RefusalCause::Unusable(fault()), RefusalKind::Unusable),
+        (RefusalCause::Unknown(fault()), RefusalKind::Unknown),
+    ];
+    assert_eq!(kinds.len(), table().len());
+    for (i, (cause, kind)) in kinds.iter().enumerate() {
+        assert_eq!(cause.kind(), *kind, "{cause:?}");
+        for (_, other) in &kinds[i + 1..] {
+            assert_ne!(kind, other);
+        }
+    }
+}
+
+#[test]
+fn a_refusal_fault_names_its_cause_and_carries_the_backends_code() {
     use super::{REFUSED, refusal_fault};
     use crate::error_code::ErrorCode;
-    use std::error::Error;
 
     let coded = || IoFault {
         source: "test",
         code: Some(ErrorCode::from_hresult(1117)),
+        refusal: None,
         error: ErrorReport::from_static(&TOLD),
     };
     let mut cases: Vec<(RefusalCause, Option<ErrorCode>)> = table()
@@ -92,52 +125,59 @@ fn a_refusal_fault_carries_its_cause_and_the_backends_code() {
         let fault = refusal_fault(cause.clone());
         assert_eq!(fault.source, REFUSED);
         assert_eq!(fault.code, code, "{cause:?}");
-        let carried = fault
-            .error
-            .downcast_ref::<RefusalCause>()
-            .expect("the cause is the error");
-        assert_eq!(*carried, cause);
-        // The backend's own report is the cause's source, where it gave one.
-        let told = carried.source().map(ToString::to_string);
-        let expected = matches!(cause, RefusalCause::Unusable(_) | RefusalCause::Unknown(_))
-            .then(|| "told".to_owned());
-        assert_eq!(told, expected, "{cause:?}");
+        assert_eq!(fault.refusal, Some(cause.kind()), "{cause:?}");
     }
 }
 
 #[test]
-fn a_cause_carrying_nothing_is_reported_by_a_static_and_one_carrying_a_fault_is_shared() {
+fn a_cause_carrying_nothing_is_reported_by_a_static_of_the_cause() {
     use super::refusal_fault;
 
     for (cause, ..) in table() {
+        if matches!(cause, RefusalCause::Unusable(_) | RefusalCause::Unknown(_)) {
+            continue;
+        }
         let first = refusal_fault(cause.clone());
         let second = refusal_fault(cause.clone());
-        let carries = matches!(cause, RefusalCause::Unusable(_) | RefusalCause::Unknown(_));
-        assert_eq!(
-            matches!(first.error, ErrorReport::Static(_)),
-            !carries,
-            "{cause:?}"
-        );
-        // A static is one error each time; a shared report is a new one each time.
-        assert_eq!(first == second, !carries, "{cause:?}");
+        assert!(matches!(first.error, ErrorReport::Static(_)), "{cause:?}");
+        // A static is one error each time.
+        assert_eq!(first, second, "{cause:?}");
+        assert_eq!(first.error.to_string(), cause.to_string(), "{cause:?}");
     }
 }
 
 #[test]
-fn a_cause_carrying_a_fault_falls_back_to_the_backends_report_when_sharing_it_fails() {
-    use super::refusal_fault_in;
+fn a_cause_carrying_a_fault_passes_the_backends_report_through() {
+    use super::refusal_fault;
 
-    static NEVER: Refusing = Refusing;
-    for cause in [
-        RefusalCause::Unusable(fault()),
-        RefusalCause::Unknown(fault()),
-    ] {
-        let refused = refusal_fault_in(cause.clone(), &NEVER);
-        assert_eq!(
-            refused.error,
-            fault().error,
-            "{cause:?}: the backend's own report"
-        );
-        assert!(refused.error.downcast_ref::<RefusalCause>().is_none());
+    let shared = shared_report();
+    for reported in [ErrorReport::from_static(&TOLD), shared] {
+        for cause in [
+            RefusalCause::Unusable(IoFault {
+                error: reported.clone(),
+                ..fault()
+            }),
+            RefusalCause::Unknown(IoFault {
+                error: reported.clone(),
+                ..fault()
+            }),
+        ] {
+            let refused = refusal_fault(cause.clone());
+            // The backend's own report, not a new one made to carry the cause.
+            assert_eq!(refused.error, reported, "{cause:?}");
+            assert!(refused.error.downcast_ref::<RefusalCause>().is_none());
+            assert_eq!(refused.refusal, Some(cause.kind()), "{cause:?}");
+        }
     }
+}
+
+#[test]
+fn a_refusal_is_part_of_what_makes_two_faults_equal() {
+    let plain = fault();
+    let refused = IoFault {
+        refusal: Some(RefusalKind::Busy),
+        ..fault()
+    };
+    assert_ne!(plain, refused);
+    assert_eq!(refused, refused.clone());
 }

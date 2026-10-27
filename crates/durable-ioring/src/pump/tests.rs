@@ -378,6 +378,7 @@ impl Waitable for ScriptedNotification {
             return Err(IoFault {
                 source: "test",
                 code: None,
+                refusal: None,
                 error: ErrorReport::from_static(&WAIT_FAILED),
             });
         }
@@ -435,6 +436,7 @@ impl IoBackend for Scripted {
             return Err(IoFault {
                 source: "test",
                 code: None,
+                refusal: None,
                 error,
             });
         }

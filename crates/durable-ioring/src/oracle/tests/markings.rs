@@ -26,6 +26,7 @@ fn fault(code: u32) -> IoFault {
     IoFault {
         source: crate::test_support::SOURCE,
         code: Some(ErrorCode::from_hresult(code.cast_signed())),
+        refusal: None,
         error: crate::report_io_error(io::Error::from_raw_os_error(code.cast_signed())),
     }
 }

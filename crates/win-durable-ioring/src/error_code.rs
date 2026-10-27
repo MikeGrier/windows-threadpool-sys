@@ -21,6 +21,7 @@ pub(crate) fn windows_fault(error: io::Error) -> IoFault {
     IoFault {
         source: WINDOWS_IORING,
         code: error_code_of(&error),
+        refusal: None,
         error: report_io_error(error),
     }
 }

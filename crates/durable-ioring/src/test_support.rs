@@ -77,6 +77,7 @@ pub(crate) fn fault(error: io::Error) -> IoFault {
     IoFault {
         source: SOURCE,
         code: error.raw_os_error().map(ErrorCode::from_hresult),
+        refusal: None,
         error: crate::report_io_error(error),
     }
 }
