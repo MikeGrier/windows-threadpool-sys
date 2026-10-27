@@ -89,10 +89,10 @@ pub(super) fn leave(spans: &mut Spans, key: SpanKey) -> bool {
 /// in `kept` if an unresolved failure suspects it (DI-D-108), nameable until `now` on the failure
 /// clock unless its lineage's end stopped it earlier. What about that was inconsistent, if
 /// anything.
-fn forget<E: EpochId + 'static, T, I: Instant>(
+fn forget<E: EpochId + 'static, T>(
     spans: &mut Spans,
     window: &mut Window,
-    kept: &mut Kept<E, I>,
+    kept: &mut Kept<E>,
     write: &Write<E, T>,
     now: u64,
 ) -> Option<&'static str> {

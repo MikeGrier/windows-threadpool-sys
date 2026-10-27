@@ -10,7 +10,7 @@ use windows_ioring_sys::IoRingErrorExt;
 use super::pushes::{ADDED, GIVEN, Harness, Ring, given, instance, temp};
 use super::{empty, file, setup};
 use durable_ioring::DurableRing;
-use durable_ioring::oracle::{ConformanceOracle, ObservedFailures, Violation};
+use durable_ioring::oracle::{ConformanceOracle, Violation};
 use durable_ioring::{
     DurabilityRequest, Entry, Failed, FailureCause, ImportError, ImportScope, UnknownLineage,
 };
@@ -28,7 +28,8 @@ fn next_failed(harness: &mut Harness) -> Failed<V> {
     }
 }
 
-/// The ops a failure suspects, by sequence number, as the ring lends them (DI-D-108).
+/// The ops a failure suspects, by sequence number, as the instance's observer was told them
+/// (DI-D-113).
 fn suspects(harness: &Harness, failed: &Failed<V>) -> Vec<u64> {
     harness
         .suspects(failed.id)
@@ -196,13 +197,12 @@ fn an_armed_failure_is_used_by_its_own_file_only() {
     harness.finish();
 }
 
-/// The oracle refuses a `Failed` whose instance will not lend its suspect set: here, another
-/// instance is asked, which holds no records for it (DI-D-108).
+/// The oracle refuses a `Failed` whose observer it was not given: it reads a failure's suspect set
+/// from the observer it hands out, and was told nothing of the failure (DI-D-113).
 #[test]
-fn the_oracle_refuses_a_failed_whose_suspects_the_ring_will_not_lend() {
-    let (first, second) = (temp(&[0; 16]), temp(&[0; 16]));
+fn the_oracle_refuses_a_failed_its_observer_was_not_told_of() {
+    let first = temp(&[0; 16]);
     let mut harness = Harness::new(instance(vec![given(GIVEN, &first)], Vec::new()));
-    let other = Harness::new(instance(vec![given(GIVEN, &second)], Vec::new()));
     harness.write(GIVEN, 0, b"x", 1, 1);
     harness.next();
     harness
@@ -216,29 +216,21 @@ fn the_oracle_refuses_a_failed_whose_suspects_the_ring_will_not_lend() {
     let mut oracle = ConformanceOracle::<V, u32>::new();
     assert!(
         matches!(
-            oracle.observe_from(&other.ring, &entry),
-            Err(Violation::SuspectsNotLent { failure }) if failure == failed.id
+            oracle.observe(&entry),
+            Err(Violation::FailureNotTold { failure }) if failure == failed.id
         ),
-        "the other instance holds no records for it"
+        "the instance's observer is the harness's, not this oracle's"
     );
     harness.finish();
-    other.finish();
 }
 
 /// An observer given in the setup is told of a failure and the writes it suspects before its
-/// `Failed` can be popped, and of what becomes of them as it happens -- what the ring lends
-/// (DI-D-113).
+/// `Failed` can be popped, and of what becomes of them as it happens (DI-D-113).
 #[test]
-fn an_observer_given_in_the_setup_is_told_what_the_ring_lends() {
+fn an_observer_given_in_the_setup_is_told_of_a_failure_and_what_becomes_of_it() {
     let temp = temp(&[0; 64]);
-    let told = std::sync::Arc::new(ObservedFailures::new());
-    let ring = Ring::new(crate::dioring::Setup {
-        failure_observer: Some(told.clone()),
-        ..setup(vec![given(GIVEN, &temp)], Vec::new(), None)
-    })
-    .expect("an instance")
-    .0;
-    let mut harness = Harness::new(ring);
+    let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], Vec::new()));
+    let told = harness.told.clone();
     let write = harness.write(GIVEN, 0, b"x", 2, 1);
     harness.next();
     let imported = harness
@@ -253,16 +245,15 @@ fn an_observer_given_in_the_setup_is_told_what_the_ring_lends() {
         .collect();
     assert_eq!(suspect, [write]);
     let failed = next_failed(&mut harness);
-    assert_eq!(harness.suspects(failed.id), suspect, "what the ring lends");
+    assert_eq!(failed.id, imported.failure);
     assert_eq!(harness.seal(2), DurabilityRequest::Submitted);
-    assert!(matches!(harness.next_entry(), Entry::Marked { .. }));
-    let mut lent = Vec::new();
-    harness
-        .ring
-        .failure_markings(failed.id, |marking| lent.push(marking))
-        .expect("held");
-    assert_eq!(told.markings(failed.id), Some(lent));
     assert!(matches!(harness.next_entry(), Entry::Blocked { .. }));
+    let markings = told.markings(failed.id).expect("told of the failure");
+    assert_eq!(markings.len(), 1, "one write, marked once");
+    assert_eq!(markings[0].write, write);
+    assert!(matches!(
+        markings[0].kind,
+        durable_ioring::MarkingKind::Covered { .. }
+    ));
     harness.finish();
 }
-

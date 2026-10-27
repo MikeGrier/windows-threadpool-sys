@@ -463,9 +463,11 @@ fn kept_writes_fill_to_the_operations_declared() {
         .expect("the import's entry");
     let failures = rig.core.failures_listed();
     assert_eq!(
-        super::markings_of(&rig.core, failures[0].id).len(),
-        4,
-        "each kept write's marking"
+        rig.told
+            .markings(failures[0].id)
+            .map(|markings| markings.len()),
+        Some(4),
+        "each kept write's marking was told"
     );
     assert_eq!(rig.core.window_places(), 4, "each kept for the failure");
     let actions = rig

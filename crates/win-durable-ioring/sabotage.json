@@ -2247,14 +2247,6 @@
       "replace": ["        for request in made.drain(..).take(0) {\n"]
     },
     {
-      "name": "DI-23.12.3.4: observe_from accepts a Failed whose suspects the ring will not lend",
-      "file": "../durable-ioring/src/oracle.rs",
-      "expect": "caught",
-      "why": "A ring that lends no suspect set for the Failed it just popped breaks DI-D-108; reading that as an empty set would pass every per-write check.",
-      "find": ["            .map_err(|_| Violation::SuspectsNotLent { failure: failed.id })?;"],
-      "replace": ["            .ok();"]
-    },
-    {
       "name": "DI-23.12.3.8: the setup's failure observer is not given to the core",
       "file": "src/dioring.rs",
       "expect": "caught",

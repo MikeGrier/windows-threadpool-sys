@@ -5,6 +5,7 @@
 use super::{FailedEntry, LEN, Oracle, Report, TestEntry, V, done, op};
 use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage};
+use crate::observer::FailureObserver;
 use crate::oracle::Violation;
 use crate::types::{
     Entry, Epoch, Failed, FailureCause, ImportScope, Marking, MarkingKind, OpKind, SuspectWrite,
@@ -150,18 +151,17 @@ fn no_failure_after_the_end_suspects_the_lineage_but_one_before_is_still_marked(
     oracle
         .observe(&done(w_gone.0, write(gone, 5), 0))
         .expect("the write in flight completes");
-    let marked: TestEntry = Entry::Marked {
-        failure: before,
-        marking: Marking {
-            write: w_gone.0,
-            observed: 0,
-            kind: MarkingKind::Covered {
-                flushed: true,
-                provider: false,
-            },
+    let marking = Marking {
+        write: w_gone.0,
+        observed: 0,
+        kind: MarkingKind::Covered {
+            flushed: true,
+            provider: false,
         },
     };
+    oracle.observer().marked(before, &marking);
+    let abandoned: TestEntry = Entry::Abandoned { failure: before };
     oracle
-        .observe(&marked)
-        .expect("the failure suspecting it before the end is marked");
+        .observe(&abandoned)
+        .expect("the failure suspecting it before the end is told of the marking");
 }

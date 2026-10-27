@@ -6,6 +6,7 @@ use std::io;
 
 use super::{ConformanceOracle, Violation};
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
+use crate::observer::FailureObserver;
 use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome, SuspectWrite};
 
 // The failure rules: DI-3.2.4.
@@ -24,22 +25,29 @@ const LEN: u32 = 4;
 type Oracle = ConformanceOracle<V, u32>;
 type TestEntry = Entry<V, Vec<u8>, u32>;
 
-/// A `Failed` entry, with the suspect set a harness reads from the instance once it is popped
-/// (DI-D-108).
+/// A `Failed` entry, with the suspect set its observer was told before it could be popped
+/// (DI-D-113).
 struct FailedEntry(TestEntry, Vec<SuspectWrite<V>>);
 
-/// Report a `Failed` entry as a harness does: the entry, then its suspect set.
+/// Report a `Failed` entry as an instance does: its observer is told of the failure and its
+/// suspect writes once, however many times the entry is reported, then the entry is popped.
 trait Report {
     fn report(&mut self, failed: FailedEntry) -> Result<(), Violation<V>>;
 }
 
 impl Report for Oracle {
     fn report(&mut self, FailedEntry(entry, suspect): FailedEntry) -> Result<(), Violation<V>> {
-        self.observe(&entry)?;
         let Entry::Failed(failed) = &entry else {
             panic!("a FailedEntry holds a Failed");
         };
-        self.suspects(failed.id, &suspect)
+        let told = self.observer();
+        if told.suspects(failed.id).is_none() {
+            told.failed(failed.id, &failed.cause, failed.observed);
+            for write in suspect {
+                told.suspected(failed.id, write);
+            }
+        }
+        self.observe(&entry)
     }
 }
 

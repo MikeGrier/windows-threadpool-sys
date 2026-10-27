@@ -3,7 +3,7 @@
 
 use std::io;
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use super::{
     Accepted, DEFAULT_LINEAGE, Due, Durability, Event, Flush, Key, Reach, Routing, Sealing, State,
@@ -14,8 +14,9 @@ use crate::diagnostics::NoDiagnostics;
 use crate::diagnostics::tests::Recording;
 use crate::domains::DomainId;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, OpId};
+use crate::observer::FailureObserver;
 use crate::test_support::{CAPACITY, ManualClock, Ticks, fault};
-use crate::types::{FailureCause, IoFault, IoTargetKey, MarkingKind, SuspectWrite};
+use crate::types::{FailureCause, IoFault, IoTargetKey, Marking, MarkingKind, SuspectWrite};
 
 /// What a stamp is in these tests: a plain number, read from a clock the test moves by hand.
 type Stamp = u64;
@@ -50,8 +51,33 @@ mod empties;
 mod window;
 
 /// The core, answering for its default lineage: the one every test here exercises unless it mints
-/// another. Every other method is the core's own, through `Deref`.
-struct One<K = ManualClock>(Durability<u64, &'static str, Stamp, K>);
+/// another. Every other method is the core's own, through `Deref`. It is built with an observer
+/// that keeps the markings it is told of, which the tests read as [`Told`] gives them.
+struct One<K = ManualClock>(Durability<u64, &'static str, Stamp, K>, Arc<Told>);
+
+/// The markings a core's observer was told of (DI-D-113), in the order told, and how many have been
+/// read as new.
+#[derive(Default)]
+struct Told {
+    markings: Mutex<Markings>,
+}
+
+/// Each marking told, with its failure, and how many have been read as new.
+type Markings = (Vec<(FailureId, Marking<Ids>)>, usize);
+
+impl FailureObserver<Ids> for Told {
+    fn failed(&self, _failure: FailureId, _cause: &FailureCause<Ids>, _observed: Stamp) {}
+
+    fn suspected(&self, _failure: FailureId, _write: SuspectWrite<Ids>) {}
+
+    fn marked(&self, failure: FailureId, marking: &Marking<Ids>) {
+        self.markings
+            .lock()
+            .expect("a test's lock")
+            .0
+            .push((failure, marking.clone()));
+    }
+}
 
 impl<K> Deref for One<K> {
     type Target = Durability<u64, &'static str, Stamp, K>;
@@ -67,6 +93,31 @@ impl<K> DerefMut for One<K> {
     }
 }
 
+impl<K> One<K> {
+    /// The markings told since they were last read, by failure, write and kind.
+    fn marked(&self) -> Vec<Seen> {
+        let mut told = self.1.markings.lock().expect("a test's lock");
+        let new = told.0[told.1..]
+            .iter()
+            .map(|(failure, marking)| {
+                Seen::Marked(failure.seq, marking.write.seq, marking.kind.clone())
+            })
+            .collect();
+        told.1 = told.0.len();
+        new
+    }
+
+    /// Every marking told for failure `seq`, in the order told.
+    fn markings_of(&self, seq: u64) -> Vec<Marking<Ids>> {
+        let told = self.1.markings.lock().expect("a test's lock");
+        told.0
+            .iter()
+            .filter(|(failure, _)| failure.seq == seq)
+            .map(|(_, marking)| marking.clone())
+            .collect()
+    }
+}
+
 impl<K: StampClocked> One<K> {
     fn with_clock(clock: K) -> Self {
         Self::reporting(clock, Arc::new(NoDiagnostics))
@@ -74,10 +125,11 @@ impl<K: StampClocked> One<K> {
 
     /// A core reporting to `sink`.
     fn reporting(clock: K, sink: Arc<dyn crate::diagnostics::DiagnosticSink>) -> Self {
-        Self(
-            Durability::new(InstanceId::next(), clock, sink, &CAPACITY, SERVED)
-                .expect("a valid capacity"),
-        )
+        let told = Arc::new(Told::default());
+        let mut core = Durability::new(InstanceId::next(), clock, sink, &CAPACITY, SERVED)
+            .expect("a valid capacity");
+        assert!(core.observed_by(told.clone()), "no observer was given yet");
+        Self(core, told)
     }
 
     fn sealed_through(&self) -> Option<u64> {
@@ -271,10 +323,11 @@ enum Seen {
     /// The lineage, and the highest epoch abandoned.
     LineageEnded(Key, Option<u64>),
     Failed(u64, Vec<u64>),
-    /// Failure, suspect writes, and each marking's write and kind.
-    Abandoned(u64, Vec<u64>, Vec<(u64, MarkingKind)>),
-    Healed(u64, Vec<u64>, Vec<(u64, MarkingKind)>),
-    /// Failure, the write marked, and how.
+    /// Failure, and suspect writes.
+    Abandoned(u64, Vec<u64>),
+    Healed(u64, Vec<u64>),
+    /// Told to the observer, not made due: read with [`One::marked`]. Failure, the write marked, and
+    /// how.
     Marked(u64, u64, MarkingKind),
     /// The operation never issued, and the lineage and epoch named abandoned.
     NeverIssued(u64, Key, u64),
@@ -287,90 +340,56 @@ fn seen(due: &Due<u64, &'static str, Stamp>) -> Vec<Seen> {
         |writes: &[SuspectWrite<Ids>]| -> Vec<u64> { writes.iter().map(|w| w.op.seq).collect() };
     due.events
         .iter()
-        .flat_map(|event| -> Vec<Seen> {
-            vec![match event {
-                Event::Durable {
-                    lineage: DEFAULT_LINEAGE,
-                    through,
-                } => Seen::Durable(*through),
-                Event::Durable { lineage, through } => Seen::DurableIn(*lineage, *through),
-                Event::Blocked {
-                    lineage: DEFAULT_LINEAGE,
-                    through,
-                    by,
-                } => Seen::Blocked(*through, by.seq),
-                Event::Blocked {
-                    lineage,
-                    through,
-                    by,
-                } => Seen::BlockedIn(*lineage, *through, by.seq),
-                Event::LineageEnded {
-                    lineage,
-                    abandoned_through,
-                } => Seen::LineageEnded(*lineage, *abandoned_through),
-                Event::Failed { failed, snapshot } => {
-                    Seen::Failed(failed.id.seq, ops(&snapshot.suspect))
-                }
-                Event::Abandoned { failure, snapshot } => Seen::Abandoned(
-                    failure.seq,
-                    ops(&snapshot.suspect),
-                    marks(&snapshot.markings),
-                ),
-                Event::Healed { failure, snapshot } => Seen::Healed(
-                    failure.seq,
-                    ops(&snapshot.suspect),
-                    marks(&snapshot.markings),
-                ),
-                Event::Marked { to, .. } => {
-                    return to
-                        .iter()
-                        .map(|(failure, marking)| {
-                            Seen::Marked(failure.seq, marking.write.seq, marking.kind.clone())
-                        })
-                        .collect();
-                }
-                Event::Superseded { lineage, through } => Seen::Superseded(*lineage, *through),
-                Event::NeverIssued { op, abandoned } => {
-                    Seen::NeverIssued(op.seq, abandoned.lineage, abandoned.epoch)
-                }
-            }]
+        .map(|event| match event {
+            Event::Durable {
+                lineage: DEFAULT_LINEAGE,
+                through,
+            } => Seen::Durable(*through),
+            Event::Durable { lineage, through } => Seen::DurableIn(*lineage, *through),
+            Event::Blocked {
+                lineage: DEFAULT_LINEAGE,
+                through,
+                by,
+            } => Seen::Blocked(*through, by.seq),
+            Event::Blocked {
+                lineage,
+                through,
+                by,
+            } => Seen::BlockedIn(*lineage, *through, by.seq),
+            Event::LineageEnded {
+                lineage,
+                abandoned_through,
+            } => Seen::LineageEnded(*lineage, *abandoned_through),
+            Event::Failed { failed, snapshot } => {
+                Seen::Failed(failed.id.seq, ops(&snapshot.suspect))
+            }
+            Event::Abandoned { failure, snapshot } => {
+                Seen::Abandoned(failure.seq, ops(&snapshot.suspect))
+            }
+            Event::Healed { failure, snapshot } => {
+                Seen::Healed(failure.seq, ops(&snapshot.suspect))
+            }
+            Event::Superseded { lineage, through } => Seen::Superseded(*lineage, *through),
+            Event::NeverIssued { op, abandoned } => {
+                Seen::NeverIssued(op.seq, abandoned.lineage, abandoned.epoch)
+            }
         })
         .collect()
 }
 
-/// The writes failure `seq` suspects, by sequence number, as the core lends them.
+/// The writes failure `seq` suspects, by sequence number, as the core holds them.
 fn suspects_of<K: StampClock<Instant = Stamp>>(lineage: &One<K>, seq: u64) -> Vec<u64> {
     let id = crate::ids::FailureId {
         instance: lineage.0.instance,
         seq,
     };
-    let mut writes = Vec::new();
-    assert!(
-        lineage
-            .0
-            .failure_suspects(id, |write| writes.push(write.op.seq)),
-        "the core holds failure {seq}'s records"
-    );
-    writes
-}
-
-/// The markings failure `seq` has gained, as the core lends them.
-fn markings_of<K: StampClock<Instant = Stamp>>(
-    lineage: &One<K>,
-    seq: u64,
-) -> Vec<crate::types::Marking<Ids>> {
-    let id = crate::ids::FailureId {
-        instance: lineage.0.instance,
-        seq,
-    };
-    let mut markings = Vec::new();
-    assert!(
-        lineage
-            .0
-            .failure_markings(id, |marking| markings.push(marking)),
-        "the core holds failure {seq}'s records"
-    );
-    markings
+    lineage
+        .0
+        .suspects_listed(id)
+        .unwrap_or_else(|| panic!("the core holds failure {seq}'s records"))
+        .iter()
+        .map(|write| write.op.seq)
+        .collect()
 }
 
 /// Markings by their write's sequence number and kind.

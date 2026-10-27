@@ -10,9 +10,9 @@ use crate::alloc_tags::{tag, tagged};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::ids::{FailureId, FailureToken};
-use crate::types::{
-    FailureCause, FailureInfo, Marking, Resolution, ResolveError, ResolveRefusal, SuspectWrite,
-};
+#[cfg(test)]
+use crate::types::SuspectWrite;
+use crate::types::{FailureCause, FailureInfo, Resolution, ResolveError, ResolveRefusal};
 
 impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     Durability<E, T, I, K>
@@ -81,9 +81,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                         },
                     );
                     self.abandon_held(&failure, &mut due);
-                    failure.standing = Standing::Resolved {
-                        marks_before: self.kept.order(),
-                    };
+                    failure.standing = Standing::Resolved;
                     self.failures.insert(index, failure);
                 }
                 Resolution::Heal => {
@@ -103,7 +101,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let failure = self.failures.iter().find(|f| f.id == id)?;
         match failure.standing {
             Standing::Open => FailureToken::mint(id, &self.tokens, failure.token, false),
-            Standing::Healing { .. } | Standing::Resolved { .. } => None,
+            Standing::Healing { .. } | Standing::Resolved => None,
         }
     }
 
@@ -121,7 +119,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             let token_live = match &failure.standing {
                 Standing::Open => self.tokens.is_live(failure.token, failure.id),
                 Standing::Healing { .. } => true,
-                Standing::Resolved { .. } => continue,
+                Standing::Resolved => continue,
             };
             visit(FailureInfo {
                 id: failure.id,
@@ -132,40 +130,25 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         }
     }
 
-    /// Give `visit` each write failure `id` suspects, in push order (DI-D-108): `false` if its
-    /// records are not held -- it is not this instance's, or its `Abandoned` or `Healed` was popped.
-    pub(crate) fn failure_suspects(
-        &self,
-        id: FailureId,
-        visit: impl FnMut(SuspectWrite<V<E, I>>),
-    ) -> bool {
-        let Some(failure) = self.failures.iter().find(|failure| failure.id == id) else {
-            return false;
-        };
-        self.visit_suspects(failure, visit);
-        true
-    }
-
-    /// Give `visit` each marking failure `id` has gained, in the order observed, those of a
-    /// resolved failure up to its resolution (DI-D-108): `false` if its records are not held.
-    pub(crate) fn failure_markings(
-        &self,
-        id: FailureId,
-        visit: impl FnMut(Marking<V<E, I>>),
-    ) -> bool {
-        let Some(failure) = self.failures.iter().find(|failure| failure.id == id) else {
-            return false;
-        };
-        self.markings(failure).for_each(visit);
-        true
+    /// Each write failure `id` suspects, in push order, for a test to compare with what the
+    /// observer was told; `None` if its records are not held -- it is not this instance's, or its
+    /// `Abandoned` or `Healed` was popped.
+    #[cfg(test)]
+    pub(crate) fn suspects_listed(&self, id: FailureId) -> Option<Vec<SuspectWrite<V<E, I>>>> {
+        let failure = self.failures.iter().find(|failure| failure.id == id)?;
+        let mut listed = Vec::new();
+        self.visit_suspects(failure, |write| listed.push(write));
+        Some(listed)
     }
 
     /// The consumer popped failure `id`'s `Abandoned` or `Healed` entry: its records go, and with
     /// them the places, the token slot and the import's list it held (DI-D-108).
     pub(crate) fn forget(&mut self, id: FailureId) {
-        let Some(index) = self.failures.iter().position(|failure| {
-            failure.id == id && matches!(failure.standing, Standing::Resolved { .. })
-        }) else {
+        let Some(index) = self
+            .failures
+            .iter()
+            .position(|failure| failure.id == id && matches!(failure.standing, Standing::Resolved))
+        else {
             self.inconsistent(
                 "a resolution entry was popped for a failure not resolved",
                 format_args!("failure {id:?}"),
@@ -186,10 +169,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     ) -> super::exchange::Snapshot<E, I> {
         let mut suspect = Vec::new();
         self.visit_suspects(failure, |write| suspect.push(write));
-        super::exchange::Snapshot {
-            suspect,
-            markings: self.markings(failure).collect(),
-        }
+        super::exchange::Snapshot { suspect }
     }
 
     /// How many imported failures the table holds: each counts from its import until its

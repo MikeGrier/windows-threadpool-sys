@@ -194,7 +194,7 @@ fn abandoning_a_gate_ends_what_waits_for_it_as_never_issued() {
     assert_eq!(
         seen(&due),
         [
-            Seen::Abandoned(0, vec![suspect.seq], vec![]),
+            Seen::Abandoned(0, vec![suspect.seq]),
             Seen::NeverIssued(read.seq, D, 1),
             Seen::NeverIssued(write.seq, D, 1),
         ]
@@ -233,7 +233,7 @@ fn a_held_write_whose_own_epoch_is_abandoned_is_never_issued() {
     assert_eq!(
         seen(&due),
         [
-            Seen::Abandoned(0, vec![issued.seq], vec![]),
+            Seen::Abandoned(0, vec![issued.seq]),
             Seen::NeverIssued(held.seq, minted, 3),
         ],
         "no write may join an abandoned epoch (DI-D-35)"
@@ -270,7 +270,7 @@ fn a_released_write_whose_own_epoch_is_then_abandoned_is_never_issued() {
     assert_eq!(
         seen(&due),
         [
-            Seen::Abandoned(0, vec![issued.seq], vec![]),
+            Seen::Abandoned(0, vec![issued.seq]),
             Seen::NeverIssued(held.seq, minted, 3),
         ]
     );
@@ -487,10 +487,11 @@ fn a_seal_a_pending_heal_waits_for_can_close_a_cycle() {
     let token = tokens(import(&mut lineage)).remove(0);
     assert_eq!(
         seen(&lineage.0.flushed(minted, 3, A, Ok(()))),
-        [
-            Seen::Marked(0, write.seq, super::COVERED),
-            Seen::BlockedIn(minted, 3, 0)
-        ]
+        [Seen::BlockedIn(minted, 3, 0)]
+    );
+    assert_eq!(
+        lineage.marked(),
+        [Seen::Marked(0, write.seq, super::COVERED)]
     );
     lineage
         .resolve(vec![(token, Resolution::Heal)])
@@ -543,7 +544,7 @@ fn a_held_write_is_part_of_the_re_issue_a_heal_waits_for() {
     assert_eq!(
         seen(&lineage.flushed(8, A, Ok(()))),
         [
-            Seen::Healed(0, vec![lost.seq], vec![]),
+            Seen::Healed(0, vec![lost.seq]),
             Seen::Durable(3),
             Seen::Durable(5),
             Seen::Durable(8),

@@ -9,9 +9,10 @@ use crate::contract::EpochId;
 use crate::domains::{import_list, import_reach};
 use crate::durability::Reach;
 use crate::ids::{FailureId, FailureToken};
+#[cfg(test)]
+use crate::types::SuspectWrite;
 use crate::types::{
-    FailureCause, FailureInfo, ImportError, ImportScope, Imported, Marking, Resolution,
-    ResolveError, SuspectWrite, UnknownFailure,
+    FailureCause, FailureInfo, ImportError, ImportScope, Imported, Resolution, ResolveError,
 };
 
 /// What an import recorded and made due, or why it was refused.
@@ -85,40 +86,11 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         self.durability.failures_listed()
     }
 
-    /// Give `visit` each write `failure` suspects, in push order (DI-D-108).
-    ///
-    /// # Errors
-    ///
-    /// [`UnknownFailure`] when the core holds no records for it: another instance's, or resolved
-    /// and its `Abandoned` or `Healed` entry already popped.
-    pub fn failure_suspects(
-        &self,
-        failure: FailureId,
-        visit: impl FnMut(SuspectWrite<V<E, K>>),
-    ) -> Result<(), UnknownFailure<V<E, K>>> {
-        if self.durability.failure_suspects(failure, visit) {
-            Ok(())
-        } else {
-            Err(UnknownFailure(failure))
-        }
-    }
-
-    /// Give `visit` each marking `failure` has gained, in the order observed -- a resolved
-    /// failure's up to its resolution (DI-D-108).
-    ///
-    /// # Errors
-    ///
-    /// [`UnknownFailure`], as [`failure_suspects`](Self::failure_suspects) says.
-    pub fn failure_markings(
-        &self,
-        failure: FailureId,
-        visit: impl FnMut(Marking<V<E, K>>),
-    ) -> Result<(), UnknownFailure<V<E, K>>> {
-        if self.durability.failure_markings(failure, visit) {
-            Ok(())
-        } else {
-            Err(UnknownFailure(failure))
-        }
+    /// Each write `failure` suspects, in push order, for a test to compare with what the observer
+    /// was told; `None` when the core holds no records for it.
+    #[cfg(test)]
+    pub(crate) fn suspects_listed(&self, failure: FailureId) -> Option<Vec<SuspectWrite<V<E, K>>>> {
+        self.durability.suspects_listed(failure)
     }
 
     /// A new token for `failure`, if it is unresolved and its token was dropped.

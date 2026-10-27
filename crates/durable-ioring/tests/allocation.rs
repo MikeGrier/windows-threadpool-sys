@@ -523,8 +523,8 @@ fn clean() -> Vec<Measured> {
     phases
 }
 
-/// The failure paths: a commit that fails, the inventory queried, its suspect set and markings read,
-/// a heal taking effect, an import, and an abandon.
+/// The failure paths: a commit that fails, the inventory queried, a heal taking effect, an import,
+/// and an abandon.
 fn failures() -> Vec<Measured> {
     let script = FaultScript::new().on(
         When::any().op(ScriptOp::Commit).target(KEY).nth(1),
@@ -554,16 +554,6 @@ fn failures() -> Vec<Measured> {
     counted(|| core.failures(|_| listed += 1));
     assert_eq!(listed, 1, "the one failure");
     rig.phase("failures queried");
-    let core = &rig.core;
-    let (mut suspects, mut markings) = (0_usize, 0_usize);
-    counted(|| {
-        core.failure_suspects(token.id(), |_| suspects += 1)
-            .expect("unresolved");
-        core.failure_markings(token.id(), |_| markings += 1)
-            .expect("unresolved");
-    });
-    assert!(suspects > 0, "the failed commit's writes are suspect");
-    rig.phase("a failure's suspects and markings read");
 
     rig.round(default, 2);
     rig.run();
@@ -612,7 +602,7 @@ fn failures() -> Vec<Measured> {
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
-    ("construction, with two targets", 40),
+    ("construction, with two targets", 39),
     ("writes, first round", 3),
     ("write completions, first round", 0),
     ("pops, first round", 0),
@@ -646,11 +636,10 @@ const CLEAN: &[(&str, u64)] = &[
 
 /// As [`CLEAN`], for the failure paths.
 const FAILURES: &[(&str, u64)] = &[
-    ("construction, with two targets", 40),
+    ("construction, with two targets", 39),
     ("writes before the failure", 3),
     ("a commit failure observed", 0),
     ("failures queried", 0),
-    ("a failure's suspects and markings read", 0),
     ("writes re-issued", 0),
     ("a heal resolved", 0),
     ("the heal taking effect at the next seal", 0),
@@ -717,7 +706,7 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
         "durability::new::failures",
         1,
     ),
-    ("construction, with two targets", "durability::new::kept", 2),
+    ("construction, with two targets", "durability::new::kept", 1),
     (
         "construction, with two targets",
         "durability::new::tokens",
@@ -860,7 +849,7 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
         "durability::new::failures",
         1,
     ),
-    ("construction, with two targets", "durability::new::kept", 2),
+    ("construction, with two targets", "durability::new::kept", 1),
     (
         "construction, with two targets",
         "durability::new::tokens",

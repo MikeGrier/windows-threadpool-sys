@@ -22,9 +22,9 @@ use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
 
 use durable_ioring::{
     AddTargetError, AtCapacity, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo,
-    Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover, LineageInfo, Marking,
-    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError,
-    SuspectWrite, Tag, UnknownFailure, UnknownLineage, WriteOptions,
+    Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover, LineageInfo,
+    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
+    UnknownLineage, WriteOptions,
 };
 use durable_ioring::{
     DurableRing, EntryOf, EpochIdOf, FailureIdOf, HandleOf, Lin, PushResult, RegisteredBufferRing,
@@ -331,32 +331,6 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// [`DurableRing::take_token`].
     pub fn take_token(&self, failure: FailureIdOf<D>) -> Option<TokenOf<D>> {
         self.with(|ring| ring.take_token(failure))
-    }
-
-    /// [`DurableRing::failure_suspects`].
-    ///
-    /// # Errors
-    ///
-    /// [`UnknownFailure`], as the ring's does.
-    pub fn failure_suspects(
-        &self,
-        failure: FailureIdOf<D>,
-        visit: impl FnMut(SuspectWrite<D::Ids>),
-    ) -> Result<(), UnknownFailure<D::Ids>> {
-        self.with(|ring| ring.failure_suspects(failure, visit))
-    }
-
-    /// [`DurableRing::failure_markings`].
-    ///
-    /// # Errors
-    ///
-    /// [`UnknownFailure`], as the ring's does.
-    pub fn failure_markings(
-        &self,
-        failure: FailureIdOf<D>,
-        visit: impl FnMut(Marking<D::Ids>),
-    ) -> Result<(), UnknownFailure<D::Ids>> {
-        self.with(|ring| ring.failure_markings(failure, visit))
     }
 }
 

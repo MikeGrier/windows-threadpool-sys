@@ -146,8 +146,8 @@ Everything below either sharpens one word of that sentence or states a condition
    below an already-sealed number is a no-op that reports m's current state -- durable, pending,
    failed, or abandoned.
 8. **Failures are reported, inventoried, and left to the consumer.** Every durability failure is
-   delivered as a `Failed` event, whose suspect set the instance lends for reading, stays in the
-   inventory until resolved, and
+   delivered as a `Failed` event, whose suspect set a failure observer given at construction is told
+   ([DI-D-113](DESIGN-NOTES.md#di-d-113)), stays in the inventory until resolved, and
    is resolved only by the consumer. dioring never resolves one on its own and never judges whether a
    repair was sufficient.
 9. **Gated operations wait for durability, not for resolution.** A gated operation on epoch n is
@@ -389,7 +389,8 @@ time base ([DI-D-37](DESIGN-NOTES.md#di-d-37), [DI-D-38](DESIGN-NOTES.md#di-d-38
 [DI-D-50](DESIGN-NOTES.md#di-d-50)). Two facts about it are part of the contract:
 
 - **Stamps never decrease in observation order**: each `Failed` entry carries a stamp at or after
-  the one before it in the queue.
+  the one before it in the queue, and the stamps a failure observer is told of -- each failure's, and
+  each marking's -- never decrease in the order it is told them.
 - **The inventory reports the stamp the `Failed` entry carried**, not a reading taken when asked.
 
 Nothing else is promised. Equal stamps are normal -- interrupt time's resolution is the system
@@ -398,8 +399,9 @@ give the core a mock clock, which must promise the same.
 
 ### What happens to a suspect write afterwards
 
-A failure's record gains a **marking** whenever one of its suspect writes does something after the
-failure was observed ([DI-D-36](DESIGN-NOTES.md#di-d-36), [DI-D-39](DESIGN-NOTES.md#di-d-39)):
+A failure gains a **marking** whenever one of its suspect writes does something after the failure
+was observed ([DI-D-36](DESIGN-NOTES.md#di-d-36), [DI-D-39](DESIGN-NOTES.md#di-d-39)), and the
+failure observer is told of it ([DI-D-113](DESIGN-NOTES.md#di-d-113)):
 
 - **Nullified** -- the write completed with a fault, so it did not happen. The marking carries the
   fault.
@@ -408,12 +410,12 @@ failure was observed ([DI-D-36](DESIGN-NOTES.md#di-d-36), [DI-D-39](DESIGN-NOTES
   cites who answered: the built-in default's commit, which dioring observed, and the consumer's
   provider, whose answer is its own warranty ([DI-D-47](DESIGN-NOTES.md#di-d-47)).
 
-The kinds are open to more. A marking carries the write, its kind and when it was observed, and is
-reported by a `Marked` entry and kept with the failure's records, from which it can be read. It
-exists so the history can be reconciled after the fact, and it **changes nothing**: not the
-high-water mark, not what a failure holds, and not what resolving it needs. A failure gains
-markings until it is abandoned or its heal takes effect, so the markings read after that are those it
-had at that moment; a suspect write still in flight then is reported only by its own completion.
+The kinds are open to more. A marking carries the write, its kind and when it was observed, and the
+observer is told it once for each failure it goes to, as it is made; nothing else reports it and
+the instance keeps no copy. It exists so the history can be reconciled after the fact, and it
+**changes nothing**: not the high-water mark, not what a failure holds, and not what resolving it
+needs. A failure is told of markings until it is abandoned or its heal takes effect; a suspect
+write still in flight then is reported only by its own completion.
 
 **Where every report comes from** ([DI-D-47](DESIGN-NOTES.md#di-d-47),
 [DI-D-50](DESIGN-NOTES.md#di-d-50)). dioring relays every failure, and says from where. A fault a
@@ -438,7 +440,8 @@ dioring's own observation that the provider never answered.
   nothing. A write still to be committed is one in flight, completed and not yet covered, or held
   for its gate: one that failed, or that a seal has already covered, has nothing left to commit and
   is not waited for. The consumer learns of a failed write from its own completion, and of a
-  suspect write's fate from the failure observer, if it gave one. From then the failure no longer holds that lineage, whose high-water mark may pass it.
+  suspect write's fate from the failure observer, if it gave one. From then the failure no longer
+  holds that lineage, whose high-water mark may pass it.
   Once it holds none -- at once, for a failure that belongs to no lineage -- it is resolved as
   healed, and a `Healed` entry reports it, before any `Durable` that the last lineage's seal lets
   through. A lineage that ends no longer holds a heal back.
@@ -468,12 +471,12 @@ cause, lent for the visit from the instance's own storage, so enumerating alloca
 the instance's lock and must not call back into it. `close()` gives what is left of each the same
 way.
 
-**A failure's records are read, not carried** ([DI-D-108](DESIGN-NOTES.md#di-d-108)). Its suspect set
-and its markings are not copied into any entry: the instance lends them, one at a time to a visitor
-the consumer gives (`failure_suspects`, `failure_markings`), from its own storage. They can be read
-from the failure's `Failed` entry until its `Abandoned` or `Healed` entry is popped, a resolved
-failure's included; popping that entry is what lets them go, and after it the failure is unknown to
-the instance. A consumer that wants them after that keeps its own copy.
+**A failure's detail is told, not carried** ([DI-D-113](DESIGN-NOTES.md#di-d-113)). Its suspect set
+and its markings are in no entry and in no query: a consumer that wants them gives the instance a
+failure observer when it is built (below), and keeps what it is told in its own storage. The
+instance holds a failure -- and the places of its suspect writes -- until its `Abandoned` or
+`Healed` entry is popped, which lets them go, after which the failure is unknown to the instance;
+that is what keeps the queue within its bound ([DI-D-112](DESIGN-NOTES.md#di-d-112)).
 
 Resolved failures leave no other memory. Because identities are never reused, an identity no longer
 in the inventory means resolved.
@@ -494,8 +497,8 @@ The observer is called synchronously, while the instance's lock is held: it must
 the instance, and any lock it takes is a leaf beneath the instance's
 ([DI-D-90](DESIGN-NOTES.md#di-d-90)). What it is lent it copies if it keeps it. Through it a consumer
 can attribute a failure to its own operations, lineages and epochs in its own storage; the instance
-keeps only what its own answers need. A consumer that gives no observer cannot learn later what a
-failure suspected or what became of those writes once their records are let go.
+keeps only what its own answers need. A consumer that gives no observer cannot learn what a failure
+suspected or what became of those writes: nothing else reports either.
 
 ### Importing a failure
 
@@ -531,7 +534,8 @@ capacity declares no lineage or fewer domains than the provider serves.
     ends. The instance keeps a write's record until then, to name it in a later failure's suspect set,
     so popping a write's completion does not let go of its place;
   - **each failure suspecting it**, until the failure is healed or abandoned and its `Healed` or
-    `Abandoned` entry is popped -- until then the instance keeps the write's record to lend;
+    `Abandoned` entry is popped -- until then the instance keeps the write's record, to name it in
+    what the failure holds;
   - **a seal the high-water mark has not passed**, which holds the place of the first write it covers
     ([DI-D-110](DESIGN-NOTES.md#di-d-110)) from when it is made until the mark passes it or its lineage
     ends. The place is one the write already holds, so a seal adds none; it keeps the place after the
@@ -564,7 +568,7 @@ capacity declares no lineage or fewer domains than the provider serves.
 ## The completion queue
 
 The consumer pops **dioring's** completion queue, not the backend's. It holds every completion
-the consumer should observe -- reads and writes, passed through -- plus seven events dioring
+the consumer should observe -- reads and writes, passed through -- plus the events dioring
 synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-30)):
 
 | Event | When |
@@ -572,9 +576,8 @@ synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-
 | `Durable { through: n }` | the high-water mark has reached n; at most one per lineage waits un-popped, a later replacing an older |
 | `Failed { failure, token, cause, observed }` | a durability failure was observed (a target's commit, or a provider's domain, failed; or an import) |
 | `Blocked { through: n, by: failure }` | a request's commits succeeded, but an unresolved failure at or below n prevents reporting it; withdrawn if not yet popped when a later entry answers the request (guarantee 4) |
-| `Marked { failure, marking }` | a suspect write of an unresolved failure was nullified or covered; one for each failure suspecting it, in the order observed |
-| `Abandoned { failure }` | the consumer abandoned a failure; popping it lets go of the failure's records |
-| `Healed { failure }` | a heal took effect; popping it lets go of the failure's records |
+| `Abandoned { failure }` | the consumer abandoned a failure; popping it lets go of what the instance held for the failure |
+| `Healed { failure }` | a heal took effect; popping it lets go of what the instance held for the failure |
 | `LineageEnded { lineage, abandoned_through }` | a lineage ended -- its last handle was released, or given to `end_lineage` -- and every epoch of it not yet durable is abandoned; the lineage counts against the lineages declared until it is popped |
 
 ## The readiness signal
@@ -641,7 +644,7 @@ back -- while another copy is held ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
   cannot answer for. It is retired once its operations in flight have drained, the commits out
   for its sealed writes have answered, and its `LineageEnded` has been popped
   ([DI-D-112](DESIGN-NOTES.md#di-d-112)); their completions are delivered, and a failure that already
-  suspected one of them still gains its marking.
+  suspected one of them is still told of its marking.
 - **A failure shared with another lineage stays unresolved** for that lineage; ending one lineage
   resolves nothing on another's behalf. A heal waiting for the ended lineage's next seal no longer
   waits for it.

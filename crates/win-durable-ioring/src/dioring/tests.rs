@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Mike Grier
 
+use std::cell::RefCell;
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
@@ -16,6 +17,7 @@ use crate::windows_backend::{FileOptions, OpenedFile, Win32FileTarget};
 use durable_ioring::Capacity;
 use durable_ioring::DurableRing;
 use durable_ioring::backend::IoBackend;
+use durable_ioring::oracle::ObservedFailures;
 use durable_ioring::{DurabilityProvider, FlushRequest};
 use durable_ioring::{FlushDomain, IoTargetKey};
 use durable_ioring::{HeldOperation, Hold, Identities, Leftover, LineageInfo};
@@ -167,6 +169,8 @@ fn setup(
     buffers: Vec<Vec<u8>>,
     provider: Option<Box<dyn DurabilityProvider<V>>>,
 ) -> Setup<'static, 'static, u64, Vec<u8>> {
+    let told = Arc::new(ObservedFailures::new());
+    PENDING.with(|pending| *pending.borrow_mut() = Some(told.clone()));
     Setup {
         submission_queue_size: QUEUE,
         completion_queue_size: QUEUE,
@@ -175,9 +179,23 @@ fn setup(
         provider,
         capacity: CAPACITY,
         diagnostics: None,
-        failure_observer: None,
+        failure_observer: Some(told),
         delivery: DeliveryMode::Pool(None),
     }
+}
+
+thread_local! {
+    /// The failure observer the latest `setup` on this thread gave its instance: the harness built
+    /// over that instance takes it, so its oracle reads what the instance told it (DI-D-113).
+    static PENDING: RefCell<Option<Arc<ObservedFailures<V>>>> = const { RefCell::new(None) };
+}
+
+/// The failure observer the latest `setup` on this thread gave its instance, taken: the one an
+/// oracle over that instance reads.
+pub(crate) fn told_by_setup() -> Arc<ObservedFailures<V>> {
+    PENDING
+        .with(|pending| pending.borrow_mut().take())
+        .expect("an instance was built from `setup`, which gives it an observer")
 }
 
 /// A mock interrupt-time clock a test moves by hand (DI-D-38). Clones share one reading, so a test
@@ -517,15 +535,8 @@ fn an_instance_delivers_on_the_pool_its_environment_names() {
     env.set_pool(&threads);
     let file = temp(&[0; 16]);
     let ring = pushes::Ring::new(Setup {
-        submission_queue_size: QUEUE,
-        completion_queue_size: QUEUE,
-        files: vec![given(GIVEN, &file)],
-        buffers: Vec::new(),
-        provider: None,
-        capacity: CAPACITY,
-        diagnostics: None,
-        failure_observer: None,
         delivery: DeliveryMode::Pool(Some(&mut env)),
+        ..setup(vec![given(GIVEN, &file)], Vec::new(), None)
     })
     .expect("build")
     .0;

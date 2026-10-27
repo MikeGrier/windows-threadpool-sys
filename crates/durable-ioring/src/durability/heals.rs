@@ -57,7 +57,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             .iter()
             .filter_map(|failure| match failure.standing {
                 Standing::Healing { at } => Some(at),
-                Standing::Open | Standing::Resolved { .. } => None,
+                Standing::Open | Standing::Resolved => None,
             })
             .filter(|&at| self.releases(lineage, made, through, at))
             .max();
@@ -80,7 +80,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
                 .lineages
                 .get(&lineage)
                 .is_some_and(|state| !state.ended && state.released.is_none_or(|done| done < at)),
-            Standing::Resolved { .. } => false,
+            Standing::Resolved => false,
         }
     }
 

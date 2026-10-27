@@ -135,10 +135,11 @@ struct Rig {
     requests: Vec<ProviderRequest<V>>,
     /// The contract's rules, over every push, seal, heal and entry the rig sees (DI-D-24).
     oracle: ConformanceOracle<V, &'static str>,
-    /// Each failure's suspect set, as the core lent it when its `Failed` was popped (DI-D-108).
+    /// Each failure's suspect set, as the core's observer was told it when its `Failed` was popped
+    /// (DI-D-113).
     suspected: std::collections::HashMap<u64, Vec<crate::types::SuspectWrite<V>>>,
-    /// What the core's failure observer was told (DI-D-113), compared with what it lends as each
-    /// `Failed` and `Marked` is popped.
+    /// What the core's failure observer was told, which the oracle reads as well: the observer the
+    /// oracle hands out.
     told: Arc<crate::oracle::ObservedFailures<V>>,
 }
 
@@ -176,16 +177,17 @@ impl Rig {
         rig
     }
 
-    /// `core`, with no target, over a backend with room to spare, given a failure observer that
-    /// keeps what it is told.
+    /// `core`, with no target, over a backend with room to spare, given the failure observer the
+    /// oracle reads from.
     fn over(core: Core) -> Self {
-        let told = Arc::new(crate::oracle::ObservedFailures::new());
+        let oracle = ConformanceOracle::new();
+        let told = oracle.observer();
         Self {
             core: core.observed_by(told.clone()),
             told,
             backend: MemoryBackend::new(nz(8), nz(16)),
             requests: Vec::new(),
-            oracle: ConformanceOracle::new(),
+            oracle,
             suspected: std::collections::HashMap::new(),
         }
     }
@@ -350,7 +352,7 @@ impl Rig {
     }
 
     /// Every entry, popped one at a time and each reported to the oracle: a `Failed`'s suspect set
-    /// is read from the core as it is popped, kept in `suspected`, and given to the oracle.
+    /// is read from what the observer was told as it is popped, and kept in `suspected`.
     fn entries(&mut self) -> Vec<Entry<V, Vec<u8>, &'static str>> {
         std::iter::from_fn(|| self.pop_entry()).collect()
     }
@@ -362,23 +364,16 @@ impl Rig {
             .observe(&entry)
             .expect("the oracle accepts the entry");
         if let Entry::Failed(failed) = &entry {
-            let suspect = suspects_of(&self.core, failed.id);
+            let suspect = self
+                .told
+                .suspects(failed.id)
+                .expect("the observer was told of the failure before its Failed was popped");
             assert_eq!(
-                self.told.suspects(failed.id).as_ref(),
+                self.core.suspects_listed(failed.id).as_ref(),
                 Some(&suspect),
-                "the observer was told a suspect set other than the one the core lends"
+                "the observer was told a suspect set other than the one the core holds"
             );
-            self.oracle
-                .suspects(failed.id, &suspect)
-                .expect("the oracle accepts the suspect set");
             self.suspected.insert(failed.id.seq, suspect);
-        }
-        if let Entry::Marked { failure, .. } = &entry {
-            assert_eq!(
-                self.told.markings(*failure),
-                Some(markings_of(&self.core, *failure)),
-                "the observer was told markings other than the ones the core lends"
-            );
         }
         Some(entry)
     }
@@ -386,22 +381,6 @@ impl Rig {
     fn target(&self) -> &MemoryTarget {
         self.backend.target(KEY).expect("attached")
     }
-}
-
-/// The writes `failure` suspects, as `core` lends them.
-fn suspects_of(core: &Core, failure: crate::ids::FailureId) -> Vec<crate::types::SuspectWrite<V>> {
-    let mut writes = Vec::new();
-    core.failure_suspects(failure, |write| writes.push(write))
-        .expect("the core holds the failure's records");
-    writes
-}
-
-/// The markings `failure` has gained, as `core` lends them.
-fn markings_of(core: &Core, failure: crate::ids::FailureId) -> Vec<crate::types::Marking<V>> {
-    let mut markings = Vec::new();
-    core.failure_markings(failure, |marking| markings.push(marking))
-        .expect("the core holds the failure's records");
-    markings
 }
 
 /// An entry, briefly: what a test compares, a failure by the size of its suspect set as

@@ -38,12 +38,11 @@
 //! **Inconsistencies** (DI-D-46). A state the core cannot be in is reported to the diagnostic sink
 //! (DI-D-51) and panicked on where it is found, in every build; see [`inconsistent`].
 //!
-//! **Markings** (DI-D-36, DI-D-39). A suspect set never gains a write, but its failure records
-//! what happens to its writes afterwards: a suspect write that completes with a fault, and one
-//! whose own file is then flushed successfully, each add a marking to every unresolved failure
-//! suspecting it, appended to the failure's record and reported as an entry of its own. They
-//! change nothing the mark, a hold or a resolution depends on. A failure abandoned or healed stops
-//! gaining them; its `Abandoned` or `Healed` entry carries the record as it ended.
+//! **Markings** (DI-D-36, DI-D-39, DI-D-113). A suspect set never gains a write, but what happens
+//! to its writes afterwards is told to the failure observer: a suspect write that completes with a
+//! fault, and one whose own file is then flushed successfully, are each told once for every
+//! unresolved failure suspecting them, as they happen, and kept nowhere. They change nothing the
+//! mark, a hold or a resolution depends on. A failure abandoned or healed is told no more.
 //!
 //! **Time** (DI-D-37, DI-D-38, DI-D-50). A failure's observation time is read inside the transition
 //! that records it, from the [`StampClock`] the core holds -- the driver's, interrupt time for the
@@ -288,10 +287,8 @@ enum Standing {
     /// the inventory does not hand out another.
     Healing { at: HealAt },
     /// Abandoned, or healed and the heal taken effect, and its `Abandoned` or `Healed` entry not yet
-    /// popped: it holds what it held, and lends its records, until then (DI-D-108). Its markings
-    /// are those made before `marks_before` in the order observed: a suspect write marked since,
-    /// for another failure, is not one of its.
-    Resolved { marks_before: u64 },
+    /// popped: it holds what it held until then (DI-D-108).
+    Resolved,
 }
 
 /// When a heal was made (DI-D-114): the push sequence and the seal clock then, so the writes pushed
@@ -349,10 +346,6 @@ impl<E: EpochId + 'static, I: Instant> Failure<E, I> {
             && self.reach.reaches(lists, lists.get(domains))
     }
 }
-
-/// The next `Marked` a queued marking expands to: the failure, the marking, and whether another
-/// follows.
-pub(crate) type NextMarking<E, I> = (FailureId, Marking<V<E, I>>, bool);
 
 /// One lineage's own state.
 struct LineageState<E> {
@@ -454,7 +447,7 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     /// The unresolved failures, in observation order.
     failures: Vec<Failure<E, I>>,
     /// Writes no longer uncovered that an unresolved failure still suspects, with their markings.
-    kept: Kept<E, I>,
+    kept: Kept<E>,
     /// Whether each unresolved failure's token is live (DI-D-108), shared with the tokens.
     tokens: Arc<TokenSlots>,
     /// The token slots no unresolved failure holds.
@@ -870,7 +863,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// in flight keeps it, because suspect sets are frozen, and marks it nullified. A write of an
     /// ended lineage is let go either way.
     pub(crate) fn completed(&mut self, op: OpId, end: WriteEnd) -> Due<E, T, I> {
-        let mut due = self.fresh();
+        let due = self.fresh();
         let Some(write) = self.writes.get_mut(&op.seq) else {
             self.inconsistent(
                 "a write completed that was never recorded as pushed",
@@ -901,7 +894,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             }
             WriteEnd::Failed(fault) => {
                 self.let_go_one(op.seq);
-                self.mark(op, MarkingKind::Nullified { fault }, &mut due);
+                self.mark(op, MarkingKind::Nullified { fault });
             }
         }
         tables::count_down(&mut self.in_flight_by_epoch, lineage, epoch);
@@ -1054,7 +1047,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         };
         self.part_answered(lineage, seq, Part::File(file), outcome);
         match result {
-            Ok(()) => self.cover(lineage, seq, &mut due),
+            Ok(()) => self.cover(lineage, seq),
             Err(fault) => {
                 let cause = FailureCause::Commit {
                     target: file,
@@ -1146,103 +1139,37 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         id
     }
 
-    /// Mark `write`, which has just stopped being uncovered, if an unresolved failure suspects it
-    /// (DI-D-36): one reading of the clock, kept once with the write's record, and one `Marked`
-    /// queued, which is expanded when popped into one for each failure suspecting it, in
-    /// observation order (DI-D-109).
-    fn mark(&mut self, write: OpId, kind: MarkingKind, due: &mut Due<E, T, I>) {
-        let open =
-            |failure: &&Failure<E, I>| !matches!(failure.standing, Standing::Resolved { .. });
-        if !self
+    /// Tell the observer of the marking `write` gains as it stops being uncovered, once for each
+    /// unresolved failure suspecting it, in observation order (DI-D-36, DI-D-113): one reading of
+    /// the clock for all of them. Nothing is kept of it, and with no observer it is not made.
+    fn mark(&self, write: OpId, kind: MarkingKind) {
+        let open = |failure: &&Failure<E, I>| !matches!(failure.standing, Standing::Resolved);
+        let mut suspecting = self
             .failures
             .iter()
             .filter(open)
-            .any(|failure| self.suspects(failure, write))
-        {
+            .filter(|failure| self.suspects(failure, write))
+            .peekable();
+        if suspecting.peek().is_none() {
             return;
         }
-        let observed = tagged(tag::DURABILITY_MARK_CLOCK, || self.clock.now());
-        if let Err(what) = self.kept.mark(write, observed, kind.clone()) {
-            self.inconsistent(what, format_args!("write {write:?}, {kind:?}"));
+        if self.kept.get(write.seq).is_none() {
+            self.inconsistent(
+                "a suspected write was marked that was not kept",
+                format_args!("write {write:?}, {kind:?}"),
+            );
         }
-        // The observer is told once for each failure the marking goes to (DI-D-113); a test keeps
-        // the same list, to compare with what the queued marking expands to.
-        #[cfg(test)]
-        let mut to = Vec::new();
-        if self.observer.is_some() || cfg!(test) {
-            for failure in self
-                .failures
-                .iter()
-                .filter(open)
-                .filter(|failure| self.suspects(failure, write))
-            {
-                let marking = Marking {
-                    write,
-                    observed,
-                    kind: kind.clone(),
-                };
-                if let Some(observer) = &self.observer {
-                    observer.marked(failure.id, &marking);
-                }
-                #[cfg(test)]
-                to.push((failure.id, marking));
-            }
-        }
-        self.emit(
-            due,
-            Event::Marked {
-                write,
-                #[cfg(test)]
-                to,
-            },
-        );
-    }
-
-    /// The next `Marked` the queued marking of `write` expands to (DI-D-109): the first failure
-    /// after the one numbered `after`, in observation order, that suspects the write and was not
-    /// resolved before the marking was made, with the marking, and whether another follows. `None`
-    /// when none does -- the write is not kept, not marked, or every failure it went to has been
-    /// given it.
-    pub(crate) fn next_marking(
-        &self,
-        write: OpId,
-        after: Option<u64>,
-    ) -> Option<NextMarking<E, I>> {
-        let (order, observed, kind) = self.kept.marking_of(write.seq)?;
-        let mut to = self
-            .failures
-            .iter()
-            .filter(|failure| after.is_none_or(|after| failure.id.seq > after))
-            // The rule `failure_markings` reads by. At a pop it always holds: a failure resolved
-            // before the marking has its resolution entry ahead of the marking's in the queue, and
-            // popping that entry forgot it, so only failures resolved since remain. Kept so the two
-            // readings cannot drift; the sabotage dropping it is a control that survives.
-            .filter(|failure| match failure.standing {
-                Standing::Resolved { marks_before } => order < marks_before,
-                Standing::Open | Standing::Healing { .. } => true,
-            })
-            .filter(|failure| self.suspects(failure, write));
-        let first = to.next()?;
+        let Some(observer) = &self.observer else {
+            return;
+        };
         let marking = Marking {
             write,
-            observed,
-            kind: kind.clone(),
+            observed: tagged(tag::DURABILITY_MARK_CLOCK, || self.clock.now()),
+            kind,
         };
-        Some((first.id, marking, to.next().is_some()))
-    }
-
-    /// Every marking `failure` has gained, in the order observed: its suspect writes', read from
-    /// their records (DI-D-108), and for a resolved failure only those made before it was.
-    fn markings<'a>(
-        &'a self,
-        failure: &'a Failure<E, I>,
-    ) -> impl Iterator<Item = Marking<V<E, I>>> + 'a {
-        let before = match failure.standing {
-            Standing::Resolved { marks_before } => Some(marks_before),
-            Standing::Open | Standing::Healing { .. } => None,
-        };
-        self.kept
-            .markings(move |write| self.suspects(failure, write), before)
+        for failure in suspecting {
+            observer.marked(failure.id, &marking);
+        }
     }
 
     /// Resolve as healed every healing failure that holds no lineage any more, each reported by its
@@ -1267,9 +1194,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     snapshot,
                 },
             );
-            self.failures[at].standing = Standing::Resolved {
-                marks_before: self.kept.order(),
-            };
+            self.failures[at].standing = Standing::Resolved;
         }
     }
 

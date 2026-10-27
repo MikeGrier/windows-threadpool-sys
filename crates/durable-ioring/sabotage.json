@@ -34,8 +34,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "One completion per operation (DI-D-24): nothing pushed would ever be reported. Every test that waits for a completion times out at its bound.",
-      "find": ["                self.push_queued(Queued::Entry(Entry::Op(OpCompletion {"],
-      "replace": ["                drop::<Queued<V<E, K>, B, C>>(Queued::Entry(Entry::Op(OpCompletion {"]
+      "find": ["                self.push_queued(Entry::Op(OpCompletion {"],
+      "replace": ["                drop::<Entry<V<E, K>, B, C>>(Entry::Op(OpCompletion {"]
     },
     {
       "name": "DI-3.2.2.1: the readiness event is set only when the queue was already non-empty",
@@ -106,8 +106,8 @@
       "file": "src/oracle.rs",
       "expect": "caught",
       "why": "A lost completion is invisible to every rule that looks at entries; only finish names it.",
-      "find": ["        if self.outstanding.is_empty() {\n"],
-      "replace": ["        if true {\n"]
+      "find": ["        if !self.outstanding.is_empty() {\n"],
+      "replace": ["        if false {\n"]
     },
     {
       "name": "DI-3.2.3: a seal does not wait for its writes in flight",
@@ -354,24 +354,24 @@
       "file": "src/oracle.rs",
       "expect": "caught",
       "why": "The first time fact, as the oracle checks it. Without the comparison every stamp is accepted, and a mock that broke its promise or a core that read its clock outside the lock would pass unnoticed.",
-      "find": ["            Some(previous) if observed < previous => Err(Violation::StampWentBackwards {\n"],
-      "replace": ["            Some(previous) if false => Err(Violation::StampWentBackwards {\n"]
+      "find": ["                && observed < previous\n"],
+      "replace": ["                && false\n"]
     },
     {
       "name": "WT-2.2.2: the oracle refuses equal stamps",
       "file": "src/oracle.rs",
       "expect": "caught",
       "why": "The other direction of the same guard: interrupt time repeats a value for a whole system tick, so two failures in one tick carry equal stamps, and an oracle that refused them would reject a correct stream.",
-      "find": ["            Some(previous) if observed < previous => Err(Violation::StampWentBackwards {\n"],
-      "replace": ["            Some(previous) if observed <= previous => Err(Violation::StampWentBackwards {\n"]
+      "find": ["                && observed < previous\n"],
+      "replace": ["                && observed <= previous\n"]
     },
     {
       "name": "DI-3.2.4.2: a suspect write that completes failed is not nullified",
       "file": "src/durability.rs",
       "expect": "caught",
-      "why": "The nullifier is the marking DI-D-36 exists for: without it a failure's record says nothing of a suspect write that did not happen, and reconciling the history after the fact is guesswork.",
-      "find": ["                self.mark(op, MarkingKind::Nullified { fault }, &mut due);\n"],
-      "replace": [""]
+      "why": "The nullifier is the marking DI-D-36 exists for: without it the observer is told nothing of a suspect write that did not happen, and reconciling the history after the fact is guesswork.",
+      "find": ["                self.mark(op, MarkingKind::Nullified { fault });\n"],
+      "replace": ["                let _ = fault;\n"]
     },
     {
       "name": "DI-3.2.4.2: a flush covers every write of its seal, not its own file's",
@@ -420,14 +420,6 @@
       "why": "A heal's resolution is the entry the consumer pops to learn of it, and popping it is what lets the failure go; with no entry the failure is resolved in silence and held for ever.",
       "find": ["            self.emit(", "                due,", "                Event::Healed {", "                    failure,", "                    #[cfg(test)]", "                    snapshot,", "                },", "            );"],
       "replace": ["            #[cfg(test)]", "            drop(snapshot);", "            let _ = failure;"]
-    },
-    {
-      "name": "DI-3.2.4.2: the instance lends no markings",
-      "file": "src/durability/failures.rs",
-      "expect": "caught",
-      "why": "failure_markings is where a consumer reads a failure's record (DI-D-108); lending nothing hides what the stream already said.",
-      "find": ["        self.markings(failure).for_each(visit);", "        true"],
-      "replace": ["        let _ = (failure, visit);", "        true"]
     },
     {
       "name": "DI-3.10.3.2: the oracle accepts a nullifier with any fault",
@@ -2232,8 +2224,8 @@
       "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "The allocation test (tests/allocation.rs) pins how many allocations each phase of the core makes, so an allocation added to a path is seen. Without it the measurement DI-M23 lowers would not notice a new one. DI-D-97.",
-      "find": ["            let Queued::Marked { write, after, .. } = self.queue.front()? else {\n"],
-      "replace": ["            core::hint::black_box(alloc::vec::Vec::<u8>::with_capacity(1));\n            let Queued::Marked { write, after, .. } = self.queue.front()? else {\n"]
+      "find": ["        let entry = self.queue.pop_front()?;\n"],
+      "replace": ["        core::hint::black_box(alloc::vec::Vec::<u8>::with_capacity(1));\n", "        let entry = self.queue.pop_front()?;\n"]
     },
     {
       "name": "DI-23.2: a tagged call sets no tag",
@@ -2432,8 +2424,8 @@
       "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "An operation holds its place until its completion is popped; popping must let it go, or a consumer that pops everything still fills the window.",
-      "find": ["                    Entry::Op(done) => self.durability.popped(done.id),"],
-      "replace": ["                    Entry::Op(_) => {}"]
+      "find": ["            Entry::Op(done) => self.durability.popped(done.id),"],
+      "replace": ["            Entry::Op(_) => {}"]
     },
     {
       "name": "DI-23.8.1: a held operation takes no place",
@@ -2488,8 +2480,8 @@
       "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "A lineage has at most one un-popped Durable (DI-D-101); without the removal a consumer that pops slowly finds one per seal, and the queue grows with the seals a consumer makes.",
-      "find": ["                        older.lineage != through.lineage"],
-      "replace": ["                        let _ = older;", "                        true"]
+      "find": ["                    Entry::Durable { through: older } => older.lineage != through.lineage,"],
+      "replace": ["                    Entry::Durable { through: older } => {", "                        let _ = older;", "                        true", "                    }"]
     },
     {
       "name": "DI-23.9: the later Durable is written over the older in place",
@@ -2497,15 +2489,15 @@
       "expect": "caught",
       "why": "The later Durable goes to the tail and is never written in place: an entry queued between them -- a completion of a write the later one covers, or a Healed -- would then stand after a Durable that names it.",
       "find": ["                let through = *through;"],
-      "replace": ["                let through = *through;", "                let older = self.queue.iter().position(|queued| matches!(queued, Queued::Entry(Entry::Durable { through: older }) if older.lineage == through.lineage));", "                if let Some(at) = older {", "                    self.queue[at] = Queued::Entry(entry);", "                    return;", "                }"]
+      "replace": ["                let through = *through;", "                let older = self.queue.iter().position(|queued| matches!(queued, Entry::Durable { through: older } if older.lineage == through.lineage));", "                if let Some(at) = older {", "                    self.queue[at] = entry;", "                    return;", "                }"]
     },
     {
       "name": "DI-23.9: a Durable replaces the un-popped Durable of any lineage",
       "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "At most one un-popped Durable is kept for each lineage; replacing another lineage's drops an answer its consumer was owed.",
-      "find": ["                        older.lineage != through.lineage"],
-      "replace": ["                        let _ = older;", "                        false"]
+      "find": ["                    Entry::Durable { through: older } => older.lineage != through.lineage,"],
+      "replace": ["                    Entry::Durable { through: older } => {", "                        let _ = older;", "                        false", "                    }"]
     },
     {
       "name": "DI-23.5.2.1: an ended lineage lets go a write whose flush is out",
@@ -3212,44 +3204,12 @@
       "replace": ["            false"]
     },
     {
-      "name": "DI-23.12.3.2: a marking is not kept",
-      "file": "src/durability.rs",
-      "expect": "caught",
-      "why": "A failure's markings are read from its suspects' records, so a marking not written there is lost from the inventory and the resolution entries.",
-      "find": ["        if let Err(what) = self.kept.mark(write, observed, kind.clone()) {"],
-      "replace": ["        if let Err(what) = Ok::<(), &str>(()) {"]
-    },
-    {
       "name": "DI-23.12.3.2: a write no failure suspects is marked",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Only a suspected write is kept, so marking one no failure suspects marks a write with no record, an inconsistency.",
-      "find": ["        if !self", "            .failures", "            .iter()", "            .filter(open)", "            .any(|failure| self.suspects(failure, write))", "        {", "            return;", "        }"],
-      "replace": []
-    },
-    {
-      "name": "DI-23.12.3.2: a released write's marking keeps its room",
-      "file": "src/durability/kept.rs",
-      "expect": "caught",
-      "why": "The markings table is made for the kept writes, so a released write must give its marking room back with it.",
-      "find": ["                marked.remove(&order);"],
-      "replace": ["                let _ = order;"]
-    },
-    {
-      "name": "DI-23.12.3.4: an abandoned failure's markings include those made after it was resolved",
-      "file": "src/durability/failures.rs",
-      "expect": "caught",
-      "why": "A suspect write's markings are kept once, shared by every failure suspecting it, so a resolved failure reads only those made before its resolution (DI-D-108).",
-      "find": ["                    failure.standing = Standing::Resolved {", "                        marks_before: self.kept.order(),"],
-      "replace": ["                    failure.standing = Standing::Resolved {", "                        marks_before: u64::MAX,"]
-    },
-    {
-      "name": "DI-23.12.3.4: a healed failure's markings include those made after it was resolved",
-      "file": "src/durability.rs",
-      "expect": "caught",
-      "why": "As for an abandoned failure: the cutoff is taken when the heal takes effect.",
-      "find": ["            self.failures[at].standing = Standing::Resolved {", "                marks_before: self.kept.order(),"],
-      "replace": ["            self.failures[at].standing = Standing::Resolved {", "                marks_before: u64::MAX,"]
+      "find": ["        if suspecting.peek().is_none() {"],
+      "replace": ["        if suspecting.peek().is_none() && false {"]
     },
     {
       "name": "DI-23.12.3.3: the rule names a write recorded after the failure",
@@ -3464,40 +3424,40 @@
       "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "Popping a failure's Abandoned is what lets go of its records and what it held (DI-D-108); without it the failure is held for ever.",
-      "find": ["                    Entry::Abandoned { failure } | Entry::Healed { failure } => {"],
-      "replace": ["                    Entry::Healed { failure } => {"]
+      "find": ["            Entry::Abandoned { failure } | Entry::Healed { failure } => {"],
+      "replace": ["            Entry::Healed { failure } => {"]
     },
     {
       "name": "DI-23.12.3.4: popping a Healed does not let the failure go",
       "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "As for an Abandoned: a healed failure is let go when its Healed is popped.",
-      "find": ["                    Entry::Abandoned { failure } | Entry::Healed { failure } => {"],
-      "replace": ["                    Entry::Abandoned { failure } => {"]
+      "find": ["            Entry::Abandoned { failure } | Entry::Healed { failure } => {"],
+      "replace": ["            Entry::Abandoned { failure } => {"]
     },
     {
       "name": "DI-23.12.3.4: a resolved failure is still marked",
       "file": "src/durability.rs",
       "expect": "caught",
-      "why": "A resolved failure has reported its resolution and gains no marking after it; a Marked for it follows its Abandoned or Healed.",
-      "find": ["            |failure: &&Failure<E, I>| !matches!(failure.standing, Standing::Resolved { .. });"],
-      "replace": ["            |_: &&Failure<E, I>| true;"]
+      "why": "A resolved failure has reported its resolution and is told no marking after it (DI-D-113).",
+      "find": ["        let open = |failure: &&Failure<E, I>| !matches!(failure.standing, Standing::Resolved);"],
+      "replace": ["        let open = |_: &&Failure<E, I>| true;"]
     },
     {
       "name": "DI-23.12.3.4: the inventory lists a resolved failure",
       "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "The inventory is of unresolved failures; one held only until its resolution is popped is not in it.",
-      "find": ["                Standing::Resolved { .. } => continue,"],
-      "replace": ["                Standing::Resolved { .. } => false,"]
+      "find": ["                Standing::Resolved => continue,"],
+      "replace": ["                Standing::Resolved => false,"]
     },
     {
       "name": "DI-23.12.3.4: a resolved failure gives out a token",
       "file": "src/durability/failures.rs",
       "expect": "caught",
       "why": "A resolved failure is resolved for good; a token for it would resolve it twice.",
-      "find": ["            Standing::Healing { .. } | Standing::Resolved { .. } => None,"],
-      "replace": ["            Standing::Resolved { .. } => FailureToken::mint(id, &self.tokens, failure.token, false),", "            Standing::Healing { .. } => None,"]
+      "find": ["            Standing::Healing { .. } | Standing::Resolved => None,"],
+      "replace": ["            Standing::Resolved => FailureToken::mint(id, &self.tokens, failure.token, false),", "            Standing::Healing { .. } => None,"]
     },
     {
       "name": "DI-23.12.3.4: a resolved import stops counting before its resolution is popped",
@@ -3506,22 +3466,6 @@
       "why": "An import holds its domain list and its places until its resolution is popped, so it counts until then (DI-D-107, DI-D-108).",
       "find": ["            .filter(|failure| matches!(failure.cause, FailureCause::Imported { .. }))"],
       "replace": ["            .filter(|failure| matches!(failure.cause, FailureCause::Imported { .. }) && !matches!(failure.standing, Standing::Resolved { .. }))"]
-    },
-    {
-      "name": "DI-23.12.3.4: the instance lends no suspects",
-      "file": "src/durability/failures.rs",
-      "expect": "caught",
-      "why": "failure_suspects is the only place a failure's suspect set is read (DI-D-108); lending nothing loses it.",
-      "find": ["        self.visit_suspects(failure, visit);", "        true"],
-      "replace": ["        let _ = (failure, visit);", "        true"]
-    },
-    {
-      "name": "DI-23.12.3.4: the oracle lets an entry pass while a Failed is owed its suspect set",
-      "file": "src/oracle.rs",
-      "expect": "caught",
-      "why": "A harness that never reports a Failed's suspect set checks none of them; the oracle refuses the next entry until it does.",
-      "find": ["    pub fn observe<B>(&mut self, entry: &Entry<V, B, C>) -> Result<(), Violation<V>> {", "        if let Some(failure) = self.owed {"],
-      "replace": ["    pub fn observe<B>(&mut self, entry: &Entry<V, B, C>) -> Result<(), Violation<V>> {", "        if let Some(failure) = self.owed.filter(|_| false) {"]
     },
     {
       "name": "DI-23.12.3.4: the oracle accepts an Abandoned for a failure it does not hold",
@@ -3544,8 +3488,8 @@
       "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "A lineage's end answers its pending requests; its seals are gone, so a Blocked left queued names nothing (DI-D-112).",
-      "find": ["                        if through.lineage == lineage)"],
-      "replace": ["                        if through.lineage == lineage && false)"]
+      "find": ["                    |queued| !matches!(queued, Entry::Blocked { through, .. } if through.lineage == lineage),"],
+      "replace": ["                    |queued| !matches!(queued, Entry::Blocked { through, .. } if through.lineage == lineage && false),"]
     },
     {
       "name": "DI-23.12.3.5: a replaced empty seal leaves its Blocked queued",
@@ -3584,32 +3528,8 @@
       "file": "src/io_core/queue.rs",
       "expect": "caught",
       "why": "The pop is what lets an ended lineage's count go; without it the lineage counts for ever.",
-      "find": ["                    Entry::LineageEnded { lineage, .. } => self.durability.end_popped(lineage.seq),"],
-      "replace": ["                    Entry::LineageEnded { .. } => {}"]
-    },
-    {
-      "name": "DI-23.12.3.5: the expansion of a marking ignores when a failure was resolved",
-      "file": "src/durability.rs",
-      "expect": "survives",
-      "why": "The control. A failure resolved before a write was marked has its resolution entry ahead of the marking in the queue, and popping it forgets the failure, so when the marking is expanded every resolved failure still held was resolved after it: the cutoff holds at every pop, and dropping it changes nothing a test can see. Measured: a_marking_is_not_given_to_a_failure_resolved_before_it passes under it.",
-      "find": ["                Standing::Resolved { marks_before } => order < marks_before,"],
-      "replace": ["                Standing::Resolved { .. } => true,"]
-    },
-    {
-      "name": "DI-23.12.3.5: a queued marking ends after its first failure",
-      "file": "src/durability.rs",
-      "expect": "caught",
-      "why": "One queued marking is popped as one Marked for each failure it goes to; ending it early loses the rest.",
-      "find": ["        Some((first.id, marking, to.next().is_some()))"],
-      "replace": ["        let _ = to.next();", "        Some((first.id, marking, false))"]
-    },
-    {
-      "name": "DI-23.12.3.5: a queued marking does not move past the failure it gave",
-      "file": "src/io_core/queue.rs",
-      "expect": "caught",
-      "why": "Each pop gives the next failure; without the cursor the first is given again.",
-      "find": ["                    *after = Some(failure.seq);"],
-      "replace": ["                    let _ = (after, failure);"]
+      "find": ["            Entry::LineageEnded { lineage, .. } => self.durability.end_popped(lineage.seq),"],
+      "replace": ["            Entry::LineageEnded { .. } => {}"]
     },
     {
       "name": "DI-23.12.3.5: the completion queue is made with no room",
@@ -3688,8 +3608,8 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Each marking is told once for each failure it goes to, as it is made (DI-D-113).",
-      "find": ["                    observer.marked(failure.id, &marking);"],
-      "replace": ["                    let _: (_, _, &Marking<V<E, I>>) = (observer, failure, &marking);"]
+      "find": ["            observer.marked(failure.id, &marking);"],
+      "replace": ["            let _: (_, _, &Marking<V<E, I>>) = (observer, failure, &marking);"]
     },
     {
       "name": "DI-23.12.3.8: an observer may be given to a core in use",
@@ -3706,6 +3626,54 @@
       "why": "One observer, its fan-out the consumer's (DI-D-113); a second given would silently replace the first.",
       "find": ["        if self.observer.is_some() {"],
       "replace": ["        if false {"]
+    },
+    {
+      "name": "DI-23.12.3.9: the oracle accepts a marking that contradicts its write's completion",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "A marking the observer was told of is checked against the completion of the write it names (DI-D-36): a nullifier needs a failed completion with the same fault, a covered marking a transfer.",
+      "find": ["            if !agrees {"],
+      "replace": ["            if !agrees && false {"]
+    },
+    {
+      "name": "DI-23.12.3.9: the oracle accepts a marking of a write the failure does not suspect",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "A marking goes to the failures suspecting its write, so one naming a write outside the failure's suspect set was told to the wrong failure.",
+      "find": ["            if !reported.suspect.iter().any(|(op, _)| *op == write) {"],
+      "replace": ["            if false && !reported.suspect.iter().any(|(op, _)| *op == write) {"]
+    },
+    {
+      "name": "DI-23.12.3.9: the oracle does not check the markings of a failure it resolves",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The markings told for a failure are checked when its Abandoned or Healed is observed, since the completion of every write it was told of a marking of has been popped by then.",
+      "find": ["        let told = self.check_markings(failure, reported)?;"],
+      "replace": ["        let _ = reported;", "        let told = self.told.markings(failure).map_or(0, |told| told.len());"]
+    },
+    {
+      "name": "DI-23.12.3.9: the oracle does not check the markings of a failure still unresolved at finish",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "A failure never resolved is told markings too, and finish is the only point the stream says it is over.",
+      "find": ["            self.check_markings(failure, reported)?;"],
+      "replace": ["            let _ = (failure, reported);"]
+    },
+    {
+      "name": "DI-23.12.3.9: the oracle accepts a marking told after its failure was resolved",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "A resolved failure is told nothing more (DI-D-113); a marking told for it later was told to a failure the instance had let go of.",
+      "find": ["            if now != told {"],
+      "replace": ["            if now != told && false {"]
+    },
+    {
+      "name": "DI-23.12.3.9: the oracle accepts a Failed its observer was not told of",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "A failure and its suspect writes are told before its Failed can be popped (DI-D-113), so a Failed with nothing told names a failure whose suspects nothing could check.",
+      "find": ["        let Some(suspect) = self.told.suspects(failure) else {", "            return Err(Violation::FailureNotTold { failure });", "        };"],
+      "replace": ["        let suspect = self.told.suspects(failure).unwrap_or_default();"]
     }
   ]
 }

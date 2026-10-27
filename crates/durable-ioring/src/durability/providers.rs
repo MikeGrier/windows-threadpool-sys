@@ -135,7 +135,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         };
         self.part_answered(lineage, seal, Part::Domain(domain), ended);
         match outcome {
-            Ok(()) => self.cover(lineage, seal, &mut due),
+            Ok(()) => self.cover(lineage, seal),
             Err(cause) => {
                 self.observe(cause, &Reach::Domain(domain), None, &mut due);
             }
@@ -145,8 +145,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
 
     /// Cover every write named to `lineage`'s seal `seal` whose parts have all answered success:
     /// its file's flush, if the default answers for it, and each of its file's domains the
-    /// provider serves. Each is marked covered in every failure suspecting it (DI-D-36).
-    pub(super) fn cover(&mut self, lineage: Key, seal: u64, due: &mut Due<E, T, I>) {
+    /// provider serves. Each is told to the failure observer as covered, once for each failure
+    /// suspecting it (DI-D-36, DI-D-113).
+    pub(super) fn cover(&mut self, lineage: Key, seal: u64) {
         let Some(found) = self.seals.get(&(lineage, seal)) else {
             return;
         };
@@ -195,7 +196,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             });
         }
         for (op, kind) in ops.drain(..) {
-            self.mark(op, kind, due);
+            self.mark(op, kind);
         }
         self.scratch.covered = ops;
     }

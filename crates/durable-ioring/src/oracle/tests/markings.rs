@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Mike Grier
-//! The oracle's marking rules (DI-3.2.4.2), each refused when broken and accepted when kept.
+//! The oracle's marking rules (DI-3.2.4.2, DI-D-113), each refused when broken and accepted when
+//! kept: the markings its observer was told of for a failure are checked when the failure is
+//! resolved, and at `finish` for those still unresolved.
 
 use std::io;
 use std::sync::LazyLock;
@@ -8,6 +10,7 @@ use super::{FailedEntry, LEN, Oracle, Report, TestEntry, V, completion, op, writ
 use crate::IoTargetKey;
 use crate::error_code::ErrorCode;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage, OpId};
+use crate::observer::FailureObserver;
 use crate::oracle::Violation;
 use crate::types::{
     Entry, Epoch, Failed, FailureCause, ImportScope, IoFault, Marking, MarkingKind, Outcome,
@@ -63,16 +66,29 @@ fn marking(write: OpId, kind: MarkingKind, ticks: u64) -> Marking<V> {
     }
 }
 
-fn marked(failure: FailureId, write: OpId, kind: MarkingKind) -> TestEntry {
-    Entry::Marked {
-        failure,
-        marking: marking(write, kind, 0),
-    }
+/// Tell the oracle's observer of a marking, as the instance does as the write stops being
+/// uncovered.
+fn tell(oracle: &Oracle, failure: FailureId, write: OpId, kind: MarkingKind, ticks: u64) {
+    oracle
+        .observer()
+        .marked(failure, &marking(write, kind, ticks));
+}
+
+/// The entry reporting `failure` abandoned, which is when the oracle checks its markings.
+fn abandoned(failure: FailureId) -> TestEntry {
+    Entry::Abandoned { failure }
 }
 
 fn nullified() -> MarkingKind {
     MarkingKind::Nullified {
         fault: IO_DEVICE.clone(),
+    }
+}
+
+fn covered() -> MarkingKind {
+    MarkingKind::Covered {
+        flushed: true,
+        provider: false,
     }
 }
 
@@ -111,33 +127,17 @@ fn markings_that_agree_with_their_writes_completions_are_accepted() {
     let instance = InstanceId::next();
     let mut oracle = three_writes_one_failure(instance);
     let f = failure(instance, 0);
-    for (seq, kind) in [
-        (0, nullified()),
-        (
-            1,
-            MarkingKind::Covered {
-                flushed: true,
-                provider: false,
-            },
-        ),
-        (
-            2,
-            MarkingKind::Covered {
-                flushed: true,
-                provider: false,
-            },
-        ),
-    ] {
-        oracle
-            .observe(&marked(f, op(instance, seq), kind.clone()))
-            .unwrap_or_else(|v| panic!("write {seq} {kind:?}: {v:?}"));
+    for (seq, kind) in [(0, nullified()), (1, covered()), (2, covered())] {
+        tell(&oracle, f, op(instance, seq), kind, 0);
     }
+    oracle
+        .observe(&abandoned(f))
+        .expect("every marking agrees with its write's completion");
 }
 
 #[test]
 fn a_marking_contradicting_its_writes_completion_is_refused() {
     let instance = InstanceId::next();
-    let mut oracle = three_writes_one_failure(instance);
     let f = failure(instance, 0);
     let wrong_code = MarkingKind::Nullified { fault: fault(5) };
     // The same code, but another report than the completion's: a nullifier relays the one report.
@@ -146,17 +146,13 @@ fn a_marking_contradicting_its_writes_completion_is_refused() {
         (1, nullified()),
         (0, wrong_code),
         (0, another_report),
-        (
-            0,
-            MarkingKind::Covered {
-                flushed: true,
-                provider: false,
-            },
-        ),
+        (0, covered()),
     ] {
+        let mut oracle = three_writes_one_failure(instance);
+        tell(&oracle, f, op(instance, seq), kind.clone(), 0);
         assert!(
             matches!(
-                oracle.observe(&marked(f, op(instance, seq), kind.clone())),
+                oracle.observe(&abandoned(f)),
                 Err(Violation::MarkingContradicted { .. })
             ),
             "write {seq} {kind:?}"
@@ -174,15 +170,9 @@ fn a_marking_before_its_writes_completion_is_refused() {
     oracle
         .report(failed_at(instance, 0, &[0], 0))
         .expect("a failure suspecting it");
+    tell(&oracle, failure(instance, 0), op(instance, 0), covered(), 0);
     assert!(matches!(
-        oracle.observe(&marked(
-            failure(instance, 0),
-            op(instance, 0),
-            MarkingKind::Covered {
-                flushed: true,
-                provider: false
-            }
-        )),
+        oracle.observe(&abandoned(failure(instance, 0))),
         Err(Violation::MarkingContradicted { .. })
     ));
 }
@@ -190,97 +180,104 @@ fn a_marking_before_its_writes_completion_is_refused() {
 #[test]
 fn a_marking_naming_a_write_the_failure_does_not_suspect_is_refused() {
     let instance = InstanceId::next();
+    let second = failure(instance, 1);
     let mut oracle = three_writes_one_failure(instance);
     oracle
         .report(failed_at(instance, 1, &[0], 0))
         .expect("a second failure, suspecting write 0 alone");
+    tell(&oracle, second, op(instance, 2), covered(), 0);
     assert!(matches!(
-        oracle.observe(&marked(
-            failure(instance, 1),
-            op(instance, 2),
-            MarkingKind::Covered {
-                flushed: true,
-                provider: false
-            }
-        )),
+        oracle.observe(&abandoned(second)),
         Err(Violation::MarkingNotSuspect { .. })
     ));
+
+    let mut oracle = three_writes_one_failure(instance);
     oracle
-        .observe(&marked(failure(instance, 1), op(instance, 0), nullified()))
+        .report(failed_at(instance, 1, &[0], 0))
+        .expect("a second failure, suspecting write 0 alone");
+    tell(&oracle, second, op(instance, 0), nullified(), 0);
+    oracle
+        .observe(&abandoned(second))
         .expect("write 0 it does suspect");
 }
 
 #[test]
-fn a_marking_for_a_failure_not_live_is_refused() {
+fn the_markings_of_a_failure_still_unresolved_are_checked_at_finish() {
     let instance = InstanceId::next();
+    let f = failure(instance, 0);
+    let oracle = three_writes_one_failure(instance);
+    tell(&oracle, f, op(instance, 2), nullified(), 0);
+    assert!(matches!(
+        oracle.finish(),
+        Err(Violation::MarkingContradicted { .. })
+    ));
+
+    let oracle = three_writes_one_failure(instance);
+    tell(&oracle, f, op(instance, 2), covered(), 0);
+    oracle.finish().expect("it agrees");
+}
+
+#[test]
+fn a_failure_resolved_is_told_no_more() {
+    let instance = InstanceId::next();
+    let f = failure(instance, 0);
     let mut oracle = three_writes_one_failure(instance);
+    tell(&oracle, f, op(instance, 1), covered(), 0);
+    oracle.observe(&abandoned(f)).expect("abandoned");
+    tell(&oracle, f, op(instance, 2), covered(), 0);
     assert!(matches!(
-        oracle.observe(&marked(
-            failure(instance, 7),
-            op(instance, 2),
-            MarkingKind::Covered {
-                flushed: true,
-                provider: false
-            }
-        )),
-        Err(Violation::MarkedUnknown { .. })
+        oracle.finish(),
+        Err(Violation::MarkedAfterResolution { failure }) if failure == f
     ));
-    let ended: TestEntry = Entry::Abandoned {
-        failure: failure(instance, 0),
-    };
-    oracle.observe(&ended).expect("abandoned");
-    assert!(matches!(
-        oracle.observe(&marked(
-            failure(instance, 0),
-            op(instance, 2),
-            MarkingKind::Covered {
-                flushed: true,
-                provider: false
-            }
-        )),
-        Err(Violation::MarkedUnknown { .. })
-    ));
+
+    let mut oracle = three_writes_one_failure(instance);
+    tell(&oracle, f, op(instance, 1), covered(), 0);
+    oracle.observe(&abandoned(f)).expect("abandoned");
+    oracle
+        .finish()
+        .expect("told of nothing after it was resolved");
 }
 
 #[test]
 fn markings_and_failures_share_one_stamp_order() {
     let instance = InstanceId::next();
-    let mut oracle = Oracle::new();
-    oracle
-        .pushed(op(instance, 0), write_kind(instance, 1), LEN, 0)
-        .expect("a write");
-    oracle
-        .report(failed_at(instance, 0, &[0], 100))
-        .expect("a failure at 100");
-    oracle
-        .observe(&completion(
-            op(instance, 0),
-            write_kind(instance, 1),
-            Outcome::Transferred(LEN),
-            0,
-        ))
-        .expect("its completion");
-    let covered = |ticks| -> TestEntry {
-        Entry::Marked {
-            failure: failure(instance, 0),
-            marking: marking(
+    let f = failure(instance, 0);
+    let ready = || {
+        let mut oracle = Oracle::new();
+        oracle
+            .pushed(op(instance, 0), write_kind(instance, 1), LEN, 0)
+            .expect("a write");
+        oracle
+            .report(failed_at(instance, 0, &[0], 100))
+            .expect("a failure at 100");
+        oracle
+            .observe(&completion(
                 op(instance, 0),
-                MarkingKind::Covered {
-                    flushed: true,
-                    provider: false,
-                },
-                ticks,
-            ),
-        }
+                write_kind(instance, 1),
+                Outcome::Transferred(LEN),
+                0,
+            ))
+            .expect("its completion");
+        oracle
     };
+
+    let oracle = ready();
+    tell(&oracle, f, op(instance, 0), covered(), 100);
+    tell(&oracle, f, op(instance, 0), covered(), 150);
     oracle
-        .observe(&covered(100))
-        .expect("equal to the failure's");
-    oracle.observe(&covered(150)).expect("later");
+        .finish()
+        .expect("a marking equal to the failure's, then a later one");
+
+    let oracle = ready();
+    tell(&oracle, f, op(instance, 0), covered(), 150);
+    tell(&oracle, f, op(instance, 0), covered(), 149);
     assert!(matches!(
-        oracle.observe(&covered(149)),
+        oracle.finish(),
         Err(Violation::StampWentBackwards { .. })
     ));
+
+    let mut oracle = ready();
+    tell(&oracle, f, op(instance, 0), covered(), 150);
     assert!(
         matches!(
             oracle.report(failed_at(instance, 1, &[], 120)),
@@ -291,53 +288,15 @@ fn markings_and_failures_share_one_stamp_order() {
 }
 
 #[test]
-fn a_failed_is_owed_its_suspect_set_before_anything_else_is_reported() {
+fn a_failed_the_observer_was_not_told_of_is_refused() {
     let instance = InstanceId::next();
     let f = failure(instance, 0);
-    let FailedEntry(entry, writes) = failed_at(instance, 0, &[], 0);
-    let other: TestEntry = Entry::Durable {
-        through: Epoch::new(Lineage { instance, seq: 0 }, 1),
-    };
-
+    let FailedEntry(entry, _) = failed_at(instance, 0, &[], 0);
     let mut oracle = Oracle::new();
-    oracle.observe(&entry).expect("the Failed itself");
     assert!(matches!(
-        oracle.observe(&other),
-        Err(Violation::SuspectsNotReported { failure }) if failure == f
+        oracle.observe(&entry),
+        Err(Violation::FailureNotTold { failure }) if failure == f
     ));
-
-    let mut oracle = Oracle::new();
-    oracle.observe(&entry).expect("the Failed itself");
-    assert!(matches!(
-        oracle.finish(),
-        Err(Violation::SuspectsNotReported { failure }) if failure == f
-    ));
-
-    let mut oracle = Oracle::new();
-    assert!(
-        matches!(
-            oracle.suspects(f, &writes),
-            Err(Violation::SuspectsUnasked { failure }) if failure == f
-        ),
-        "no Failed was reported"
-    );
-    oracle.observe(&entry).expect("the Failed itself");
-    assert!(
-        matches!(
-            oracle.suspects(failure(instance, 1), &writes),
-            Err(Violation::SuspectsUnasked { .. })
-        ),
-        "another failure's"
-    );
-    oracle.suspects(f, &writes).expect("its own");
-    assert!(
-        matches!(
-            oracle.suspects(f, &writes),
-            Err(Violation::SuspectsUnasked { .. })
-        ),
-        "given once"
-    );
-    oracle.finish().expect("nothing owed");
 }
 
 #[test]

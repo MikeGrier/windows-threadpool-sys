@@ -318,12 +318,13 @@ fn ending_a_lineage_a_heal_waits_for_reports_the_heal() {
     };
     heal(&mut harness, token);
     harness.seal(1);
-    assert!(
-        matches!(harness.next_entry(), Entry::Marked { failure, .. } if failure == id),
-        "the seal's flush covered the default's suspect write"
-    );
     let one = harness.epoch(1);
     expect_durable(&mut harness, one);
+    assert_eq!(
+        harness.told.markings(id).map(|told| told.len()),
+        Some(1),
+        "the seal's flush covered the default's suspect write, and the observer was told"
+    );
 
     drop(minted);
     assert_eq!(expect_ended(&mut harness, lineage), Some(1));

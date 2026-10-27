@@ -518,7 +518,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         stopped: impl Fn(
             &DomainLists,
             &Ordered<u64, Write<E, T>>,
-            &Kept<E, I>,
+            &Kept<E>,
             &HeldOp<E, T>,
         ) -> Option<Gate<E>>,
         due: &mut Due<E, T, I>,

@@ -74,20 +74,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.2** -- The core's per-call scratch and the lists a call hands the driver are made at construction, each for a stated bound, and `CoreActions` carries no lists (DI-D-111). -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23122)
 
-- [ ] **DI-23.12.3** -- **A failure's storage** ([DI-D-108](DESIGN-NOTES.md#di-d-108),
-  [DI-D-109](DESIGN-NOTES.md#di-d-109)): the suspect set as the rule that made it -- the cut, the reach, the lineage --
-  over write records that keep where they stopped being uncovered and are kept while a failure could name them; a marking
-  kept once per write; the failure's records lent by a scoped borrow, events and the inventory carrying its identity,
-  token, cause and stamp; a resolved failure's records kept until its `Abandoned` or `Healed` is popped; a `Marked` queued
-  once per marked write and expanded at pop; and the failure table, the completion queue, and the list of entries one
-  change makes (`Due`'s events, made at construction by `DI-23.12.2` for the clean paths only) sized from the derived
-  bounds, the entries list pushed onto within its room as the others are. Proof obligations: unresolved observed failures within `operations` times one plus the served domains, a
-  provider's answer for an ended lineage included, and a test filling the table and the queue to their bounds. Breaking:
-  `Failed`, `Abandoned`, `Healed`, `Marked`, `FailureInfo` and `SuspectSet` change shape in both crates, and the oracle
-  follows. Split 2026-10-24 when it began into the steps below, in dependency order: today a covered write's record is let
-  go at the moment its marking is made, which is why each failure keeps its own copies, so the records must outlive
-  coverage before a failure can be a rule over them, and the consumer-facing change comes last, over storage already in
-  place.
+- [x] **DI-23.12.3** -- A failure's storage is a rule over write records kept while a failure could name them, in tables and a queue sized from derived bounds, with the failure's detail dispatched to an observer instead of lent. -> [completed 2026-10-26](COMPLETED-CHECKLIST.md#di-23123)
 
 - [x] **DI-23.12.3.1** -- The unresolved failures are kept in a table made at construction for the flush parts plus the imports, with the bound argued and filled by a test. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-231231)
 
@@ -105,10 +92,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.3.8** -- A failure observer given at construction is told of each failure, its suspect writes in push order before its Failed can be popped, and each marking for each failure it goes to, beside the lending it will replace. -> [completed 2026-10-26](COMPLETED-CHECKLIST.md#di-231238)
 
-- [ ] **DI-23.12.3.9** -- **Withdraw what the observer replaces** ([DI-D-113](DESIGN-NOTES.md#di-d-113)): `failure_suspects` and
-  `failure_markings`; `Marked` as an entry, with the expansion at pop and the markings term of `Capacity::entries`; the
-  markings kept on the write records, their order and `Standing::Resolved`'s cutoff; and the oracle's owed suspect set.
-  CONTRACT.md, the READMEs' examples, and the allocation records follow. Breaking for both crates.
+- [x] **DI-23.12.3.9** -- A failure's suspect writes and markings reach a consumer only through its failure observer: the lending, `Marked` and the markings kept on the write records are withdrawn, and the oracle reads what the observer was told. -> [completed 2026-10-26](COMPLETED-CHECKLIST.md#di-231239)
 
 - [x] **DI-23.12.4** -- Lineage handles, failure tokens, descriptions and domain lists are fixed storage made at construction: slots, a lent string, and rows. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23124)
 
@@ -136,7 +120,8 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
   epochs. Found 2026-10-24 implementing `DI-23.12.2`, which moved the lists that carry these but not the contents; no step
   owned them, and the allocation test cannot see them, since it runs no provider and closes no cycle, so it gains a
   provider-routed seal and a refused cycle here. The assistant's recommendation, for the engineer: lend each by a scoped
-  borrow of fixed storage, as a failure's records are ([DI-D-108](DESIGN-NOTES.md#di-d-108)) -- a request's parts sized
+  borrow of fixed storage, as a failure's records were lent ([DI-D-108](DESIGN-NOTES.md#di-d-108), since replaced by
+  the observer of [DI-D-113](DESIGN-NOTES.md#di-d-113)) -- a request's parts sized
   from the recorded seals and the served domains, and a cycle, at most the operations plus one steps long, read through the
   refusal for the duration of a visitor. A contract change for both crates.
 

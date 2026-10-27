@@ -112,23 +112,6 @@ impl<V: Identities> fmt::Display for UnknownLineage<V> {
 
 impl<V: Identities> core::error::Error for UnknownLineage<V> {}
 
-/// A failure whose records the instance does not hold: not one of its own, or resolved and its
-/// `Abandoned` or `Healed` entry already popped (DI-D-108).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnknownFailure<V: Identities>(pub V::FailureId);
-
-impl<V: Identities> fmt::Display for UnknownFailure<V> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{:?} is not a failure whose records this instance holds",
-            self.0
-        )
-    }
-}
-
-impl<V: Identities> core::error::Error for UnknownFailure<V> {}
-
 /// Why an `import_failure` was refused; nothing was recorded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImportError<V: Identities> {
@@ -310,8 +293,8 @@ pub enum FailureCause<V: Identities> {
 
 /// The payload of a `Failed` entry: the one place a token is dispensed besides the inventory.
 /// The writes it put at risk -- its suspect set, frozen now and never gaining a write (DI-D-12
-/// (b)) -- are lent by the instance's `failure_suspects`, which reads the instance's own records
-/// rather than a copy (DI-D-108).
+/// (b)) -- are not carried: a [`FailureObserver`](crate::observer::FailureObserver) given at
+/// construction is told of each, in push order, before this entry can be popped (DI-D-113).
 #[derive(Debug)]
 pub struct Failed<V: Identities> {
     /// The failure's identity.
@@ -427,27 +410,18 @@ pub enum Entry<V: Identities, B, C> {
         /// The failure in the way.
         by: V::FailureId,
     },
-    /// The consumer abandoned a failure, and its suspect writes are declared lost. Its records --
-    /// its suspect writes, and every marking it gained up to this resolution -- are lent by
-    /// `failure_suspects` and `failure_markings` until this entry is popped, and the failure holds
-    /// what it held until then (DI-D-108). A suspect write still in flight now is reported only by
-    /// its own completion (DI-D-47).
+    /// The consumer abandoned a failure, and its suspect writes are declared lost. The failure
+    /// holds what it held until this entry is popped (DI-D-108). A suspect write still in flight
+    /// now is reported only by its own completion (DI-D-47).
     Abandoned {
         /// The failure abandoned.
         failure: V::FailureId,
     },
-    /// A heal took effect (DI-D-12 (c)): the failure is resolved as healed. Its records are lent
-    /// until this entry is popped, as `Abandoned`'s are.
+    /// A heal took effect (DI-D-12 (c)): the failure is resolved as healed. It holds what it held
+    /// until this entry is popped, as `Abandoned`'s does.
     Healed {
         /// The failure healed.
         failure: V::FailureId,
-    },
-    /// A failure not yet resolved gained a marking.
-    Marked {
-        /// The failure.
-        failure: V::FailureId,
-        /// The marking.
-        marking: Marking<V>,
     },
     /// `end_lineage` took effect: every epoch of `lineage` not yet durable, through
     /// `abandoned_through`, is abandoned (`None` if none was pending).
@@ -692,7 +666,8 @@ pub struct ResolveError<V: Identities> {
 
 /// One unresolved failure, as the inventory lends it to a visitor (DI-D-103): its cause is the
 /// instance's own, lent for the visit, so a visitor that keeps it clones it. Its suspect writes and
-/// markings are lent by the instance's `failure_suspects` and `failure_markings` (DI-D-108).
+/// markings are not reported here: a [`FailureObserver`](crate::observer::FailureObserver) is told
+/// of them as they happen (DI-D-113).
 #[derive(Clone, Copy, Debug)]
 pub struct FailureInfo<'a, V: Identities> {
     /// The failure's identity.

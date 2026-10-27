@@ -53,7 +53,7 @@ fn pop_through_failures(harness: &mut Harness) -> RingEntry {
         if let Ok(Some(entry)) = harness.ring.pop() {
             harness
                 .oracle
-                .observe_from(&harness.ring, &entry)
+                .observe(&entry)
                 .expect("the oracle accepts the entry");
             return entry;
         }

@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Mike Grier
-//! The completion queue within its derived bound (DI-D-109, DI-D-112): a marking queued once per
-//! write and expanded when popped; a `Blocked` withdrawn once its seal is gone; a lineage counted
-//! until its `LineageEnded` is popped; and the queue made for `Capacity::entries`. Every call in
-//! the rig also checks, inside the core, that the queue keeps the rules the bound rests on.
+//! The completion queue within its derived bound (DI-D-112, DI-D-113): a marking is no entry; a
+//! `Blocked` withdrawn once its seal is gone; a lineage counted until its `LineageEnded` is
+//! popped; and the queue made for `Capacity::entries`. Every call in the rig also checks, inside
+//! the core, that the queue keeps the rules the bound rests on.
 
 use std::sync::Arc;
 
@@ -38,9 +38,6 @@ fn kinds(rig: &Rig, entries: &[Entry<V, Vec<u8>, &'static str>]) -> Vec<String> 
             Entry::Durable { through } => format!("durable {}", at(through)),
             Entry::Blocked { through, by } => format!("blocked {} by f{}", at(through), by.seq),
             Entry::Failed(failed) => format!("failed f{}", failed.id.seq),
-            Entry::Marked { failure, marking } => {
-                format!("marked op{} for f{}", marking.write.seq, failure.seq)
-            }
             Entry::Abandoned { failure } => format!("abandoned f{}", failure.seq),
             Entry::Healed { failure } => format!("healed f{}", failure.seq),
             Entry::LineageEnded { .. } => "ended".to_owned(),
@@ -79,7 +76,7 @@ fn the_queue_is_made_for_the_derived_bound() {
         let bound = capacity.entries(served).expect("fits");
         assert_eq!(
             bound,
-            4 * capacity.operations
+            3 * capacity.operations
                 + 2 * capacity.failures(served).expect("fits")
                 + 3 * capacity.lineages
         );
@@ -87,50 +84,47 @@ fn the_queue_is_made_for_the_derived_bound() {
     }
 }
 
-/// A write two failures suspect is marked once, and queued once: popped as one `Marked` for each,
-/// in observation order -- a failure abandoned after the marking included, whose `Abandoned`
-/// comes after it.
+/// A marking is no entry (DI-D-113): a write two failures suspect, marked once, queues nothing, and
+/// the observer is told of it for each failure, in observation order.
 #[test]
-fn a_marking_is_queued_once_and_popped_once_for_each_failure_it_goes_to() {
+fn a_marking_queues_nothing_and_goes_to_the_observer_for_each_failure() {
     let mut rig = rig(|_| {});
     rig.write(1, 0, b"x").expect("room");
     rig.run();
     rig.entries();
     let first = import(&mut rig);
-    let _second = import(&mut rig);
+    let second = import(&mut rig);
     rig.seal(1);
     rig.run();
-    assert_eq!(rig.core.queued(), 2, "one marking, one Blocked");
+    assert_eq!(rig.core.queued(), 1, "only the Blocked");
+    for id in [first.id(), second.id()] {
+        assert_eq!(
+            rig.told.markings(id).map(|told| told.len()),
+            Some(1),
+            "told once of the one marking"
+        );
+    }
     resolve(&mut rig, first, Resolution::Abandon);
     let entries = rig.entries();
-    assert_eq!(
-        kinds(&rig, &entries),
-        [
-            "marked op0 for f0",
-            "marked op0 for f1",
-            "blocked 1 by f0",
-            "abandoned f0"
-        ]
-    );
+    assert_eq!(kinds(&rig, &entries), ["blocked 1 by f0", "abandoned f0"]);
 }
 
-/// A failure resolved before a write is marked is not given the marking: its `Abandoned` is queued
-/// ahead of the marking, and popping it lets the failure go before the marking is expanded.
+/// A failure resolved before a write is marked is not told of the marking.
 #[test]
-fn a_marking_is_not_given_to_a_failure_resolved_before_it() {
+fn a_failure_resolved_before_a_marking_is_not_told_of_it() {
     let mut rig = rig(|_| {});
     rig.write(1, 0, b"x").expect("room");
     rig.run();
     rig.entries();
     let first = import(&mut rig);
-    let _second = import(&mut rig);
+    let second = import(&mut rig);
+    let (first_id, second_id) = (first.id(), second.id());
     resolve(&mut rig, first, Resolution::Abandon);
     rig.seal(1);
     rig.run();
-    assert_eq!(
-        popped(&mut rig),
-        ["abandoned f0", "marked op0 for f1", "blocked 1 by f1"]
-    );
+    assert_eq!(popped(&mut rig), ["abandoned f0", "blocked 1 by f1"]);
+    assert_eq!(rig.told.markings(first_id), Some(Vec::new()));
+    assert_eq!(rig.told.markings(second_id).map(|told| told.len()), Some(1));
 }
 
 /// The `Blocked` entries reach twice the operations -- a recorded seal and the empty seal trailing
@@ -148,17 +142,12 @@ fn the_blocked_entries_fill_to_twice_the_operations_and_a_durable_withdraws_them
         rig.seal(through);
         rig.run();
     }
-    assert_eq!(rig.core.queued(), 2 + 4, "two markings, and four Blocked");
+    assert_eq!(rig.core.queued(), 4, "four Blocked");
     resolve(&mut rig, token, Resolution::Abandon);
     let entries = rig.entries();
     assert_eq!(
         kinds(&rig, &entries),
-        [
-            "marked op0 for f0",
-            "marked op1 for f0",
-            "abandoned f0",
-            "durable 4"
-        ],
+        ["abandoned f0", "durable 4"],
         "every Blocked withdrawn by the Durable through 4"
     );
 }
@@ -177,10 +166,7 @@ fn empty_seals_behind_a_failure_leave_one_blocked_for_the_last() {
     for through in 2..=21 {
         rig.seal(through);
     }
-    assert_eq!(
-        popped(&mut rig),
-        ["marked op0 for f0", "blocked 1 by f0", "blocked 21 by f0"]
-    );
+    assert_eq!(popped(&mut rig), ["blocked 1 by f0", "blocked 21 by f0"]);
 }
 
 /// A lineage's end withdraws its un-popped `Blocked`: its seals are gone.
@@ -197,7 +183,7 @@ fn a_lineage_end_withdraws_its_blocked() {
     rig.run();
     let actions = rig.core.end_lineage(minted).expect("live");
     rig.act(actions);
-    assert_eq!(popped(&mut rig), ["marked op0 for f0", "ended"]);
+    assert_eq!(popped(&mut rig), ["ended"]);
 }
 
 /// Minting, sealing and ending a lineage queues a `Durable` and a `LineageEnded` and holds nothing
@@ -239,9 +225,9 @@ fn retiring_a_live_lineage_withdraws_its_durable() {
         .expect("the retired one no longer counts");
 }
 
-/// Every kind of entry at once, in a small declaration: completions, markings, a failure, a
-/// `Blocked`, a `Durable` replaced, and a `LineageEnded` -- the queue's rules checked after every
-/// call, and the entries popped in the order they happened.
+/// Every kind of entry at once, in a small declaration: completions, a failure, a `Blocked`, a
+/// `Durable` replaced, and a `LineageEnded` -- the queue's rules checked after every call, and the
+/// entries popped in the order they happened.
 #[test]
 fn every_kind_of_entry_queued_at_once_pops_in_order() {
     let mut rig = rig(|c| {
@@ -261,7 +247,7 @@ fn every_kind_of_entry_queued_at_once_pops_in_order() {
     rig.seal_in(minted, 2);
     let actions = rig.core.end_lineage(minted).expect("live");
     rig.act(actions);
-    assert_eq!(rig.core.queued(), 8);
+    assert_eq!(rig.core.queued(), 6);
     assert!(rig.core.queued() <= rig.core.capacity.entries(0).expect("fits"));
     let entries = rig.entries();
     assert_eq!(
@@ -270,8 +256,6 @@ fn every_kind_of_entry_queued_at_once_pops_in_order() {
             "op0",
             "op1",
             format!("failed f{}", failure.failure.seq).as_str(),
-            "marked op0 for f0",
-            "marked op1 for f0",
             "blocked 1 by f0",
             "durable L2",
             "ended"

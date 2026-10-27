@@ -364,7 +364,8 @@ entry it pops. Every write is in the default lineage, so the lineage is not show
 returns a handle to it, and `tag(n)` is its epoch n as a write or a seal takes it, `epoch(n)` as a
 query or an entry names it. A commit failure cannot be provoked on a healthy machine through a Win32
 file, so each example arms one with dioring's fault seam, `fail_next_flush`, which makes the next
-flush of a file report the error given whatever the device answered. Setting up the instance, and a
+flush of a file report the error given whatever the device answered. Setting up the instance, an
+observer that keeps the suspect writes it is told of (the examples that read them), and a
 `pop_until` that pops until an entry it is looking for, are hidden.
 
 ### Healing a failure
@@ -387,6 +388,24 @@ flush of a file report the error given whatever the device answered. Setting up 
 #         }
 #     }
 # }
+# use std::sync::{Arc, Mutex};
+# type Ids = WindowsIds<u64>;
+# #[derive(Default)]
+# struct Suspects(Mutex<Vec<(FailureId, OpId)>>);
+# impl Suspects {
+#     fn of(&self, failure: FailureId) -> Vec<OpId> {
+#         let told = self.0.lock().expect("not poisoned");
+#         told.iter().filter(|(f, _)| *f == failure).map(|(_, op)| *op).collect()
+#     }
+# }
+# impl FailureObserver<Ids> for Suspects {
+#     fn failed(&self, _: FailureId, _: &FailureCause<Ids>, _: <Ids as Identities>::Instant) {}
+#     fn suspected(&self, failure: FailureId, write: SuspectWrite<Ids>) {
+#         self.0.lock().expect("not poisoned").push((failure, write.op));
+#     }
+#     fn marked(&self, _: FailureId, _: &Marking<Ids>) {}
+# }
+# let told = Arc::new(Suspects::default());
 # let path = std::env::temp_dir().join(format!("durable-ioring-heal-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
@@ -404,7 +423,7 @@ flush of a file report the error given whatever the device answered. Setting up 
 #     provider: None,
 #     capacity: Capacity { operations: 256, lineages: 4, imports: 4, targets: 4, domains: 4 },
 #     diagnostics: None,
-#     failure_observer: None,
+#     failure_observer: Some(told.clone()),
 #     delivery: DeliveryMode::Pool(None),
 # })
 # .expect("an instance");
@@ -424,10 +443,8 @@ let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) 
     unreachable!()
 };
 assert!(matches!(f1.cause, FailureCause::Commit { .. }));
-// -> failure_suspects(F1)                     // lends [A@41, B@41, C@41]
-let mut suspect = 0;
-ring.failure_suspects(f1.id, |_| suspect += 1).expect("F1 is held");
-assert_eq!(suspect, 3);
+// -> (the observer was told, before `Failed` could be popped)  // F1 suspects [A@41, B@41, C@41]
+assert_eq!(told.of(f1.id).len(), 3);
 assert_eq!(ring.durable_through(lineage.lineage()), Ok(None)); // nothing is durable yet
 // -> write(tag 41, A')                        // refused: 41 is sealed (guarantee 6)
 let refused = ring.write(FILE, 0, vec![2; 8], tag(41), ()).expect_err("41 is sealed");
@@ -478,6 +495,24 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 #         }
 #     }
 # }
+# use std::sync::{Arc, Mutex};
+# type Ids = WindowsIds<u64>;
+# #[derive(Default)]
+# struct Suspects(Mutex<Vec<(FailureId, OpId)>>);
+# impl Suspects {
+#     fn of(&self, failure: FailureId) -> Vec<OpId> {
+#         let told = self.0.lock().expect("not poisoned");
+#         told.iter().filter(|(f, _)| *f == failure).map(|(_, op)| *op).collect()
+#     }
+# }
+# impl FailureObserver<Ids> for Suspects {
+#     fn failed(&self, _: FailureId, _: &FailureCause<Ids>, _: <Ids as Identities>::Instant) {}
+#     fn suspected(&self, failure: FailureId, write: SuspectWrite<Ids>) {
+#         self.0.lock().expect("not poisoned").push((failure, write.op));
+#     }
+#     fn marked(&self, _: FailureId, _: &Marking<Ids>) {}
+# }
+# let told = Arc::new(Suspects::default());
 # let path = std::env::temp_dir().join(format!("durable-ioring-many-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
@@ -495,17 +530,13 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 #     provider: None,
 #     capacity: Capacity { operations: 256, lineages: 4, imports: 4, targets: 4, domains: 4 },
 #     diagnostics: None,
-#     failure_observer: None,
+#     failure_observer: Some(told.clone()),
 #     delivery: DeliveryMode::Pool(None),
 # })
 # .expect("an instance");
 let tag = |n: u64| lineage.at(n); // what a write or a seal takes
 let epoch = |n: u64| Epoch::new(lineage.lineage(), n); // what a query or an entry names
-let ops = |ring: &Ring, failure| {
-    let mut ops = Vec::new();
-    ring.failure_suspects(failure, |w| ops.push(w.op)).expect("held");
-    ops
-};
+let ops = |failure| told.of(failure);
 
 // -> write(tag 41, A) ; write(tag 43, P)      // 43 is open
 let a = ring.write(FILE, 0, vec![1; 8], tag(41), ()).expect("a write");
@@ -514,23 +545,23 @@ ring.fail_next_flush(FILE, 1117);
 // -> make_durable_through(41)                 // seals 41
 ring.make_durable_through(tag(41)).expect("a seal");
 // <- WriteDone(A) ; WriteDone(P)
-// <- Failed { failure: F1, cause: Commit }    // -> failure_suspects(F1): [A@41, P@43]
+// <- Failed { failure: F1, cause: Commit }    // the observer was told F1 suspects [A@41, P@43]
 let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
     unreachable!()
 };
-assert_eq!(ops(&ring, f1.id), [a, p]); // one failure, two epochs: sealed 41 and open 43
+assert_eq!(ops(f1.id), [a, p]); // one failure, two epochs: sealed 41 and open 43
 // -> write(tag 43, R)                         // still allowed: 43 is open
 let r = ring.write(FILE, 16, vec![1; 8], tag(43), ()).expect("a write");
 // <- WriteDone(R)
 pop_until(&mut ring, |e| matches!(e, Entry::Op(done) if done.id == r));
 // -> import_failure()                         // the consumer learned of an outside failure
 let f2_id = ring.import_failure(ImportScope::All).expect("the whole instance").failure;
-// <- Failed { failure: F2, cause: Imported } // -> failure_suspects(F2): [A@41, P@43, R@43]
+// <- Failed { failure: F2, cause: Imported } // the observer was told F2 suspects [A@41, P@43, R@43]
 let Entry::Failed(f2) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
     unreachable!()
 };
 assert_eq!(f2.id, f2_id);
-assert_eq!(ops(&ring, f2.id), [a, p, r]); // epoch 43 now sits in F1 and F2
+assert_eq!(ops(f2.id), [a, p, r]); // epoch 43 now sits in F1 and F2
 
 // The first ending: heal both. Re-issue A, P and R under tag 44, resolve both in one atomic
 // call, and seal 44.
@@ -710,7 +741,7 @@ A consumer that writes and never seals is refused for the same reason, however f
 ### Refused at capacity, and cleared by resolving a failure
 
 A failure keeps the place of every write it suspects until its `Abandoned` or `Healed` entry is
-popped -- the instance lends its suspect set until then -- so a consumer that leaves failures
+popped -- the instance holds its suspect set until then -- so a consumer that leaves failures
 unresolved finds the submit window shrinking, popped completions or not. Here a seal's commit fails
 with two writes suspected, in an instance built for three operations: one more write is accepted, and
 the next is refused until the failure is resolved and its `Abandoned` popped. Healing frees the

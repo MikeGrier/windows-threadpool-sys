@@ -214,8 +214,13 @@ fn a_file_both_answer_for_needs_its_flush_and_its_domain_in_either_order() {
         assert!(quiet(&first), "half covered is not covered ({flush_first})");
         assert_eq!(
             seen(&last),
-            [Seen::Marked(0, write.seq, BY_BOTH), Seen::Blocked(1, 0)],
-            "covered, citing both, and held by the import ({flush_first})"
+            [Seen::Blocked(1, 0)],
+            "held by the import ({flush_first})"
+        );
+        assert_eq!(
+            lineage.marked(),
+            [Seen::Marked(0, write.seq, BY_BOTH)],
+            "covered, citing both ({flush_first})"
         );
     }
 }
@@ -231,18 +236,17 @@ fn a_provider_success_covers_the_writes_it_completes() {
     lineage.completed(on_two, FULL);
     import(&mut lineage);
     let seal = call(&submitted(lineage.seal(1))).seal;
+    assert!(seen(&succeeded(&mut lineage, seal, 2)).is_empty());
     assert_eq!(
-        seen(&succeeded(&mut lineage, seal, 2)),
+        lineage.marked(),
         [Seen::Marked(0, on_two.seq, BY_PROVIDER)],
         "domain 2 completes B's write and not A's"
     );
     assert_eq!(
         seen(&succeeded(&mut lineage, seal, 1)),
-        [
-            Seen::Marked(0, on_one.seq, BY_PROVIDER),
-            Seen::Blocked(1, 0)
-        ]
+        [Seen::Blocked(1, 0)]
     );
+    assert_eq!(lineage.marked(), [Seen::Marked(0, on_one.seq, BY_PROVIDER)]);
 }
 
 #[test]
@@ -274,10 +278,13 @@ fn a_provider_failure_reaches_the_files_in_its_domain_and_every_unknown_file() {
         inventory[0].cause
     );
     assert!(seen(&succeeded(&mut lineage, seal, 2)).is_empty());
-    assert_eq!(
-        seen(&lineage.flushed(1, C, Ok(()))),
-        [Seen::Marked(0, unknown.seq, super::COVERED)],
+    assert!(
+        seen(&lineage.flushed(1, C, Ok(()))).is_empty(),
         "the failure is the seal's answer; nothing more is reported for it"
+    );
+    assert_eq!(
+        lineage.marked(),
+        [Seen::Marked(0, unknown.seq, super::COVERED)]
     );
     assert_eq!(lineage.durable_through(), None);
     assert!(matches!(lineage.state(1), State::Blocked(by) if by.seq == 0));

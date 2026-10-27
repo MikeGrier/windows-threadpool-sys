@@ -2,7 +2,8 @@
 //! The failure observer (DI-D-113): told of each failure, then its suspect writes in push order,
 //! before its `Failed` can be popped; then of each marking once for each failure it goes to, in
 //! observation order, a resolved failure told nothing more. Every rig in these tests also compares
-//! what its observer was told with what the core lends, as each `Failed` and `Marked` is popped.
+//! what its observer was told of a failure's suspects with what the core holds, as each `Failed`
+//! is popped, and the oracle checks the markings it was told of when the failure is resolved.
 
 use std::sync::{Arc, Mutex};
 
@@ -85,12 +86,13 @@ fn core() -> Core {
 /// A rig whose core's observer also logs every call.
 fn logged() -> (Rig, Arc<Log>) {
     let log = Arc::new(Log::default());
-    let told = Arc::new(ObservedFailures::new());
+    let oracle = ConformanceOracle::new();
+    let told = oracle.observer();
     let mut rig = Rig {
         core: core().observed_by(Arc::new(Both(told.clone(), log.clone()))),
         backend: MemoryBackend::new(nz(8), nz(16)),
         requests: Vec::new(),
-        oracle: ConformanceOracle::new(),
+        oracle,
         suspected: std::collections::HashMap::new(),
         told,
     };
@@ -151,7 +153,7 @@ fn a_marking_is_told_once_for_each_failure_in_the_order_observed() {
     assert_eq!(
         log.take(),
         ["marked f0 op0 covered", "marked f1 op0 covered"],
-        "as made, before either Marked is popped"
+        "as made"
     );
     rig.entries();
 }

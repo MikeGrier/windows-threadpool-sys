@@ -59,6 +59,21 @@ fn plain(submissions: u32, completions: u32) -> Eng {
     )
 }
 
+/// As [`plain`], its core given the failure observer `oracle` reads from (DI-D-113).
+fn observed(oracle: &ConformanceOracle<V, u32>, submissions: u32, completions: u32) -> Eng {
+    engine(
+        submissions,
+        completions,
+        Core::new(
+            Ticks::default(),
+            Arc::new(NoDiagnostics),
+            crate::test_support::CAPACITY,
+        )
+        .expect("a valid capacity")
+        .observed_by(oracle.observer()),
+    )
+}
+
 fn at(engine: &Eng, id: u64) -> Epoch<V> {
     Epoch::new(engine.core.default_lineage(), id)
 }
@@ -92,16 +107,6 @@ fn entries(
         oracle
             .observe(&entry)
             .expect("the oracle accepts the entry");
-        if let Entry::Failed(failed) = &entry {
-            let mut suspect = Vec::new();
-            engine
-                .core
-                .failure_suspects(failed.id, |write| suspect.push(write))
-                .expect("held until its resolution is popped");
-            oracle
-                .suspects(failed.id, &suspect)
-                .expect("the oracle accepts the suspect set");
-        }
         entries.push(entry);
     }
     entries
@@ -188,8 +193,8 @@ fn a_commit_the_backend_refuses_is_kept_and_issued_by_a_later_drain() {
 fn a_commit_the_backend_refuses_for_good_is_ended_and_what_that_makes_due_is_acted_on() {
     // DI-D-54: the refusal's own actions are acted on in turn, so the failure it makes due is
     // delivered by the call that met the refusal.
-    let mut engine = plain(8, 16);
     let mut oracle = ConformanceOracle::new();
+    let mut engine = observed(&oracle, 8, 16);
     write(&mut engine, &mut oracle, ONE, b"one");
     engine.drain();
     entries(&mut engine, &mut oracle);

@@ -4889,3 +4889,48 @@ one through the setup. The allocation test's core has a counting observer, told 
 Sabotage: six entries, one in win-durable-ioring's manifest; all swept as declared, one only after its patch was
 corrected to compile without the call it removes.
 
+## Moved 2026-10-26 23:01:50 -04:00 -- DI-23.12.3.9: what the failure observer replaces
+
+### <a id="di-231239"></a>DI-23.12.3.9 -- A failure's suspect writes and markings reach a consumer only through its failure observer: the lending, `Marked` and the markings kept on the write records are withdrawn, and the oracle reads what the observer was told. *(completed 2026-10-26 23:01:50 -04:00)*
+
+**Withdraw what the observer replaces** ([DI-D-113](DESIGN-NOTES.md#di-d-113)): `failure_suspects` and
+`failure_markings`; `Marked` as an entry, with the expansion at pop and the markings term of `Capacity::entries`; the
+markings kept on the write records, their order and `Standing::Resolved`'s cutoff; and the oracle's owed suspect set.
+CONTRACT.md, the READMEs' examples, and the allocation records follow. Breaking for both crates.
+
+What was built is [DI-D-113](DESIGN-NOTES.md#di-d-113)'s "As built (DI-23.12.3.9)". The two lending calls are off the
+trait, the core, the Windows driver, its delivery handle and the fake, with `UnknownFailure`; `Entry::Marked` is gone and
+the queue holds only entries, bounded by three times the operations rather than four; the kept records carry no markings
+and no failure-clock reading for them. The oracle hands out the observer it reads (`observer`, or `reading` one built
+first), refuses a `Failed` its observer was not told of, and checks the markings told for a failure when the failure is
+resolved, and at `finish` for the rest, so the owed-suspect-set protocol and three of its violations are gone. The core
+keeps a test-only `suspects_listed` its rig compares with what the observer was told; the durability tests read markings
+through an observer of their own; the Windows tests' `setup` gives each instance a recorder its harness hands the
+oracle. [CONTRACT.md](CONTRACT.md) and win-durable-ioring's README examples say how a consumer reads them now. The
+allocation records were re-recorded: construction makes one table fewer.
+
+Sabotage: the entries for the withdrawn behaviours were dropped, the rest that named them re-anchored, and six added for
+the oracle reading the observer; all swept as declared, one only after its patch was corrected to name the queue's
+entries. 
+
+### <a id="di-23123"></a>DI-23.12.3 -- A failure's storage is a rule over write records kept while a failure could name them, in tables and a queue sized from derived bounds, with the failure's detail dispatched to an observer instead of lent. *(completed 2026-10-26 23:01:50 -04:00)*
+
+**A failure's storage** ([DI-D-108](DESIGN-NOTES.md#di-d-108),
+[DI-D-109](DESIGN-NOTES.md#di-d-109)): the suspect set as the rule that made it -- the cut, the reach, the lineage --
+over write records that keep where they stopped being uncovered and are kept while a failure could name them; a marking
+kept once per write; the failure's records lent by a scoped borrow, events and the inventory carrying its identity,
+token, cause and stamp; a resolved failure's records kept until its `Abandoned` or `Healed` is popped; a `Marked` queued
+once per marked write and expanded at pop; and the failure table, the completion queue, and the list of entries one
+change makes (`Due`'s events, made at construction by `DI-23.12.2` for the clean paths only) sized from the derived
+bounds, the entries list pushed onto within its room as the others are. Proof obligations: unresolved observed failures within `operations` times one plus the served domains, a
+provider's answer for an ended lineage included, and a test filling the table and the queue to their bounds. Breaking:
+`Failed`, `Abandoned`, `Healed`, `Marked`, `FailureInfo` and `SuspectSet` change shape in both crates, and the oracle
+follows. Split 2026-10-24 when it began into the steps below, in dependency order: today a covered write's record is let
+go at the moment its marking is made, which is why each failure keeps its own copies, so the records must outlive
+coverage before a failure can be a rule over them, and the consumer-facing change comes last, over storage already in
+place.
+
+Closed with its last step, `DI-23.12.3.9`. Two of the shapes named above were superseded on the way, by
+[DI-D-113](DESIGN-NOTES.md#di-d-113): the failure's records are not lent but told to a failure observer given at
+construction, and `Marked` is no entry, so there is no queued marking to expand. The steps are each archived under their
+own anchors.

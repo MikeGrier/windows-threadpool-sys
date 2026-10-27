@@ -5,9 +5,8 @@
 //! tests cover it.
 
 use durable_ioring::DurableRing;
-use durable_ioring::FailureId;
 use durable_ioring::{
-    DurabilityRequest, Entry, Failed, FailureCause, ImportScope, Marking, MarkingKind, Resolution,
+    DurabilityRequest, Entry, Failed, FailureCause, ImportScope, MarkingKind, Resolution,
 };
 
 use super::pushes::{GIVEN, Harness, given, instance, temp};
@@ -24,15 +23,8 @@ fn next_failed(harness: &mut Harness) -> Failed<V> {
     }
 }
 
-fn next_marked(harness: &mut Harness) -> (FailureId, Marking<V>) {
-    match harness.next_entry() {
-        Entry::Marked { failure, marking } => (failure, marking),
-        other => panic!("expected Marked, got {other:?}"),
-    }
-}
-
 #[test]
-fn a_suspect_write_flushed_after_an_import_is_marked_covered_and_abandoning_carries_it() {
+fn a_suspect_write_flushed_after_an_import_is_marked_covered_and_the_observer_is_told() {
     let file = temp(&[0; 64]);
     let mut harness = Harness::new(instance(vec![given(GIVEN, &file)], Vec::new()));
     let write = harness.write(GIVEN, 0, b"covered", 2, 1);
@@ -43,49 +35,38 @@ fn a_suspect_write_flushed_after_an_import_is_marked_covered_and_abandoning_carr
         .expect("import");
     let failed = next_failed(&mut harness);
     assert_eq!(harness.suspects(failed.id), [write]);
+    assert_eq!(harness.told.markings(failed.id), Some(Vec::new()));
 
     assert_eq!(harness.seal(2), DurabilityRequest::Submitted);
-    let (failure, marking) = next_marked(&mut harness);
-    assert_eq!((failure, marking.write), (failed.id, write));
+    assert!(
+        matches!(harness.next_entry(), Entry::Blocked { by, .. } if by == failed.id),
+        "covered, and still held: a marking changes nothing the mark depends on"
+    );
+    let markings = harness.told.markings(failed.id).expect("told of it");
+    assert_eq!(markings.len(), 1);
+    assert_eq!(markings[0].write, write);
     assert_eq!(
-        marking.kind,
+        markings[0].kind,
         MarkingKind::Covered {
             flushed: true,
             provider: false
         }
     );
-    assert!(
-        matches!(harness.next_entry(), Entry::Blocked { by, .. } if by == failed.id),
-        "covered, and still held: a marking changes nothing the mark depends on"
-    );
-    let markings = |harness: &Harness| {
-        let mut markings = Vec::new();
-        harness
-            .ring
-            .failure_markings(failed.id, |m| markings.push(m))
-            .expect("held until its Abandoned is popped");
-        markings
-    };
-    assert_eq!(markings(&harness), std::slice::from_ref(&marking));
 
     harness
         .ring
         .resolve(vec![(failed.token, Resolution::Abandon)])
         .expect("abandon");
-    assert_eq!(
-        markings(&harness),
-        [marking],
-        "resolved, and lent until its Abandoned is popped"
-    );
     match harness.next_entry() {
         Entry::Abandoned { failure } => assert_eq!(failure, failed.id),
         other => panic!("expected Abandoned, got {other:?}"),
     }
-    assert!(
-        harness.ring.failure_markings(failed.id, |_| {}).is_err(),
-        "popped, and let go"
-    );
     assert!(matches!(harness.next_entry(), Entry::Durable { .. }));
+    assert_eq!(
+        harness.told.markings(failed.id).as_deref(),
+        Some(markings.as_slice()),
+        "resolved, and told no more"
+    );
     harness.finish();
 }
 

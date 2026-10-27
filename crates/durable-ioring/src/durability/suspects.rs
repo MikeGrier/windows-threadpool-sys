@@ -37,7 +37,7 @@ pub(super) struct Suspect<E> {
 pub(super) fn suspects<'a, E: EpochId + 'static, T, I: Instant>(
     lists: &'a DomainLists,
     writes: &'a Ordered<u64, Write<E, T>>,
-    kept: &'a Kept<E, I>,
+    kept: &'a Kept<E>,
     failure: &'a Failure<E, I>,
 ) -> impl Iterator<Item = Suspect<E>> + 'a {
     let (uncovered, gone) = parts(lists, writes, kept, failure);
@@ -48,7 +48,7 @@ pub(super) fn suspects<'a, E: EpochId + 'static, T, I: Instant>(
 fn parts<'a, E: EpochId + 'static, T, I: Instant>(
     lists: &'a DomainLists,
     writes: &'a Ordered<u64, Write<E, T>>,
-    kept: &'a Kept<E, I>,
+    kept: &'a Kept<E>,
     failure: &'a Failure<E, I>,
 ) -> (
     impl Iterator<Item = Suspect<E>> + 'a,

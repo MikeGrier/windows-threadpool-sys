@@ -8,17 +8,16 @@ use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::domains::DomainId;
 use crate::ids::{FailureId, InstanceId, Lineage, OpId};
-use crate::types::{Entry, Epoch, Failed, IoFault, IoTargetKey};
 #[cfg(test)]
-use crate::types::{Marking, SuspectWrite};
+use crate::types::SuspectWrite;
+use crate::types::{Entry, Epoch, Failed, IoFault, IoTargetKey};
 
-/// A failure's records as they stood when an event about it was made, for a test to compare: the
-/// entries carry none (DI-D-108).
+/// A failure's suspect writes as they stood when an event about it was made, for a test to
+/// compare: the entries carry none (DI-D-108).
 #[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct Snapshot<E: EpochId + 'static, I: Instant> {
     pub(crate) suspect: Vec<SuspectWrite<V<E, I>>>,
-    pub(crate) markings: Vec<Marking<V<E, I>>>,
 }
 
 /// A flush now due: `lineage`'s seal `through`'s flush of `file`, through `target`.
@@ -57,15 +56,6 @@ pub(crate) enum Event<E: EpochId + 'static, I: Instant> {
         #[cfg(test)]
         snapshot: Snapshot<E, I>,
     },
-    /// A suspected write was marked (DI-D-109): queued once, and expanded when popped into a
-    /// `Marked` for each failure it goes to, read from the write's kept record.
-    Marked {
-        write: OpId,
-        /// The failures it goes to, in observation order, with the marking: what the expansion
-        /// must give, for a test to compare.
-        #[cfg(test)]
-        to: Vec<(FailureId, Marking<V<E, I>>)>,
-    },
     /// An empty seal answered `Blocked` was replaced by a later one, which takes over its request:
     /// its un-popped `Blocked` is withdrawn (DI-D-112).
     Superseded {
@@ -87,7 +77,7 @@ pub(crate) enum Event<E: EpochId + 'static, I: Instant> {
 impl<E: EpochId + 'static, I: Instant> Event<E, I> {
     /// The entry this event is, for `instance`'s queue, or the event handed back when it is not one
     /// on its own: an operation never issued, which only the holder of the operation can make an
-    /// entry of; a marking, expanded when popped; and a seal superseded, which withdraws an entry.
+    /// entry of; and a seal superseded, which withdraws an entry.
     pub(crate) fn into_entry<B, C>(self, instance: InstanceId) -> Arrival<E, I, B, C> {
         let name = |seq| Lineage { instance, seq };
         Arrival::Entry(match self {
@@ -112,9 +102,7 @@ impl<E: EpochId + 'static, I: Instant> Event<E, I> {
                 lineage: name(lineage),
                 abandoned_through,
             },
-            event @ (Event::NeverIssued { .. }
-            | Event::Marked { .. }
-            | Event::Superseded { .. }) => {
+            event @ (Event::NeverIssued { .. } | Event::Superseded { .. }) => {
                 return Arrival::Other(event);
             }
         })

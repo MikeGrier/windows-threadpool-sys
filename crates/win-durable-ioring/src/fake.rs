@@ -13,10 +13,9 @@ use durable_ioring::driver::InstanceId;
 use durable_ioring::{
     AddTargetError, AtCapacity, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,
     Epoch, EpochState, FailureInfo, Hold, ImportError, ImportScope, Imported, IoTargetKey,
-    Leftover, LineageInfo, Marking, OpCompletion, OpKind, Outcome, ReadKey, ReadOptions,
-    RemoveTargetError, Resolution, ResolveError, RetireLineageError, RetireLineageRefusal,
-    SealError, SuspectWrite, Tag, TargetKey, UnknownFailure, UnknownLineage, WriteKey,
-    WriteOptions,
+    Leftover, LineageInfo, OpCompletion, OpKind, Outcome, ReadKey, ReadOptions, RemoveTargetError,
+    Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag, TargetKey,
+    UnknownLineage, WriteKey, WriteOptions,
 };
 use durable_ioring::{DurableRing, EntryOf, ErrorReport, IoFault, PushResult, StaticError};
 
@@ -221,22 +220,6 @@ impl DurableRing for Fake {
     }
 
     fn failures(&self, _visit: impl FnMut(FailureInfo<'_, V>)) {}
-
-    fn failure_suspects(
-        &self,
-        failure: FailureId,
-        _visit: impl FnMut(SuspectWrite<V>),
-    ) -> Result<(), UnknownFailure<V>> {
-        Err(UnknownFailure(failure))
-    }
-
-    fn failure_markings(
-        &self,
-        failure: FailureId,
-        _visit: impl FnMut(Marking<V>),
-    ) -> Result<(), UnknownFailure<V>> {
-        Err(UnknownFailure(failure))
-    }
 
     fn take_token(&mut self, _failure: FailureId) -> Option<FailureToken> {
         None

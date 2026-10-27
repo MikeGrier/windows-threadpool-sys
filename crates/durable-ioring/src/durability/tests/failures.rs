@@ -133,7 +133,7 @@ fn a_suspect_set_is_frozen_and_a_later_seal_it_holds_is_answered_blocked() {
     assert_eq!(
         seen(&due),
         [
-            Seen::Abandoned(0, vec![0], vec![]),
+            Seen::Abandoned(0, vec![0]),
             Seen::Durable(1),
             Seen::Durable(2)
         ]
@@ -326,7 +326,7 @@ fn a_heal_waits_for_a_seal_that_reaches_the_re_issue() {
     assert_eq!(
         seen(&lineage.flushed(10, A, Ok(()))),
         [
-            Seen::Healed(0, vec![lost.seq], vec![]),
+            Seen::Healed(0, vec![lost.seq]),
             Seen::Durable(3),
             Seen::Durable(5),
             Seen::Durable(10),
@@ -346,16 +346,17 @@ fn a_heal_takes_effect_at_the_first_seal_after_it_that_reaches_the_re_issue() {
     }
     submitted(lineage.seal(41));
     let mut token = tokens(lineage.flushed(41, A, failed()));
+    assert!(seen(&lineage.flushed(41, B, Ok(()))).is_empty());
     assert_eq!(
-        seen(&lineage.flushed(41, B, Ok(()))),
+        lineage.marked(),
         [Seen::Marked(0, 1, super::COVERED)],
         "B's write is covered by B's flush, though 41 failed on A"
     );
-    assert_eq!(
-        seen(&lineage.flushed(41, C, Ok(()))),
-        [Seen::Marked(0, 2, super::COVERED)],
+    assert!(
+        seen(&lineage.flushed(41, C, Ok(()))).is_empty(),
         "41 was answered by its Failed, so only the marking is due"
     );
+    assert_eq!(lineage.marked(), [Seen::Marked(0, 2, super::COVERED)]);
     assert_eq!(lineage.refuses(41), Some(41));
     for file in [A, B, C] {
         let write = ops.push(&mut lineage, 42, file, DEFAULT);
@@ -379,11 +380,7 @@ fn a_heal_takes_effect_at_the_first_seal_after_it_that_reaches_the_re_issue() {
     assert_eq!(
         seen(&lineage.flushed(42, C, Ok(()))),
         [
-            Seen::Healed(
-                0,
-                vec![0, 1, 2],
-                vec![(1, super::COVERED), (2, super::COVERED)]
-            ),
+            Seen::Healed(0, vec![0, 1, 2]),
             Seen::Durable(41),
             Seen::Durable(42),
         ]
@@ -459,7 +456,7 @@ fn abandoning_takes_effect_at_once_and_abandons_every_epoch_the_failure_contains
         .expect("abandon");
     assert_eq!(
         seen(&due),
-        [Seen::Abandoned(0, vec![0, 1], vec![]), Seen::Durable(1)]
+        [Seen::Abandoned(0, vec![0, 1]), Seen::Durable(1)]
     );
     assert_eq!(lineage.state(1), State::Abandoned);
     assert_eq!(lineage.state(2), State::Open);
@@ -502,7 +499,7 @@ fn one_abandonment_abandons_an_epoch_that_still_waits_for_every_failure_containi
         .expect("resolve both");
     assert_eq!(
         seen(&due),
-        [Seen::Abandoned(1, vec![a.seq, p.seq, r.seq], vec![])],
+        [Seen::Abandoned(1, vec![a.seq, p.seq, r.seq])],
         "41 still sits in failure 0, whose heal waits for a seal"
     );
     assert_eq!(lineage.state(41), State::Abandoned);

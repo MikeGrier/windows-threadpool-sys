@@ -7,6 +7,7 @@
 
 use std::fs;
 use std::os::windows::io::AsRawHandle;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use windows_ioring_sys::RegisteredSpan;
@@ -22,7 +23,7 @@ use crate::dioring::{Dioring, Setup, TargetSetup, TimeBase};
 use crate::readiness::check_readiness;
 use crate::windows_backend::{Cached, FileOptions, OpenedFile, ReadOnly, Win32FileTarget};
 use durable_ioring::backend::RefusalCause;
-use durable_ioring::oracle::ConformanceOracle;
+use durable_ioring::oracle::{ConformanceOracle, ObservedFailures};
 use durable_ioring::{Access, IoTarget};
 use durable_ioring::{
     DurabilityRequest, Entry, Epoch, EpochState, ImportScope, IoTargetKey, OpCompletion, OpKind,
@@ -85,16 +86,21 @@ pub(super) fn given(key: IoTargetKey, temp: &TempFile) -> TargetSetup {
 pub(super) struct Harness<K: TimeBase = InterruptStamps> {
     pub(super) ring: Ring<K>,
     pub(super) oracle: ConformanceOracle<V, u32>,
+    /// What the instance's failure observer was told, which the oracle reads (DI-D-113).
+    pub(super) told: Arc<ObservedFailures<V>>,
     /// A handle to the instance's default lineage, which every write here is tagged in.
     pub(super) default: LineageHandle,
 }
 
 impl<K: TimeBase> Harness<K> {
+    /// A harness over `ring`, built from `setup`, whose failure observer the oracle reads.
     pub(super) fn new(ring: Ring<K>) -> Self {
+        let told = super::told_by_setup();
         Self {
             default: ring.default_lineage(),
             ring,
-            oracle: ConformanceOracle::new(),
+            oracle: ConformanceOracle::reading(told.clone()),
+            told,
         }
     }
 
@@ -174,23 +180,24 @@ impl<K: TimeBase> Harness<K> {
             .expect("the oracle accepts the push");
     }
 
-    /// The ops `failure` suspects, in push order, as the ring lends them (DI-D-108).
+    /// The ops `failure` suspects, in push order, as the instance's observer was told them
+    /// (DI-D-113).
     pub(super) fn suspects(&self, failure: durable_ioring::FailureId) -> Vec<OpId> {
-        let mut ops = Vec::new();
-        self.ring
-            .failure_suspects(failure, |write| ops.push(write.op))
-            .expect("held until its resolution is popped");
-        ops
+        self.told
+            .suspects(failure)
+            .expect("the observer was told of the failure before its Failed was popped")
+            .iter()
+            .map(|write| write.op)
+            .collect()
     }
 
-    /// The next entry, within the bound, after the oracle has accepted it and the suspect set of a
-    /// `Failed`.
+    /// The next entry, within the bound, after the oracle has accepted it.
     pub(super) fn next_entry(&mut self) -> RingEntry {
         let started = Instant::now();
         loop {
             if let Some(entry) = self.ring.pop().expect("pop") {
                 self.oracle
-                    .observe_from(&self.ring, &entry)
+                    .observe(&entry)
                     .expect("the oracle accepts the entry");
                 return entry;
             }

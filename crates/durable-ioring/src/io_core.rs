@@ -78,8 +78,6 @@ mod lineages;
 mod provider;
 mod queue;
 
-use queue::Queued;
-
 #[cfg(test)]
 mod tests;
 
@@ -210,7 +208,7 @@ pub struct DurableIoCore<E: EpochId + 'static, B, C, K: StampClock> {
     /// none has no entry.
     per_target: HeapMap<IoTargetKey, usize>,
     /// The completion queue, made for [`Capacity::entries`] (DI-D-112).
-    queue: VecDeque<Queued<V<E, K>, B, C>>,
+    queue: VecDeque<Entry<V<E, K>, B, C>>,
     /// Submissions the core originated that the backend refused for a retryable cause, emitted
     /// again with the next actions.
     unpushed: Vec<Submission<B>>,
@@ -621,13 +619,13 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                     Ok(transferred) => Outcome::Transferred(transferred),
                     Err(fault) => Outcome::Failed(fault),
                 };
-                self.push_queued(Queued::Entry(Entry::Op(OpCompletion {
+                self.push_queued(Entry::Op(OpCompletion {
                     id,
                     kind,
                     outcome,
                     buffer,
                     context,
-                })));
+                }));
                 if write {
                     self.durability.completed(id, end)
                 } else {
@@ -746,7 +744,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         }
         operations.extend(self.held.keys().copied());
         for queued in &self.queue {
-            if let Queued::Entry(Entry::Op(done)) = queued {
+            if let Entry::Op(done) = queued {
                 operations.insert(done.id.seq);
             }
         }
@@ -1090,16 +1088,6 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                     let abandoned = Epoch::new(self.name(abandoned.lineage), abandoned.epoch);
                     self.never_issued(op, abandoned);
                 }
-                Arrival::Other(Event::Marked {
-                    write,
-                    #[cfg(test)]
-                    to,
-                }) => self.push_queued(Queued::Marked {
-                    write,
-                    after: None,
-                    #[cfg(test)]
-                    to: to.into(),
-                }),
                 Arrival::Other(Event::Superseded { lineage, through }) => {
                     self.withdraw_blocked(Epoch::new(self.name(lineage), through));
                 }
@@ -1168,13 +1156,13 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             );
             return;
         };
-        self.push_queued(Queued::Entry(Entry::Op(OpCompletion {
+        self.push_queued(Entry::Op(OpCompletion {
             id: held.id,
             kind: held.kind,
             outcome: Outcome::NeverIssued { abandoned },
             buffer: owned_op(held.op),
             context: held.context,
-        })));
+        }));
     }
 
     /// A held operation's gate is durable: emit it, recorded as in flight from now.

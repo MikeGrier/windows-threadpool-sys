@@ -82,15 +82,11 @@ impl Capacity {
     }
 
     /// The most entries the completion queue holds at once with a provider serving `served`
-    /// domains (DI-D-109, DI-D-112): four times the operations, twice the failures, and three times
-    /// the lineages. `None` if that is more than a `usize`.
+    /// domains (DI-D-109, DI-D-112, DI-D-113): three times the operations, twice the failures, and
+    /// three times the lineages. `None` if that is more than a `usize`.
     ///
     /// - **An operation's completion** holds its operation's place until it is popped: at most
     ///   the operations.
-    /// - **A `Marked`** is queued once per marked write, and a write is marked once. Every failure
-    ///   it goes to was open when it was marked, so that failure's `Abandoned` or `Healed` is
-    ///   behind it, and the failure is held -- and with it the write's kept record and place --
-    ///   until that entry is popped (DI-D-108): at most the operations.
     /// - **A failure's `Failed`, and its `Abandoned` or `Healed`**: a failure is held in the
     ///   failure table from its `Failed` until its resolution entry is popped, so at most two
     ///   for each failure the table holds.
@@ -105,7 +101,7 @@ impl Capacity {
     ///   lineages.
     pub(crate) fn entries(&self, served: usize) -> Option<usize> {
         self.operations
-            .checked_mul(4)?
+            .checked_mul(3)?
             .checked_add(self.failures(served)?.checked_mul(2)?)?
             .checked_add(self.lineages.checked_mul(3)?)
     }
