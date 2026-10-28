@@ -2,18 +2,20 @@
 //! How many allocations the core makes in each phase of its work, and which call made each
 //! ([DI-23.1], [DI-23.2], [DI-D-97], [DI-D-104]).
 //!
-//! The goal is a core that allocates everything it needs at construction and nothing after. This
-//! measures how far it is from that: a counting global allocator, and a scenario over the in-memory
-//! backend split into phases, each counting only the allocations made inside calls into the core.
-//! The test's own buffers, the backend's work and the test's bookkeeping are not counted.
+//! The goal is a core that allocates everything it needs at construction and nothing after, and
+//! this holds it to that: a counting global allocator, and a scenario over the in-memory backend
+//! split into phases, each counting only the allocations made inside calls into the core. The
+//! test's own buffers and bookkeeping are not counted; the backend's work is, inside the calls the
+//! core makes to it, so a backend that grows a queue as it fills fails here too.
 //!
 //! Every allocation is counted under the tag the core set for the call that made it. Three rules
 //! hold in every phase: no counted allocation is untagged, no tag is seen from two places in the
 //! source, and the tags add up to the phase's total.
 //!
-//! The expected tables are today's counts, not a target. A change that moves a count fails here and
-//! prints the new table, so a count going down is seen as clearly as one going up. Each item of
-//! DI-M23 lowers the counts it addresses, and a phase whose count reaches zero is held there.
+//! **Every phase after construction allocates nothing** (DI-23.12.9), and any that does fails the
+//! test, naming it. Construction's allocations are recorded, by phase and by tag: a change that
+//! moves one fails here and prints the new table, so a count going down is seen as clearly as one
+//! going up.
 //!
 //! Counting is per thread, so the tests the harness runs in parallel are not counted. An allocation
 //! the core made on another thread would be missed; it makes none, since it runs only inside the
@@ -878,96 +880,13 @@ fn providers() -> Vec<Measured> {
 
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
-const CLEAN: &[(&str, u64)] = &[
-    ("construction, with two targets", 39),
-    ("writes, first round", 3),
-    ("write completions, first round", 0),
-    ("pops, first round", 0),
-    ("writes, second round", 0),
-    ("write completions, second round", 0),
-    ("pops, second round", 0),
-    ("reads", 0),
-    ("read completions and pops", 0),
-    ("a seal covering writes", 0),
-    ("commit completions", 0),
-    ("pops after the seal", 0),
-    ("a seal covering no writes", 0),
-    ("completions and pops after the empty seal", 0),
-    ("gated writes", 0),
-    ("the gate's epoch written", 0),
-    ("the gate's epoch sealed, releasing the gated writes", 0),
-    ("the gated writes sealed", 0),
-    ("a lineage minted", 0),
-    ("the minted lineage written", 0),
-    ("a busy lineage refused, and its holds named", 0),
-    ("the minted lineage sealed", 0),
-    ("the minted lineage ended", 0),
-    ("two lineages minted", 0),
-    ("a gated write held", 0),
-    ("a gated push refused for a cycle", 0),
-    ("a second gated write held", 0),
-    ("a seal refused for a cycle", 0),
-    ("the lower seal releasing a gated write", 0),
-    (
-        "the other lineage sealed, releasing the first gated write",
-        0,
-    ),
-    ("the first lineage sealed through its held write", 0),
-    ("two lineages ended", 0),
-    ("a target added", 0),
-    ("the added target written", 0),
-    ("a busy target refused, and its holds named", 0),
-    ("the added target sealed", 0),
-    ("the added target removed", 0),
-    ("lineages queried", 0),
-    ("close", 0),
-];
+const CLEAN: &[(&str, u64)] = &[("construction, with two targets", 39)];
 
 /// As [`CLEAN`], for the failure paths.
-const FAILURES: &[(&str, u64)] = &[
-    ("construction, with two targets", 39),
-    ("writes before the failure", 3),
-    ("a commit failure observed", 0),
-    ("failures queried", 0),
-    ("writes re-issued", 0),
-    ("a heal resolved", 0),
-    ("the heal taking effect at the next seal", 0),
-    ("writes before the import", 0),
-    ("a failure imported", 0),
-    ("an abandon resolved", 0),
-];
+const FAILURES: &[(&str, u64)] = &[("construction, with two targets", 39)];
 
 /// As [`CLEAN`], for the provider's path.
-const PROVIDERS: &[(&str, u64)] = &[
-    ("construction, with a provider and its request buffer", 51),
-    ("provider writes, first round", 3),
-    ("provider write completions, first round", 0),
-    ("a seal asking the provider, first round", 0),
-    ("the request drained, first round", 0),
-    ("the request lent and answered, first round", 0),
-    ("the answer given to the core, first round", 0),
-    ("commit completions and pops, first round", 0),
-    ("provider writes, second round", 0),
-    ("provider write completions, second round", 0),
-    ("a seal asking the provider, second round", 0),
-    ("the request drained, second round", 0),
-    ("the request lent and answered, second round", 0),
-    ("the answer given to the core, second round", 0),
-    ("commit completions and pops, second round", 0),
-    ("a lineage minted for the provider", 0),
-    ("the minted lineage written", 0),
-    (
-        "the minted lineage sealed and ended before its request was drained",
-        0,
-    ),
-    ("the ended lineage's request drained", 0),
-    ("the ended lineage's request lent and answered", 0),
-    (
-        "the ended lineage's answer given and its commit completed",
-        0,
-    ),
-    ("close", 0),
-];
+const PROVIDERS: &[(&str, u64)] = &[("construction, with a provider and its request buffer", 51)];
 
 /// Each phase's allocations by tag, as last recorded, in the order the tags were first seen.
 const CLEAN_TAGS: &[(&str, &str, u64)] = &[
@@ -1109,7 +1028,6 @@ const CLEAN_TAGS: &[(&str, &str, u64)] = &[
     ),
     ("construction, with two targets", "io_core::new::queue", 1),
     ("construction, with two targets", "io_core::new::served", 1),
-    ("writes, first round", "io_core::issue::backend_push", 3),
 ];
 
 /// As [`CLEAN_TAGS`], for the failure paths.
@@ -1252,11 +1170,6 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     ),
     ("construction, with two targets", "io_core::new::queue", 1),
     ("construction, with two targets", "io_core::new::served", 1),
-    (
-        "writes before the failure",
-        "io_core::issue::backend_push",
-        3,
-    ),
 ];
 
 /// As [`CLEAN_TAGS`], for the provider's path.
@@ -1491,11 +1404,6 @@ const PROVIDERS_TAGS: &[(&str, &str, u64)] = &[
         "request_buf::new::ids",
         1,
     ),
-    (
-        "provider writes, first round",
-        "io_core::issue::backend_push",
-        3,
-    ),
 ];
 
 /// Each phase's total.
@@ -1534,10 +1442,24 @@ fn tables(name: &str, tags_name: &str, measured: &[Measured]) -> String {
     shown
 }
 
+/// The phase every scenario starts with, the only one that may allocate, and so the only one whose
+/// counts are recorded (DI-23.12.9).
+fn construction(measured: &[Measured]) -> &[Measured] {
+    &measured[..1]
+}
+
 /// The rules every phase keeps: no allocation untagged, no tag seen from two places, and the tags
-/// adding up to the total.
+/// adding up to the total; and that no phase after construction allocates at all.
 fn broken_rules(measured: &[Measured]) -> Vec<String> {
     let mut broken = Vec::new();
+    for m in &measured[1..] {
+        if m.total > 0 {
+            broken.push(format!(
+                "{}: {} allocations after construction",
+                m.phase, m.total
+            ));
+        }
+    }
     for m in measured {
         if m.untagged > 0 {
             broken.push(format!("{}: {} untagged", m.phase, m.untagged));
@@ -1578,10 +1500,11 @@ fn check(run: fn() -> Vec<Measured>, expected: (Totals, ByTag), names: (&str, &s
         "allocation tags broken:\n{}",
         broken.join("\n")
     );
+    let made = construction(&measured);
     assert!(
-        totals(&measured) == expected.0 && by_tag(&measured) == expected.1,
-        "allocations changed:\n{}",
-        tables(names.0, names.1, &measured)
+        totals(made) == expected.0 && by_tag(made) == expected.1,
+        "construction's allocations changed:\n{}",
+        tables(names.0, names.1, made)
     );
 }
 

@@ -319,15 +319,25 @@ struct Held {
 impl MemoryBackend {
     /// A backend whose submission queue holds `submission_queue_size` submissions and whose
     /// completion queue holds `completion_queue_size` completions, with no registered buffers.
+    ///
+    /// Both queues are made at their declared sizes, as a ring's are, so that queueing a
+    /// submission and completing it allocate nothing (DI-23.12.9): the sizes bound them, so they
+    /// never outgrow what was reserved. A size the allocator cannot give leaves the queue to grow
+    /// as it fills instead.
     #[must_use]
     pub fn new(submission_queue_size: NonZeroU32, completion_queue_size: NonZeroU32) -> Self {
+        let (submissions, completions) = (size(submission_queue_size), size(completion_queue_size));
+        let mut queued = VecDeque::new();
+        let _ = queued.try_reserve_exact(submissions);
+        let mut completed = VecDeque::new();
+        let _ = completed.try_reserve_exact(completions);
         Self {
             targets: BTreeMap::new(),
             registered: Vec::new(),
-            queued: VecDeque::new(),
-            completed: VecDeque::new(),
-            submission_queue_size: size(submission_queue_size),
-            completion_queue_size: size(completion_queue_size),
+            queued,
+            completed,
+            submission_queue_size: submissions,
+            completion_queue_size: completions,
             notification: MemoryNotification::default(),
             script: ScriptState::default(),
             held: Vec::new(),

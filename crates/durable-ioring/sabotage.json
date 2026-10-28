@@ -3850,6 +3850,22 @@
       "why": "The buffer is made at construction with room for every request the core can have made, so reading one into it costs nothing: the allocation test drains and lends a provider seal and records zero.",
       "find": ["        let first_part = self.parts.len();\n"],
       "replace": ["        core::mem::forget(alloc::vec![0_u8]);\n        let first_part = self.parts.len();\n"]
+    },
+    {
+      "name": "DI-23.12.9: the in-memory backend grows its submission queue as it fills",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "The backend is counted inside the calls the core makes to it, so a backend that grows a queue as it fills makes the first round of writes allocate, which the allocation test now refuses after construction. The queues are made at their declared sizes, which bound them.",
+      "find": ["        let _ = queued.try_reserve_exact(submissions);\n"],
+      "replace": ["        let _ = (&mut queued, submissions);\n"]
+    },
+    {
+      "name": "DI-23.12.9: a write completion allocates",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "Every phase after construction is held at zero: a completion that allocates once the instance is built fails the allocation test, whichever phase it falls in.",
+      "find": ["        let was_empty = self.queue.is_empty();\n        let Completion {\n"],
+      "replace": ["        core::mem::forget(alloc::vec![0_u8]);\n        let was_empty = self.queue.is_empty();\n        let Completion {\n"]
     }
   ]
 }

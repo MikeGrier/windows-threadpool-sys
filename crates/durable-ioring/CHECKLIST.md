@@ -64,11 +64,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.11** -- The clean paths hand out no allocated collection: provider requests, lineages and `close()` go to visitors, and the busy refusals count what `target_holds` and `lineage_holds` name. -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-2311)
 
-- [ ] **DI-23.12** -- **Implement what `DI-23.10` settles** ([DI-D-108](DESIGN-NOTES.md#di-d-108),
-  [DI-D-109](DESIGN-NOTES.md#di-d-109)), until `DI-23.1` asserts zero allocations after construction in every phase. Split
-  2026-10-24 into the steps below, in dependency order; each is said in CONTRACT.md and the documentation as it lands, and
-  each one's phases of the allocation test reach zero with it. Steps after the first are written at the resolution
-  available now and are expected to sharpen, or split again, when they start.
+- [x] **DI-23.12** -- Implement what `DI-23.10` settles, until the allocation test asserts zero allocations after construction in every phase. -> [completed 2026-10-28](COMPLETED-CHECKLIST.md#di-2312)
 
 - [x] **DI-23.12.1** -- The ordered tables, the seal queue among them, are on fixed storage of the crate's own, and a recorded seal holds a place of the window until the mark passes it (DI-D-110). -> [completed 2026-10-24](COMPLETED-CHECKLIST.md#di-23121)
 
@@ -108,9 +104,7 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.8.2** -- A provider request's contents are read, when drained, into a buffer made at construction and lent to the provider for its call. -> [completed 2026-10-28](COMPLETED-CHECKLIST.md#di-231282)
 
-- [ ] **DI-23.12.9** -- **The allocation test asserts zero after construction in every phase** (`DI-23.1`): the recorded
-  tables become an assertion that every phase after construction allocates nothing, construction's allocations staying
-  recorded. Closes `DI-23.12`.
+- [x] **DI-23.12.9** -- The allocation test asserts that every phase after construction allocates nothing, recording only construction's allocations; the in-memory backend's queues are made at their declared sizes. -> [completed 2026-10-28](COMPLETED-CHECKLIST.md#di-23129)
 
 - [ ] **DI-23.13** -- **Build without `std` in CI**: this crate with `--no-default-features` for a target that has no `std`
   and has 64-bit atomics, `x86_64-unknown-none` (not `thumbv7em-none-eabi`; see

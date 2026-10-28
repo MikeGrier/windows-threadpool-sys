@@ -1856,6 +1856,11 @@ panic due to OOM in the middle of things." The session is
   workload through the in-memory backend, and asserts how many allocations each phase made. Written first, it measures the
   census in the session; each change drives a phase's count to zero. Every allocation it counts is tagged by the code that
   made it ([DI-D-104](#di-d-104)).
+- **As built** (DI-23.12.9, the assistant's, 2026-10-28): the test asserts that every phase after construction counts
+  zero, and records only construction's allocations, by phase and by tag. The backend is counted too, inside the calls
+  the core makes to it, which is how the last non-zero phase was found: the in-memory backend's queues grew as writes were
+  queued. They are now made at their declared sizes, which bound them, as a ring's are; a size the allocator cannot give
+  leaves a queue to grow, so only a backend declared absurdly large is outside the claim.
 
 The capacity model is [DI-D-98](#di-d-98) to [DI-D-101](#di-d-101); the errors are [DI-D-105](#di-d-105); what the clean
 paths hand out is [DI-D-103](#di-d-103). A failure's storage and the shared handles are [DI-D-108](#di-d-108); the rest of
@@ -2761,4 +2766,4 @@ Amends [DI-D-23](#di-d-23) and [DI-D-43](#di-d-43), which had the refusal name t
     win-durable-ioring tests' `KeptRequest` does.
   - **Allocation.** The allocation test's `PROVIDERS` scenario drains, lends, answers and gives back a provider seal in two
     rounds, and ends a lineage with a seal undrained, each phase at zero after construction; construction makes the
-    four buffer lists and the two tables. The first round of writes still counts three, the one DI-23.12.9 is for.
+    four buffer lists and the two tables.

@@ -5017,3 +5017,23 @@ As built: the as-built notes are in [DI-D-115](DESIGN-NOTES.md#di-d-115).
 write lists in them, the `ProviderRequest` built from them, and the traced cycle's `Vec` of epochs. Found 2026-10-24
 implementing `DI-23.12.2`, which moved the lists that carry these but not the contents. Split 2026-10-27 when the engineer
 decided the cycle's half ([DI-D-115](DESIGN-NOTES.md#di-d-115)); built as `DI-23.12.8.1` and `DI-23.12.8.2`.
+
+## Moved 2026-10-28 17:57:00 -04:00 -- DI-23.12.9: every phase after construction asserted at zero
+
+### <a id="di-23129"></a>DI-23.12.9 -- The allocation test asserts that every phase after construction allocates nothing, recording only construction's allocations; the in-memory backend's queues are made at their declared sizes. *(completed 2026-10-28 17:57:00 -04:00)*
+
+**The allocation test asserts zero after construction in every phase** (`DI-23.1`): the recorded tables became an
+assertion that every phase after construction allocates nothing, construction's allocations staying recorded, by phase
+and by tag. The one phase still counting, the first round of writes, was the in-memory backend's queues growing as
+submissions were queued; they are now made at their declared sizes, which bound them (`MemoryBackend::new`).
+
+As built: the as-built notes are in [DI-D-97](DESIGN-NOTES.md#di-d-97).
+
+## Moved 2026-10-28 17:57:00 -04:00 -- DI-23.12: what DI-23.10 settles, implemented
+
+### <a id="di-2312"></a>DI-23.12 -- Implement what `DI-23.10` settles, until the allocation test asserts zero allocations after construction in every phase. *(completed 2026-10-28 17:57:00 -04:00)*
+
+**Implement what `DI-23.10` settles** ([DI-D-108](DESIGN-NOTES.md#di-d-108), [DI-D-109](DESIGN-NOTES.md#di-d-109)), until
+`DI-23.1` asserts zero allocations after construction in every phase. Split 2026-10-24 into `DI-23.12.1` to
+`DI-23.12.9`; each is said in CONTRACT.md and the documentation as it landed, and each one's phases of the allocation
+test reached zero with it. Closed by `DI-23.12.9`.
