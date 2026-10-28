@@ -12,7 +12,8 @@ use windows_threadpool_sys::wait::ThreadpoolWait;
 
 use super::pushes::{BOUND, GIVEN, Harness, Ring, temp};
 use super::{
-    FlushDomain, FlushRequest, Keeper, Kept, TargetSetup, TempFile, V, domain, file, keeper, setup,
+    FlushDomain, FlushRequest, Keeper, Kept, KeptRequest, TargetSetup, TempFile, V, domain, file,
+    keeper, setup,
 };
 use durable_ioring::DurabilityProvider;
 use durable_ioring::DurableRing;
@@ -44,18 +45,18 @@ fn instance(
 }
 
 /// The requests the provider has been handed so far, taken.
-fn taken(kept: &Kept) -> Vec<FlushRequest<V>> {
+fn taken(kept: &Kept) -> Vec<KeptRequest> {
     std::mem::take(&mut *kept.lock().expect("the requests"))
 }
 
 /// The only request the provider has been handed.
-fn only(kept: &Kept) -> FlushRequest<V> {
+fn only(kept: &Kept) -> KeptRequest {
     let mut requests = taken(kept);
     assert_eq!(requests.len(), 1, "{requests:?}");
     requests.remove(0)
 }
 
-fn succeed(request: FlushRequest<V>) {
+fn succeed(request: KeptRequest) {
     for part in request.domains {
         part.completion.succeed();
     }
@@ -93,8 +94,8 @@ impl DurabilityProvider<V> for Answers {
         self.0.clone()
     }
 
-    fn make_durable(&mut self, request: FlushRequest<V>) {
-        succeed(request);
+    fn make_durable(&mut self, request: FlushRequest<'_, V>) {
+        succeed(KeptRequest::of(request));
     }
 }
 
@@ -107,7 +108,7 @@ impl DurabilityProvider<V> for Panics {
         self.0.clone()
     }
 
-    fn make_durable(&mut self, _: FlushRequest<V>) {
+    fn make_durable(&mut self, _: FlushRequest<'_, V>) {
         panic!("the provider panics");
     }
 }
@@ -398,7 +399,7 @@ fn routed(files: Vec<TargetSetup>) -> (Harness, Kept, Kept) {
 }
 
 /// The files `requested` names, each with its writes.
-fn named(request: &FlushRequest<V>) -> Vec<(String, IoTargetKey, Vec<OpId>)> {
+fn named(request: &KeptRequest) -> Vec<(String, IoTargetKey, Vec<OpId>)> {
     request
         .domains
         .iter()

@@ -18,7 +18,7 @@ use durable_ioring::Capacity;
 use durable_ioring::DurableRing;
 use durable_ioring::backend::IoBackend;
 use durable_ioring::oracle::ObservedFailures;
-use durable_ioring::{DurabilityProvider, FlushRequest};
+use durable_ioring::{DomainCompletion, DurabilityProvider, FlushRequest};
 use durable_ioring::{FlushDomain, IoTargetKey};
 use durable_ioring::{HeldOperation, Hold, Identities, Leftover, LineageInfo};
 use durable_ioring::{LineageHandle, StampClock};
@@ -298,7 +298,7 @@ impl DurabilityProvider<V> for Serves {
         self.0.clone()
     }
 
-    fn make_durable(&mut self, _: FlushRequest<V>) {
+    fn make_durable(&mut self, _: FlushRequest<'_, V>) {
         unreachable!("construction asks a provider for its domains and nothing else")
     }
 }
@@ -318,18 +318,62 @@ pub(crate) struct Keeper {
 }
 
 /// The requests a `Keeper` has been handed and not yet given up.
-pub(crate) type Kept = Arc<Mutex<Vec<FlushRequest<V>>>>;
+pub(crate) type Kept = Arc<Mutex<Vec<KeptRequest>>>;
+
+/// One seal's request, copied out of the one the provider was lent so that a test can keep it past
+/// the call, and answer it from anywhere (DI-D-115).
+#[derive(Debug)]
+pub(crate) struct KeptRequest {
+    /// One part per domain the request asked about.
+    pub(crate) domains: Vec<KeptDomain>,
+}
+
+/// One domain's part of a [`KeptRequest`].
+#[derive(Debug)]
+pub(crate) struct KeptDomain {
+    pub(crate) domain: FlushDomain,
+    pub(crate) files: Vec<KeptFile>,
+    pub(crate) completion: DomainCompletion,
+}
+
+/// A file in a [`KeptDomain`], and the writes named for the domain.
+#[derive(Debug)]
+pub(crate) struct KeptFile {
+    pub(crate) key: IoTargetKey,
+    pub(crate) writes: Vec<<V as Identities>::OpId>,
+}
+
+impl KeptRequest {
+    /// What `request` asks, every domain taken.
+    pub(crate) fn of(request: FlushRequest<'_, V>) -> Self {
+        let domains = request
+            .domains()
+            .map(|part| KeptDomain {
+                domain: part.domain.clone(),
+                files: part
+                    .files
+                    .map(|file| KeptFile {
+                        key: file.key,
+                        writes: file.writes.to_vec(),
+                    })
+                    .collect(),
+                completion: part.completion,
+            })
+            .collect();
+        Self { domains }
+    }
+}
 
 impl DurabilityProvider<V> for Keeper {
     fn domains(&self) -> Vec<FlushDomain> {
         self.domains.clone()
     }
 
-    fn make_durable(&mut self, request: FlushRequest<V>) {
+    fn make_durable(&mut self, request: FlushRequest<'_, V>) {
         self.kept
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(request);
+            .push(KeptRequest::of(request));
     }
 }
 

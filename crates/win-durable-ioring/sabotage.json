@@ -226,8 +226,8 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "DI-D-44: the provider may answer inside its call, and the answer takes the engine's lock. Calling it with the lock held -- reached through the slot pool delivery shares, the one path the borrow checker does not refuse -- deadlocks the synchronous answer test, which a timeout counts as caught.",
-      "find": ["        for request in made.drain(..) {\n            provider.make_durable(request);\n"],
-      "replace": ["        let shared = self.delivery.as_ref().expect(\"live\").shared();\n        let _held = durable_ioring::driver::lock(&shared);\n        for request in made.drain(..) {\n            provider.make_durable(request);\n"]
+      "find": ["        for request in self.requests.requests(&home) {\n            provider.make_durable(request);"],
+      "replace": ["        let shared = self.delivery.as_ref().expect(\"live\").shared();\n        let _held = durable_ioring::driver::lock(&shared);\n        for request in self.requests.requests(&home) {\n            provider.make_durable(request);"]
     },
     {
       "name": "DI-3.2.7: ending does not wait for the provider",
@@ -2119,28 +2119,28 @@
       "replace": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::default()));\n"]
     },
     {
-      "name": "DI-12.2.4: the router sends every part to its first provider",
+      "name": "DI-12.2.4: the router gives every provider every part",
       "file": "../durable-ioring/src/router.rs",
       "expect": "caught",
       "why": "Through a real instance, each routed provider is asked only for its own domains (DI-D-81): a part sent to another is flushed by something that never said it could, and the instance's tests here see it without the router's own.",
-      "find": ["                parts[registration].push(part)"],
-      "replace": ["                parts[0].push(part)"]
+      "find": ["            let owns = |domain: &FlushDomain| owners.get(domain) == Some(&registration);"],
+      "replace": ["            let owns = |domain: &FlushDomain| owners.get(domain).is_some();"]
     },
     {
       "name": "DI-12.2.4: the router calls its providers in reverse registration order",
       "file": "../durable-ioring/src/router.rs",
       "expect": "caught",
       "why": "Through a real instance, a panicking provider stops the ones registered after it, whose domains are abandoned without being called (DI-D-83); calling in reverse hands the later ones their parts first.",
-      "find": ["        for (route, domains) in self.routes.iter_mut().zip(parts) {"],
-      "replace": ["        for (route, domains) in self.routes.iter_mut().rev().zip(parts.into_iter().rev()) {"]
+      "find": ["        for (registration, route) in self.routes.iter_mut().enumerate() {"],
+      "replace": ["        for (registration, route) in self.routes.iter_mut().enumerate().rev() {"]
     },
     {
-      "name": "DI-12.2.4 control: the router's per-provider parts are made by counting",
+      "name": "DI-12.2.4 control: the router's domain walk goes through into_iter",
       "file": "../durable-ioring/src/router.rs",
       "expect": "survives",
-      "why": "A control: the same empty parts made by counting the routes instead of walking them, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
-      "find": ["            self.routes.iter().map(|_| Vec::new()).collect()"],
-      "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect()"]
+      "why": "A control: the same walk of the request's domains through IntoIterator, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        for domain in request.domain_names() {"],
+      "replace": ["        for domain in request.domain_names().into_iter() {"]
     },
     {
       "name": "DI-19.2.4: a lock wait's end names a pair of its own, as the driver's tests see it",
@@ -2243,8 +2243,8 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "Every request drained from the engine is made, once the lock is released (DI-D-44, DI-D-103).",
-      "find": ["        for request in made.drain(..) {\n"],
-      "replace": ["        for request in made.drain(..).take(0) {\n"]
+      "find": ["        for request in self.requests.requests(&home) {"],
+      "replace": ["        for request in self.requests.requests(&home).take(0) {"]
     },
     {
       "name": "DI-23.12.3.8: the setup's failure observer is not given to the core",

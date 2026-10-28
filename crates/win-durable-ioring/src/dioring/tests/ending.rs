@@ -14,7 +14,8 @@ use windows_ioring_sys::RegisteredSpan;
 use super::gates::{expect_durable, read_gated, two, write_gated};
 use super::pushes::{ADDED, BOUND, GIVEN, Harness, Ring, given, instance, temp};
 use super::{
-    FlushDomain, FlushRequest, V, closed, domain, empty, file, holds, keeper, listed, setup,
+    FlushDomain, FlushRequest, KeptRequest, V, closed, domain, empty, file, holds, keeper, listed,
+    setup,
 };
 use crate::windows_backend::Win32FileTarget;
 use durable_ioring::backend::SubmissionData;
@@ -351,7 +352,7 @@ fn drop_waits_for_a_provider_completion_answered_on_another_thread() {
 #[derive(Debug)]
 struct Hoards {
     domains: Vec<FlushDomain>,
-    kept: Vec<FlushRequest<V>>,
+    kept: Vec<KeptRequest>,
 }
 
 impl DurabilityProvider<V> for Hoards {
@@ -359,8 +360,8 @@ impl DurabilityProvider<V> for Hoards {
         self.domains.clone()
     }
 
-    fn make_durable(&mut self, request: FlushRequest<V>) {
-        self.kept.push(request);
+    fn make_durable(&mut self, request: FlushRequest<'_, V>) {
+        self.kept.push(KeptRequest::of(request));
     }
 }
 

@@ -49,10 +49,10 @@ use durable_ioring::DurableIoCore;
 use durable_ioring::IoTarget;
 use durable_ioring::StampClock;
 use durable_ioring::backend::{IoBackend, RegisteredRegion, SubmissionData, refusal_fault};
+use durable_ioring::driver::Answer;
 use durable_ioring::driver::LockWatch;
 use durable_ioring::driver::PumpedDelivery;
 use durable_ioring::driver::first_repeat;
-use durable_ioring::driver::{Answer, DomainCall};
 use durable_ioring::driver::{Engine, EngineGuard};
 use durable_ioring::driver::{Home, LineageSlots};
 use durable_ioring::{
@@ -63,10 +63,7 @@ use durable_ioring::{
     RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 use durable_ioring::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle};
-use durable_ioring::{
-    DomainCompletion, DomainRequest, DurabilityProvider, FlushRequest, ProviderPart,
-    ProviderRequest,
-};
+use durable_ioring::{DurabilityProvider, RequestBuf};
 use durable_ioring::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
 use durable_ioring::{ReadKey, TargetKey, WriteKey};
 use durable_ioring_events::EtwDiagnostics;
@@ -302,9 +299,10 @@ pub struct Dioring<
     pub(crate) delivery: Option<Delivery<E, B, C, K, R>>,
     pub(crate) hub: Arc<Hub<E, B, C, K, R>>,
     pub(crate) provider: Option<Box<dyn DurabilityProvider<WindowsIds<E>>>>,
-    /// The provider's requests, moved out of the engine and not yet made: kept across calls, so
-    /// moving them out allocates nothing once it has room for them (DI-D-103).
-    pub(crate) requests: Vec<FlushRequest<WindowsIds<E>>>,
+    /// The provider's requests, moved out of the engine and not yet made: made when the instance
+    /// is, with room for every one it can have at once, so moving them out allocates nothing
+    /// (DI-D-115). The provider is called from it, one call at a time, as `&mut self` allows.
+    pub(crate) requests: RequestBuf<DioringIds<E, K::Instant>>,
     /// A copy of the default lineage's handle, so the default lineage lives as long as the
     /// instance does (DI-D-40).
     pub(crate) default: LineageHandle,
@@ -426,8 +424,11 @@ where
         } else {
             DurableIoCore::new(clock, Arc::clone(&diagnostics), capacity)
         };
-        let made = built.and_then(|core| Ok((core, LineageSlots::new(capacity.lineages)?)));
-        let (core, slots) = match made {
+        let made = built.and_then(|core| {
+            let requests = core.request_buf()?;
+            Ok((core, LineageSlots::new(capacity.lineages)?, requests))
+        });
+        let (core, slots, requests) = match made {
             Ok(made) => made,
             Err(refused) => {
                 return Err(SetupError {
@@ -555,7 +556,7 @@ where
                 delivery: Some(delivery),
                 hub,
                 provider,
-                requests: Vec::new(),
+                requests,
                 default,
             },
             handle,
@@ -1050,26 +1051,27 @@ where
 
     /// Make every request for the consumer's provider made so far, in order, with the engine's lock
     /// released: the provider may answer inside its call, and the answer takes the lock
-    /// (DI-D-44). Every request is built before the first is made, so a panic in the provider drops
-    /// the completions of those after it unanswered: each a failure of its domain, as DI-D-27 says.
+    /// (DI-D-44). Every request is read out of the core before the first is made, into the buffer
+    /// made with the instance, so a panic in the provider leaves those after it to be abandoned as
+    /// the buffer's iterator is dropped: each a failure of its domain, as DI-D-27 says.
     fn call_provider(&mut self) {
-        let home = answers(&self.hub);
-        let made = &mut self.requests;
         self.delivery
             .as_ref()
             .expect("an instance is live until it ends")
             .engine()
-            .drain_requests(|request| made.push(flush_request(request, &home)));
-        if made.is_empty() {
+            .drain_requests(&mut self.requests);
+        if self.requests.is_empty() {
             return;
         }
+        let home = answers(&self.hub);
         let provider = self
             .provider
             .as_mut()
             .expect("only a provider's domains make requests");
-        for request in made.drain(..) {
+        for request in self.requests.requests(&home) {
             provider.make_durable(request);
         }
+        self.requests.clear();
     }
 }
 
@@ -1109,35 +1111,6 @@ impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Dioring<B, E
         drop(backend);
         core.close(visit);
     }
-}
-
-/// A request in the core's terms, as the provider is handed it: each domain's part, with the
-/// completion that answers it through `home`.
-fn flush_request<E: EpochId + 'static>(
-    request: ProviderRequest<WindowsIds<E>>,
-    home: &Weak<dyn Answer>,
-) -> FlushRequest<WindowsIds<E>> {
-    let ProviderRequest {
-        lineage,
-        seal,
-        domains,
-    } = request;
-    let domains = domains
-        .into_iter()
-        .map(|ProviderPart { domain, targets }| DomainRequest {
-            completion: DomainCompletion::new(
-                Weak::clone(home),
-                DomainCall {
-                    lineage,
-                    seal,
-                    name: domain.clone(),
-                },
-            ),
-            domain,
-            files: targets,
-        })
-        .collect();
-    FlushRequest { domains }
 }
 
 /// A span of the registered buffers, as the backend names it.

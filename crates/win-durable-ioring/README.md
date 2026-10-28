@@ -72,8 +72,8 @@ impl DurabilityProvider<WindowsIds<u64>> for Device {
         self.0.clone()
     }
 
-    fn make_durable(&mut self, request: FlushRequest<WindowsIds<u64>>) {
-        for part in request.domains {
+    fn make_durable(&mut self, request: FlushRequest<'_, WindowsIds<u64>>) {
+        for part in request.domains() {
             part.completion.succeed();
         }
     }
