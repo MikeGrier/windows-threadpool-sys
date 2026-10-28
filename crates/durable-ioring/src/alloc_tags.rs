@@ -135,6 +135,10 @@ pub(crate) mod tag {
     pub(crate) const IO_CORE_NEW_HELD: Tag = Tag::new("io_core::new::held");
     pub(crate) const IO_CORE_NEW_UNPUSHED: Tag = Tag::new("io_core::new::unpushed");
     pub(crate) const IO_CORE_NEW_OUTGOING: Tag = Tag::new("io_core::new::outgoing");
+    pub(crate) const REQUEST_BUF_NEW_REQUESTS: Tag = Tag::new("request_buf::new::requests");
+    pub(crate) const REQUEST_BUF_NEW_PARTS: Tag = Tag::new("request_buf::new::parts");
+    pub(crate) const REQUEST_BUF_NEW_TARGETS: Tag = Tag::new("request_buf::new::targets");
+    pub(crate) const REQUEST_BUF_NEW_IDS: Tag = Tag::new("request_buf::new::ids");
     pub(crate) const IO_CORE_NEW_REQUESTS: Tag = Tag::new("io_core::new::requests");
     pub(crate) const IO_CORE_NEW_QUEUE: Tag = Tag::new("io_core::new::queue");
     pub(crate) const IO_CORE_ISSUE_BACKEND_CHECK: Tag = Tag::new("io_core::issue::backend_check");
@@ -151,6 +155,9 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_NEW_HELD: Tag = Tag::new("durability::new::held");
     pub(crate) const DURABILITY_NEW_SERVED: Tag = Tag::new("durability::new::served");
     pub(crate) const DURABILITY_NEW_SPANS: Tag = Tag::new("durability::new::spans");
+    pub(crate) const DURABILITY_NEW_SEAL_DOMAINS: Tag = Tag::new("durability::new::seal_domains");
+    pub(crate) const DURABILITY_NEW_SCRATCH_TOUCHED: Tag =
+        Tag::new("durability::new::scratch_touched");
     pub(crate) const DURABILITY_NEW_WINDOW: Tag = Tag::new("durability::new::window");
     pub(crate) const DURABILITY_NEW_FLUSH_PAIRS: Tag = Tag::new("durability::new::flush_pairs");
     pub(crate) const DURABILITY_NEW_SERVED_NAMES: Tag = Tag::new("durability::new::served_names");
@@ -170,8 +177,6 @@ pub(crate) mod tag {
         Tag::new("durability::new::scratch_bounds");
     pub(crate) const DURABILITY_NEW_SCRATCH_PAIRS: Tag = Tag::new("durability::new::scratch_pairs");
     pub(crate) const DURABILITY_OBSERVE_CAUSE: Tag = Tag::new("durability::observe::cause");
-    pub(crate) const DURABILITY_START_SEALS_DOMAINS: Tag =
-        Tag::new("durability::start_seals::domains");
     pub(crate) const DURABILITY_END_SEAL_REPORT: Tag = Tag::new("durability::end_seal::report");
     pub(crate) const DURABILITY_END_FLUSH_REPORT: Tag = Tag::new("durability::end_flush::report");
     pub(crate) const DURABILITY_INCONSISTENT_WANTS: Tag =
@@ -184,12 +189,6 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_START_SEALS_REPORT: Tag =
         Tag::new("durability::start_seals::report");
 
-    // durability/providers.rs
-    pub(crate) const PROVIDERS_NAME_PART: Tag = Tag::new("durability::providers::name::part");
-    pub(crate) const PROVIDERS_NAME_WRITE: Tag = Tag::new("durability::providers::name::write");
-    pub(crate) const PROVIDERS_NAME_WRITES: Tag = Tag::new("durability::providers::name::writes");
-    pub(crate) const PROVIDERS_NAME_FILE: Tag = Tag::new("durability::providers::name::file");
-
     // durability/lineages.rs
 
     // io_core/provider.rs
@@ -197,8 +196,6 @@ pub(crate) mod tag {
     pub(crate) const IO_CORE_WITH_PROVIDER_SERVED_NAMES: Tag =
         Tag::new("io_core::with_provider::served_names");
     pub(crate) const IO_CORE_WITH_PROVIDER_NAMES: Tag = Tag::new("io_core::with_provider::names");
-    pub(crate) const IO_CORE_REQUEST_DOMAINS: Tag = Tag::new("io_core::request::domains");
-    pub(crate) const IO_CORE_REQUEST_TARGETS: Tag = Tag::new("io_core::request::targets");
 
     // domains.rs
     pub(crate) const DOMAINS_IMPORT_REACH_UNMATCHED: Tag =
@@ -217,8 +214,6 @@ pub(crate) mod tag {
     pub(crate) const ROUTER_BUILD_OWNER: Tag = Tag::new("router::build::owner");
     pub(crate) const ROUTER_BUILD_ROUTE: Tag = Tag::new("router::build::route");
     pub(crate) const ROUTER_DOMAINS: Tag = Tag::new("router::domains");
-    pub(crate) const ROUTER_MAKE_DURABLE_PARTS: Tag = Tag::new("router::make_durable::parts");
-    pub(crate) const ROUTER_MAKE_DURABLE_PART: Tag = Tag::new("router::make_durable::part");
     pub(crate) const ROUTER_MAKE_DURABLE_PROVIDER: Tag = Tag::new("router::make_durable::provider");
 
     // engine.rs

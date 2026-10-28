@@ -19,7 +19,8 @@ use core::fmt;
 
 use crate::alloc_tags::{tag, tagged};
 use crate::contract::Identities;
-use crate::provider::{DomainRequest, DurabilityProvider, FlushRequest};
+use crate::provider::DurabilityProvider;
+use crate::request::FlushRequest;
 use crate::types::FlushDomain;
 
 /// Builds a [`RoutingProvider`] from providers registered with it in turn. Registrations are
@@ -147,34 +148,31 @@ impl<V: Identities> DurabilityProvider<V> for RoutingProvider<V> {
         })
     }
 
-    fn make_durable(&mut self, request: FlushRequest<V>) {
-        let mut parts: Vec<Vec<DomainRequest<V>>> = tagged(tag::ROUTER_MAKE_DURABLE_PARTS, || {
-            self.routes.iter().map(|_| Vec::new()).collect()
-        });
-        for part in request.domains {
-            let Some(&registration) = self.owners.get(&part.domain) else {
+    fn make_durable(&mut self, request: FlushRequest<'_, V>) {
+        // Before any provider is called, so a domain nobody serves abandons every part of the
+        // request, as dropping it does.
+        for domain in request.domain_names() {
+            if !self.owners.contains_key(domain) {
                 panic!(
-                    "the routing provider was asked to make the flush domain {:?} durable, which no \
-                     provider registered with it serves",
-                    part.domain
+                    "the routing provider was asked to make the flush domain {domain:?} durable, \
+                     which no provider registered with it serves"
                 );
-            };
-            tagged(tag::ROUTER_MAKE_DURABLE_PART, || {
-                parts[registration].push(part)
-            });
+            }
         }
-        // A panic here unwinds through `parts`, dropping the parts of the providers not yet called,
-        // whose completions then answer as abandoned.
-        for (route, domains) in self.routes.iter_mut().zip(parts) {
-            if !domains.is_empty() {
+        // A panic in a provider unwinds through `request`, whose drop abandons the parts of the
+        // providers not yet called.
+        let owners = &self.owners;
+        for (registration, route) in self.routes.iter_mut().enumerate() {
+            let owns = |domain: &FlushDomain| owners.get(domain) == Some(&registration);
+            let part = request.only(&owns);
+            if part.domain_count() > 0 {
                 tagged(tag::ROUTER_MAKE_DURABLE_PROVIDER, || {
-                    route.provider.make_durable(FlushRequest { domains });
+                    route.provider.make_durable(part);
                 });
             }
         }
     }
 }
-
 impl<V: Identities> fmt::Debug for RoutingProvider<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RoutingProvider")

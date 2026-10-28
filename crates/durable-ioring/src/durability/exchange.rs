@@ -6,7 +6,6 @@
 use super::{Gate, Key, V};
 use crate::clock::Instant;
 use crate::contract::EpochId;
-use crate::domains::DomainId;
 use crate::ids::{FailureId, InstanceId, Lineage, OpId};
 #[cfg(test)]
 use crate::types::SuspectWrite;
@@ -152,21 +151,13 @@ impl<E: EpochId + 'static, T, I: Instant> Default for Due<E, T, I> {
     }
 }
 
-/// One seal's request for the consumer's provider (DI-D-27), in the core's terms: per domain the
-/// provider serves that the seal touched, each file's writes named for it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One seal's request for the consumer's provider (DI-D-27): which seal asked. What it asks is
+/// not kept: the driver drains the request into storage of its own made at construction, and the
+/// core names the domains the seal touched, and the writes named to each, from its tables as it
+/// does (DI-D-115).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ProviderCall {
     pub(crate) lineage: Key,
     /// The seal's sequence number, which its answers name.
     pub(crate) seal: u64,
-    /// By domain, ascending; within one, files in the order first written.
-    pub(crate) domains: Vec<DomainPart>,
-}
-
-/// One domain's part of a provider request.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DomainPart {
-    pub(crate) domain: DomainId,
-    /// Each file, with the writes named for this domain, in push order.
-    pub(crate) files: Vec<(IoTargetKey, Vec<OpId>)>,
 }

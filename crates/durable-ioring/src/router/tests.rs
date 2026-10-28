@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{RoutedTwice, RouterBuilder, RoutingProvider};
 use crate::ids::DioringIds;
-use crate::provider::{DurabilityProvider, FlushRequest};
+use crate::provider::DurabilityProvider;
+use crate::request::FlushRequest;
 use crate::types::FlushDomain;
 
 type V = DioringIds<u64, u64>;
@@ -36,7 +37,7 @@ impl DurabilityProvider<V> for Serves {
         self.domains.clone()
     }
 
-    fn make_durable(&mut self, _: FlushRequest<V>) {
+    fn make_durable(&mut self, _: FlushRequest<'_, V>) {
         panic!("a router's build makes no request");
     }
 }

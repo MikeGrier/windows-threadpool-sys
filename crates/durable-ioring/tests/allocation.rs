@@ -29,19 +29,20 @@ use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::num::NonZeroU32;
 use std::panic::Location;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
 use durable_ioring::alloc_tags::{self, Site, Tag};
 use durable_ioring::backend::{IoBackend, SubmissionData};
+use durable_ioring::driver::{Answer, DomainCall};
 use durable_ioring::memory::{
     Fault, FaultScript, MemoryBackend, MemoryTarget, ScriptOp, When, scripted_fault,
 };
 use durable_ioring::{
-    Capacity, CoreActions, DioringIds, DurabilityRequest, DurableIoCore, Entry, Epoch,
-    FailureCause, FailureObserver, ImportScope, IoTarget, IoTargetKey, Lineage, Marking,
-    NoDiagnostics, PushRefusal, ReadOptions, Resolution, SealError, StampClock, SuspectWrite,
-    WriteOptions,
+    Capacity, ConstructionError, CoreActions, DioringIds, DomainOutcome, DurabilityRequest,
+    DurableIoCore, Entry, Epoch, FailureCause, FailureObserver, FlushDomain, ImportScope, IoTarget,
+    IoTargetKey, Lineage, Marking, NoDiagnostics, PushRefusal, ReadOptions, RequestBuf, Resolution,
+    SealError, StampClock, SuspectWrite, WriteOptions,
 };
 
 /// A failure observer that only counts what it is told, so it allocates nothing itself.
@@ -240,6 +241,39 @@ fn take(phase: &'static str) -> Measured {
             .collect(),
     }
 }
+/// Where the scenario's provider answers: each answer is kept, in room made before anything is
+/// counted, for the test to give the core.
+#[derive(Default)]
+struct Answers {
+    given: Mutex<Vec<(Lineage, u64, FlushDomain, DomainOutcome)>>,
+}
+
+impl Answers {
+    /// With room for the answers one round makes.
+    fn new() -> Arc<Self> {
+        let answers = Self::default();
+        answers
+            .given
+            .lock()
+            .expect("the answers")
+            .reserve(CAPACITY.domains);
+        Arc::new(answers)
+    }
+}
+
+impl Answer for Answers {
+    fn issued(&self) {}
+
+    fn answer(&self, call: &DomainCall, outcome: DomainOutcome) {
+        self.given.lock().expect("the answers").push((
+            call.lineage,
+            call.seal,
+            call.name.clone(),
+            outcome,
+        ));
+    }
+}
+
 /// A clock that counts its readings, with no allocation behind it.
 #[derive(Default)]
 struct Ticks(AtomicU64);
@@ -279,23 +313,56 @@ struct Rig {
     phases: Vec<Measured>,
     /// The core's failure observer, to show it was told.
     told: Arc<TallyObserver>,
+    /// The buffer the provider's requests are drained into, made with a core that has a provider.
+    requests: Option<RequestBuf<V>>,
 }
 
 impl Rig {
     /// Build the core over `backend`, with `KEY` and `OTHER` attached: the first phase.
-    fn new(mut backend: MemoryBackend) -> Self {
+    fn new(backend: MemoryBackend) -> Self {
+        Self::built(backend, None, "construction, with two targets")
+    }
+
+    /// As [`new`](Self::new), for a core whose provider serves `domains`, which `KEY` declares, and
+    /// with the buffer the provider's requests are drained into.
+    fn with_provider(backend: MemoryBackend, domains: Vec<FlushDomain>) -> Self {
+        Self::built(
+            backend,
+            Some(domains),
+            "construction, with a provider and its request buffer",
+        )
+    }
+
+    fn built(
+        mut backend: MemoryBackend,
+        provider: Option<Vec<FlushDomain>>,
+        first: &'static str,
+    ) -> Self {
         let diagnostics = Arc::new(NoDiagnostics);
+        let served = provider.clone().unwrap_or_default();
         // Made before anything is counted: what is measured is the core telling it, which the
         // failure paths do (DI-D-113).
         let told = Arc::new(TallyObserver::default());
         let observer: Arc<dyn FailureObserver<V>> = told.clone();
-        let mut core = counted(|| {
-            Core::new(Ticks::default(), diagnostics, CAPACITY)
-                .map(|core| core.observed_by(observer))
+        let (mut core, requests) = counted(|| {
+            let (core, requests) = match provider {
+                Some(domains) => {
+                    let core =
+                        Core::with_provider(Ticks::default(), diagnostics, CAPACITY, domains)?;
+                    let requests = core.request_buf()?;
+                    (core, Some(requests))
+                }
+                None => (Core::new(Ticks::default(), diagnostics, CAPACITY)?, None),
+            };
+            Ok::<_, ConstructionError>((core.observed_by(observer), requests))
         })
         .expect("a valid capacity");
         for key in [KEY, OTHER] {
-            let target = MemoryTarget::new();
+            let target = if key == KEY {
+                MemoryTarget::new().with_domains(served.iter().cloned())
+            } else {
+                MemoryTarget::new()
+            };
             let description = target.describe();
             counted(|| core.add_target(key, description)).expect("a new key");
             backend.attach(key, target).expect("a new key");
@@ -305,8 +372,9 @@ impl Rig {
             backend,
             phases: Vec::new(),
             told,
+            requests,
         };
-        rig.phase("construction, with two targets");
+        rig.phase(first);
         rig
     }
 
@@ -326,6 +394,46 @@ impl Rig {
                 let core = &mut self.core;
                 let _ = counted(|| core.refused(refused));
             }
+        }
+    }
+
+    /// Drain the provider's requests into the buffer made with the core, as the driver does with
+    /// the engine's lock held.
+    fn drain_requests(&mut self) {
+        let buf = self.requests.as_mut().expect("a core with a provider");
+        let core = &mut self.core;
+        counted(|| core.drain_requests(buf));
+    }
+
+    /// Lend each drained request to the provider, which answers every domain of it with success, as
+    /// a provider does inside its call: the answers land in `answers`.
+    fn lend_requests(&mut self, home: &Weak<dyn Answer>) {
+        let buf = self.requests.as_mut().expect("a core with a provider");
+        counted(|| {
+            for request in buf.requests(home) {
+                for part in request.domains() {
+                    for file in part.files {
+                        assert!(!file.writes.is_empty(), "a file is named for its writes");
+                    }
+                    part.completion.succeed();
+                }
+            }
+        });
+        buf.clear();
+    }
+
+    /// Give the core each answer the provider made.
+    fn provide(&mut self, answers: &Answers) {
+        let given: Vec<_> = answers
+            .given
+            .lock()
+            .expect("the answers")
+            .drain(..)
+            .collect();
+        for (lineage, seal, domain, outcome) in given {
+            let core = &mut self.core;
+            let actions = counted(|| core.provided(lineage, seal, &domain, outcome));
+            self.act(actions);
         }
     }
 
@@ -664,6 +772,110 @@ fn failures() -> Vec<Measured> {
     rig.phases
 }
 
+/// A round of writes, and a seal covering them that asks the provider about `KEY`'s: the writes
+/// completing, the seal, its request drained into the buffer made at construction, lent to the
+/// provider, answered, the answer given to the core, and the seal's commit completing. `names` are
+/// the phases, in that order.
+fn provider_round(
+    rig: &mut Rig,
+    answers: &Answers,
+    home: &Weak<dyn Answer>,
+    lineage: Lineage,
+    epoch: u64,
+    names: [&'static str; 7],
+) {
+    rig.round(lineage, epoch);
+    rig.phase(names[0]);
+    rig.run();
+    rig.drain();
+    rig.phase(names[1]);
+    rig.seal(lineage, epoch);
+    rig.phase(names[2]);
+    rig.drain_requests();
+    rig.phase(names[3]);
+    rig.lend_requests(home);
+    rig.phase(names[4]);
+    rig.provide(answers);
+    rig.phase(names[5]);
+    rig.run();
+    rig.drain();
+    rig.phase(names[6]);
+}
+
+/// The provider's path: seals that ask it, their requests drained into the buffer made at
+/// construction, lent to the provider and answered, and the answers given back to the core; and a
+/// seal whose lineage ended before its request was drained (DI-D-115).
+fn providers() -> Vec<Measured> {
+    let log = FlushDomain::new(b"log".to_vec());
+    let mut rig = Rig::with_provider(MemoryBackend::new(nz(64), nz(128)), vec![log]);
+    let default = rig.core.default_lineage();
+    // Made before the count: where the provider's answers go is the driver's.
+    let answers = Answers::new();
+    let strong: Arc<dyn Answer> = answers.clone();
+    let home: Weak<dyn Answer> = Arc::downgrade(&strong);
+
+    provider_round(
+        &mut rig,
+        &answers,
+        &home,
+        default,
+        1,
+        [
+            "provider writes, first round",
+            "provider write completions, first round",
+            "a seal asking the provider, first round",
+            "the request drained, first round",
+            "the request lent and answered, first round",
+            "the answer given to the core, first round",
+            "commit completions and pops, first round",
+        ],
+    );
+    provider_round(
+        &mut rig,
+        &answers,
+        &home,
+        default,
+        2,
+        [
+            "provider writes, second round",
+            "provider write completions, second round",
+            "a seal asking the provider, second round",
+            "the request drained, second round",
+            "the request lent and answered, second round",
+            "the answer given to the core, second round",
+            "commit completions and pops, second round",
+        ],
+    );
+
+    let description = Some("the minted lineage".to_owned());
+    let minted = counted(|| rig.core.mint_lineage(description)).expect("room for a lineage");
+    rig.phase("a lineage minted for the provider");
+    rig.round(minted, 1);
+    rig.run();
+    rig.drain();
+    rig.phase("the minted lineage written");
+    rig.seal(minted, 1);
+    let core = &mut rig.core;
+    let actions = counted(|| core.end_lineage(minted)).expect("a live lineage");
+    rig.act(actions);
+    rig.phase("the minted lineage sealed and ended before its request was drained");
+    rig.drain_requests();
+    rig.phase("the ended lineage's request drained");
+    rig.lend_requests(&home);
+    rig.phase("the ended lineage's request lent and answered");
+    rig.provide(&answers);
+    rig.run();
+    rig.drain();
+    rig.phase("the ended lineage's answer given and its commit completed");
+
+    let Rig {
+        core, mut phases, ..
+    } = rig;
+    counted(|| core.close(|_| {}));
+    phases.push(take("close"));
+    phases
+}
+
 /// The allocations each phase made, as last recorded. A change that moves one updates this table and
 /// its tags', and its commit says why.
 const CLEAN: &[(&str, u64)] = &[
@@ -723,6 +935,38 @@ const FAILURES: &[(&str, u64)] = &[
     ("writes before the import", 0),
     ("a failure imported", 0),
     ("an abandon resolved", 0),
+];
+
+/// As [`CLEAN`], for the provider's path.
+const PROVIDERS: &[(&str, u64)] = &[
+    ("construction, with a provider and its request buffer", 51),
+    ("provider writes, first round", 3),
+    ("provider write completions, first round", 0),
+    ("a seal asking the provider, first round", 0),
+    ("the request drained, first round", 0),
+    ("the request lent and answered, first round", 0),
+    ("the answer given to the core, first round", 0),
+    ("commit completions and pops, first round", 0),
+    ("provider writes, second round", 0),
+    ("provider write completions, second round", 0),
+    ("a seal asking the provider, second round", 0),
+    ("the request drained, second round", 0),
+    ("the request lent and answered, second round", 0),
+    ("the answer given to the core, second round", 0),
+    ("commit completions and pops, second round", 0),
+    ("a lineage minted for the provider", 0),
+    ("the minted lineage written", 0),
+    (
+        "the minted lineage sealed and ended before its request was drained",
+        0,
+    ),
+    ("the ended lineage's request drained", 0),
+    ("the ended lineage's request lent and answered", 0),
+    (
+        "the ended lineage's answer given and its commit completed",
+        0,
+    ),
+    ("close", 0),
 ];
 
 /// Each phase's allocations by tag, as last recorded, in the order the tags were first seen.
@@ -1015,6 +1259,245 @@ const FAILURE_TAGS: &[(&str, &str, u64)] = &[
     ),
 ];
 
+/// As [`CLEAN_TAGS`], for the provider's path.
+const PROVIDERS_TAGS: &[(&str, &str, u64)] = &[
+    (
+        "construction, with a provider and its request buffer",
+        "domains::first_repeat::seen",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::lineages",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::writes",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::seals",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::in_flight_by_epoch",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::held_by_epoch",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::gated",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::held",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::spans",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::window",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::seal_domains",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::flush_pairs",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::served_names",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::failures",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::kept",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::abandoned",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::tokens",
+        2,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::free_tokens",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::lists",
+        2,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::due",
+        4,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::scratch_live",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::scratch_covered",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::scratch_work",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::scratch_bounds",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::scratch_touched",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::scratch_pairs",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "durability::new::served",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::new::targets",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::new::domains",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::new::in_flight",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::new::per_target",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::new::held",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::new::unpushed",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::new::outgoing",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::new::requests",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::new::queue",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::new::served",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "domains::intern_all::id",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "domains::intern_all::shared",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::with_provider::named",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::with_provider::served_names",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "io_core::with_provider::names",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "request_buf::new::requests",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "request_buf::new::parts",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "request_buf::new::targets",
+        1,
+    ),
+    (
+        "construction, with a provider and its request buffer",
+        "request_buf::new::ids",
+        1,
+    ),
+    (
+        "provider writes, first round",
+        "io_core::issue::backend_push",
+        3,
+    ),
+];
+
 /// Each phase's total.
 type Totals = &'static [(&'static str, u64)];
 
@@ -1113,6 +1596,15 @@ fn the_failure_paths_allocate_as_recorded() {
         failures,
         (FAILURES, FAILURE_TAGS),
         ("FAILURES", "FAILURE_TAGS"),
+    );
+}
+
+#[test]
+fn the_provider_path_allocates_as_recorded() {
+    check(
+        providers,
+        (PROVIDERS, PROVIDERS_TAGS),
+        ("PROVIDERS", "PROVIDERS_TAGS"),
     );
 }
 

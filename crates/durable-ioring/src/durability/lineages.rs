@@ -116,6 +116,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         // What stays is a seal with a flush out, to find the writes it let go when it answers.
         let window = &mut self.window;
         let mut lost = None;
+        let (seal_domains, served) = (&mut self.seal_domains, &self.served);
         self.seals.retain(|key, seal| {
             if key.0 != lineage {
                 return true;
@@ -123,8 +124,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             seal.trailing = None;
             let keep =
                 matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0);
-            if !keep && let Err(what) = window::unpin(window, seal.pin) {
-                lost.get_or_insert(what);
+            if !keep {
+                super::forget_domains(seal_domains, served, key.0, key.1);
+                if let Err(what) = window::unpin(window, seal.pin) {
+                    lost.get_or_insert(what);
+                }
             }
             keep
         });

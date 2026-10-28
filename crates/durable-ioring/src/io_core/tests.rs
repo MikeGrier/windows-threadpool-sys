@@ -16,7 +16,7 @@ use crate::ids::{DioringIds, Lineage, OpId};
 use crate::io_target::IoTarget;
 use crate::memory::{MemoryBackend, MemoryTarget};
 use crate::oracle::ConformanceOracle;
-use crate::provider::ProviderRequest;
+use crate::request::OwnedRequest;
 use crate::test_support::{Listed, Ticks};
 use crate::types::{
     DurabilityRequest, Entry, Epoch, EpochState, FailureCause, FlushDomain, HeldOperation, Hold,
@@ -132,7 +132,7 @@ struct Rig {
     core: Core,
     backend: MemoryBackend,
     /// Every provider request the core has made, in order.
-    requests: Vec<ProviderRequest<V>>,
+    requests: Vec<OwnedRequest<V>>,
     /// The contract's rules, over every push, seal, heal and entry the rig sees (DI-D-24).
     oracle: ConformanceOracle<V, &'static str>,
     /// Each failure's suspect set, as the core's observer was told it when its `Failed` was popped
@@ -1044,4 +1044,41 @@ fn nothing_to_do_is_empty() {
     assert!(rig.retried().is_empty());
     let (_, actions) = rig.sealed(rig.epoch(1));
     assert!(!actions.is_empty(), "it delivered");
+}
+
+#[test]
+fn a_core_with_no_provider_drains_nothing_into_its_buffer() {
+    let mut rig = Rig::new();
+    let mut buf = rig.core.request_buf().expect("a buffer");
+    rig.write(1, 0, b"x").expect("accepted");
+    rig.seal(1);
+    rig.backend.submit().expect("submit");
+    let write = rig.backend.pop().expect("never fails").expect("the write");
+    let _ = rig.core.complete(write);
+    rig.core.drain_requests(&mut buf);
+    assert!(buf.is_empty(), "no domain is the provider's");
+}
+
+#[test]
+fn draining_empties_the_buffer_first_and_the_core_s_queue_with_it() {
+    let core = Core::with_provider(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+        vec![domain("P")],
+    )
+    .expect("no repeats");
+    let mut rig = Rig::over(core);
+    rig.attach(KEY, MemoryTarget::new().with_domains([domain("P")]));
+    let mut buf = rig.core.request_buf().expect("a buffer");
+    rig.write(1, 0, b"x").expect("accepted");
+    rig.seal(1);
+    rig.backend.submit().expect("submit");
+    let write = rig.backend.pop().expect("never fails").expect("the write");
+    // Completed by hand, so the request stays in the core's queue for the drain below.
+    let _ = rig.core.complete(write);
+    rig.core.drain_requests(&mut buf);
+    assert_eq!(buf.len(), 1, "the seal asked the provider");
+    rig.core.drain_requests(&mut buf);
+    assert!(buf.is_empty(), "the queue was empty, and so is the buffer");
 }

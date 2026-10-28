@@ -66,6 +66,16 @@ impl Capacity {
         self.operations.checked_mul(served.checked_add(1)?)
     }
 
+    /// The most of each of the provider's parts that seals can have out at once when it serves
+    /// `served` domains (DI-D-115): the domains the seals asked about, the targets named in their
+    /// requests, and the writes named in those. Each is at most `served` for each recorded seal,
+    /// and recorded seals are at most the operations (DI-D-110): a write is named to one seal, and
+    /// to a served domain once, and a target is in a request only for a write it has. `None` if
+    /// that is more than a `usize`.
+    pub(crate) fn provider_parts(&self, served: usize) -> Option<usize> {
+        self.operations.checked_mul(served)
+    }
+
     /// The most failures unresolved at once with a provider serving `served` domains (DI-D-109):
     /// the observed ones, at most the flush parts, and the imported ones, at most `imports`.
     ///

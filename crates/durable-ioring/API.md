@@ -307,9 +307,9 @@ flush, since the router merges nothing across them -- documented, not enforced. 
 provider propagates and abandons the domains of those not yet called; a domain no provider serves
 is a caller breaking the protocol, and is panicked on.
 
-Once every write a seal covers has completed, dioring hands the provider one `FlushRequest`: per
-domain it serves, the files (`FileKey`, `SharedHandle`) and the `OpId`s named for each -- identities,
-never extents -- and one `DomainCompletion`. The provider flushes by any means, returns promptly,
+Once every write a seal covers has completed, dioring lends the provider one `FlushRequest`, for
+the length of its call: per domain it serves, the files (`IoTargetKey`) and the `OpId`s named for
+each -- identities, never extents -- and one `DomainCompletion`. The provider flushes by any means, returns promptly,
 and answers each domain once with `succeed()` or `fail(error)`, from any thread, at any time. A
 completion dropped unanswered is `Cause::ProviderAbandoned`; a failure is `Cause::Provider`. A write
 is durable when every domain of its file has succeeded. dioring sets no timeout: a call that never
@@ -1151,30 +1151,39 @@ pub trait DurabilityProvider<V: Identities>: Send + Debug {
     /// follows the completion letting a seal start -- and never with its lock held, so an answer
     /// given inside it is recorded at once (DI-D-44). A panic propagates to that call, and every
     /// completion it drops unanswered is a failure of its domain.
-    fn make_durable(&mut self, request: FlushRequest<V>);
+    ///
+    /// `request` is lent for the call (DI-D-115): what it names is the instance's own storage,
+    /// made at construction, so a provider that works after the call copies what it needs and
+    /// keeps the completions, which are its own. A domain it does not take is abandoned when the
+    /// request is dropped.
+    fn make_durable(&mut self, request: FlushRequest<'_, V>);
 }
 
-/// One seal's work for the consumer's provider.
-#[derive(Debug)]
-pub struct FlushRequest<V: Identities> {
-    pub domains: Vec<DomainRequest<V>>,
+/// One seal's work for the consumer's provider, lent for the length of `make_durable`.
+pub struct FlushRequest<'a, V: Identities> { /* a view of the instance's request buffer */ }
+
+impl<'a, V: Identities> FlushRequest<'a, V> {
+    /// How many domains are still to be taken, and their names without taking them.
+    pub fn domain_count(&self) -> usize;
+    pub fn domain_names(&self) -> impl Iterator<Item = &FlushDomain>;
+    /// The domains still to be taken, each with its completion, which taking it creates.
+    pub fn domains(&self) -> Domains<'_, V>;
+    /// A view of only the domains `keep` names: a router's way of handing each provider its own.
+    pub fn only<'b>(&'b self, keep: &'b dyn Fn(&FlushDomain) -> bool) -> FlushRequest<'b, V>;
 }
 
 /// One flush domain's part of a request, and the handle that answers it.
-#[derive(Debug)]
-pub struct DomainRequest<V: Identities> {
-    pub domain: FlushDomain,
-    pub files: Vec<FileWrites<V>>,
+pub struct DomainRequest<'a, V: Identities> {
+    pub domain: &'a FlushDomain,
+    pub files: Files<'a, V>,
     pub completion: DomainCompletion,
 }
 
 /// A file in one domain's part, and the writes to it named for that domain: identities, never
 /// extents. Every one has completed.
-#[derive(Debug)]
-pub struct FileWrites<V: Identities> {
-    pub key: FileKey,
-    pub file: SharedHandle,
-    pub writes: Vec<V::OpId>,
+pub struct IoTargetWrites<'a, V: Identities> {
+    pub key: IoTargetKey,
+    pub writes: &'a [V::OpId],
 }
 
 /// Answers one domain of one request, once, from any thread at any time -- inside

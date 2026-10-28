@@ -2670,8 +2670,8 @@ Amends [DI-D-41](#di-d-41) and [DI-D-46](#di-d-46); [CONTRACT.md](CONTRACT.md)'s
 
 ## <a id="di-d-115"></a>DI-D-115: a gate cycle is refused without naming it; the consumer who wants the cycle traces it from its own pushes
 
-**Decided, and built as DI-23.12.8.1 (see "As built" below).** The engineer, 2026-10-27, on the first half of
-DI-23.12.8: "yes drop the cycle trace. The caller who cares can do it themselves." The exchange is in
+**Decided, and built as DI-23.12.8.1 and DI-23.12.8.2 (see "As built" below).** The engineer, 2026-10-27, on the first
+half of DI-23.12.8: "yes drop the cycle trace. The caller who cares can do it themselves." The exchange is in
 [the session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#a-gate-cycles-report-continued-2026-10-27).
 Amends [DI-D-23](#di-d-23) and [DI-D-43](#di-d-43), which had the refusal name the cycle.
 
@@ -2693,11 +2693,11 @@ Amends [DI-D-23](#di-d-23) and [DI-D-43](#di-d-43), which had the refusal name t
 - **Not taken**: a single `Copy` pointer in the seal refusal, naming the held write in the sealed range that closes the
   cycle (offered by the assistant; not taken -- the caller does it); and the trace reported edge by edge to the diagnostic
   sink, an allocation-free way to keep it for debugging, left as an option no work is queued for.
-- **Not covered**: a provider request's contents, the other half of DI-23.12.8. Which writes are named to which seal is
-  the instance's choice, by its seal cut and when each write completes, so a consumer could only approximate it; that
-  half waits for the engineer as DI-23.12.8.2.
-- **Sizing a provider request's storage** (the assistant's analysis, 2026-10-27; a working position, not a decision: the
-  shape of the storage, lent or recycled, is the engineer's to decide, and nothing here is built). **The size is computable
+- **Not the same case**: a provider request's contents, the other half of DI-23.12.8. Which writes are named to which seal
+  is the instance's choice, by its seal cut and when each write completes, so a consumer could only approximate it; the
+  instance keeps them, in storage made at construction, as DI-23.12.8.2 built (below).
+- **Sizing a provider request's storage** (the assistant's analysis, 2026-10-27, written before the shape was chosen; the
+  shape built is in "As built" for DI-23.12.8.2 below). **The size is computable
   when the core is built**, from `operations` and the number of served domains, both known to `with_provider`, so no new
   declared capacity is needed. It is the same product [capacity.rs](src/capacity.rs)'s `flush_parts` already uses.
   - **Parts at most `operations * served`.** Every recorded seal pins one write's place and the seal table is made for
@@ -2714,10 +2714,9 @@ Amends [DI-D-23](#di-d-23) and [DI-D-43](#di-d-43), which had the refusal name t
   - **It is a worst case, and has to be.** A seal is never refused for capacity ([DI-D-98](#di-d-98)), so the tables cover
     every recorded seal at once. The ids are needed only until the provider call returns, but a driver can fall behind
     while seals keep being made, so a lease does not lower the worst case.
-  - **Open, and part of the shape decision:** the provider is called without the engine's lock ([DI-D-44](#di-d-44)), so two
-    threads can be inside `make_durable` at once and ranges can be released out of order, which needs a free list and not a
-    ring. A view that iterates the writes table instead of copying would need no storage, but can be read only under the
-    lock, which that call does not hold.
+  - **The question the shape had to answer:** the provider is called without the engine's lock ([DI-D-44](#di-d-44)), so a
+    view that iterates the writes table instead of copying can be read only under the lock, which that call does not hold.
+    The shape built answers it with a buffer the driver owns.
 - **As built** (DI-23.12.8.1, the assistant's, 2026-10-27): `PushRefusal::GateCycle` and `SealError::GateCycle` are unit
   variants, so the types lose a `Vec` and `SealError` a field `Display` printed; `Durability::write_cycle` and `seal_cycle`
   answer `bool` and `Sealing::Cycle` carries nothing. `trace`, `trace_in`, `Step`, the scratch list for them, `io_core`'s
@@ -2727,3 +2726,39 @@ Amends [DI-D-23](#di-d-23) and [DI-D-43](#di-d-43), which had the refusal name t
   order, and only stops naming the first it finds. The allocation test gained a gated write held, a push refused for a
   cycle, a second gated write held and a seal refused for one, then the lower seal that untangles them, each at zero.
   Breaking for both crates where they matched on the cycle.
+- **As built** (DI-23.12.8.2, the assistant's shape, which the engineer took up with "implement di-23.12.8"): a provider
+  request is **lent**, not owned. The core queues only which seal asked (`ProviderCall`, a lineage and a seal number);
+  `DurableIoCore::drain_requests(&mut RequestBuf)` reads each request out of the core as it stands then, into a
+  `RequestBuf` the driver made at construction with `request_buf()`, and the driver calls the provider from that buffer
+  after the engine's lock is released, so nothing the provider holds refers to the engine.
+  - **Where the contents come from.** The domains a seal asked about are the entries of a new table in `Durability`,
+    `seal_domains`, ordered by (lineage, seal, domain) and sized `operations * served`; it replaces the list in
+    `SealStage::Flushing` and is forgotten where a seal goes (the flush answer that passes it, a lineage ending, and a
+    drained empty seal). The writes named to the seal for the provider are the writes table's `Stage::Named(seal)` entries
+    with a provider route, which stay named until the seal is covered. Nothing is copied at seal time, so a seal's cost
+    does not grow with its writes.
+  - **The buffer** holds four lists, each reserved to `operations * served` (requests to `operations`): requests, parts,
+    target entries and write ids, as the sizing above argued. `fill` is all-or-nothing and truncates on overflow, which is
+    reported as an inconsistency, never as growth. A part's files are listed in first-written order and each file's ids in
+    push order, by walking the writes table once per part and once per file, so nothing is collected.
+  - **The lent request.** `FlushRequest<'a, V>` gives `domain_count`, `domain_names`, `domains()` and `only(&filter)`.
+    Taking a domain creates its `DomainCompletion`, which is the provider's own and may outlive the buffer; the ids and
+    files it names are the buffer's, valid for the call. A domain not taken when the request is dropped is abandoned, as a
+    completion dropped unanswered is, and so is every request the iterator did not lend when it is dropped, which is what
+    a panicking provider leaves behind. `only` is a narrowed view for the router, composing through nested views, so each
+    registered provider is given the domains it serves and is called only if it has one.
+  - **Serialization, the open question the sizing left.** Provider calls are made one at a time, from the `&mut Dioring`
+    the consumer's own call already holds, so the buffer needs no lock and no free list. A consumer whose provider is slow
+    delays that consumer's next call rather than growing storage. `FlushRequest` and `RequestBuf` hold a `Cell` and are not
+    `Sync`.
+  - **A request read late.** Because the contents are read when drained, a request drained after its lineage ended may name
+    fewer writes, since ending a lineage forgets the provider-only writes named to a seal it lets go; a seal removed at the
+    end yields an empty request. The provider is still asked, and its answer reports nothing, as a late answer does
+    ([DI-D-42](#di-d-42)).
+  - **What went.** `ProviderRequest`, `ProviderPart`, the owned `FlushRequest`, `DomainRequest` and `IoTargetWrites` that
+    held `Vec`s, `DomainPart`, `providers::name`, and the tags of their allocations. Breaking for both crates: a provider
+    takes `FlushRequest<'_, V>` and reads `request.domains()`; one that works after the call copies what it needs, as the
+    win-durable-ioring tests' `KeptRequest` does.
+  - **Allocation.** The allocation test's `PROVIDERS` scenario drains, lends, answers and gives back a provider seal in two
+    rounds, and ends a lineage with a seal undrained, each phase at zero after construction; construction makes the
+    four buffer lists and the two tables. The first round of writes still counts three, the one DI-23.12.9 is for.

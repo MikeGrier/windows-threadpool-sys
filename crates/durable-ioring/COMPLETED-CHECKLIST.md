@@ -4992,3 +4992,28 @@ docs and `Display`, and the tests that compared traced cycles follow; the detect
 ways. The allocation test gains a refused gated push and a refused seal, at zero. Breaking for both crates.
 
 As built: the as-built notes are in DI-D-115.
+
+## Moved 2026-10-28 16:07:00 -04:00 -- DI-23.12.8.2: a provider request's contents lent from a buffer made at construction
+
+### <a id="di-231282"></a>DI-23.12.8.2 -- A provider request's contents are read, when drained, into a buffer made at construction and lent to the provider for its call. *(completed 2026-10-28 16:07:00 -04:00)*
+
+**A provider request's contents onto storage made at construction**, in the shape the assistant recommended and the
+engineer took up ("implement di-23.12.8"): a seal's domain parts and the write lists in them, and the `ProviderRequest`
+built from them, were allocated where a seal started. The core now queues only which seal asked, keeps the domains it
+asked about in a table sized `operations * served`, and `drain_requests` reads the request into a `RequestBuf` the driver
+made at construction; the provider is lent a `FlushRequest<'_, V>` for its call, a domain it does not take is abandoned
+when the request is dropped, and a router hands each provider a narrowed view. The allocation test gains a provider-routed
+scenario, from a core built with `with_provider`. A contract change for both crates.
+
+As built: the as-built notes are in [DI-D-115](DESIGN-NOTES.md#di-d-115).
+
+## Moved 2026-10-28 16:07:00 -04:00 -- DI-23.12.8: a provider request's contents and a gate cycle's report allocate nothing after construction
+
+### <a id="di-23128"></a>DI-23.12.8 -- A provider request's contents and a gate cycle's report allocate nothing after construction: the cycle is refused unnamed, and the request is lent from a buffer made at construction. *(completed 2026-10-28 16:07:00 -04:00)*
+
+**A provider request's contents and a gate cycle's report allocate nothing after construction**
+([DI-D-97](DESIGN-NOTES.md#di-d-97)): both reach the consumer, a request through the provider and a cycle in
+`PushRefusal::GateCycle` and `SealError::GateCycle`. Each was allocated where it is made: a seal's domain parts and the
+write lists in them, the `ProviderRequest` built from them, and the traced cycle's `Vec` of epochs. Found 2026-10-24
+implementing `DI-23.12.2`, which moved the lists that carry these but not the contents. Split 2026-10-27 when the engineer
+decided the cycle's half ([DI-D-115](DESIGN-NOTES.md#di-d-115)); built as `DI-23.12.8.1` and `DI-23.12.8.2`.

@@ -3,7 +3,7 @@
 //! serves, the requests a seal makes of it, and its answers.
 //!
 //! The core holds no provider. It routes each target's writes by the domains the provider serves,
-//! emits a [`ProviderRequest`] per seal that touched one, and takes each domain's answer through
+//! queues a request per seal that touched one, drained into a [`RequestBuf`], and takes each domain's answer through
 //! [`DurableIoCore::provided`]. Calling the provider, and doing so with no lock held so that it may
 //! answer inside its call, is the driver's.
 
@@ -17,9 +17,10 @@ use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::diagnostics::DiagnosticSink;
 use crate::domains::{first_repeat, intern_all};
-use crate::durability::{Due, ProviderCall};
+use crate::durability::Due;
 use crate::ids::Lineage;
-use crate::provider::{DomainOutcome, IoTargetWrites, ProviderPart, ProviderRequest};
+use crate::provider::DomainOutcome;
+use crate::request::RequestBuf;
 use crate::types::FlushDomain;
 
 impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
@@ -78,8 +79,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         Ok(core)
     }
 
-    /// The provider answered `domain` of `lineage`'s seal `seal`, as a [`ProviderRequest`] named
-    /// them. An answer for a lineage since ended reports nothing, as a late commit does (DI-D-42).
+    /// The provider answered `domain` of `lineage`'s seal `seal`, as the request named them. An answer for a lineage since ended reports nothing, as a late commit does (DI-D-42).
     ///
     /// An answer naming another core's lineage, a domain the provider does not serve, a seal or
     /// domain no request asked about, or a domain answered twice is the driver or the provider
@@ -110,33 +110,40 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         self.act(due, was_empty)
     }
 
-    /// A request in the core's terms, as the provider is handed it.
-    pub(super) fn request(&self, call: ProviderCall) -> ProviderRequest<V<E, K>> {
-        let domains = tagged(tag::IO_CORE_REQUEST_DOMAINS, || {
-            call.domains
-                .into_iter()
-                .map(|part| {
-                    let at = self
-                        .served
-                        .binary_search(&part.domain)
-                        .expect("a request names only domains the provider serves");
-                    let targets = tagged(tag::IO_CORE_REQUEST_TARGETS, || {
-                        part.files
-                            .into_iter()
-                            .map(|(key, writes)| IoTargetWrites { key, writes })
-                            .collect()
-                    });
-                    ProviderPart {
-                        domain: self.served_names[at].clone(),
-                        targets,
-                    }
-                })
-                .collect()
-        });
-        ProviderRequest {
-            lineage: self.name(call.lineage),
-            seal: call.seal,
-            domains,
+    /// A buffer to drain the provider's requests into, with room for every one this core can have
+    /// made at once ([`Capacity`]'s `operations` and the domains the provider serves): made by the
+    /// driver when it builds the instance, since it is storage and storage is made then
+    /// (DI-D-115). One for a core with no provider is empty.
+    ///
+    /// # Errors
+    ///
+    /// [`ConstructionError::Table`] if a size is more than a `usize`, or cannot be allocated.
+    pub fn request_buf(&self) -> Result<RequestBuf<V<E, K>>, ConstructionError> {
+        RequestBuf::new(&self.capacity, self.served.len())
+    }
+
+    /// Drain every request the provider has to be made, in the order the seals started, into
+    /// `buf`, emptying it first and the core's queue as it goes (DI-D-115). A request is read from
+    /// the core as it stands now: the domains its seal asked about, and the writes named to it,
+    /// which a lineage that has ended since may have let go.
+    pub fn drain_requests(&mut self, buf: &mut RequestBuf<V<E, K>>) {
+        buf.clear();
+        while let Some(call) = self.requests.pop_front() {
+            let lineage = self.name(call.lineage);
+            let (durability, served, names) = (&self.durability, &self.served, &self.served_names);
+            let asked = durability
+                .asked(call.lineage, call.seal)
+                .filter_map(|domain| {
+                    let at = served.binary_search(&domain).ok()?;
+                    Some((domain, names.get(at)?.clone()))
+                });
+            let named = || durability.named_for_provider(call.lineage, call.seal);
+            if buf.fill(lineage, call.seal, asked, named).is_err() {
+                self.durability.inconsistent(
+                    "the provider's requests did not fit the buffer made for them",
+                    format_args!("lineage {lineage:?}, seal {}", call.seal),
+                );
+            }
         }
     }
 }

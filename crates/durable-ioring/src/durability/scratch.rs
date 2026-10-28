@@ -19,6 +19,7 @@ use crate::alloc_tags::{tag, tagged};
 use crate::capacity::{Capacity, ConstructionError, list, within};
 use crate::clock::Instant;
 use crate::contract::EpochId;
+use crate::domains::DomainId;
 use crate::ids::OpId;
 
 /// The scratch a call collects into, emptied when the call is done with it.
@@ -35,6 +36,9 @@ pub(super) struct Scratch<E> {
     pub(super) work: Vec<Gate<E>>,
     /// A cycle search's bound for each lineage it reached: at most the lineages declared.
     pub(super) bounds: Vec<(Key, E)>,
+    /// The served domains a seal being started names writes for, ascending, each once: at most the
+    /// domains the provider serves.
+    pub(super) touched: Vec<DomainId>,
     /// The flush pairs `end_pairs` ends, sorted before they are: at most the flush parts.
     pub(super) pairs: Vec<((Key, u64, Part), FlushPair<E>)>,
 }
@@ -55,6 +59,9 @@ impl<E> Scratch<E> {
             })?,
             bounds: tagged(tag::DURABILITY_NEW_SCRATCH_BOUNDS, || {
                 list("a cycle search's bounds", Some(capacity.lineages))
+            })?,
+            touched: tagged(tag::DURABILITY_NEW_SCRATCH_TOUCHED, || {
+                list("the domains a seal being started names", Some(served))
             })?,
             pairs: tagged(tag::DURABILITY_NEW_SCRATCH_PAIRS, || {
                 list(

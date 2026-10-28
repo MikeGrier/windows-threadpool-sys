@@ -51,6 +51,7 @@ pub mod oracle;
 mod ordered;
 mod provider;
 mod pump;
+mod request;
 mod router;
 #[cfg(test)]
 mod test_support;
@@ -82,11 +83,11 @@ pub use io_target::{
 };
 pub use key::{Key, ReadKey, TargetKey, WriteKey};
 pub use observer::FailureObserver;
-pub use provider::{
-    DomainCompletion, DomainOutcome, DomainRequest, DurabilityProvider, FlushRequest,
-    IoTargetWrites, ProviderPart, ProviderRequest,
-};
+pub use provider::{DomainCompletion, DomainOutcome, DurabilityProvider};
 pub use pump::Waitable;
+pub use request::{
+    DomainRequest, Domains, Files, FlushRequest, IoTargetWrites, RequestBuf, Requests,
+};
 pub use router::{RoutedTwice, RouterBuilder, RoutingProvider};
 pub use types::{
     AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,

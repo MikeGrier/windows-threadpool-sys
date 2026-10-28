@@ -10,13 +10,9 @@
 //! intersection with the failed file's whole set (DI-D-21).
 
 use alloc::sync::Arc;
-use alloc::vec;
 use alloc::vec::Vec;
 
-use super::{
-    DomainPart, Due, Durability, Key, MarkingKind, Part, Reach, SealStage, Span, Stage, V, Write,
-};
-use crate::alloc_tags::{tag, tagged};
+use super::{Due, Durability, Key, MarkingKind, Part, Reach, SealStage, Span, Stage, V, Write};
 use crate::capacity::within;
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
@@ -25,37 +21,24 @@ use crate::domains::DomainId;
 use crate::ids::OpId;
 use crate::types::{FailureCause, FlushDomain, IoTargetKey};
 
-/// Name `op`, a write to `file` declared with `domains`, in the request for each of those domains
-/// the provider serves.
-pub(super) fn name(
-    parts: &mut Vec<DomainPart>,
+/// Note, in `touched`, each of the `domains` a write to a file declared with them names that the
+/// provider serves: ascending, each once, within the room `touched` was made with, which is the
+/// domains served, so a domain is handed back (`Err`) only by an inconsistency.
+pub(super) fn touch(
+    touched: &mut Vec<DomainId>,
     served: &[DomainId],
-    file: IoTargetKey,
     domains: &[DomainId],
-    op: OpId,
-) {
+) -> Result<(), DomainId> {
     for &domain in domains.iter().filter(|domain| served.contains(domain)) {
-        let at = match parts.iter().position(|part| part.domain == domain) {
-            Some(at) => at,
-            None => {
-                tagged(tag::PROVIDERS_NAME_PART, || {
-                    parts.push(DomainPart {
-                        domain,
-                        files: Vec::new(),
-                    });
-                });
-                parts.len() - 1
-            }
+        let Err(at) = touched.binary_search(&domain) else {
+            continue;
         };
-        let files = &mut parts[at].files;
-        match files.iter_mut().find(|(key, _)| *key == file) {
-            Some((_, writes)) => tagged(tag::PROVIDERS_NAME_WRITE, || writes.push(op)),
-            None => {
-                let writes = tagged(tag::PROVIDERS_NAME_WRITES, || vec![op]);
-                tagged(tag::PROVIDERS_NAME_FILE, || files.push((file, writes)));
-            }
+        if touched.len() == touched.capacity() {
+            return Err(domain);
         }
+        touched.insert(at, domain);
     }
+    Ok(())
 }
 
 impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
@@ -75,6 +58,39 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 format_args!("{} domains", self.served.len()),
             );
         }
+    }
+
+    /// How many (seal, domain) entries the table of what the seals asked holds.
+    #[cfg(test)]
+    pub(crate) fn seal_domains_held(&self) -> usize {
+        self.seal_domains.len()
+    }
+
+    /// The domains `lineage`'s seal `seal` asked the provider about, ascending (DI-D-115).
+    pub(crate) fn asked(&self, lineage: Key, seal: u64) -> impl Iterator<Item = DomainId> + '_ {
+        self.served
+            .iter()
+            .copied()
+            .filter(move |&domain| self.seal_domains.get(&(lineage, seal, domain)).is_some())
+    }
+
+    /// The writes named to `lineage`'s seal `seal` for the provider, in push order: each with its
+    /// file and the domains that file was declared with. The request the provider is made is read
+    /// from these as it is drained, not kept from when the seal started (DI-D-115): a write stays
+    /// named to its seal until the seal's parts have answered.
+    pub(crate) fn named_for_provider(
+        &self,
+        lineage: Key,
+        seal: u64,
+    ) -> impl Iterator<Item = (OpId, IoTargetKey, &[DomainId])> + '_ {
+        self.writes
+            .values()
+            .filter(move |write| {
+                write.lineage == lineage
+                    && write.stage == Stage::Named(seal)
+                    && write.routing.provider
+            })
+            .map(|write| (write.op, write.file, self.lists.get(write.domains)))
     }
 
     /// The provider answered `domain` of `lineage`'s seal `seal`: `Ok` for success, or the cause of
@@ -97,20 +113,17 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         {
             return due;
         }
+        let seal_domains = &mut self.seal_domains;
         let answered = self
             .seals
             .get_mut(&(lineage, seal))
             .ok_or("a provider answered for a seal that does not exist")
             .and_then(|candidate| {
-                let SealStage::Flushing {
-                    domains, failed, ..
-                } = &mut candidate.stage
-                else {
+                let SealStage::Flushing { failed, .. } = &mut candidate.stage else {
                     return Err("a provider answered for a seal not flushing");
                 };
-                let part = domains
-                    .iter_mut()
-                    .find(|part| part.domain == domain)
+                let part = seal_domains
+                    .get_mut(&(lineage, seal, domain))
                     .ok_or("a provider answered a domain the seal did not ask about")?;
                 if part.answered {
                     return Err("a provider answered a domain twice");
@@ -153,10 +166,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let Some(found) = self.seals.get(&(lineage, seal)) else {
             return;
         };
-        let SealStage::Flushing { domains, .. } = &found.stage else {
+        let SealStage::Flushing { .. } = &found.stage else {
             return;
         };
-        let (served, spans, lists) = (&self.served, &self.spans, &self.lists);
+        let (served, spans, lists, seal_domains) =
+            (&self.served, &self.spans, &self.lists, &self.seal_domains);
         let covered = |write: &Write<E, T>| {
             write.lineage == lineage
                 && write.stage == Stage::Named(seal)
@@ -168,7 +182,11 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     .get(write.domains)
                     .iter()
                     .filter(|domain| served.contains(domain))
-                    .all(|domain| domains.iter().any(|part| part.domain == *domain && part.ok))
+                    .all(|&domain| {
+                        seal_domains
+                            .get(&(lineage, seal, domain))
+                            .is_some_and(|part| part.ok)
+                    })
         };
         // Each marking cites who answered for its write (DI-D-47): the default's flush, observed,
         // and the provider's warranty, exactly as the write's file is routed.

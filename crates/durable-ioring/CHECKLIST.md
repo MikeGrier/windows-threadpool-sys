@@ -102,25 +102,11 @@ and `DI-23.10` is where they are settled. **No allocation is analysed or removed
 
 - [x] **DI-23.12.7** -- The crate is `no_std` without its `std` feature, builds for `x86_64-unknown-none`, and what only `std` provides is behind the feature or moved to `alloc` and `core`. -> [completed 2026-10-27](COMPLETED-CHECKLIST.md#di-23127)
 
-- [ ] **DI-23.12.8** -- **A provider request's contents and a gate cycle's report allocate nothing after construction**
-  ([DI-D-97](DESIGN-NOTES.md#di-d-97)): both reach the consumer, a request through the provider and a cycle in
-  `PushRefusal::GateCycle` and `SealError::GateCycle`. Each was allocated where it is made: a seal's domain parts and the
-  write lists in them, the `ProviderRequest` built from them, and the traced cycle's `Vec` of epochs. Found 2026-10-24
-  implementing `DI-23.12.2`, which moved the lists that carry these but not the contents; the allocation test cannot see
-  them, since it runs no provider and closes no cycle. Split 2026-10-27 when the engineer decided the cycle's half
-  ([DI-D-115](DESIGN-NOTES.md#di-d-115)); the two halves are independent.
+- [x] **DI-23.12.8** -- A provider request's contents and a gate cycle's report allocate nothing after construction: the cycle is refused unnamed, and the request is lent from a buffer made at construction. -> [completed 2026-10-28](COMPLETED-CHECKLIST.md#di-23128)
 
 - [x] **DI-23.12.8.1** -- A gate cycle is refused without naming it: `PushRefusal::GateCycle` and `SealError::GateCycle` carry nothing, and the naming search goes. -> [completed 2026-10-27](COMPLETED-CHECKLIST.md#di-231281)
 
-- [ ] **DI-23.12.8.2** -- **A provider request's contents onto storage made at construction**, **once the engineer decides
-  its shape**: a seal's domain parts and the write lists in them, and the `ProviderRequest` built from them. Unlike a
-  cycle, which writes are named to which seal is the instance's choice (its seal cut and when each write completes), so a
-  consumer could only approximate them ([DI-D-115](DESIGN-NOTES.md#di-d-115)'s "Not covered"). The assistant's
-  recommendation: lend the request by a scoped borrow of fixed storage, for the duration of the provider's call. The
-  storage is sized when the core is built, from `operations` and the served domains, as [DI-D-115](DESIGN-NOTES.md#di-d-115)'s
-  "Sizing a provider request's storage" derives it; the decision it leaves is lent or recycled, and the free list for
-  out-of-order release. The allocation test gains a provider-routed seal, from a core built with `with_provider`. A
-  contract change for both crates.
+- [x] **DI-23.12.8.2** -- A provider request's contents are read, when drained, into a buffer made at construction and lent to the provider for its call. -> [completed 2026-10-28](COMPLETED-CHECKLIST.md#di-231282)
 
 - [ ] **DI-23.12.9** -- **The allocation test asserts zero after construction in every phase** (`DI-23.1`): the recorded
   tables become an assertion that every phase after construction allocates nothing, construction's allocations staying

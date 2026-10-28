@@ -21,12 +21,13 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crate::alloc_tags::{tag, tagged};
 use crate::backend::{IoBackend, Refused, Submission, SubmissionData};
+use crate::capacity::ConstructionError;
 use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::ids::{DioringIds, OpId};
 use crate::io_core::{CoreActions, DurableIoCore};
 use crate::lock_watch::WatchedGuard;
-use crate::provider::ProviderRequest;
+use crate::request::RequestBuf;
 use crate::types::{
     DurabilityRequest, Epoch, IoFault, IoTargetKey, PushError, ReadOptions, SealError, WriteOptions,
 };
@@ -229,12 +230,22 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
         Ok((answer, self.act(actions)))
     }
 
-    /// Give `visit` each provider request made so far, in order, by value, for the driver to make
-    /// (DI-D-103). The visitor runs while the engine is borrowed, and under the driver's lock if it
-    /// holds one, so a driver whose provider may answer inside its call moves each request out
-    /// and makes it once the lock is released.
-    pub fn drain_requests(&mut self, visit: impl FnMut(ProviderRequest<V<E, K>>)) {
-        self.core.drain_requests(visit);
+    /// Drain each provider request made so far into `buf`, in order, for the driver to make
+    /// (DI-D-115). This runs while the engine is borrowed, and under the driver's lock if it holds
+    /// one, so a driver whose provider may answer inside its call makes them from `buf` once the
+    /// lock is released: `buf` is the driver's, and nothing it holds refers to the engine.
+    pub fn drain_requests(&mut self, buf: &mut RequestBuf<V<E, K>>) {
+        self.core.drain_requests(buf);
+    }
+
+    /// A buffer to drain this engine's provider requests into (DI-D-115): see
+    /// [`DurableIoCore::request_buf`].
+    ///
+    /// # Errors
+    ///
+    /// [`ConstructionError::Table`] if a size is more than a `usize`, or cannot be allocated.
+    pub fn request_buf(&self) -> Result<RequestBuf<V<E, K>>, ConstructionError> {
+        self.core.request_buf()
     }
 }
 

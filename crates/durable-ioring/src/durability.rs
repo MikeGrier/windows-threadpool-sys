@@ -103,7 +103,7 @@ use suspects::suspects;
 use tables::{Counts, Seals};
 use window::Window;
 
-pub(crate) use exchange::{Arrival, DomainPart, Due, Event, Flush, ProviderCall, WriteEnd};
+pub(crate) use exchange::{Arrival, Due, Event, Flush, ProviderCall, WriteEnd};
 pub(crate) use gates::GateState;
 #[cfg(test)]
 mod tests;
@@ -239,12 +239,22 @@ struct Write<E, T> {
     until: Option<u64>,
 }
 
-/// One domain a seal asked the consumer's provider about.
+/// Where one domain a seal asked the consumer's provider about stands, kept in a table of its own
+/// beside the seals, by lineage, seal and domain, so a seal holds no list (DI-D-115).
 struct SealDomain {
-    domain: DomainId,
     answered: bool,
     /// Answered with success.
     ok: bool,
+}
+
+/// The domains the seals asked the provider about, by lineage, seal and domain.
+type SealDomains = Ordered<(Key, u64, DomainId), SealDomain>;
+
+/// Forget the domains `lineage`'s seal `seq` asked the provider about, as the seal goes.
+fn forget_domains(seal_domains: &mut SealDomains, served: &[DomainId], lineage: Key, seq: u64) {
+    for &domain in served {
+        seal_domains.remove(&(lineage, seq, domain));
+    }
 }
 
 enum SealStage {
@@ -252,12 +262,8 @@ enum SealStage {
     Waiting,
     /// Its flushes, and its request to the consumer's provider, are out: `unanswered` counts the
     /// flushes of its files not yet answered, each recorded in its file's span entry. `failed` once
-    /// one part failed.
-    Flushing {
-        unanswered: usize,
-        domains: Vec<SealDomain>,
-        failed: bool,
-    },
+    /// one part failed. The domains it asked the provider about are in `Durability::seal_domains`.
+    Flushing { unanswered: usize, failed: bool },
     /// Every part answered.
     Done { succeeded: bool },
 }
@@ -442,6 +448,9 @@ pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     gated: Ordered<(Key, E, u64), Gate<E>>,
     /// What each (lineage, file, seal span) holding an uncovered write is charged (DI-D-98).
     spans: Spans,
+    /// The domains each recorded seal asked the consumer's provider about, and how each answered
+    /// (DI-D-115). Entries go with their seal.
+    seal_domains: SealDomains,
     /// The places of the submit window each operation holds, and who holds them (DI-D-100).
     window: Window,
     /// The unresolved failures, in observation order.
@@ -607,6 +616,12 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
         let window = tagged(tag::DURABILITY_NEW_WINDOW, || {
             Window::new(capacity.operations)
         })?;
+        let seal_domains = tagged(tag::DURABILITY_NEW_SEAL_DOMAINS, || {
+            ordered(
+                "the domains the seals asked the provider about",
+                capacity.provider_parts(served),
+            )
+        })?;
         let flush_pairs = tagged(tag::DURABILITY_NEW_FLUSH_PAIRS, || {
             table("the open flush pairs", capacity.flush_parts(served))
         })?;
@@ -649,6 +664,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             held_by_epoch,
             gated,
             spans,
+            seal_domains,
             window,
             failures,
             kept,
@@ -1012,12 +1028,16 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                             && write.stage == Stage::Named(seq)
                     });
                     let window = &mut self.window;
+                    let (seal_domains, served) = (&mut self.seal_domains, &self.served);
                     let mut lost = None;
                     self.seals.retain(|key, seal| {
                         let keep = key.0 != lineage
                             || matches!(seal.stage, SealStage::Flushing { unanswered, .. } if unanswered > 0);
-                        if !keep && let Err(what) = window::unpin(window, seal.pin) {
-                            lost.get_or_insert(what);
+                        if !keep {
+                            forget_domains(seal_domains, served, key.0, key.1);
+                            if let Err(what) = window::unpin(window, seal.pin) {
+                                lost.get_or_insert(what);
+                            }
                         }
                         keep
                     });
@@ -1276,6 +1296,8 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
         let mut full = None;
         let mut pairs_full = false;
         let mut unlisted = false;
+        let mut domains_full = false;
+        let mut touched = core::mem::take(&mut self.scratch.touched);
         for (_, seal) in tables::seals_of_mut(&mut self.seals, lineage) {
             if !matches!(seal.stage, SealStage::Waiting) {
                 continue;
@@ -1289,7 +1311,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             // This seal's flushes are the ones pushed from here on, one per file it names.
             let first_flush = due.flushes.len();
             let mut unanswered = 0;
-            let mut parts: Vec<DomainPart> = Vec::new();
+            touched.clear();
             for write in self.writes.values_mut() {
                 if write.lineage != lineage
                     || write.stage != Stage::Completed
@@ -1303,13 +1325,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                 }
                 write.stage = Stage::Named(seq);
                 if write.routing.provider {
-                    providers::name(
-                        &mut parts,
-                        &self.served,
-                        write.file,
-                        self.lists.get(write.domains),
-                        write.op,
-                    );
+                    let named =
+                        providers::touch(&mut touched, &self.served, self.lists.get(write.domains));
+                    domains_full |= named.is_err();
                 }
                 let domains = write.domains;
                 let Ok(entry) = self
@@ -1335,21 +1353,20 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     }
                 }
             }
-            parts.sort_unstable_by_key(|part| part.domain);
-            let domains = tagged(tag::DURABILITY_START_SEALS_DOMAINS, || {
-                parts
-                    .iter()
-                    .map(|part| SealDomain {
-                        domain: part.domain,
+            for &domain in &touched {
+                let asked = self.seal_domains.insert(
+                    (lineage, seq, domain),
+                    SealDomain {
                         answered: false,
                         ok: false,
-                    })
-                    .collect()
-            });
+                    },
+                );
+                domains_full |= asked.is_err();
+            }
             let issued = due.flushes[first_flush..]
                 .iter()
                 .map(|flush| Part::File(flush.file))
-                .chain(parts.iter().map(|part| Part::Domain(part.domain)));
+                .chain(touched.iter().map(|&domain| Part::Domain(domain)));
             for part in issued {
                 let Some(id) = CorrelationId::for_pair(&*self.diagnostics, DiagnosticKind::Flush)
                 else {
@@ -1375,21 +1392,24 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
                     pairs_full = true;
                 }
             }
-            if !parts.is_empty() {
-                let call = ProviderCall {
-                    lineage,
-                    seal: seq,
-                    domains: parts,
-                };
+            if !touched.is_empty() {
+                let call = ProviderCall { lineage, seal: seq };
                 if within(&mut due.calls, call).is_err() {
                     unlisted = true;
                 }
             }
             seal.stage = SealStage::Flushing {
                 unanswered,
-                domains,
                 failed: false,
             };
+        }
+        touched.clear();
+        self.scratch.touched = touched;
+        if domains_full {
+            self.inconsistent(
+                "a seal asked the provider about more domains than the table made for them holds",
+                format_args!("lineage {lineage}"),
+            );
         }
         if let Some(op) = lost {
             self.inconsistent(
@@ -1422,16 +1442,18 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     /// DI-D-114); a failure is healed once that has happened in every lineage it held.
     fn finish_seals(&mut self, lineage: Key) {
         let mut last = None;
+        let (seal_domains, served) = (&self.seal_domains, &self.served);
         for (_, seal) in tables::seals_of_mut(&mut self.seals, lineage) {
-            let SealStage::Flushing {
-                unanswered,
-                domains,
-                failed,
-            } = &seal.stage
-            else {
+            let SealStage::Flushing { unanswered, failed } = &seal.stage else {
                 continue;
             };
-            if *unanswered > 0 || domains.iter().any(|d| !d.answered) {
+            let seq = seal.seq;
+            let unasked = served.iter().any(|&domain| {
+                seal_domains
+                    .get(&(lineage, seq, domain))
+                    .is_some_and(|asked| !asked.answered)
+            });
+            if *unanswered > 0 || unasked {
                 continue;
             }
             let succeeded = !*failed;

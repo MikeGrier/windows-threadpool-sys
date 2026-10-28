@@ -59,14 +59,15 @@ use crate::diagnostics::DiagnosticSink;
 use crate::domain_lists::DomainList;
 use crate::domains::{DomainId, epoch_state, intern, routing};
 use crate::durability::{
-    Accepted, Arrival, DEFAULT_LINEAGE, Due, Durability, Event, Gate, GateState, Key, Routing,
-    Sealing, WriteEnd,
+    Accepted, Arrival, DEFAULT_LINEAGE, Due, Durability, Event, Gate, GateState, Key, ProviderCall,
+    Routing, Sealing, WriteEnd,
 };
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::io_target::IoTargetDescription;
 use crate::observer::FailureObserver;
 use crate::ordered::Ordered;
-use crate::provider::ProviderRequest;
+#[cfg(test)]
+use crate::request::OwnedRequest;
 use crate::types::{
     AddTargetCause, AddTargetError, DurabilityRequest, Entry, Epoch, EpochState, FlushDomain,
     HeldOperation, Hold, IoTargetBusy, IoTargetKey, Leftover, OpCompletion, OpKind, Outcome,
@@ -100,7 +101,9 @@ type StateAnswer<E, K> = Result<EpochState<V<E, K>>, UnknownLineage<V<E, K>>>;
 /// The submissions and requests stay in the core, in queues made when it was built, so a call
 /// allocates nothing to say what is to be done (DI-23.12.2). The submissions are at most those in
 /// flight, which are at most the operations declared; the requests are one for each seal started,
-/// and are at most the operations declared while the driver drains them after every call.
+/// and are at most the operations declared while the driver drains them after every call. A
+/// request is kept only as which seal asked: [`DurableIoCore::drain_requests`] reads what it asks
+/// into a [`RequestBuf`](crate::RequestBuf) the driver made when it built the instance (DI-D-115).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "the submissions must be taken and pushed, the requests drained, and a delivery made when asked"]
 pub struct CoreActions {
@@ -119,7 +122,7 @@ impl CoreActions {
 #[derive(Debug)]
 pub(crate) struct Taken<V: Identities, B> {
     pub(crate) submit: Vec<Submission<B>>,
-    pub(crate) requests: Vec<ProviderRequest<V>>,
+    pub(crate) requests: Vec<OwnedRequest<V>>,
     pub(crate) deliver: bool,
 }
 
@@ -136,7 +139,9 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// Take what `actions` left in the core: every submission to push, and every request.
     pub(crate) fn taken(&mut self, actions: CoreActions) -> Taken<V<E, K>, B> {
         let mut requests = Vec::new();
-        self.drain_requests(|request| requests.push(request));
+        let mut buf = self.request_buf().expect("a buffer for the requests");
+        self.drain_requests(&mut buf);
+        requests.extend(buf.owned());
         Taken {
             submit: core::iter::from_fn(|| self.next_submission()).collect(),
             requests,
@@ -216,7 +221,7 @@ pub struct DurableIoCore<E: EpochId + 'static, B, C, K: StampClock> {
     /// Submissions the core originated, for the driver to take and push, in order.
     outgoing: VecDeque<Submission<B>>,
     /// Requests for the consumer's provider, in the order made, for the driver to drain.
-    requests: VecDeque<ProviderRequest<V<E, K>>>,
+    requests: VecDeque<ProviderCall>,
     next_op: u64,
     next_token: u64,
 }
@@ -695,12 +700,6 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         self.outgoing.pop_front()
     }
 
-    /// Hand each request for the consumer's provider to `visit`, in the order made, emptying the
-    /// queue, whose storage is kept (DI-D-103).
-    pub fn drain_requests(&mut self, visit: impl FnMut(ProviderRequest<V<E, K>>)) {
-        self.requests.drain(..).for_each(visit);
-    }
-
     /// Put the submissions refused before with the ones to take, ahead of anything emitted after.
     fn emit_unpushed(&mut self) {
         for submission in self.unpushed.drain(..) {
@@ -1111,8 +1110,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             });
         }
         for call in due.calls.drain(..) {
-            let request = self.request(call);
-            if within_queue(&mut self.requests, request).is_err() {
+            if within_queue(&mut self.requests, call).is_err() {
                 self.durability.inconsistent(
                     "more provider requests were made than seals can be recorded",
                     format_args!("instance {:?}", self.instance),

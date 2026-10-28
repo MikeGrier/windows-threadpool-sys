@@ -7,12 +7,14 @@ use std::io;
 
 use super::Stamp;
 use super::{
-    A, B, C, DEFAULT, FULL, Lineage, Ops, Seen, State, durable, flush, inconsistent, lineage,
-    quiet, seen, submitted,
+    A, B, C, DEFAULT, FULL, Lineage, Ops, Seen, State, durable, flush, flush_of, inconsistent,
+    lineage, quiet, seen, submitted,
 };
 use crate::domains::DomainId;
-use crate::durability::{DEFAULT_LINEAGE, DomainPart, Due, Key, ProviderCall, Reach, Routing, V};
-use crate::types::{FailureCause, FlushDomain, ImportScope, MarkingKind};
+use crate::durability::{DEFAULT_LINEAGE, Due, Key, ProviderCall, Reach, Routing, V};
+use crate::ids::OpId;
+use crate::request::RequestBuf;
+use crate::types::{FailureCause, FlushDomain, ImportScope, IoTargetKey, MarkingKind};
 
 /// A file only the provider answers for: every domain it declares is served.
 const PROVIDER: Routing = Routing {
@@ -36,13 +38,51 @@ const BY_BOTH: MarkingKind = MarkingKind::Covered {
     provider: true,
 };
 
+/// The consumer's name for served domain id.
+fn domain_name(id: u32) -> FlushDomain {
+    FlushDomain::new(format!("d{id}").into_bytes())
+}
+
 fn serve(lineage: &mut Lineage, ids: &[u32]) {
     lineage.serve(
         ids.iter().map(|&d| DomainId(d)).collect(),
-        ids.iter()
-            .map(|d| crate::types::FlushDomain::new(format!("d{d}").into_bytes()))
-            .collect(),
+        ids.iter().map(|&d| domain_name(d)).collect(),
     );
+}
+
+/// What a request asks, as it is once drained into the driver's buffer (DI-D-115): each domain it
+/// asked about, ascending, with each file's writes named for it.
+fn drained(
+    lineage: &Lineage,
+    asked: &ProviderCall,
+) -> Vec<(FlushDomain, Vec<(IoTargetKey, Vec<OpId>)>)> {
+    let durability = &lineage.0;
+    let mut buf = RequestBuf::<V<u64, Stamp>>::new(&durability.capacity, durability.served_count)
+        .expect("a buffer for the request");
+    let home = crate::ids::Lineage {
+        instance: durability.instance,
+        seq: asked.lineage,
+    };
+    let domains = durability
+        .asked(asked.lineage, asked.seal)
+        .map(|domain| (domain, domain_name(domain.0)));
+    buf.fill(home, asked.seal, domains, || {
+        durability.named_for_provider(asked.lineage, asked.seal)
+    })
+    .expect("the request fits");
+    let [request] = <[_; 1]>::try_from(buf.owned()).expect("one request");
+    request
+        .domains
+        .into_iter()
+        .map(|part| {
+            let files = part
+                .targets
+                .into_iter()
+                .map(|target| (target.key, target.writes))
+                .collect();
+            (part.domain, files)
+        })
+        .collect()
 }
 
 /// The single request a change asked of the provider.
@@ -102,20 +142,14 @@ fn a_seal_asks_the_provider_once_with_its_domains_sorted_and_each_files_writes_g
     let asked = call(&due);
     assert_eq!(asked.lineage, DEFAULT_LINEAGE);
     assert_eq!(
-        asked.domains,
+        drained(&lineage, asked),
         [
-            DomainPart {
-                domain: DomainId(1),
-                files: vec![(A, vec![first, second]), (B, vec![other])],
-            },
-            DomainPart {
-                domain: DomainId(2),
-                files: vec![(A, vec![first, second])],
-            },
-            DomainPart {
-                domain: DomainId(3),
-                files: vec![(C, vec![mixed])],
-            },
+            (
+                domain_name(1),
+                vec![(A, vec![first, second]), (B, vec![other])]
+            ),
+            (domain_name(2), vec![(A, vec![first, second])]),
+            (domain_name(3), vec![(C, vec![mixed])]),
         ]
     );
 }
@@ -151,11 +185,17 @@ fn each_seal_is_its_own_request() {
     let late = ops.push_in(&mut lineage, 2, A, PROVIDER, &[1]);
     lineage.completed(early, FULL);
     lineage.completed(late, FULL);
-    let one = call(&submitted(lineage.seal(1))).clone();
-    let two = call(&submitted(lineage.seal(2))).clone();
+    let one = *call(&submitted(lineage.seal(1)));
+    let two = *call(&submitted(lineage.seal(2)));
     assert_ne!(one.seal, two.seal);
-    assert_eq!(one.domains[0].files, [(A, vec![early])]);
-    assert_eq!(two.domains[0].files, [(A, vec![late])]);
+    assert_eq!(
+        drained(&lineage, &one),
+        [(domain_name(1), vec![(A, vec![early])])]
+    );
+    assert_eq!(
+        drained(&lineage, &two),
+        [(domain_name(1), vec![(A, vec![late])])]
+    );
     assert_eq!(
         durable(&succeeded(&mut lineage, two.seal, 1)),
         Vec::<u64>::new()
@@ -318,7 +358,7 @@ fn a_minted_lineages_seal_asks_with_its_own_key() {
     let minted: Key = lineage.mint(Some("log".to_owned()));
     let write = ops.push_to(&mut lineage, minted, 1, A, PROVIDER, &[1]);
     lineage.completed(write, FULL);
-    let asked = call(&submitted(lineage.0.seal(minted, 1))).clone();
+    let asked = *call(&submitted(lineage.0.seal(minted, 1)));
     assert_eq!(asked.lineage, minted);
     inconsistent("a provider answered for a seal that does not exist", || {
         lineage.provided(DEFAULT_LINEAGE, asked.seal, DomainId(1), Ok(()))
@@ -405,4 +445,64 @@ fn an_answer_no_request_asked_for_is_inconsistent() {
     inconsistent("a provider answered for a seal that does not exist", || {
         succeeded(&mut lineage, seal, 2)
     });
+}
+
+#[test]
+fn what_a_seal_asked_the_provider_goes_with_the_seal_when_the_mark_passes_it() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    serve(&mut lineage, &[1, 2]);
+    let write = ops.push_in(&mut lineage, 1, A, PROVIDER, &[1, 2]);
+    lineage.completed(write, FULL);
+    let seal = call(&submitted(lineage.seal(1))).seal;
+    assert_eq!(lineage.0.seal_domains_held(), 2, "a domain each");
+    succeeded(&mut lineage, seal, 2);
+    assert_eq!(lineage.0.seal_domains_held(), 2, "an answered one stays");
+    assert_eq!(durable(&succeeded(&mut lineage, seal, 1)), [1]);
+    assert_eq!(lineage.0.seal_domains_held(), 0, "the seal is passed");
+}
+
+#[test]
+fn what_a_seal_asked_the_provider_goes_when_its_lineage_ends_with_nothing_of_it_out() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    serve(&mut lineage, &[1, 2]);
+    let minted = lineage.mint(None);
+    let write = ops.push_to(&mut lineage, minted, 1, A, PROVIDER, &[1, 2]);
+    lineage.completed(write, FULL);
+    submitted(lineage.0.seal(minted, 1));
+    assert_eq!(lineage.0.seal_domains_held(), 2);
+    ops.push_to(&mut lineage, minted, 2, A, PROVIDER, &[1]);
+    lineage.end(minted);
+    assert_eq!(
+        lineage.0.seal_domains_held(),
+        0,
+        "a seal with no flush out is let go as the lineage ends"
+    );
+}
+
+#[test]
+fn what_a_seal_asked_the_provider_goes_when_the_last_flush_of_an_ended_lineage_answers() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    serve(&mut lineage, &[1]);
+    let minted = lineage.mint(None);
+    let write = ops.push_to(&mut lineage, minted, 1, A, BOTH, &[1, 9]);
+    lineage.completed(write, FULL);
+    let due = submitted(lineage.0.seal(minted, 1));
+    assert_eq!(due.flushes, [flush_of(minted, 1, A)]);
+    assert_eq!(lineage.0.seal_domains_held(), 1);
+    ops.push_to(&mut lineage, minted, 2, A, BOTH, &[1, 9]);
+    lineage.end(minted);
+    assert_eq!(
+        lineage.0.seal_domains_held(),
+        1,
+        "its flush is out, so it stays"
+    );
+    lineage.0.flushed(minted, 1, A, Ok(()));
+    assert_eq!(
+        lineage.0.seal_domains_held(),
+        0,
+        "and goes when that flush answers"
+    );
 }

@@ -146,7 +146,7 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-27: such a write is durable only when the provider says so. A seal that finishes on its flushes alone reports durable what nobody checked; the provider tests see Durable before any answer.",
-      "find": ["            if *unanswered > 0 || domains.iter().any(|d| !d.answered) {"],
+      "find": ["            if *unanswered > 0 || unasked {"],
       "replace": ["            if *unanswered > 0 {"]
     },
     {
@@ -754,16 +754,16 @@
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "DI-D-27: a domain's success covers exactly the writes named for it. Without it a provider-served write stays suspect after the provider made it durable.",
-      "find": ["                    .all(|domain| domains.iter().any(|part| part.domain == *domain && part.ok))\n"],
-      "replace": ["                    .all(|_| false)\n"]
+      "find": ["                    .all(|&domain| {\n                        seal_domains\n                            .get(&(lineage, seal, domain))\n                            .is_some_and(|part| part.ok)\n                    })"],
+      "replace": ["                    .all(|_| false)"]
     },
     {
       "name": "DI-3.2.6: coverage ignores the provider's domains",
       "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "DI-D-27: a write is covered only once every domain of its file has succeeded. A file both answer for would be covered by its flush alone, and a domain's success would cover writes in other domains.",
-      "find": ["                    .all(|domain| domains.iter().any(|part| part.domain == *domain && part.ok))\n"],
-      "replace": ["                    .all(|_| true)\n"]
+      "find": ["                    .all(|&domain| {\n                        seal_domains\n                            .get(&(lineage, seal, domain))\n                            .is_some_and(|part| part.ok)\n                    })"],
+      "replace": ["                    .all(|_| true)"]
     },
     {
       "name": "DI-3.2.6: a provider failure reaches every file",
@@ -798,28 +798,28 @@
       "replace": ["    for &domain in domains.iter() {\n"]
     },
     {
-      "name": "DI-3.2.6: a request's domains are not sorted",
-      "file": "src/durability.rs",
+      "name": "DI-3.2.6: a request's domains are listed in descending order",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
-      "why": "DI-D-44: a request names its domains in the order of their interned ids. The request test pushes a file declared out of order, so the order of first appearance differs.",
-      "find": ["            parts.sort_unstable_by_key(|part| part.domain);\n"],
-      "replace": [""]
+      "why": "DI-D-44: a request names its domains in the order of their interned ids, which the provider is told them in. Descending is the order the table was walked in before it was sorted.",
+      "find": ["            .copied()\n            .filter(move |&domain| self.seal_domains.get(&(lineage, seal, domain)).is_some())"],
+      "replace": ["            .copied()\n            .rev()\n            .filter(move |&domain| self.seal_domains.get(&(lineage, seal, domain)).is_some())"]
     },
     {
-      "name": "CONTROL: a request's domains are sorted stably",
-      "file": "src/durability.rs",
+      "name": "CONTROL: a request's domains are walked by cloning the served ids",
+      "file": "src/durability/providers.rs",
       "expect": "survives",
-      "why": "The manifest checking itself. A seal's parts name each domain once, so a stable sort orders them as the unstable one does.",
-      "find": ["            parts.sort_unstable_by_key(|part| part.domain);\n"],
-      "replace": ["            parts.sort_by_key(|part| part.domain);\n"]
+      "why": "The manifest checking itself. A served id is a Copy word, so cloning it walks the same domains in the same order.",
+      "find": ["            .copied()\n            .filter(move |&domain| self.seal_domains.get(&(lineage, seal, domain)).is_some())"],
+      "replace": ["            .cloned()\n            .filter(move |&domain| self.seal_domains.get(&(lineage, seal, domain)).is_some())"]
     },
     {
       "name": "DI-3.2.6: a seal records no domain it asked about",
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-27: the seal waits for every domain it asked about. Recording none lets it finish on its flushes, and refuses every answer as one it did not ask for.",
-      "find": ["            let domains = tagged(tag::DURABILITY_START_SEALS_DOMAINS, || {"],
-      "replace": ["            let domains: Vec<SealDomain> = Vec::new();", "            let _: Vec<SealDomain> = tagged(tag::DURABILITY_START_SEALS_DOMAINS, || {"]
+      "find": ["            for &domain in &touched {\n                let asked = self.seal_domains.insert("],
+      "replace": ["            for &domain in touched.iter().take(0) {\n                let asked = self.seal_domains.insert("]
     },
     {
       "name": "DI-3.2.6: a completion dropped unanswered answers nothing",
@@ -1298,8 +1298,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-27: a seal touching a served domain is answered by the provider; without its request the seal never finishes.",
-      "find": ["            if within_queue(&mut self.requests, request).is_err() {"],
-      "replace": ["            if { drop(request); false } {"]
+      "find": ["            if within_queue(&mut self.requests, call).is_err() {"],
+      "replace": ["            if { drop(call); false } {"]
     },
     {
       "name": "DI-3.10.3.5.3: every provider answer is taken as success",
@@ -1980,36 +1980,36 @@
       "replace": ["        let mut routes = tagged(tag::ROUTER_BUILD_ROUTES, Vec::new);"]
     },
     {
-      "name": "DI-12.2.2: every part goes to the first registration",
+      "name": "DI-12.2.2: every provider is given every part",
       "file": "src/router.rs",
       "expect": "caught",
       "why": "Each domain's part goes to the provider that serves it (DI-D-81); a part given to another provider is flushed by something that never said it could.",
-      "find": ["                parts[registration].push(part)"],
-      "replace": ["                parts[0].push(part)"]
+      "find": ["            let owns = |domain: &FlushDomain| owners.get(domain) == Some(&registration);"],
+      "replace": ["            let owns = |domain: &FlushDomain| owners.get(domain).is_some();"]
     },
     {
       "name": "DI-12.2.2: a provider with no part is called anyway",
       "file": "src/router.rs",
       "expect": "caught",
       "why": "One call per provider that has parts: a provider called with an empty request is asked for work it was never given, and a provider that rejects that would fail a seal it had no part in.",
-      "find": ["            if !domains.is_empty() {"],
-      "replace": ["            if domains.len() < usize::MAX {"]
+      "find": ["            if part.domain_count() > 0 {"],
+      "replace": ["            if part.domain_count() < usize::MAX {"]
     },
     {
-      "name": "DI-12.2.2: an unrouted domain is sent to the first registration instead of panicked on",
+      "name": "DI-12.2.2: an unrouted domain is not panicked on",
       "file": "src/router.rs",
       "expect": "caught",
       "why": "A domain no provider serves is a caller breaking the protocol and is panicked on where it is found (DI-D-46, DI-D-83); sending it to a provider hands work to something that never said it could do it, and lets the breach persist.",
-      "find": ["            let Some(&registration) = self.owners.get(&part.domain) else {"],
-      "replace": ["            let Some(&registration) = self.owners.get(&part.domain).or(Some(&0)) else {"]
+      "find": ["            if !self.owners.contains_key(domain) {"],
+      "replace": ["            if false && !self.owners.contains_key(domain) {"]
     },
     {
-      "name": "DI-12.2.2 control: the per-provider parts are made by counting",
+      "name": "DI-12.2.2 control: the router's domain walk goes through into_iter",
       "file": "src/router.rs",
       "expect": "survives",
-      "why": "A control: the same empty parts made by counting the routes instead of walking them, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
-      "find": ["            self.routes.iter().map(|_| Vec::new()).collect()"],
-      "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect()"]
+      "why": "A control: the same walk of the request's domains through IntoIterator, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        for domain in request.domain_names() {"],
+      "replace": ["        for domain in request.domain_names().into_iter() {"]
     },
     {
       "name": "DI-19.1: an id is minted whether or not the sink wants the pair",
@@ -2247,9 +2247,9 @@
       "name": "DI-23.2 control: a tag no scenario reaches is renamed",
       "file": "src/alloc_tags.rs",
       "expect": "survives",
-      "why": "A control, and a limit stated: the allocation test pins only the tags its scenarios reach. A provider-routed seal is not run by any scenario, so its tag's name is seen by nothing. The rules hold for the paths exercised; the static pass is what covers the rest.",
-      "find": ["Tag::new(\"durability::providers::name::part\")"],
-      "replace": ["Tag::new(\"durability::providers::name::part_renamed\")"]
+      "why": "A control, and a limit stated: the allocation test pins only the tags its scenarios reach. The router is not run by any of them, so its tag's name is seen by nothing. The rules hold for the paths exercised; the static pass is what covers the rest.",
+      "find": ["Tag::new(\"router::make_durable::provider\")"],
+      "replace": ["Tag::new(\"router::make_durable::provider_renamed\")"]
     },
     {
       "name": "DI-23.4.2: a shared report ignores the allocator it was given",
@@ -2868,12 +2868,12 @@
       "replace": ["            if true {"]
     },
     {
-      "name": "DI-23.11: the engine gives no provider request",
-      "file": "src/io_core.rs",
+      "name": "DI-23.11: the core drains no provider request",
+      "file": "src/io_core/provider.rs",
       "expect": "caught",
-      "why": "drain_requests gives each request made, by value, for the driver to make.",
-      "find": ["        self.requests.drain(..).for_each(visit);\n"],
-      "replace": ["        self.requests.drain(..).take(0).for_each(visit);\n"]
+      "why": "drain_requests reads each request made into the driver's buffer, for the driver to make.",
+      "find": ["        while let Some(call) = self.requests.pop_front() {"],
+      "replace": ["        while let Some(call) = self.requests.pop_front().filter(|_| false) {"]
     },
     {
       "name": "DI-23.11: a busy target always points at target_holds",
@@ -2984,16 +2984,16 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "A seal an ended lineage drops as its last flush answers lets go of its place; one kept is a place no answer will release.",
-      "find": ["                        if !keep && let Err(what) = window::unpin(window, seal.pin) {\n"],
-      "replace": ["                        if !keep && let Err(what) = Ok::<(), &str>(()) {\n"]
+      "find": ["                            if let Err(what) = window::unpin(window, seal.pin) {"],
+      "replace": ["                            if let Err(what) = Ok::<(), &str>(()) {"]
     },
     {
       "name": "DI-23.12.1.2: a seal an ending lineage drops keeps its place",
       "file": "src/durability/lineages.rs",
       "expect": "caught",
       "why": "Ending a lineage drops its seals with no flush out, and each lets go of the place it held.",
-      "find": ["            if !keep && let Err(what) = window::unpin(window, seal.pin) {\n"],
-      "replace": ["            if !keep && let Err(what) = Ok::<(), &str>(()) {\n"]
+      "find": ["                if let Err(what) = window::unpin(window, seal.pin) {"],
+      "replace": ["                if let Err(what) = Ok::<(), &str>(()) {"]
     },
     {
       "name": "DI-23.12.1.2: the seal table is made one short of the operations",
@@ -3778,6 +3778,78 @@
       "why": "As for a push: the allocation test refuses a seal for a cycle and records zero.",
       "find": ["            Sealing::Cycle => Err(SealError::GateCycle),"],
       "replace": ["            Sealing::Cycle => {\n                core::mem::forget(alloc::vec![0_u8]);\n                Err(SealError::GateCycle)\n            }"]
+    },
+    {
+      "name": "DI-23.12.8.2: a seal's asked domains are not forgotten when it goes",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "The table of what the seals asked holds an entry for each domain of each seal not yet passed, and is sized for exactly that (DI-D-115). An entry left behind is one the table never gets back, so it fills.",
+      "find": ["        seal_domains.remove(&(lineage, seq, domain));"],
+      "replace": ["        let _ = (&seal_domains, lineage, seq, domain);"]
+    },
+    {
+      "name": "DI-23.12.8.2: a request names only the first domain it asked about",
+      "file": "src/request.rs",
+      "expect": "caught",
+      "why": "A request has a part for each domain the seal asked the provider about; one left out is a domain whose answer nobody is asked for, so the seal never finishes.",
+      "find": ["        for (domain, name) in asked {"],
+      "replace": ["        for (domain, name) in asked.take(1) {"]
+    },
+    {
+      "name": "DI-23.12.8.2: a file's part lists the writes of the other files",
+      "file": "src/request.rs",
+      "expect": "caught",
+      "why": "A target in a part is named with its own writes; the writes of another file are the provider flushing, and reporting durable, writes it was not asked about.",
+      "find": ["                    if written == file && domains.contains(&domain) {"],
+      "replace": ["                    if domains.contains(&domain) {"]
+    },
+    {
+      "name": "DI-23.12.8.2: a narrowed view ignores its filter",
+      "file": "src/request.rs",
+      "expect": "caught",
+      "why": "The router's way of handing each provider its own domains: a view that keeps them all hands a provider the domains of the others.",
+      "find": ["            .is_none_or(|n| (n.keep)(&part.domain) && n.within.covers(part))"],
+      "replace": ["            .is_none_or(|n| n.within.covers(part))"]
+    },
+    {
+      "name": "DI-23.12.8.2: a narrowed view forgets the view it narrows",
+      "file": "src/request.rs",
+      "expect": "caught",
+      "why": "A view narrowed from a narrowed view has only the domains both keep, so what the outer view dropped is not handed out again.",
+      "find": ["            .is_none_or(|n| (n.keep)(&part.domain) && n.within.covers(part))"],
+      "replace": ["            .is_none_or(|n| (n.keep)(&part.domain))"]
+    },
+    {
+      "name": "DI-23.12.8.2: a request dropped does not abandon the domains it did not take",
+      "file": "src/request.rs",
+      "expect": "caught",
+      "why": "A domain nobody takes is a domain nobody answers, as a completion dropped unanswered is, so the seal would wait for it for ever. Dropping the request is what answers it, as abandoned (DI-D-27).",
+      "find": ["                drop(self.take(part));"],
+      "replace": ["                part.taken.set(true);"]
+    },
+    {
+      "name": "DI-23.12.8.2: requests not lent are not abandoned",
+      "file": "src/request.rs",
+      "expect": "caught",
+      "why": "A provider that panics leaves the requests after its own unlent; each of their domains is abandoned as the iterator drops, so none is left unanswered.",
+      "find": ["        for request in self.by_ref() {\n            drop(request);\n        }"],
+      "replace": ["        self.next = self.buf.requests.len();"]
+    },
+    {
+      "name": "DI-23.12.8.2: draining does not empty the buffer first",
+      "file": "src/io_core/provider.rs",
+      "expect": "caught",
+      "why": "The buffer is the driver's and is reused: what a previous drain left in it would be made to the provider again.",
+      "find": ["        buf.clear();\n"],
+      "replace": ["        let _ = &mut *buf;\n"]
+    },
+    {
+      "name": "DI-23.12.8.2: filling a request allocates",
+      "file": "src/request.rs",
+      "expect": "caught",
+      "why": "The buffer is made at construction with room for every request the core can have made, so reading one into it costs nothing: the allocation test drains and lends a provider seal and records zero.",
+      "find": ["        let first_part = self.parts.len();\n"],
+      "replace": ["        core::mem::forget(alloc::vec![0_u8]);\n        let first_part = self.parts.len();\n"]
     }
   ]
 }

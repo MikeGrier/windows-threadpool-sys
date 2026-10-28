@@ -336,6 +336,7 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: crate::clock::StampClock<Ins
             let mut unpinned = Ok(());
             let pair = if let Some(seq) = recorded {
                 let popped: Seal<E> = self.seals.remove(&(lineage, seq)).expect("found above");
+                super::forget_domains(&mut self.seal_domains, &self.served, lineage, seq);
                 // What trailed it is now first.
                 state.leading = popped.trailing;
                 unpinned = window::unpin(&mut self.window, popped.pin);
