@@ -2817,13 +2817,39 @@ lifted to a crate ([DI-21+.1](PARKED.md#di-m21----promoting-the-sample-log-parke
 
 **Open, and not decided:**
 - **The blocking API.** The assistant's, restated in the session at the engineer's request: `append` and `commit` never
-  block, `wait_durable(lsn)` blocks while doing the ring's work on the caller's thread, and the log has one owner. Awaiting
-  the engineer.
+  block, and `wait_durable(lsn)` blocks while doing the ring's work on the caller's thread. Sharing the log between threads
+  (above) replaces "one owner": what is open now includes how threads waiting on different LSNs share that work without
+  holding the mutex while they wait. Awaiting the engineer.
 - **Where the sample's code lives**, so that one source builds on every platform. The assistant's recommendation: an
   unpublished package of its own in the workspace (`publish = false`, as `win-job-launcher` and `windows-placement-probe`
   are), depending on `durable-ioring` everywhere and on `win-durable-ioring` on Windows only, so its tests over the
   in-memory dioring run on every platform CI builds. The alternative is examples in `durable-ioring` with a Windows-only
   dev-dependency on `win-durable-ioring`. To be settled before `DI-21.5`.
+
+**Measured against two-phase commit, the same day** (the engineer's yardstick; the exchange is in
+[the session](../../design-sessions/DESIGN-SESSION-2026-10-29-database-and-file-system-log-practice.md#measured-against-two-phase-commit-continued-2026-10-29)):
+
+- **Reservations** ("gap 1: yes"). A client reserves log space for records it must be able to write -- a prepared
+  participant's outcome -- and an append drawn from a reservation is never refused for space; an unreserved append is
+  refused before it would eat reserved room. The conservative rules set the cost: a record of up to `s` bytes reserves its
+  header and `s` rounded up to whole blocks, and each segment counts as its size less one maximum record. Reservations are
+  not durable; after reopening, a client re-reserves before it takes new work. A reservation promises log space, not the
+  ring's submission capacity, and a failed log honours none.
+- **Reading by LSN** ("gap 4: yes"). **The LSN is a byte position in an ever-growing log address space**, as ARIES and
+  PostgreSQL define it: a segment's generation times the segment size, plus the offset. A read finds the segment and offset
+  by arithmetic and confirms the record's own header; a record already released may be overwritten, which its generation
+  shows, and is reported as released. Many concurrent transactions in one log need nothing more from the log: the client
+  carries a transaction id and the previous record's LSN in the payload and walks the chain. This defines the LSN the record
+  header above carries; the epoch id is still the LSN.
+- **Several clients in one log, shared between threads** ("gap 3: yes in the sample, implement a simple mutex based
+  synchronization I guess"). Each record is tagged with its client's stream; recovery hands each client its own records;
+  each client has its own release point and reservations, and the log reclaims only up to the lowest release point. All
+  streams share one lineage, so they share each force. The log is shared between threads behind a mutex; the engineer's
+  "I guess" is recorded as a hedge on the mechanism, so a better-fitting synchronization found while building it is raised,
+  not swapped in. How a client is named and joins is the contract's to settle.
+- **Tail pinning is out of scope** ("This is a hazard of the 2pc that I would call out of scope"). An unreleased record
+  pins every segment after it; the contract says so. Unpinning needs re-logging only the client can describe. With
+  reservations, a pinned log refuses new work while reserved work still finishes.
 
 **What the answers settle without being asked.** Fail-stop means the log never rewrites after a failure, so it keeps no
 record buffer past its write: the question of who retains data for a rewrite (the parked retention layer,
@@ -2831,5 +2857,5 @@ record buffer past its write: the question of who retains data for a rewrite (th
 allocate-at-construction discipline of [DI-D-97](#di-d-97) was not taken up: every platform named runs with `std`, and the
 sample does not attempt `no_std`.
 
-**Scheduled work:** `DI-M24` and `DI-21.3` to `DI-21.8` in [CHECKLIST.md](CHECKLIST.md), and `DI-21+.2` in
-[PARKED.md](PARKED.md).
+**Scheduled work:** `DI-M24` and `DI-21.3` to `DI-21.8`, with `DI-21.5.1` to `DI-21.5.3` for reservations, reading by LSN
+and shared clients, in [CHECKLIST.md](CHECKLIST.md), and `DI-21+.2` in [PARKED.md](PARKED.md).

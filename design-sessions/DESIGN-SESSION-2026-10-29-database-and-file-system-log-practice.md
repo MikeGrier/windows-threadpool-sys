@@ -382,3 +382,44 @@ in-memory backend exists: the only implementations of `DurableRing` are the Wind
 giving the in-memory backend a model of what a crash leaves, is crate work, scheduled as `DI-M24`.
 
 The decision is recorded as [DI-D-116](../crates/durable-ioring/DESIGN-NOTES.md#di-d-116).
+
+## Measured against two-phase commit (continued 2026-10-29)
+
+The engineer: "the time I've seen a common log facility in the past was in support of a two-phase commit facility, where the
+2PC commit facility needed the RMs to be able to implement Prepare / Commit well and the common log was the mechanism for
+this. Is this at least a beginning foundation for this sort of functionality? I'm not specifically looking to develop a 2pc
+but it's the one yardstick I have history with."
+
+**The assistant's answer.** The log half, partly. A forced record is `commit()` then `wait_durable(lsn)`; a record's identity
+is its LSN; recovery returns every record reported durable, so in-doubt work is found; the write-ahead rule for a resource
+manager's own data is the gate step; and fail-stop then recovery is what a participant does on an I/O failure. Four gaps:
+
+1. **No reservation.** A participant that has voted yes must always be able to log its outcome; an append refused because
+   the log is full breaks that. ARIES reserves log space for the same reason (A1); the assistant recalled, without checking
+   in this session, that Windows' CLFS offers `ReserveAndAppendLog`.
+2. **Tail pinning.** One old, unreleased record holds every segment after it; logs move the tail by re-logging live state
+   forward, which only the client can describe.
+3. **One client per log.** A common log usually carries several clients' streams, sharing its forces and its space.
+4. **No read by LSN while running**, which undo, and resending an outcome, need.
+
+**The engineer:** "Gap 1 seems very worthwhile. Is it very challenging?"; "Gap 2 is not something that I want to pursue I
+think. This is a hazard of the 2pc that I would call out of scope. unless you felt this was easily achievable?"; "gap 3: is
+the issue here more about identifying the records and their provenance or concurrent access?"; "gap 4: this interests me,
+because to the third point, I can imagine a single log that covers multiple concurrent transactions".
+
+**The assistant's answers.** Reservations are accounting, with the conservative rules setting their cost: a reservation for
+a record of up to `s` bytes costs its header and `s` rounded up to whole blocks, and each segment counts as its size less one
+maximum record, since a record never spans a segment. Unreserved appends are refused before they eat reserved room;
+reservations are not durable, and a client re-reserves after reopening, before taking new work. A reservation promises log
+space, not the ring's submission capacity, which clears as I/O completes. With reservations, a pinned log refuses new work
+while prepared work finishes. Gap 2 is not easy: unpinning needs re-logging only the client can do, so the contract states
+the hazard. Gap 3 is provenance and space more than concurrency: records tagged by client, a release point per client with
+the log reclaiming only to the lowest, and reservations per client; all clients share one lineage, so they share each force.
+For gap 4, an LSN defined as a byte position in an ever-growing log address space, as ARIES and PostgreSQL define it (A1,
+A2), makes reading by LSN arithmetic: the generation names the segment and the remainder the offset, and the record's own
+header confirms it. Many concurrent transactions need no help from the log beyond that: the client puts a transaction id and
+the previous record's LSN in the payload (ARIES' `PrevLSN`) and walks the chain with `read(lsn)`.
+
+**The engineer's answers:** "gap 1: yes. gap 4: yes. gap 3: yes in the sample, implement a simple mutex based
+synchronization I guess". Gap 2 stays out of scope. The decision is added to
+[DI-D-116](../crates/durable-ioring/DESIGN-NOTES.md#di-d-116).
