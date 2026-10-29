@@ -21,33 +21,11 @@ sample, which it may cite only incidentally. The engineer: "I don't see it as be
 immediate future" -- a statement of priority, not a deferral. Beyond the first two items this milestone is deliberately
 coarse: what the sample is follows from the survey.
 
-- [ ] **DI-21.1** -- **Survey common practice in database and file-system logs.** Write-ahead logging and its recovery
-  (redo and undo, log sequence numbers and a page's own LSN, fuzzy checkpoints, compensation records -- ARIES and what
-  followed it); file-system journaling (physical block journals and their ordering modes, metadata-only journals, a log
-  with restart areas); and what every log faces: group commit, detecting a torn or partial record, a record's identity
-  across a crash, reclaiming log space, and how a log and the data it protects are ordered. Each point is cited to its
-  source, published papers and the systems' own documentation, and recorded as a design session in
-  [design-sessions/](../../design-sessions/). The survey says what is common to both kinds of log, what differs and why,
-  and, for each, which `durable-ioring` facility a log built on it would use -- epochs and seals, lineages, gates across
-  lineages, flush domains, failures and their suspects -- or that none does.
+- [x] **DI-21.1** -- The survey of common practice in database and file-system logs is recorded as a design session, extending the 2026-10-24 prior-art session, with each practice mapped to the durable-ioring facility a log would use or to none. -> [completed 2026-10-29](COMPLETED-CHECKLIST.md#di-211)
 
-  **It extends the survey already made, and does not repeat it.** [The 2026-10-24 prior-art
-  session](../../design-sessions/DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md) has verified citations for ARIES'
-  write-ahead rule and reserved rollback space, Silo's epoch group commit, ordering without durability (OptFS and barrier
-  IO), and what file systems and databases do after a failed flush. This item adds what that session does not cover:
-  fuzzy checkpoints, page LSNs and compensation records; journaling modes and NTFS's `$LogFile`; torn or partial record
-  detection; a record's identity across a crash; reclaiming log space, including the ARIES checkpoint-truncation passage
-  that session records as not found. Its sources continue that session's numbering, and the new session links back to it.
-
-  **The facility mapping includes what DI-M23 added** since this milestone was queued: capacity declared at construction,
-  where a submit is refused for it and a seal never is ([DI-D-98](DESIGN-NOTES.md#di-d-98)); an unresolved failure holding
-  the submit capacity of the writes it puts at risk until it is resolved ([DI-D-100](DESIGN-NOTES.md#di-d-100)), which a
-  log must heal or abandon or it stalls; failure detail dispatched to an observer given at construction, with suspects
-  lent by visitor ([DI-D-113](DESIGN-NOTES.md#di-d-113)); and a provider's request lent for the length of its call, for a
-  log whose journal sits on its own device ([DI-D-115](DESIGN-NOTES.md#di-d-115)). A gate cycle is refused without being
-  named, so no log shows one.
-
-- [ ] **DI-21.2** -- **Bring the survey to the engineer, to settle the sample's scope.** Which practices the sample
+- [ ] **DI-21.2** -- **Bring the survey to the engineer, to settle the sample's scope.** The survey is
+  [DESIGN-SESSION-2026-10-29-database-and-file-system-log-practice.md](../../design-sessions/DESIGN-SESSION-2026-10-29-database-and-file-system-log-practice.md);
+  its section E maps each practice to a facility or to none, and its section F lists what bears on this item. Which practices the sample
   shows, which it names and leaves out, and where it lives -- an example of `win-durable-ioring`, or a portable example of
   `durable-ioring` over its in-memory backend that a Windows run also exercises -- are decided there. A gap the survey
   finds in `durable-ioring` is queued as work on the crate, not worked around in the sample.

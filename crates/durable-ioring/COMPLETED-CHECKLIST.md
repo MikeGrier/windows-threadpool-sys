@@ -5060,3 +5060,34 @@ The engineer, 2026-10-22, for a no-std user-mode file-system driver stack: [DI-D
 The crate builds without `std` for a target that has none, and after construction no phase of the allocation test
 allocates. Each item is archived under its own ID, `DI-23.1` to `DI-23.13`; the stubs that stood in the checklist were
 removed with the milestone.
+
+## Moved 2026-10-29 14:45:00 -04:00 -- DI-21.1: the survey of common practice in database and file-system logs
+
+### <a id="di-211"></a>DI-21.1 -- The survey of common practice in database and file-system logs is recorded as a design session, extending the 2026-10-24 prior-art session, with each practice mapped to the durable-ioring facility a log would use or to none. *(completed 2026-10-29 14:45:00 -04:00)*
+
+**Survey common practice in database and file-system logs.** Write-ahead logging and its recovery (redo and undo, log
+sequence numbers and a page's own LSN, fuzzy checkpoints, compensation records -- ARIES and what followed it);
+file-system journaling (physical block journals and their ordering modes, metadata-only journals, a log with restart
+areas); and what every log faces: group commit, detecting a torn or partial record, a record's identity across a crash,
+reclaiming log space, and how a log and the data it protects are ordered. Each point is cited to its source, published
+papers and the systems' own documentation, and recorded as a design session in [design-sessions/](../../design-sessions/).
+The survey says what is common to both kinds of log, what differs and why, and, for each, which `durable-ioring` facility a
+log built on it would use -- epochs and seals, lineages, gates across lineages, flush domains, failures and their suspects
+-- or that none does.
+
+It extends [the 2026-10-24 prior-art session](../../design-sessions/DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md)
+and does not repeat it, adding what that session does not cover (fuzzy checkpoints, page LSNs and compensation records;
+journaling modes and NTFS's `$LogFile`; torn or partial record detection; a record's identity across a crash; reclaiming log
+space), with its sources continuing that session's numbering. The facility mapping includes what DI-M23 added: declared
+capacity ([DI-D-98](DESIGN-NOTES.md#di-d-98)), a failure holding the capacity of the writes it puts at risk
+([DI-D-100](DESIGN-NOTES.md#di-d-100)), the failure observer ([DI-D-113](DESIGN-NOTES.md#di-d-113)), and a provider's
+request lent for its call ([DI-D-115](DESIGN-NOTES.md#di-d-115)).
+
+**Done:** [DESIGN-SESSION-2026-10-29-database-and-file-system-log-practice.md](../../design-sessions/DESIGN-SESSION-2026-10-29-database-and-file-system-log-practice.md).
+Three research agents read the sources and the assistant re-fetched them and matched each quotation mechanically; a passage
+that did not match is not quoted as verified. Two agent claims were corrected by the re-check: ARIES mentions group commit
+once, in passing, about IMS Fast Path; and a RocksDB changelog entry could not be found as reported. The ARIES passage on
+truncating the log below what recovery needs is still not found. The session's section E maps each practice to a facility
+or to none, and its section F lists what bears on DI-21.2; it decides nothing and queues no work. No gap in
+`durable-ioring` beyond the one already recorded in the 2026-10-24 session was found, which is weak evidence, since nothing
+was built against the API.
