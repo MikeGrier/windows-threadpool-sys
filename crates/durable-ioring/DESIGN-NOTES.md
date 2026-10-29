@@ -2153,7 +2153,8 @@ through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads wh
 - **The count is a `u64`.** The engineer, 2026-10-23: "use u64, they cannot overflow unless we're going beyond inc/dec."
   The count only ever moves by one, so reaching 2^64 takes centuries of increments at any rate a machine can sustain, and
   no overflow policy is needed. It needs 64-bit atomics (`target_has_atomic = "64"`), which some 32-bit embedded targets
-  lack; those targets are outside the crate until that is revisited.
+  lack; **those targets are outside the crate, by the engineer's decision, 2026-10-29: "I am choosing no"** to `rc-errors`
+  serving a target without 64-bit atomics. No work is queued for it.
 
 - **Two safe constructors, and no others.** The engineer, 2026-10-23: "just do 1 and 2". (1) One generic, fallible
   constructor into the shared `dyn Error + Send + Sync`, taking the allocator or using `Global`, and handing the value back
@@ -2458,8 +2459,10 @@ notes when it is created.
   a host build proves nothing, because the crate's own dev-dependency on itself turns `std` on for any build that has
   tests, so what runs in `cargo test` is the `std` path. **The no-`std` notification is therefore built but not run.**
   **Target:** `thumbv7em-none-eabi`, the one `wtf-string` is built for, cannot be used: `rc-errors` counts references in an
-  `AtomicU64`, which that target lacks, so `x86_64-unknown-none` is the one used. Whether `rc-errors` should serve a target
-  without 64-bit atomics is a decision for that crate, not this one, and is raised with the engineer rather than assumed.
+  `AtomicU64`, which that target lacks, so `x86_64-unknown-none` is the one used. **Decided, 2026-10-29:** the engineer chose
+  that `rc-errors` does not serve a target without 64-bit atomics ("I am choosing no"), so `x86_64-unknown-none` stays the
+  no-`std` target and `thumbv7em-none-eabi` is not one this crate supports. This schedules no work: it is the state the
+  crate is already in, and the CI job's comment says why that target is not used.
 - **A refusal carrying a backend fault passes the backend's report through**, with its cause beside it in `IoFault` as
   `ErrorCode` is, so nothing is allocated; amends [DI-D-54](#di-d-54). **As built** (DI-23.12.6, the assistant's,
   2026-10-27): `IoFault` gained `refusal: Option<RefusalKind>`, where `RefusalKind` is the payload-free classification of a
