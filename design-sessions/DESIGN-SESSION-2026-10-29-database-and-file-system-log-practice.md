@@ -331,3 +331,54 @@ Read 2026-10-29. Sources 1 to 24 are in [the earlier session](DESIGN-SESSION-202
 - **Any Microsoft description of `$LogFile`'s contents**, and of what NTFS journals of file data.
 - **Btrfs's log tree and ZFS's intent-log record format** beyond the one OpenZFS sentence.
 - **Ordering without durability on Windows**: not examined, as in the earlier session.
+
+## DI-21.2: the sample's scope (continued 2026-10-29)
+
+The engineer set the purpose, 2026-10-29: "What I would like to implement is some common easy to use log facility which is
+perhaps overly conservative but like I said is easy to use. Ideally with variable length log records, a simple to
+understand paradigm regarding log reuse, whether having two log files that we alternate between, or whatever scheme is
+commonly used." And: "The intention is to provide an example of the use of the API set over a simple to use log file to
+provide a log that is production qiuality, if not necessarily having the utmost performance characteristics we might wish
+for. If/when we lift the example to be a separate crate, we would aim for optimal performance characteristics, this is
+meant as an example with high utility."
+
+**The assistant's proposal.** A ring of N fixed-size segment files, two by default, of which alternating between two files
+is the N = 2 case; records of variable length, each with a header carrying the segment's generation, its LSN, its length
+and a CRC-32C, never spanning a segment; the end of the log found by the first record that fails a check, with the
+segments ordered by the generation in their headers and no control file; `release_before(lsn)` making whole segments
+reusable, and an append refused when every segment is full and none released. Three deliberately conservative rules: pad
+every commit to a block boundary, so no block holding a record reported durable is ever rewritten and correctness does not
+rest on sector atomicity (C2); zero-fill each segment and make it durable when the log is created, so appends change no
+file metadata (C5); and fail-stop on a failed commit, as PostgreSQL does (C6). On the ring: one lineage, the epoch id is the
+LSN, and a commit is a seal, which is group commit (E). A second step showing the write-ahead rule enforced by a gate: data
+writes gated on the log's epoch.
+
+**The engineer's answers**, the same day:
+
+- "1: ring of N segments."
+- "2: pad commit to block boundary and zero fill at creation is smart, good I approve."
+- "3: fail-stop on a failed flush, but we do need to explain how to recover"
+- "4: I would include it, as you say this is showcasing the ring"
+- "5: yes definitely the example. repeat what the blocking API is?"
+- "I would like to make this a reality over the memory base dioring, so let's schedule whatever is needed for that so we
+  can do a great deal of fault injection testing/modeling"
+- "I want the example built so that it can run on all of the above if possible (windows dioring, memory, linux if/when we
+  implement)"
+
+**The blocking API, restated** (the assistant's; asked about, not yet answered). The log has one owner and is driven by
+`&mut self`; it runs no threads of its own. `append(payload)` copies a record into the current commit group and returns its
+LSN; it never blocks, and is refused for a record too large, a log whose segments are all full and unreleased, or a log that
+has failed. `commit()` pads the group to a block boundary, writes it, seals through its last LSN and returns that LSN; it
+does not block either. `wait_durable(lsn)` blocks the calling thread until the log is durable through `lsn` or has failed,
+doing the ring's work on that thread as it waits (pumped delivery), so a simple caller sets nothing up.
+`commit_and_wait()` is the two together. `durable_through()` asks without waiting, and `release_before(lsn)` says what the
+caller no longer needs. Opening an existing log returns the records it recovered, in order. It must not be called from inside
+a provider's callback, which is the same rule as the `blocking_push` example's.
+
+**What follows for the platforms.** A log that runs on the Windows driver, on a dioring over the in-memory backend, and on a
+later Linux driver can use only the `DurableRing` contract, plus a small seam each platform supplies for creating or opening
+a segment's target; the zero-fill at creation is done through the ring itself, so it needs nothing else. No dioring over the
+in-memory backend exists: the only implementations of `DurableRing` are the Windows driver and a test fake. Building one, and
+giving the in-memory backend a model of what a crash leaves, is crate work, scheduled as `DI-M24`.
+
+The decision is recorded as [DI-D-116](../crates/durable-ioring/DESIGN-NOTES.md#di-d-116).

@@ -2774,3 +2774,62 @@ Amends [DI-D-23](#di-d-23) and [DI-D-43](#di-d-43), which had the refusal name t
   - **Allocation.** The allocation test's `PROVIDERS` scenario drains, lends, answers and gives back a provider seal in two
     rounds, and ends a lineage with a seal undrained, each phase at zero after construction; construction makes the
     four buffer lists and the two tables.
+
+## <a id="di-d-116"></a>DI-D-116: the sample log is a ring of fixed-size segments over any dioring, conservative by construction
+
+**Decided by the engineer, 2026-10-29 (DI-21.2), from the assistant's proposal; two parts remain open, listed below.** The
+exchange is in [the survey's session](../../design-sessions/DESIGN-SESSION-2026-10-29-database-and-file-system-log-practice.md#di-212-the-samples-scope-continued-2026-10-29),
+whose sections E and F it rests on. The purpose, in the engineer's words: "some common easy to use log facility which is
+perhaps overly conservative but like I said is easy to use", "production qiuality, if not necessarily having the utmost
+performance characteristics", and "this is meant as an example with high utility"; optimal performance is for when it is
+lifted to a crate ([DI-21+.1](PARKED.md#di-m21----promoting-the-sample-log-parked-behind-di-m21)).
+
+- **A ring of N fixed-size segments** ("1: ring of N segments"), N at least two, created once. Records are appended to the
+  current segment and the log moves to the next when it is full. `release_before(lsn)` makes a segment reusable once
+  everything in it is released; an append is refused when every segment is full and none is released.
+- **Variable-length records, each checked.** A header carries the segment's generation, the record's LSN, its length and a
+  CRC-32C over header and payload. A record never spans a segment; a configured maximum bounds it, and a larger one is
+  refused. The generation in every record is what keeps a stale record from a segment's previous use from being read as
+  live.
+- **The end of the log is the first record that fails a check**: its CRC, its generation, or the LSN expected next. The
+  segments are ordered by the generation in their headers, so there is no control file, and a release need not be durable:
+  after a crash the log returns what it still holds, and the caller skips what its own checkpoint no longer needs.
+- **Every commit is padded to a block boundary** ("2: ... I approve"), so no block holding a record reported durable is
+  rewritten and correctness does not rest on sector atomicity, which the contract does not give either. **Each segment is
+  filled with zeros and made durable when the log is created**, through the ring, so an append changes no file metadata.
+- **A failed commit stops the log** ("3: fail-stop on a failed flush, but we do need to explain how to recover"): the log
+  abandons the failure, closes and refuses everything after it. **How to recover is part of the log's contract**: reopening
+  recovers to what reached the media, which holds every record reported durable, and may hold later ones.
+- **On the ring:** one lineage, the epoch id is the LSN, and a commit is a seal, so group commit is a run of appends before
+  one commit.
+- **The write-ahead rule through a gate is included** ("4: I would include it, as you say this is showcasing the ring"):
+  data writes in a second lineage, gated on the log's epoch, held by the ring until the log records they depend on are
+  durable. It is built after the log itself.
+- **It runs on every dioring** ("I want the example built so that it can run on all of the above if possible (windows
+  dioring, memory, linux if/when we implement)"): the log uses only the `DurableRing` contract, plus a seam each platform
+  supplies for creating or opening a segment's target.
+- **A dioring over the in-memory backend is built for it, with a model of what a crash leaves** ("let's schedule whatever is
+  needed for that so we can do a great deal of fault injection testing/modeling"). It is crate work, `DI-M24`. It is built
+  by duplicating what the Windows driver does above its backend, under the workspace's duplicate-then-decide rule; whether
+  the two paths merge into one driver over any backend, or stay apart, is decided once both are proven, and is parked as
+  [DI-21+.2](PARKED.md#di-m21----merge-or-delete-the-duplicated-driver-parked-behind-di-m21). Extracting a shared driver now
+  would reshape a layer, which is the engineer's call and was not asked for.
+
+**Open, and not decided:**
+- **The blocking API.** The assistant's, restated in the session at the engineer's request: `append` and `commit` never
+  block, `wait_durable(lsn)` blocks while doing the ring's work on the caller's thread, and the log has one owner. Awaiting
+  the engineer.
+- **Where the sample's code lives**, so that one source builds on every platform. The assistant's recommendation: an
+  unpublished package of its own in the workspace (`publish = false`, as `win-job-launcher` and `windows-placement-probe`
+  are), depending on `durable-ioring` everywhere and on `win-durable-ioring` on Windows only, so its tests over the
+  in-memory dioring run on every platform CI builds. The alternative is examples in `durable-ioring` with a Windows-only
+  dev-dependency on `win-durable-ioring`. To be settled before `DI-21.5`.
+
+**What the answers settle without being asked.** Fail-stop means the log never rewrites after a failure, so it keeps no
+record buffer past its write: the question of who retains data for a rewrite (the parked retention layer,
+[DI-5+.1](PARKED.md#di-m5----the-retention-layer-parked-behind-di-m12)) does not arise for this sample. The
+allocate-at-construction discipline of [DI-D-97](#di-d-97) was not taken up: every platform named runs with `std`, and the
+sample does not attempt `no_std`.
+
+**Scheduled work:** `DI-M24` and `DI-21.3` to `DI-21.8` in [CHECKLIST.md](CHECKLIST.md), and `DI-21+.2` in
+[PARKED.md](PARKED.md).

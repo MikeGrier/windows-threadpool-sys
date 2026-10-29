@@ -5091,3 +5091,19 @@ truncating the log below what recovery needs is still not found. The session's s
 or to none, and its section F lists what bears on DI-21.2; it decides nothing and queues no work. No gap in
 `durable-ioring` beyond the one already recorded in the 2026-10-24 session was found, which is weak evidence, since nothing
 was built against the API.
+
+## Moved 2026-10-29 15:55:00 -04:00 -- DI-21.2: the sample log's scope settled
+
+### <a id="di-212"></a>DI-21.2 -- The sample's scope is settled: a ring of fixed-size segments with checked variable-length records, padded commits, zero-filled segments, fail-stop, and a gate step, running on every dioring (DI-D-116). *(completed 2026-10-29 15:55:00 -04:00)*
+
+**Bring the survey to the engineer, to settle the sample's scope.** Which practices the sample shows, which it names and
+leaves out, and where it lives were to be decided there, with three questions the survey brought: where it lives and how
+it stages a crash, whether it shows the allocate-at-construction discipline, and who retains data for a rewrite.
+
+**Done:** the engineer settled the shape on 2026-10-29, recorded as [DI-D-116](DESIGN-NOTES.md#di-d-116), with the exchange
+in [the survey's session](../../design-sessions/DESIGN-SESSION-2026-10-29-database-and-file-system-log-practice.md#di-212-the-samples-scope-continued-2026-10-29).
+A crash is staged on a dioring over the in-memory backend, which does not yet exist and is scheduled as `DI-M24`; the sample
+runs on every dioring; fail-stop removes the retention question for this sample; and the `no_std` discipline was not taken
+up. Two details stay open and are placed where they are needed: the blocking API, settled before `DI-21.3`, and where the
+sample's code lives, settled before `DI-21.5`. `DI-21.3`, which was "Build the sample log", was split into `DI-21.3` to
+`DI-21.8`, and the merge-or-delete decision for the duplicated driver is parked as `DI-21+.2`.
