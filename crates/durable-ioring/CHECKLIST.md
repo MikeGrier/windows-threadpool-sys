@@ -31,10 +31,39 @@ coarse: what the sample is follows from the survey.
   and, for each, which `durable-ioring` facility a log built on it would use -- epochs and seals, lineages, gates across
   lineages, flush domains, failures and their suspects -- or that none does.
 
+  **It extends the survey already made, and does not repeat it.** [The 2026-10-24 prior-art
+  session](../../design-sessions/DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md) has verified citations for ARIES'
+  write-ahead rule and reserved rollback space, Silo's epoch group commit, ordering without durability (OptFS and barrier
+  IO), and what file systems and databases do after a failed flush. This item adds what that session does not cover:
+  fuzzy checkpoints, page LSNs and compensation records; journaling modes and NTFS's `$LogFile`; torn or partial record
+  detection; a record's identity across a crash; reclaiming log space, including the ARIES checkpoint-truncation passage
+  that session records as not found. Its sources continue that session's numbering, and the new session links back to it.
+
+  **The facility mapping includes what DI-M23 added** since this milestone was queued: capacity declared at construction,
+  where a submit is refused for it and a seal never is ([DI-D-98](DESIGN-NOTES.md#di-d-98)); an unresolved failure holding
+  the submit capacity of the writes it puts at risk until it is resolved ([DI-D-100](DESIGN-NOTES.md#di-d-100)), which a
+  log must heal or abandon or it stalls; failure detail dispatched to an observer given at construction, with suspects
+  lent by visitor ([DI-D-113](DESIGN-NOTES.md#di-d-113)); and a provider's request lent for the length of its call, for a
+  log whose journal sits on its own device ([DI-D-115](DESIGN-NOTES.md#di-d-115)). A gate cycle is refused without being
+  named, so no log shows one.
+
 - [ ] **DI-21.2** -- **Bring the survey to the engineer, to settle the sample's scope.** Which practices the sample
   shows, which it names and leaves out, and where it lives -- an example of `win-durable-ioring`, or a portable example of
   `durable-ioring` over its in-memory backend that a Windows run also exercises -- are decided there. A gap the survey
   finds in `durable-ioring` is queued as work on the crate, not worked around in the sample.
+
+  **Questions the survey brings with it, each open and each answerable with "too early to say"** (the resolution
+  gradient: none is a decision until the engineer makes it):
+  - **Where it lives, and how it stages a crash.** The in-memory backend keeps a target's `contents` apart from its
+    `durable_contents`, so a portable example can stage a crash deterministically; on real Windows files a crash is hard
+    to stage. That backend, and the oracle, are behind this crate's `std` feature.
+  - **Whether the sample shows the allocate-at-construction discipline** of [DI-D-97](DESIGN-NOTES.md#di-d-97), which a
+    `no_std` log would. This is a question of scope; nothing is queued for it.
+  - **Who retains data for a rewrite.** A heal means the consumer rewrites what a failure put at risk, and retention is
+    outside this crate ([COMPONENT.md](COMPONENT.md)). A log naturally keeps its own tail for it, so the sample forces the
+    question of whether that retention is the log's own or belongs to the parked retention layer
+    ([DI-5+.1](PARKED.md#di-m5----the-retention-layer-parked-behind-di-m12)), which also bears on what promoting the log
+    ([DI-21+.1](PARKED.md#di-m21----promoting-the-sample-log-parked-behind-di-m21)) would mean.
 
 - [ ] **DI-21.3** -- **Build the sample log** to the scope `DI-21.2` sets, with its own contract written first, tests,
   and a run that shows recovery after a crash it stages.
