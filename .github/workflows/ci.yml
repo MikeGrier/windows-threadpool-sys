@@ -1156,6 +1156,33 @@ jobs:
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p wtf-string --no-default-features --locked --no-fail-fast
 
+  durable-ioring-no-std:
+    name: durable-ioring (no_std)
+    runs-on: windows-latest
+    # See build-test's comment: forces the floating stable toolchain over the
+    # repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: x86_64-unknown-none
+      - uses: Swatinem/rust-cache@v2
+      # A target with no `std` is what proves the crate builds without it:
+      # `--no-default-features` on a host target would still link if a `std`
+      # use crept back in. `x86_64-unknown-none` and not `thumbv7em-none-eabi`
+      # because `rc-errors` needs 64-bit atomics, which that target lacks. The
+      # converse is verified too -- building this target *with* the `std`
+      # feature fails -- so the gate is not vacuous. The crate's tests are not
+      # run here: its self dev-dependency turns `std` on for them, so a host run
+      # would not be a `no_std` run.
+      - name: cargo build (no_std target)
+        run: cargo build -p durable-ioring --no-default-features --target x86_64-unknown-none --locked
+      - name: cargo clippy (no_std target)
+        run: cargo clippy -p durable-ioring --no-default-features --target x86_64-unknown-none --locked -- -D warnings
+
   portable:
     name: wtf-string (non-Windows)
     strategy:

@@ -1837,7 +1837,7 @@ the begin. A sink filters either way, so nothing waits on it.
 
 ## <a id="di-d-97"></a>DI-D-97: durable-ioring runs without `std`, and allocates everything it needs at construction
 
-**Decided, not yet implemented: scheduled as DI-23.1, DI-23.3, DI-23.5, DI-23.12 and DI-23.13 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22, for a no-std user-mode file-system
+**Decided, and implemented by DI-M23 ([archive](COMPLETED-CHECKLIST.md#di-m23)).** The engineer, 2026-10-22, for a no-std user-mode file-system
 driver stack: "we allocate all heap needed for operation during construction", and "It's not acceptable for the driver to
 panic due to OOM in the middle of things." The session is
 [DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md).
@@ -1861,6 +1861,10 @@ panic due to OOM in the middle of things." The session is
   the core makes to it, which is how the last non-zero phase was found: the in-memory backend's queues grew as writes were
   queued. They are now made at their declared sizes, which bound them, as a ring's are; a size the allocator cannot give
   leaves a queue to grow, so only a backend declared absurdly large is outside the claim.
+- **As built** (DI-23.13, the assistant's, 2026-10-29): CI builds and lints the crate with `--no-default-features` for
+  `x86_64-unknown-none`, in the `durable-ioring-no-std` job. Building that target with `std` fails, so the gate is not
+  vacuous. The crate's tests are not run there: its self dev-dependency turns `std` on for them, so a host run would not
+  be a `no_std` run, and the `no_std` build of the library is what this proves.
 
 The capacity model is [DI-D-98](#di-d-98) to [DI-D-101](#di-d-101); the errors are [DI-D-105](#di-d-105); what the clean
 paths hand out is [DI-D-103](#di-d-103). A failure's storage and the shared handles are [DI-D-108](#di-d-108); the rest of
@@ -1868,7 +1872,7 @@ what the session left open is [DI-D-109](#di-d-109).
 
 ## <a id="di-d-98"></a>DI-D-98: capacity is declared at construction; submit, mint and import may be refused for it, and a seal never is
 
-**Decided; the charge is implemented (DI-23.6), the declaration and refusals are scheduled as DI-23.5.2 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-22.
+**Decided, and implemented by DI-M23 ([archive](COMPLETED-CHECKLIST.md#di-m23)).** The engineer, 2026-10-22.
 
 - **Growth the consumer starts is refused at admission when it would exceed capacity:** a submit, minting a lineage, and
   importing a failure. A refusal is backpressure, reported as being at capacity and distinct from the contract's own
@@ -2219,7 +2223,7 @@ notes when it is created.
 
 ## <a id="di-d-107"></a>DI-D-107: what capacity the consumer declares
 
-**Decided, not yet implemented: scheduled as DI-23.5.2.1 to DI-23.5.2.3 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction), after DI-23.6 to DI-23.9; the completion queue and the failure storage are DI-23.10's and DI-23.12's ("Split", below).** Settles the shape [DI-D-98](#di-d-98) left open. The engineer, 2026-10-23, confirming the assistant's proposal ("4: yes", "5: a"), then adding `domains` and ordering the work ("1: b.", "2: a").
+**Decided, and implemented by DI-M23 as DI-23.5.2.1 to DI-23.5.2.3 ([archive](COMPLETED-CHECKLIST.md#di-m23)); the completion queue and the failure storage were DI-23.10's and DI-23.12's ("Split", below).** Settles the shape [DI-D-98](#di-d-98) left open. The engineer, 2026-10-23, confirming the assistant's proposal ("4: yes", "5: a"), then adding `domains` and ordering the work ("1: b.", "2: a").
 
 - **Declared:** `operations`, the operations outstanding at once -- pushed and not yet popped as a completion, whether in
   flight, held for a gate, or completed and queued -- with reads and writes sharing the one window; `lineages`, live lineages,
@@ -2300,7 +2304,7 @@ notes when it is created.
 
 **Amended by [DI-D-113](#di-d-113): a failure's suspect writes and markings are dispatched to an observer given at construction, not lent; the lending was withdrawn in DI-23.12.3.9.**
 
-**Decided, not yet implemented: scheduled as DI-23.12 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-24: "1: agreed. 2: slots in preallocated storage. 3: a.", over the assistant's options in [the session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#di-2310-a-failures-storage-the-shared-handles-and-the-tables-continued-2026-10-24). The rest of DI-23.10 is [DI-D-109](#di-d-109).
+**Decided, and implemented as DI-23.12 ([archive](COMPLETED-CHECKLIST.md#di-m23)).** The engineer, 2026-10-24: "1: agreed. 2: slots in preallocated storage. 3: a.", over the assistant's options in [the session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#di-2310-a-failures-storage-the-shared-handles-and-the-tables-continued-2026-10-24). The rest of DI-23.10 is [DI-D-109](#di-d-109).
 
 - **A failure has no storage of its own for its suspect set; it indexes the write records** (the engineer: "My immediate
   response also was (c)"). The suspect set is frozen at observation (DI-D-12 (b)); the records it names are kept while it
@@ -2375,7 +2379,7 @@ notes when it is created.
 
 **Amended by [DI-D-113](#di-d-113): `Marked` leaves the completion queue, so the marking queued once per write and expanded at pop is withdrawn.**
 
-**Decided, not yet implemented: scheduled as DI-23.12 in [CHECKLIST.md](CHECKLIST.md#di-m23----no-std-and-every-allocation-made-at-construction).** The engineer, 2026-10-24, approving the assistant's proposal whole: "approve all, I don't see alternatives in the memory constrained space." The proposal, item by item with its reasons, is in [the session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#di-2310-proposal-not-decided-for-the-engineers-review); this records what it settled. The rule behind it: nothing allocates after construction, and nothing that arrives from the kernel or clears capacity is refused, as a seal is not ([DI-D-98](#di-d-98)).
+**Decided, and implemented as DI-23.12 ([archive](COMPLETED-CHECKLIST.md#di-m23)).** The engineer, 2026-10-24, approving the assistant's proposal whole: "approve all, I don't see alternatives in the memory constrained space." The proposal, item by item with its reasons, is in [the session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#di-2310-proposal-not-decided-for-the-engineers-review); this records what it settled. The rule behind it: nothing allocates after construction, and nothing that arrives from the kernel or clears capacity is refused, as a seal is not ([DI-D-98](#di-d-98)).
 
 - **Failures are not declared**, reversing the engineer's "4: yes", which was given before the bound below was found. An
   observed failure answers one part of one seal, a part is issued only for that seal's named writes, and a write is named

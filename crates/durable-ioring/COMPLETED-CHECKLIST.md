@@ -5037,3 +5037,26 @@ As built: the as-built notes are in [DI-D-97](DESIGN-NOTES.md#di-d-97).
 `DI-23.1` asserts zero allocations after construction in every phase. Split 2026-10-24 into `DI-23.12.1` to
 `DI-23.12.9`; each is said in CONTRACT.md and the documentation as it landed, and each one's phases of the allocation
 test reached zero with it. Closed by `DI-23.12.9`.
+
+## Moved 2026-10-29 08:15:00 -04:00 -- DI-23.13: the crate builds without `std` in CI
+
+### <a id="di-2313"></a>DI-23.13 -- A CI job builds and lints this crate with `--no-default-features` for `x86_64-unknown-none`, a target with no `std`. *(completed 2026-10-29 08:15:00 -04:00)*
+
+**Build without `std` in CI**: the `durable-ioring-no-std` job in `.github/workflows/ci.yml`, beside the `alloc-only`
+job it follows, builds and lints the crate with `--no-default-features` for `x86_64-unknown-none`, which has no `std` and
+has 64-bit atomics (not `thumbv7em-none-eabi`; see [DI-D-109](DESIGN-NOTES.md#di-d-109), DI-23.12.7). The gate is not
+vacuous: building the same target with the `std` feature fails. The crate's tests are not run there, because its self
+dev-dependency turns `std` on for them, so a host run would not be a `no_std` run.
+
+As built: the as-built notes are in [DI-D-97](DESIGN-NOTES.md#di-d-97).
+
+## Moved 2026-10-29 08:15:00 -04:00 -- DI-M23: no `std`, and every allocation made at construction
+
+### <a id="di-m23"></a>DI-M23 -- No `std`, and every allocation made at construction. *(completed 2026-10-29 08:15:00 -04:00)*
+
+The engineer, 2026-10-22, for a no-std user-mode file-system driver stack: [DI-D-97](DESIGN-NOTES.md#di-d-97) to
+[DI-D-107](DESIGN-NOTES.md#di-d-107), from
+[DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md).
+The crate builds without `std` for a target that has none, and after construction no phase of the allocation test
+allocates. Each item is archived under its own ID, `DI-23.1` to `DI-23.13`; the stubs that stood in the checklist were
+removed with the milestone.
