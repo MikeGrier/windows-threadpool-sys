@@ -98,6 +98,14 @@
       "why": "The control. Walking the smaller set makes fewer lookups; walking this one gives the same answer. A test that failed here would be asserting the implementation.",
       "find": ["        if self.len() <= other.len() {"],
       "replace": ["        if true {"]
+    },
+    {
+      "name": "FHT-D-8: a drain walks forwards, emptying a slot ahead of the rest of its run",
+      "file": "src/map/iter.rs",
+      "expect": "caught",
+      "why": "A drain takes each entry only once the slot after it is empty, so the map stays consistent after every item and a drain forgotten part way leaves working lookups. Walked forwards it empties the head of a probe run first, and an entry later in the run is no longer found by get.",
+      "find": ["            let at = (self.start + count - self.visited) % count;"],
+      "replace": ["            let at = (self.start + self.visited) % count;"]
     }
   ]
 }

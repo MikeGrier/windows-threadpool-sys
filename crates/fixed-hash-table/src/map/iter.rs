@@ -39,9 +39,17 @@ pub struct IntoIter<I> {
 
 /// The entries, removed: from [`drain`](FixedHashMap::drain). Dropping it before it is exhausted
 /// removes the rest.
+///
+/// Each entry is taken only once the slot after it is empty, walking backwards from a slot that
+/// was empty to begin with, so each is the last of its probe run and taking it moves nothing else.
+/// The map is therefore consistent after every item, not only once the iterator is dropped: one
+/// forgotten part way through leaves a smaller map whose lookups still work.
 pub struct Drain<'a, K, V, St: AsMut<[Slot<K, V>]>, H> {
     map: &'a mut FixedHashMap<K, V, St, H>,
-    next: usize,
+    /// A slot that was empty when the drain began, which the walk starts behind.
+    start: usize,
+    /// How many slots the walk has visited.
+    visited: usize,
 }
 
 impl<K, V, St, H> FixedHashMap<K, V, St, H>
@@ -87,7 +95,19 @@ where
     /// Remove every entry, yielding each. The map is empty afterwards, whether or not the iterator
     /// was run to its end; its storage is kept.
     pub fn drain(&mut self) -> Drain<'_, K, V, St, H> {
-        Drain { map: self, next: 0 }
+        // A map always leaves a slot empty (`capacity_of`), so one is found unless there are no
+        // slots at all, when there is nothing to visit either.
+        let start = self
+            .slots
+            .as_mut()
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or(0);
+        Drain {
+            map: self,
+            start,
+            visited: 0,
+        }
     }
 }
 
@@ -208,9 +228,13 @@ impl<K, V, St: AsMut<[Slot<K, V>]>, H> Iterator for Drain<'_, K, V, St, H> {
 
     fn next(&mut self) -> Option<(K, V)> {
         let slots = self.map.slots.as_mut();
-        while self.next < slots.len() {
-            let taken = slots[self.next].take();
-            self.next += 1;
+        let count = slots.len();
+        while self.visited < count {
+            self.visited += 1;
+            // Backwards from `start`: the slot after this one is `start` itself, or one visited
+            // already and so emptied.
+            let at = (self.start + count - self.visited) % count;
+            let taken = slots[at].take();
             if taken.is_some() {
                 self.map.len -= 1;
                 return taken;
@@ -226,7 +250,7 @@ impl<K, V, St: AsMut<[Slot<K, V>]>, H> Iterator for Drain<'_, K, V, St, H> {
 
 impl<K, V, St: AsMut<[Slot<K, V>]>, H> Drop for Drain<'_, K, V, St, H> {
     fn drop(&mut self) {
-        for slot in &mut self.map.slots.as_mut()[self.next..] {
+        for slot in self.map.slots.as_mut() {
             *slot = None;
         }
         self.map.len = 0;

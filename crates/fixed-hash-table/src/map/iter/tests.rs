@@ -117,6 +117,61 @@ fn a_drain_dropped_part_way_still_empties_the_map() {
     }
 }
 
+/// After every item a drain yields, each entry still in the map is found by `get`, its length
+/// counts exactly those, and no key can be inserted twice; checked for a drain forgotten after each
+/// possible number of items, over one probe run that wraps from the last slot to the front.
+#[test]
+fn a_drain_forgotten_part_way_leaves_every_lookup_working() {
+    for taken in 0..=14 {
+        let mut map: InlineMap<u32, u32, 16, Collide> =
+            InlineMap::with_hasher(Collide(LAST_OF_SIXTEEN));
+        for key in 0..14 {
+            map.insert(key, key * 10).expect("room");
+        }
+        let mut drain = map.drain();
+        let yielded: Vec<u32> = (0..taken)
+            .map(|_| drain.next().expect("an entry").0)
+            .collect();
+        core::mem::forget(drain);
+
+        assert_eq!(map.len(), 14 - yielded.len(), "after {taken}");
+        for key in 0..14 {
+            let expected = (!yielded.contains(&key)).then_some(key * 10);
+            assert_eq!(map.get(&key).copied(), expected, "key {key} after {taken}");
+        }
+        assert_eq!(map.iter().count(), map.len(), "after {taken}");
+        for key in 0..14 {
+            let had = map.get(&key).copied();
+            assert_eq!(
+                map.insert(key, 0).expect("room"),
+                had,
+                "key {key} after {taken}"
+            );
+        }
+        assert_eq!(map.len(), 14, "every key once after {taken}");
+    }
+}
+
+#[test]
+fn a_set_drain_forgotten_part_way_leaves_every_lookup_working() {
+    let mut set: crate::InlineSet<u32, 16, Collide> =
+        crate::InlineSet::with_hasher(Collide(LAST_OF_SIXTEEN));
+    for value in 0..14 {
+        set.insert(value).expect("room");
+    }
+    let mut drain = set.drain();
+    let gone = [drain.next().expect("one"), drain.next().expect("two")];
+    core::mem::forget(drain);
+    assert_eq!(set.len(), 12);
+    for value in 0..14 {
+        assert_eq!(
+            set.contains(&value),
+            !gone.contains(&value),
+            "value {value}"
+        );
+    }
+}
+
 #[test]
 fn retain_keeps_what_the_test_answers_true_for() {
     let mut map = ten();
