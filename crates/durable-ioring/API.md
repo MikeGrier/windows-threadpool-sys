@@ -110,6 +110,13 @@ if it needs it ([DI-D-6](DESIGN-NOTES.md#di-d-6)).
 `OpId` is ordered by push order, which answers [DI-D-6](DESIGN-NOTES.md#di-d-6)'s open question: the
 retention layer gets the order it needs for newest-wins replay at no extra cost.
 
+*(Amended by [DI-D-113](DESIGN-NOTES.md#di-d-113): there is no `SuspectSet`. `Failed`, `Abandoned`
+and `FailureInfo` carry no suspects; each suspect write, and each marking, goes to the
+`FailureObserver` given when the instance is built, as the failure is observed. A consumer that
+wants the suspects keeps them from there, so it must give an observer before it pushes anything:
+an instance built without one tells nobody, and they cannot be asked for afterwards. The
+identities in a `SuspectWrite` are as described above.)*
+
 ### 6. Resolution
 
 `FailureToken` is `#[must_use]`; `heal`, `abandon` and `close` consume it, and dropping it closes it
@@ -120,6 +127,8 @@ been given ([DI-D-46](DESIGN-NOTES.md#di-d-46)), and the token arrives with the 
 none is live.
 
 The only borrow returned is `SuspectSet::writes()`, into frozen shared data that nothing can change.
+*(Amended by [DI-D-113](DESIGN-NOTES.md#di-d-113): `SuspectSet` is gone, and `failures()` lends each
+`FailureInfo` to a visitor ([DI-D-103](DESIGN-NOTES.md#di-d-103)); see section 5's amendment.)*
 
 ### 7. Composition: dioring's sidecar carries the consumer's
 
@@ -713,6 +722,7 @@ pub struct SuspectWrite<V: Identities> {
 }
 
 /// A failure's suspect set: frozen when the failure is observed, shared rather than copied.
+/// Removed by DI-D-113: the suspects go to the `FailureObserver`, and nothing below carries one.
 #[derive(Clone, Debug)]
 pub struct SuspectSet<V: Identities>(Arc<[SuspectWrite<V>]>);
 
@@ -795,6 +805,7 @@ pub struct Failed<V: Identities> {
     pub id: V::FailureId,
     pub token: V::FailureToken,
     pub cause: Cause<V>,
+    /// Removed by DI-D-113: the suspects go to the `FailureObserver`.
     pub suspect: SuspectSet<V>,
 }
 
@@ -837,6 +848,7 @@ pub enum Entry<V: Identities, B, C> {
     Failed(Failed<V>),
     /// Fixed-size and allocation-free, so producing it is cheap.
     Blocked { through: Epoch<V>, by: V::FailureId },
+    /// `suspect` removed by DI-D-113: the suspects went to the `FailureObserver`.
     Abandoned { failure: V::FailureId, suspect: SuspectSet<V> },
     /// `end_lineage` took effect: every epoch of `lineage` not yet durable, through
     /// `abandoned_through`, is abandoned (`None` if none was pending).
@@ -1004,6 +1016,7 @@ pub struct ResolveError<V: Identities> {
 pub struct FailureInfo<V: Identities> {
     pub id: V::FailureId,
     pub cause: Cause<V>,
+    /// Removed by DI-D-113: the suspects go to the `FailureObserver`.
     pub suspect: SuspectSet<V>,
     pub token_live: bool,
 }
