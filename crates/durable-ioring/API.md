@@ -273,6 +273,10 @@ A file declared with none is unknown and intersects every file, so declaring not
 flush domain for the whole instance. `ImportScope::Domains` scopes an imported failure the same
 way, and `Cause::Imported` reports the scope it was given.
 
+*(Amended by [DI-D-97](DESIGN-NOTES.md#di-d-97): the scope's domains are the caller's shared
+`Arc<[FlushDomain]>`, and `import_failure` takes a visitor given each domain the instance has never
+been given, in the order named, once the import is admitted, so the import allocates nothing.)*
+
 Declarations must be complete: extra domains are safe, a missing one is the one way a declaration
 can make the contract false ([CONTRACT.md](CONTRACT.md)). Deriving the bytes from Windows' storage
 topology is a locality helper's job outside this crate (root `M39`).
@@ -572,7 +576,11 @@ pub trait DurableRing {
         items: Vec<(TokenOf<Self>, Resolution)>,
     ) -> Result<(), ResolveError<Self::Ids>>;
 
-    fn import_failure(&mut self, scope: ImportScope<Self::Ids>) -> FailureIdOf<Self>;
+    fn import_failure(
+        &mut self,
+        scope: ImportScope<Self::Ids>,
+        unmatched: impl FnMut(&FlushDomain),
+    ) -> Result<Imported<Self::Ids>, ImportError<Self::Ids>>;
 
     fn failures(&self) -> Vec<FailureInfo<Self::Ids>>;
 
@@ -722,8 +730,9 @@ pub enum ImportScope<V: Identities> {
     /// The uncovered writes of one lineage.
     Lineage(V::Lineage),
     /// The uncovered writes to every file whose declared flush domains intersect these, files
-    /// declared with none included.
-    Domains(Vec<FlushDomain>),
+    /// declared with none included. The caller's shared list (DI-D-97): the failure keeps it
+    /// without copying it.
+    Domains(Arc<[FlushDomain]>),
 }
 
 /// A flush domain: a unit whose volatile cache a flush commits and whose failure everything

@@ -162,7 +162,10 @@ fn an_operation_that_never_issues_holds_its_place_until_that_completion_is_poppe
     let gate = rig.epoch(1);
     rig.write_with(KEY, rig.epoch(2), 0, b"held", gated(gate))
         .expect("held");
-    let (_, actions) = rig.core.import_failure(ImportScope::All).expect("in scope");
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("in scope");
     rig.act(actions);
     let token = tokens(&mut rig).remove(0);
     let actions = rig
@@ -189,7 +192,10 @@ fn a_failure_holds_the_places_of_the_writes_it_suspects_after_they_are_covered_a
     rig.write(1, 0, b"x").expect("accepted");
     rig.run();
     rig.entries();
-    let (_, actions) = rig.core.import_failure(ImportScope::All).expect("in scope");
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("in scope");
     rig.act(actions);
     let token = tokens(&mut rig).remove(0);
     rig.seal(1);
@@ -222,7 +228,10 @@ fn a_consumer_that_leaves_failures_unresolved_keeps_the_places_they_hold() {
             .expect("accepted");
         rig.run();
         rig.entries();
-        let (_, actions) = rig.core.import_failure(ImportScope::All).expect("in scope");
+        let (_, actions) = rig
+            .core
+            .import_failure(ImportScope::All, |_| {})
+            .expect("in scope");
         rig.act(actions);
         tokens_held.extend(tokens(&mut rig));
     }
@@ -249,7 +258,10 @@ fn a_consumer_that_leaves_failures_unresolved_keeps_the_places_they_hold() {
 fn a_failure_holds_the_place_of_a_write_that_was_in_flight_when_it_was_observed() {
     let mut rig = Rig::new();
     rig.write(1, 0, b"x").expect("accepted");
-    let (_, actions) = rig.core.import_failure(ImportScope::All).expect("in scope");
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("in scope");
     rig.act(actions);
     let token = tokens(&mut rig).remove(0);
     rig.run();

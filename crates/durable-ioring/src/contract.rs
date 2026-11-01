@@ -18,9 +18,9 @@ use crate::io_target::IoTarget;
 use crate::key::{ReadKey, TargetKey, WriteKey};
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
-    Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover, LineageInfo,
-    PushError, ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
-    SealError, Tag, UnknownLineage, WriteOptions,
+    FlushDomain, Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover,
+    LineageInfo, PushError, ReadOptions, RemoveTargetError, Resolution, ResolveError,
+    RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -354,8 +354,12 @@ pub trait DurableRing {
 
     /// Record a failure learned of outside the instance (DI-D-12 (h)). Its suspect set is built by
     /// the same rule as any other's, within `scope`, and its token arrives with its `Failed` entry.
-    /// The answer names the failure, and any domain the scope named that the instance has never
-    /// been given (DI-D-46).
+    /// The answer names the failure. Once the import is admitted, `unmatched` is given each domain
+    /// an [`ImportScope::Domains`] named that the instance has never been given, in the order named
+    /// (DI-D-46) -- a misspelling, or a target not given yet; it is not called for a refused
+    /// import. It runs under the instance's own lock, if it has one, and must not call back into
+    /// the instance. A scope's domains are the caller's shared list, so recording the failure
+    /// copies nothing (DI-D-97).
     ///
     /// # Errors
     ///
@@ -365,6 +369,7 @@ pub trait DurableRing {
     fn import_failure(
         &mut self,
         scope: ImportScope<Self::Ids>,
+        unmatched: impl FnMut(&FlushDomain),
     ) -> Result<Imported<Self::Ids>, ImportError<Self::Ids>>;
 
     /// Give `visit` each unresolved failure, in the order observed (DI-D-103), its cause lent for

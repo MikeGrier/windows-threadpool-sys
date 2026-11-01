@@ -172,12 +172,12 @@ fn a_lineage_held_by_failures_names_them_in_order_and_nothing_once_ended() {
     );
     let (first, actions) = rig
         .core
-        .import_failure(ImportScope::Lineage(lineage))
+        .import_failure(ImportScope::Lineage(lineage), |_| {})
         .expect("a live lineage");
     rig.act(actions);
     let (second, actions) = rig
         .core
-        .import_failure(ImportScope::All)
+        .import_failure(ImportScope::All, |_| {})
         .expect("room for an import");
     rig.act(actions);
     let Err(RetireLineageRefusal::Busy(busy)) = rig.core.retire_lineage(lineage) else {

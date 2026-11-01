@@ -6,13 +6,14 @@ use super::{CoreActions, DurableIoCore, V};
 use crate::capacity::{AtCapacity, Limit};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
-use crate::domains::{import_list, import_reach};
+use crate::domains::{import_list, import_reach, unmatched};
 use crate::durability::Reach;
 use crate::ids::{FailureId, FailureToken};
 #[cfg(test)]
 use crate::types::SuspectWrite;
 use crate::types::{
-    FailureCause, FailureInfo, ImportError, ImportScope, Imported, Resolution, ResolveError,
+    FailureCause, FailureInfo, FlushDomain, ImportError, ImportScope, Imported, Resolution,
+    ResolveError,
 };
 use alloc::vec::Vec;
 
@@ -36,21 +37,29 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     }
 
     /// Record a failure the consumer learned of outside the instance (DI-D-12 (h)), reaching the
-    /// uncovered writes `scope` names.
+    /// uncovered writes `scope` names. Once it is admitted, `unmatched` is given each domain an
+    /// [`ImportScope::Domains`] named that the instance has never been given, in the order named
+    /// (DI-D-46); nothing is allocated (DI-D-97).
     ///
     /// # Errors
     ///
     /// [`ImportError::UnknownLineage`] for an [`ImportScope::Lineage`] that is not this core's live
     /// one, and [`ImportError::AtCapacity`] when the core holds as many unresolved imported
     /// failures as it was built for (DI-D-107); nothing is recorded.
-    pub fn import_failure(&mut self, scope: ImportScope<V<E, K>>) -> ImportAnswer<E, K> {
-        let (reach, only, unmatched) =
-            import_reach(&scope, &self.domains, |lineage| self.is_live(lineage))?;
+    pub fn import_failure(
+        &mut self,
+        scope: ImportScope<V<E, K>>,
+        unmatched_domain: impl FnMut(&FlushDomain),
+    ) -> ImportAnswer<E, K> {
+        let (reach, only) = import_reach(&scope, |lineage| self.is_live(lineage))?;
         if self.durability.imports() >= self.capacity.imports {
             return Err(ImportError::AtCapacity(AtCapacity {
                 limit: Limit::Imports,
                 declared: self.capacity.imports,
             }));
+        }
+        if let ImportScope::Domains(names) = &scope {
+            unmatched(names, &self.domains, unmatched_domain);
         }
         // Admitted, so a list is free for the domains it names: the unresolved imports are fewer
         // than those declared, and the targets hold one list each at most.
@@ -72,7 +81,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         let (failure, due) = self
             .durability
             .import(FailureCause::Imported { scope }, &reach, only);
-        Ok((Imported { failure, unmatched }, self.act(due, was_empty)))
+        Ok((Imported { failure }, self.act(due, was_empty)))
     }
 
     /// Give `visit` each unresolved failure, in observation order, its cause lent for the visit

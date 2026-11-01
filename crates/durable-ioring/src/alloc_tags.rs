@@ -198,8 +198,6 @@ pub(crate) mod tag {
     pub(crate) const IO_CORE_WITH_PROVIDER_NAMES: Tag = Tag::new("io_core::with_provider::names");
 
     // domains.rs
-    pub(crate) const DOMAINS_IMPORT_REACH_UNMATCHED: Tag =
-        Tag::new("domains::import_reach::unmatched");
     pub(crate) const DOMAINS_FIRST_REPEAT_COPY: Tag = Tag::new("domains::first_repeat::copy");
     pub(crate) const DOMAINS_FIRST_REPEAT_SEEN: Tag = Tag::new("domains::first_repeat::seen");
     pub(crate) const DOMAINS_INTERN_ALL_ID: Tag = Tag::new("domains::intern_all::id");

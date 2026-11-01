@@ -358,7 +358,7 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
     for _ in 0..2 {
         let (_, actions) = rig
             .core
-            .import_failure(crate::types::ImportScope::All)
+            .import_failure(crate::types::ImportScope::All, |_| {})
             .expect("room");
         rig.act(actions);
     }
@@ -392,7 +392,7 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
     for _ in 0..2 {
         let (_, actions) = rig
             .core
-            .import_failure(crate::types::ImportScope::All)
+            .import_failure(crate::types::ImportScope::All, |_| {})
             .expect("room");
         rig.act(actions);
     }
@@ -428,7 +428,7 @@ fn unresolved_failures_fill_to_the_flush_parts_and_the_imports() {
         for _ in 0..2 {
             let (_, actions) = rig
                 .core
-                .import_failure(crate::types::ImportScope::All)
+                .import_failure(crate::types::ImportScope::All, |_| {})
                 .expect("room");
             rig.act(actions);
         }
@@ -448,7 +448,7 @@ fn kept_writes_fill_to_the_operations_declared() {
     rig.run();
     let (_, actions) = rig
         .core
-        .import_failure(crate::types::ImportScope::All)
+        .import_failure(crate::types::ImportScope::All, |_| {})
         .expect("room");
     rig.act(actions);
     rig.seal(1);
@@ -500,7 +500,10 @@ fn domain_lists_fill_to_the_targets_and_imports_and_each_is_let_go_with_its_hold
         for _ in 0..2 {
             let (_, actions) = rig
                 .core
-                .import_failure(ImportScope::Domains(vec![domain("b"), domain("c")]))
+                .import_failure(
+                    ImportScope::Domains(Arc::from([domain("b"), domain("c")])),
+                    |_| {},
+                )
                 .expect("room");
             rig.act(actions);
         }

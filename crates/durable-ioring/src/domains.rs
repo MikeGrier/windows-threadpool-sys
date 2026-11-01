@@ -35,36 +35,35 @@ pub(crate) fn routing(file: &[DomainId], served: &[DomainId]) -> Routing {
 }
 
 /// What an import reaches: the files -- `None` for the domains an [`ImportScope::Domains`] names,
-/// whose list [`import_list`] makes once the import is admitted -- the one lineage it is confined
-/// to if any, and the domains it named that the instance has never been given.
-pub(crate) type ImportReach = (Option<Reach>, Option<u64>, Vec<FlushDomain>);
+/// whose list [`import_list`] makes once the import is admitted -- and the one lineage it is
+/// confined to if any.
+pub(crate) type ImportReach = (Option<Reach>, Option<u64>);
 
-/// The targets an imported failure reaches (DI-D-21), the one lineage it is confined to, if the
-/// scope names one, and the domains it names that the instance has never been given, in the order
-/// named (DI-D-46). A domain no target was declared with reaches only the targets declared with
-/// none. `live` says whether a lineage is the instance's own and live; `domains` is every domain
-/// the instance has interned.
+/// The targets an imported failure reaches (DI-D-21), and the one lineage it is confined to, if
+/// the scope names one. A domain no target was declared with reaches only the targets declared with
+/// none. `live` says whether a lineage is the instance's own and live.
 pub(crate) fn import_reach<E: EpochId + 'static, I: Instant>(
     scope: &ImportScope<DioringIds<E, I>>,
-    domains: &HeapMap<FlushDomain, DomainId>,
     live: impl Fn(Lineage) -> bool,
 ) -> Result<ImportReach, UnknownLineage<DioringIds<E, I>>> {
     Ok(match scope {
-        ImportScope::All => (Some(Reach::All), None, Vec::new()),
-        ImportScope::Lineage(lineage) if live(*lineage) => {
-            (Some(Reach::All), Some(lineage.seq), Vec::new())
-        }
+        ImportScope::All => (Some(Reach::All), None),
+        ImportScope::Lineage(lineage) if live(*lineage) => (Some(Reach::All), Some(lineage.seq)),
         ImportScope::Lineage(lineage) => return Err(UnknownLineage(*lineage)),
-        ImportScope::Domains(names) => {
-            let mut unmatched = Vec::new();
-            for domain in names.iter().filter(|domain| !domains.contains_key(*domain)) {
-                tagged(tag::DOMAINS_IMPORT_REACH_UNMATCHED, || {
-                    unmatched.push(domain.clone());
-                });
-            }
-            (None, None, unmatched)
-        }
+        ImportScope::Domains(_) => (None, None),
     })
+}
+
+/// Give `visit` each of `names` the instance has never been given -- by a target or its provider
+/// -- in the order named (DI-D-46): a misspelling, or a target not given yet.
+pub(crate) fn unmatched(
+    names: &[FlushDomain],
+    domains: &HeapMap<FlushDomain, DomainId>,
+    mut visit: impl FnMut(&FlushDomain),
+) {
+    for name in names.iter().filter(|name| !domains.contains_key(*name)) {
+        visit(name);
+    }
 }
 
 /// The reach of an import naming `names`: the domains of them the instance was given, in a list of

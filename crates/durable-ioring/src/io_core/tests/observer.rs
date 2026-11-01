@@ -102,7 +102,10 @@ fn logged() -> (Rig, Arc<Log>) {
 
 /// Import a failure reaching every uncovered write.
 fn import(rig: &mut Rig) {
-    let (_, actions) = rig.core.import_failure(ImportScope::All).expect("room");
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("room");
     rig.act(actions);
 }
 
@@ -214,6 +217,6 @@ fn an_observer_given_twice_is_inconsistent() {
 #[should_panic(expected = "a failure observer was given to a core already in use")]
 fn an_observer_given_after_a_failure_is_observed_is_inconsistent() {
     let mut core = core();
-    let _ = core.import_failure(ImportScope::All).expect("room");
+    let _ = core.import_failure(ImportScope::All, |_| {}).expect("room");
     let _ = core.observed_by(Arc::new(Log::default()));
 }

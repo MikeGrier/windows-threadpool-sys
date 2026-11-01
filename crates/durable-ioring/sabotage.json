@@ -3866,6 +3866,30 @@
       "why": "Every phase after construction is held at zero: a completion that allocates once the instance is built fails the allocation test, whichever phase it falls in.",
       "find": ["        let was_empty = self.queue.is_empty();\n        let Completion {\n"],
       "replace": ["        core::mem::forget(alloc::vec![0_u8]);\n        let was_empty = self.queue.is_empty();\n        let Completion {\n"]
+    },
+    {
+      "name": "DI-D-97: a domain-scoped import copies its list",
+      "file": "src/io_core/failures.rs",
+      "expect": "caught",
+      "why": "An import's domains are the caller's shared list, so recording the failure costs a reference count and nothing is allocated after construction; the allocation test imports by domain and records zero.",
+      "find": ["            unmatched(names, &self.domains, unmatched_domain);\n"],
+      "replace": ["            core::mem::forget(names.to_vec());\n            unmatched(names, &self.domains, unmatched_domain);\n"]
+    },
+    {
+      "name": "DI-D-46: an import reports no unmatched domain",
+      "file": "src/io_core/failures.rs",
+      "expect": "caught",
+      "why": "A domain the instance was never given reaches only the targets declared with none, so a misspelling would be silent; the visitor is what reports it, in the order named.",
+      "find": ["            unmatched(names, &self.domains, unmatched_domain);\n"],
+      "replace": ["            let _ = (names, unmatched_domain);\n"]
+    },
+    {
+      "name": "DI-D-46: an import reports a domain it was given as unmatched",
+      "file": "src/domains.rs",
+      "expect": "caught",
+      "why": "Only a name the instance has never been given is unmatched; reporting the known ones as well would send the consumer hunting for a misspelling that is not there.",
+      "find": ["    for name in names.iter().filter(|name| !domains.contains_key(*name)) {"],
+      "replace": ["    for name in names.iter().filter(|name| !domains.contains_key(*name) || name.bytes() == b\"disk\") {"]
     }
   ]
 }

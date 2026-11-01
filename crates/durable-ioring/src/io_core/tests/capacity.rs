@@ -386,11 +386,14 @@ fn an_import_past_the_imports_declared_is_refused_and_a_resolution_lifts_it() {
     rig.entries();
     let mut made = Vec::new();
     for _ in 0..2 {
-        let (_, actions) = rig.core.import_failure(ImportScope::All).expect("room");
+        let (_, actions) = rig
+            .core
+            .import_failure(ImportScope::All, |_| {})
+            .expect("room");
         rig.act(actions);
         made.extend(tokens(&mut rig));
     }
-    let refused = rig.core.import_failure(ImportScope::All);
+    let refused = rig.core.import_failure(ImportScope::All, |_| {});
     assert!(matches!(
         refused,
         Err(ImportError::AtCapacity(AtCapacity {
@@ -407,7 +410,7 @@ fn an_import_past_the_imports_declared_is_refused_and_a_resolution_lifts_it() {
     rig.act(actions);
     assert!(
         matches!(
-            rig.core.import_failure(ImportScope::All),
+            rig.core.import_failure(ImportScope::All, |_| {}),
             Err(ImportError::AtCapacity(_))
         ),
         "resolved, but its Abandoned not yet popped (DI-D-108)"
@@ -415,7 +418,7 @@ fn an_import_past_the_imports_declared_is_refused_and_a_resolution_lifts_it() {
     rig.entries();
     let (_, actions) = rig
         .core
-        .import_failure(ImportScope::All)
+        .import_failure(ImportScope::All, |_| {})
         .expect("a place was let go");
     rig.act(actions);
 }
@@ -435,7 +438,7 @@ fn a_failure_that_was_not_imported_is_not_counted_against_the_imports() {
         FailureCause::Commit { .. }
     ));
     assert!(
-        rig.core.import_failure(ImportScope::All).is_ok(),
+        rig.core.import_failure(ImportScope::All, |_| {}).is_ok(),
         "the commit's failure is not an import"
     );
 }
@@ -446,10 +449,10 @@ fn an_import_naming_an_unknown_lineage_is_refused_as_that_even_at_capacity() {
     let other = core_with(CAPACITY);
     let refused = rig
         .core
-        .import_failure(ImportScope::Lineage(other.default_lineage()));
+        .import_failure(ImportScope::Lineage(other.default_lineage()), |_| {});
     assert!(matches!(refused, Err(ImportError::UnknownLineage(_))));
     assert!(matches!(
-        rig.core.import_failure(ImportScope::All),
+        rig.core.import_failure(ImportScope::All, |_| {}),
         Err(ImportError::AtCapacity(_))
     ));
 }

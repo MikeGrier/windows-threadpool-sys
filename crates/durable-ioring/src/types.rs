@@ -177,21 +177,18 @@ pub enum ImportScope<V: Identities> {
     /// The uncovered writes of one lineage.
     Lineage(V::Lineage),
     /// The uncovered writes to every file whose declared flush domains intersect these, files
-    /// declared with none included.
-    Domains(Vec<FlushDomain>),
+    /// declared with none included. The list is the caller's, made before the call and shared:
+    /// the failure keeps the scope, and keeping it costs a reference count, not a copy (DI-D-97).
+    Domains(Arc<[FlushDomain]>),
 }
 
-/// What `import_failure` recorded.
+/// What `import_failure` recorded. The domains an [`ImportScope::Domains`] named that the instance
+/// has never been given go to the visitor `import_failure` is called with, not here (DI-D-46,
+/// DI-D-97).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Imported<V: Identities> {
     /// The failure, whose token arrives with its `Failed` entry.
     pub failure: V::FailureId,
-    /// The domains an [`ImportScope::Domains`] named that the instance has never been given -- by
-    /// any file or by its provider -- in the order named. Each reaches only the files declared with
-    /// none, which is the right answer when declarations are complete; a name here that the
-    /// consumer expected to match is a misspelling, or a file not yet given. Empty for every other
-    /// scope.
-    pub unmatched: Vec<FlushDomain>,
 }
 
 /// A flush domain: a unit whose volatile cache a flush commits and whose failure everything

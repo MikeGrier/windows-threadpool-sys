@@ -53,7 +53,10 @@ fn popped(rig: &mut Rig) -> Vec<String> {
 
 /// Import a failure reaching every uncovered write, and pop its `Failed`: its token.
 fn import(rig: &mut Rig) -> FailureToken {
-    let (_, actions) = rig.core.import_failure(ImportScope::All).expect("room");
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("room");
     rig.act(actions);
     match rig.pop_entry() {
         Some(Entry::Failed(failed)) => failed.token,
@@ -238,7 +241,10 @@ fn every_kind_of_entry_queued_at_once_pops_in_order() {
     rig.write(1, 0, b"a").expect("room");
     rig.write(1, 8, b"b").expect("room");
     rig.run();
-    let (failure, actions) = rig.core.import_failure(ImportScope::All).expect("room");
+    let (failure, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("room");
     rig.act(actions);
     rig.seal(1);
     rig.run();

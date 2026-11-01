@@ -132,7 +132,7 @@ fn a_blocked_answer_is_not_replaced_only_durable_is() {
     rig.entries();
     let (_, actions) = rig
         .core
-        .import_failure(crate::types::ImportScope::All)
+        .import_failure(crate::types::ImportScope::All, |_| {})
         .expect("in scope");
     rig.act(actions);
     rig.seal(1);

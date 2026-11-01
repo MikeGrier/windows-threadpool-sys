@@ -298,7 +298,7 @@ fn a_resolution_naming_another_instances_failure_is_refused_whole() {
     let mut other = Rig::new();
     let (_, actions) = other
         .core
-        .import_failure(crate::types::ImportScope::All)
+        .import_failure(crate::types::ImportScope::All, |_| {})
         .expect("import");
     other.act(actions);
     let theirs = match other.core.pop() {

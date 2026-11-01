@@ -124,7 +124,7 @@ fn a_gate_on_an_abandoned_epoch_is_refused() {
     rig.run();
     let (_, actions) = rig
         .core
-        .import_failure(ImportScope::All)
+        .import_failure(ImportScope::All, |_| {})
         .expect("all is always in scope");
     rig.act(actions);
     let token = only_failure(&mut rig);
@@ -151,7 +151,7 @@ fn a_gate_on_an_abandoned_epoch_the_mark_has_passed_holds_nothing() {
     rig.run();
     let (_, actions) = rig
         .core
-        .import_failure(ImportScope::All)
+        .import_failure(ImportScope::All, |_| {})
         .expect("all is always in scope");
     rig.act(actions);
     let token = only_failure(&mut rig);
@@ -191,7 +191,10 @@ fn a_held_operation_whose_gate_is_abandoned_never_issues() {
     let held = rig
         .write_with(KEY, rig.epoch(2), 0, b"held", gated(gate))
         .expect("held");
-    let (_, actions) = rig.core.import_failure(ImportScope::All).expect("in scope");
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("in scope");
     rig.act(actions);
     let token = only_failure(&mut rig);
     let actions = rig

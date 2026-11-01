@@ -439,6 +439,28 @@ impl Rig {
         }
     }
 
+    /// Import a failure scoped by `scope`, counting the names reported unmatched into `unmatched`,
+    /// and abandon it.
+    fn import_and_abandon(&mut self, scope: ImportScope<V>, unmatched: &mut usize) {
+        let core = &mut self.core;
+        let (imported, actions) = counted(|| core.import_failure(scope, |_| *unmatched += 1))
+            .expect("room for an import");
+        self.act(actions);
+        let token = self
+            .drain()
+            .into_iter()
+            .find_map(|entry| match entry {
+                Entry::Failed(failed) if failed.id == imported.failure => Some(failed.token),
+                _ => None,
+            })
+            .expect("the import's entry");
+        let core = &mut self.core;
+        let items = vec![(token, Resolution::Abandon)];
+        let actions = counted(|| core.resolve(items)).expect("a live token");
+        self.act(actions);
+        self.drain();
+    }
+
     /// Submit, and feed every completion back, until nothing is queued.
     fn run(&mut self) {
         loop {
@@ -749,7 +771,8 @@ fn failures() -> Vec<Measured> {
     rig.drain();
     rig.phase("writes before the import");
     let core = &mut rig.core;
-    let (imported, actions) = counted(|| core.import_failure(ImportScope::All)).expect("in scope");
+    let (imported, actions) =
+        counted(|| core.import_failure(ImportScope::All, |_| {})).expect("in scope");
     rig.act(actions);
     let entries = rig.drain();
     rig.phase("a failure imported");
@@ -766,6 +789,14 @@ fn failures() -> Vec<Measured> {
     rig.act(actions);
     rig.drain();
     rig.phase("an abandon resolved");
+
+    // The scope's list is the caller's, made before the count; recording the failure keeps it
+    // shared, and the name the instance was never given is reported through the visitor.
+    let named = Arc::from([FlushDomain::new(b"never-given".to_vec())]);
+    let mut unmatched = 0_usize;
+    rig.import_and_abandon(ImportScope::Domains(named), &mut unmatched);
+    assert_eq!(unmatched, 1, "the unknown name was reported");
+    rig.phase("an import naming a domain never given, abandoned");
     assert!(
         rig.told.0.load(Ordering::Relaxed) >= 4,
         "the observer was told of both failures, a suspect write and a marking"
@@ -869,6 +900,14 @@ fn providers() -> Vec<Measured> {
     rig.run();
     rig.drain();
     rig.phase("the ended lineage's answer given and its commit completed");
+
+    // An import naming the domain `KEY` declares, with that list the caller's, made before the
+    // count.
+    let named = Arc::from([FlushDomain::new(b"log".to_vec())]);
+    let mut unmatched = 0_usize;
+    rig.import_and_abandon(ImportScope::Domains(named), &mut unmatched);
+    assert_eq!(unmatched, 0, "the name is one a target declares");
+    rig.phase("an import naming a declared domain, abandoned");
 
     let Rig {
         core, mut phases, ..

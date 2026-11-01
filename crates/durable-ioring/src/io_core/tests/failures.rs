@@ -8,8 +8,8 @@ use crate::diagnostics::NoDiagnostics;
 use crate::ids::FailureToken;
 use crate::memory::MemoryTarget;
 use crate::types::{
-    Entry, Epoch, EpochState, FailureCause, FlushDomain, ImportScope, PushRefusal, Resolution,
-    ResolveRefusal,
+    Entry, Epoch, EpochState, FailureCause, FlushDomain, ImportError, ImportScope, PushRefusal,
+    Resolution, ResolveRefusal,
 };
 
 /// Drain the queue, returning the failures' tokens in order.
@@ -34,8 +34,15 @@ fn uncovered(rig: &mut Rig, epoch: u64) {
 fn an_import_suspects_the_uncovered_writes_in_scope() {
     let mut rig = Rig::new();
     uncovered(&mut rig, 1);
-    let (imported, actions) = rig.core.import_failure(ImportScope::All).expect("in scope");
-    assert!(imported.unmatched.is_empty());
+    let mut unmatched = 0;
+    let (imported, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| unmatched += 1)
+        .expect("in scope");
+    assert_eq!(
+        unmatched, 0,
+        "a scope naming no domain names none unmatched"
+    );
     assert!(actions.deliver);
     rig.act(actions);
     let entries = rig.entries();
@@ -54,9 +61,15 @@ fn an_import_suspects_the_uncovered_writes_in_scope() {
 fn a_failure_is_stamped_from_the_cores_clock() {
     let mut rig = Rig::new();
     uncovered(&mut rig, 1);
-    let first = rig.core.import_failure(ImportScope::All).expect("in scope");
+    let first = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("in scope");
     rig.act(first.1);
-    let second = rig.core.import_failure(ImportScope::All).expect("in scope");
+    let second = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("in scope");
     rig.act(second.1);
     let stamps: Vec<u64> = rig
         .core
@@ -74,16 +87,54 @@ fn an_import_naming_unknown_domains_reports_them_unmatched() {
         super::OTHER,
         MemoryTarget::new().with_domains([FlushDomain::new(b"disk".as_slice())]),
     );
-    let names = vec![
+    let names: Arc<[FlushDomain]> = Arc::from([
+        FlushDomain::new(b"zeta".as_slice()),
         FlushDomain::new(b"disk".as_slice()),
         FlushDomain::new(b"typo".as_slice()),
-    ];
-    let (imported, actions) = rig
+    ]);
+    let mut unmatched = Vec::new();
+    let (_, actions) = rig
         .core
-        .import_failure(ImportScope::Domains(names))
+        .import_failure(ImportScope::Domains(Arc::clone(&names)), |domain| {
+            unmatched.push(domain.clone());
+        })
         .expect("in scope");
     rig.act(actions);
-    assert_eq!(imported.unmatched, [FlushDomain::new(b"typo".as_slice())]);
+    assert_eq!(
+        unmatched,
+        [
+            FlushDomain::new(b"zeta".as_slice()),
+            FlushDomain::new(b"typo".as_slice())
+        ],
+        "every unknown name, in the order named, and no known one"
+    );
+    let listed = rig.core.failures_listed();
+    assert!(
+        matches!(&listed[0].cause, FailureCause::Imported { scope: ImportScope::Domains(kept) } if Arc::ptr_eq(kept, &names)),
+        "the failure keeps the caller's list, not a copy of it"
+    );
+}
+
+#[test]
+fn a_refused_import_reports_nothing_unmatched() {
+    let mut rig = Rig::new();
+    for _ in 0..crate::test_support::CAPACITY.imports {
+        let (_, actions) = rig
+            .core
+            .import_failure(ImportScope::All, |_| {})
+            .expect("room");
+        rig.act(actions);
+    }
+    let mut unmatched = 0;
+    let refused = rig.core.import_failure(
+        ImportScope::Domains(Arc::from([FlushDomain::new(b"typo".as_slice())])),
+        |_| unmatched += 1,
+    );
+    assert!(matches!(refused, Err(ImportError::AtCapacity(_))));
+    assert_eq!(
+        unmatched, 0,
+        "nothing is reported for an import not recorded"
+    );
 }
 
 #[test]
@@ -97,7 +148,7 @@ fn an_import_confined_to_a_lineage_suspects_only_its_writes() {
     rig.entries();
     let (_, actions) = rig
         .core
-        .import_failure(ImportScope::Lineage(lineage))
+        .import_failure(ImportScope::Lineage(lineage), |_| {})
         .expect("live");
     rig.act(actions);
     let entries = rig.entries();
@@ -119,7 +170,7 @@ fn an_import_naming_a_lineage_not_live_is_refused() {
     .expect("a valid capacity");
     assert!(
         rig.core
-            .import_failure(ImportScope::Lineage(other.default_lineage()))
+            .import_failure(ImportScope::Lineage(other.default_lineage()), |_| {})
             .is_err()
     );
     assert!(rig.core.failures_listed().is_empty());
@@ -129,7 +180,10 @@ fn an_import_naming_a_lineage_not_live_is_refused() {
 fn abandoning_a_failure_abandons_its_epochs() {
     let mut rig = Rig::new();
     uncovered(&mut rig, 1);
-    let (_, actions) = rig.core.import_failure(ImportScope::All).expect("in scope");
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("in scope");
     rig.act(actions);
     let token = tokens(&mut rig).pop().expect("a failure");
     let actions = rig
@@ -152,7 +206,10 @@ fn abandoning_a_failure_abandons_its_epochs() {
 fn a_heal_takes_effect_with_the_next_successful_seal() {
     let mut rig = Rig::new();
     uncovered(&mut rig, 1);
-    let (_, actions) = rig.core.import_failure(ImportScope::All).expect("in scope");
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("in scope");
     rig.act(actions);
     let token = tokens(&mut rig).pop().expect("a failure");
     rig.seal(1);
@@ -187,14 +244,17 @@ fn a_heal_takes_effect_with_the_next_successful_seal() {
 fn a_foreign_token_refuses_the_whole_resolution_and_hands_every_token_back() {
     let mut rig = Rig::new();
     uncovered(&mut rig, 1);
-    let (_, actions) = rig.core.import_failure(ImportScope::All).expect("in scope");
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("in scope");
     rig.act(actions);
     let ours = tokens(&mut rig).pop().expect("a failure");
     let mut other = Rig::new();
     uncovered(&mut other, 1);
     let (_, actions) = other
         .core
-        .import_failure(ImportScope::All)
+        .import_failure(ImportScope::All, |_| {})
         .expect("in scope");
     other.act(actions);
     let theirs = tokens(&mut other).pop().expect("a failure");
@@ -214,7 +274,10 @@ fn a_foreign_token_refuses_the_whole_resolution_and_hands_every_token_back() {
 fn a_dropped_token_can_be_taken_again_and_a_held_one_cannot() {
     let mut rig = Rig::new();
     uncovered(&mut rig, 1);
-    let (imported, actions) = rig.core.import_failure(ImportScope::All).expect("in scope");
+    let (imported, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("in scope");
     rig.act(actions);
     let token = tokens(&mut rig).pop().expect("a failure");
     assert!(
