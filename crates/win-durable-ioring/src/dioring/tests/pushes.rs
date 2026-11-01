@@ -776,11 +776,14 @@ fn a_file_added_under_a_key_in_use_is_refused_and_handed_back() {
         );
         assert_eq!(error.target.flush_domains(), [super::domain("d")]);
     }
-    let imported = ring
-        .import_failure(ImportScope::Domains(vec![super::domain("d")]))
-        .expect("an import by domain");
+    let mut reported = Vec::new();
+    ring.import_failure(
+        ImportScope::Domains(std::sync::Arc::from([super::domain("d")])),
+        |domain| reported.push(domain.clone()),
+    )
+    .expect("an import by domain");
     assert_eq!(
-        imported.unmatched,
+        reported,
         [super::domain("d")],
         "a refused target's domains were never given to the instance"
     );

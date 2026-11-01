@@ -216,7 +216,11 @@ impl DurableRing for Fake {
         unimplemented!("the fake observes no failures")
     }
 
-    fn import_failure(&mut self, _scope: ImportScope<V>) -> Result<Imported<V>, ImportError<V>> {
+    fn import_failure(
+        &mut self,
+        _scope: ImportScope<V>,
+        _unmatched: impl FnMut(&durable_ioring::FlushDomain),
+    ) -> Result<Imported<V>, ImportError<V>> {
         unimplemented!("the fake observes no failures")
     }
 

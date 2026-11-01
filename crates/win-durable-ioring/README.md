@@ -555,7 +555,7 @@ let r = ring.write(FILE, 16, vec![1; 8], tag(43), ()).expect("a write");
 // <- WriteDone(R)
 pop_until(&mut ring, |e| matches!(e, Entry::Op(done) if done.id == r));
 // -> import_failure()                         // the consumer learned of an outside failure
-let f2_id = ring.import_failure(ImportScope::All).expect("the whole instance").failure;
+let f2_id = ring.import_failure(ImportScope::All, |_| {}).expect("the whole instance").failure;
 // <- Failed { failure: F2, cause: Imported } // the observer was told F2 suspects [A@41, P@43, R@43]
 let Entry::Failed(f2) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
     unreachable!()
@@ -636,7 +636,7 @@ fails as never issued.
 # };
 # let r = ring.write(FILE, 16, vec![1; 8], tag(43), ()).expect("a write");
 # pop_until(&mut ring, |e| matches!(e, Entry::Op(done) if done.id == r));
-# ring.import_failure(ImportScope::All).expect("the whole instance");
+# ring.import_failure(ImportScope::All, |_| {}).expect("the whole instance");
 # let Entry::Failed(f2) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
 #     unreachable!()
 # };

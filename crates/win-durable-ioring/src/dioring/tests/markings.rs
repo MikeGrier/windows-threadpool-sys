@@ -31,7 +31,7 @@ fn a_suspect_write_flushed_after_an_import_is_marked_covered_and_the_observer_is
     harness.next();
     harness
         .ring
-        .import_failure(ImportScope::All)
+        .import_failure(ImportScope::All, |_| {})
         .expect("import");
     let failed = next_failed(&mut harness);
     assert_eq!(harness.suspects(failed.id), [write]);

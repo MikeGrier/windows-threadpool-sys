@@ -319,8 +319,9 @@ impl<D: DurableRing> DeliveryHandle<D> {
     pub fn import_failure(
         &self,
         scope: ImportScope<D::Ids>,
+        unmatched: impl FnMut(&durable_ioring::FlushDomain),
     ) -> Result<Imported<D::Ids>, ImportError<D::Ids>> {
-        self.with(|ring| ring.import_failure(scope))
+        self.with(|ring| ring.import_failure(scope, unmatched))
     }
 
     /// [`DurableRing::failures`].

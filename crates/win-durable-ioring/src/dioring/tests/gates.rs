@@ -85,7 +85,7 @@ pub(super) fn two(temp: &super::TempFile) -> (Harness, LineageHandle) {
 fn import_and_abandon(harness: &mut Harness) {
     harness
         .ring
-        .import_failure(ImportScope::All)
+        .import_failure(ImportScope::All, |_| {})
         .expect("import");
     let token: FailureToken = match harness.next_entry() {
         Entry::Failed(failed) => failed.token,

@@ -175,10 +175,13 @@ fn an_add_target_past_the_domains_declared_is_refused_and_gives_the_instance_non
         error.cause,
         AddTargetCause::AtCapacity(at(Limit::Domains, 1))
     );
-    let imported = ring
-        .import_failure(ImportScope::Domains(vec![super::domain("y")]))
-        .expect("an import by domain");
-    assert_eq!(imported.unmatched, [super::domain("y")]);
+    let mut reported = Vec::new();
+    ring.import_failure(
+        ImportScope::Domains(std::sync::Arc::from([super::domain("y")])),
+        |domain| reported.push(domain.clone()),
+    )
+    .expect("an import by domain");
+    assert_eq!(reported, [super::domain("y")]);
 }
 
 #[test]
@@ -230,9 +233,9 @@ fn an_import_past_the_imports_declared_is_refused() {
     ))
     .expect("build")
     .0;
-    ring.import_failure(ImportScope::All).expect("room");
+    ring.import_failure(ImportScope::All, |_| {}).expect("room");
     assert_eq!(
-        ring.import_failure(ImportScope::All).err(),
+        ring.import_failure(ImportScope::All, |_| {}).err(),
         Some(ImportError::AtCapacity(at(Limit::Imports, 1)))
     );
     assert_eq!(super::unresolved(&ring), 1, "nothing was recorded");

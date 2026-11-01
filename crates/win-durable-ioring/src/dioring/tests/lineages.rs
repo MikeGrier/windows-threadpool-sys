@@ -112,7 +112,9 @@ fn releasing_the_last_handle_ends_the_lineage_and_a_copy_keeps_it() {
         Err(UnknownLineage(lineage))
     );
     assert_eq!(
-        harness.ring.import_failure(ImportScope::Lineage(lineage)),
+        harness
+            .ring
+            .import_failure(ImportScope::Lineage(lineage), |_| {}),
         Err(ImportError::UnknownLineage(UnknownLineage(lineage)))
     );
     harness.finish();
@@ -268,7 +270,10 @@ fn an_import_scoped_to_a_lineage_suspects_only_its_writes() {
         (ImportScope::Lineage(harness.lineage()), vec![own]),
         (ImportScope::All, vec![own, theirs]),
     ] {
-        harness.ring.import_failure(scope.clone()).expect("import");
+        harness
+            .ring
+            .import_failure(scope.clone(), |_| {})
+            .expect("import");
         match harness.next_entry() {
             Entry::Failed(failed) => {
                 assert_eq!(harness.suspects(failed.id), expected, "{scope:?}");
@@ -309,7 +314,7 @@ fn ending_a_lineage_a_heal_waits_for_reports_the_heal() {
     harness.next_n(2);
     let id = harness
         .ring
-        .import_failure(ImportScope::All)
+        .import_failure(ImportScope::All, |_| {})
         .expect("import")
         .failure;
     let token = match harness.next_entry() {

@@ -890,12 +890,13 @@ where
     fn import_failure(
         &mut self,
         scope: ImportScope<Self::Ids>,
+        unmatched: impl FnMut(&FlushDomain),
     ) -> Result<Imported<Self::Ids>, ImportError<Self::Ids>> {
         let imported = {
             let mut engine = self.engine();
             engine
                 .core
-                .import_failure(scope)
+                .import_failure(scope, unmatched)
                 .map(|(imported, actions)| (imported, engine.act(actions)))
         };
         let (imported, deliver) = imported?;
