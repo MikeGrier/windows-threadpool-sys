@@ -506,8 +506,8 @@
       "file": "src/domains.rs",
       "expect": "caught",
       "why": "DI-D-19: ImportScope::Lineage narrows a failure to that lineage's writes. Widened, it would hold other lineages' marks for a failure the consumer placed in one. Caught by the ring test that imports into each of two lineages.",
-      "find": ["            (Some(Reach::All), Some(lineage.seq), Vec::new())"],
-      "replace": ["            (Some(Reach::All), None, Vec::new())"]
+      "find": ["        ImportScope::Lineage(lineage) if live(*lineage) => (Some(Reach::All), Some(lineage.seq)),"],
+      "replace": ["        ImportScope::Lineage(lineage) if live(*lineage) => (Some(Reach::All), None),"]
     },
     {
       "name": "DI-3.2.5.1: retiring ignores a failure holding the lineage",
@@ -954,8 +954,8 @@
       "file": "src/domains.rs",
       "expect": "caught",
       "why": "DI-D-46: a domain the instance was never given is reported, so a misspelling is not silent.",
-      "find": ["                tagged(tag::DOMAINS_IMPORT_REACH_UNMATCHED, || {","                    unmatched.push(domain.clone());","                });"],
-      "replace": ["                let _ = (domain, &mut unmatched);"]
+      "find": ["        visit(name);\n"],
+      "replace": ["        let _ = (name, &mut visit);\n"]
     },
     {
       "name": "DI-3.9.1: an inconsistency is not panicked on",
@@ -1371,7 +1371,7 @@
       "expect": "caught",
       "why": "DI-D-44: the driver makes the provider's requests with its lock released, so the engine keeps them; dropped, a served seal never finishes.",
       "find": ["        deliver | self.ring()\n"],
-      "replace": ["        self.core.drain_requests(drop);\n        deliver | self.ring()\n"]
+      "replace": ["        if let Ok(mut lost) = self.core.request_buf() {\n            self.core.drain_requests(&mut lost);\n        }\n        deliver | self.ring()\n"]
     },
     {
       "name": "DI-3.10.3.5.6.1: a drain stops after one pass",
@@ -2636,10 +2636,10 @@
       "replace": ["        if false {"]
     },
     {
-      "name": "DI-23.5.2.2: a push is refused with the window one short of full",
+      "name": "DI-23.5.2.2: a push past the window's ceiling is accepted",
       "file": "src/io_core.rs",
       "expect": "caught",
-      "why": "The operations declared are a ceiling: the push that takes the last place is accepted, and the next is refused.",
+      "why": "The operations declared are a ceiling: once the window holds that many places, the next push is refused whole. Accepting it lets the window outgrow the tables made for it.",
       "find": ["        if self.durability.window_places() >= self.capacity.operations {"],
       "replace": ["        if self.durability.window_places() > self.capacity.operations {"]
     },
@@ -2740,10 +2740,10 @@
       "replace": ["                !self.domains.contains_key(*domain)"]
     },
     {
-      "name": "DI-23.5.2.3: the flush parts leave out the served domains",
+      "name": "DI-23.5.2.3: the flush parts leave out the file's own flush",
       "file": "src/capacity.rs",
       "expect": "caught",
-      "why": "A seal opens a pair for its file's flush and one for each served domain, so the table of open pairs is sized for the operations times one plus the served domains; sized for the operations alone it is full before the bound.",
+      "why": "A seal opens a pair for its file's flush and one for each served domain, so the table of open pairs is sized for the operations times one plus the served domains; leaving out the one, the file's flush, makes it too small for every instance, a provider or not.",
       "find": ["        self.operations.checked_mul(served.checked_add(1)?)"],
       "replace": ["        self.operations.checked_mul(served)"]
     },
@@ -3876,20 +3876,28 @@
       "replace": ["            core::mem::forget(names.to_vec());\n            unmatched(names, &self.domains, unmatched_domain);\n"]
     },
     {
-      "name": "DI-D-46: an import reports no unmatched domain",
-      "file": "src/io_core/failures.rs",
-      "expect": "caught",
-      "why": "A domain the instance was never given reaches only the targets declared with none, so a misspelling would be silent; the visitor is what reports it, in the order named.",
-      "find": ["            unmatched(names, &self.domains, unmatched_domain);\n"],
-      "replace": ["            let _ = (names, unmatched_domain);\n"]
-    },
-    {
       "name": "DI-D-46: an import reports a domain it was given as unmatched",
       "file": "src/domains.rs",
       "expect": "caught",
       "why": "Only a name the instance has never been given is unmatched; reporting the known ones as well would send the consumer hunting for a misspelling that is not there.",
       "find": ["    for name in names.iter().filter(|name| !domains.contains_key(*name)) {"],
       "replace": ["    for name in names.iter().filter(|name| !domains.contains_key(*name) || name.bytes() == b\"disk\") {"]
+    },
+    {
+      "name": "DI-23.5.2.2: a push is refused with the window one short of full",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The operations declared are a ceiling, not one past it: the push that takes the last place is accepted, and only the next is refused.",
+      "find": ["        if self.durability.window_places() >= self.capacity.operations {"],
+      "replace": ["        if self.durability.window_places() + 1 >= self.capacity.operations {"]
+    },
+    {
+      "name": "DI-23.5.2.3: the flush parts leave out the served domains",
+      "file": "src/capacity.rs",
+      "expect": "caught",
+      "why": "A seal opens a pair for each served domain it touched as well as its file's flush, so an instance with a provider needs the operations times one plus the served domains; sized for the operations alone, it is full before the bound once seals ask the provider.",
+      "find": ["        self.operations.checked_mul(served.checked_add(1)?)"],
+      "replace": ["        self.operations.checked_mul(served.checked_sub(served)?.checked_add(1)?)"]
     }
   ]
 }
