@@ -468,7 +468,7 @@
       "expect": "caught",
       "why": "An entry is progress, and a pop that has one returns it even when the submit it also made failed: the failure is reported only when there is nothing to return instead. Reporting it first drops the entry the pop had already taken, so the consumer loses a completion. Caught by the drain test, which needs the first read's entry to arrive while submits fail.",
       "find": ["                Some(entry) => Ok(Some(entry)),"],
-      "replace": ["                Some(_) if submitted.is_err() => Err(io::Error::other(submitted.expect_err(\"checked\"))),", "                Some(entry) => Ok(Some(entry)),"]
+      "replace": ["                Some(_) if submitted.is_err() => Err(refusal_fault(submitted.expect_err(\"checked\"))),", "                Some(entry) => Ok(Some(entry)),"]
     },
     {
       "name": "DI-7+.2: a push does not remember that it queued",
@@ -802,7 +802,7 @@
       "expect": "caught",
       "why": "The other direction: an instance given a pool that nothing drains delivers nothing, to every consumer that waits for its readiness.",
       "find": ["                PoolDelivery::new(engine, on_ready, environment, watch.clone()).map(Delivery::Pool)"],
-      "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
+      "replace": ["                PumpedDelivery::new(engine)\n                    .map_err(|(fault, engine)| (io::Error::from(fault), engine))\n                    .map(|pumped| pumped.with_lock_watch(watch.clone()))\n                    .map(Delivery::Pumped)"]
     },
     {
       "name": "DI-7.5: the pool's callback sets nothing",
@@ -834,7 +834,7 @@
       "expect": "caught",
       "why": "The delivery chosen at construction is the one the instance has: a pumped instance has no pool wake, so nothing sets a signal for the consumer.",
       "find": ["                SignalledDelivery::new(engine, environment, watch.clone()).map(Delivery::Signalled)"],
-      "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
+      "replace": ["                PumpedDelivery::new(engine)\n                    .map_err(|(fault, engine)| (io::Error::from(fault), engine))\n                    .map(|pumped| pumped.with_lock_watch(watch.clone()))\n                    .map(Delivery::Pumped)"]
     },
     {
       "name": "DI-7.5: a signalled instance has no completion signal",
