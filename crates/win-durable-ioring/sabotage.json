@@ -2253,6 +2253,22 @@
       "why": "The driver takes the observer in its setup and must hand it to the core; otherwise a consumer that gave one is told nothing.",
       "find": ["            Some(observer) => core.observed_by(observer),"],
       "replace": ["            Some(_) => core,"]
+    },
+    {
+      "name": "DI-test-hygiene: a temporary file leaves a stale sibling of a killed run in place",
+      "file": "src/dioring/tests.rs",
+      "expect": "caught",
+      "why": "A sweep kills a hung test process, which leaves its read-only .fresh sibling behind, and a later process given the same id then finds create_new refused. TempFile::at clears the sibling before it starts; without that, a test that creates it fails on a name nothing in the run chose.",
+      "find": ["        remove_leftover(&path.with_extension(\"fresh\"));\n        fs::write(&path, b\"x\")"],
+      "replace": ["        fs::write(&path, b\"x\")"]
+    },
+    {
+      "name": "DI-test-hygiene: dropping a temporary file leaves the sibling a test made",
+      "file": "src/dioring/tests.rs",
+      "expect": "caught",
+      "why": "A test that panics before removing its read-only .fresh sibling would leak it, and the file is what the next run to be given the same process id collides with. The drop removes it, clearing the attribute first.",
+      "find": ["        let _ = fs::remove_file(&self.0);\n        remove_leftover(&self.0.with_extension(\"fresh\"));"],
+      "replace": ["        let _ = fs::remove_file(&self.0);"]
     }
   ]
 }

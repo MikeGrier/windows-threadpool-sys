@@ -236,17 +236,38 @@ pub(crate) fn wtf(path: &Path) -> Wtf16String {
     Wtf16String::from_os_str(path.as_os_str())
 }
 
-/// A temporary file, removed when dropped.
+/// A temporary file, removed when dropped, and with it the `.fresh` sibling a test makes by
+/// creating a file of its own beside it.
 pub(crate) struct TempFile(pub(crate) PathBuf);
+
+/// Removes `path` if it exists, clearing the read-only attribute a test may have created it with.
+/// Best effort: this runs from a destructor and from setup, where a failure has nothing to report to.
+#[allow(clippy::permissions_set_readonly_false)]
+fn remove_leftover(path: &Path) {
+    if let Ok(metadata) = fs::metadata(path) {
+        let mut permissions = metadata.permissions();
+        permissions.set_readonly(false);
+        let _ = fs::set_permissions(path, permissions);
+        let _ = fs::remove_file(path);
+    }
+}
 
 impl TempFile {
     pub(crate) fn new(tag: &str) -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
-        let path = std::env::temp_dir().join(format!(
+        Self::at(std::env::temp_dir().join(format!(
             "durable-ioring-setup-{tag}-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        )))
+    }
+
+    /// A temporary file at `path`, which this removes when dropped.
+    pub(crate) fn at(path: PathBuf) -> Self {
+        // A process killed mid-test (a sweep kills a hung one) leaves its sibling behind, and a
+        // later process can be given the same id, so a test that creates the sibling with
+        // `create_new` would be refused.
+        remove_leftover(&path.with_extension("fresh"));
         fs::write(&path, b"x").expect("create the temporary file");
         Self(path)
     }
@@ -265,6 +286,7 @@ impl TempFile {
 impl Drop for TempFile {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
+        remove_leftover(&self.0.with_extension("fresh"));
     }
 }
 
