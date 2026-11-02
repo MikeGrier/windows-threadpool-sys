@@ -2254,6 +2254,151 @@ Test-Case '-Since from a base it cannot measure from sweeps every entry' {
     }
     finally { Remove-Fixture $root }
 }
+
+# -Diff selects by the patched file alone. The fixture's entries are caught by
+# tests in the file they patch, so `other is broken` is re-recorded as caught by
+# `t_marker`, defined in src/lib.rs: a change to lib.rs then reaches it through
+# its catching test under -Since, and not at all under -Diff.
+function Set-OtherCaughtByMarker {
+    param([string] $Root)
+    $head = ((Invoke-NativeStdout { git -C $Root rev-parse HEAD }) | Select-Object -First 1).Trim()
+    $path = Join-Path $Root '.scratch\sabotage\catchers.json'
+    $record = Read-SabotageCatcherRecord -Path $path
+    Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'other is broken' -Tests @('checks::t_marker') -At '2026-01-01T00:00:00.0000000Z' -Commit $head
+    Write-SabotageCatcherRecord -Path $path -Record $record
+}
+
+Test-Case '-Diff lists only the entries whose patched file is in the diff, and why' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'src\other.rs') -Value '// changed'
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Diff', 'HEAD')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'Scope    : Diff HEAD: 1 of 2 entries' $result.Output
+        Assert-Match 'other is broken  \[the file it patches changed: src/other.rs\]' $result.Output
+        Assert-False ($result.Output -match 'the marker is removed') 'its file is untouched'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Diff does not reach an entry through the file of its catching test' {
+    $root = New-ScopeFixture
+    try {
+        Set-OtherCaughtByMarker -Root $root
+        Add-Content -LiteralPath (Join-Path $root 'src\lib.rs') -Value '// changed'
+        $since = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Since', 'HEAD')
+        Assert-Match 'other is broken  \[its catching test''s file changed: src/lib.rs\]' $since.Output
+        $diff = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Diff', 'HEAD')
+        Assert-Equal 0 $diff.ExitCode $diff.Output
+        Assert-Match 'Scope    : Diff HEAD: 1 of 2 entries' $diff.Output
+        Assert-Match 'the marker is removed  \[the file it patches changed: src/lib.rs\]' $diff.Output
+        Assert-False ($diff.Output -match 'other is broken') 'its file is untouched, whatever catches it'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Diff does not sweep an entry for having no record of what caught it' {
+    $root = New-ScopeFixture
+    try {
+        Remove-Item -LiteralPath (Join-Path $root '.scratch\sabotage\catchers.json') -Force
+        Add-Content -LiteralPath (Join-Path $root 'src\other.rs') -Value '// changed'
+        $since = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Since', 'HEAD')
+        Assert-Match 'Since HEAD: 2 of 2 entries' $since.Output
+        $diff = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Diff', 'HEAD')
+        Assert-Match 'Diff HEAD: 1 of 2 entries' $diff.Output
+        Assert-False ($diff.Output -match 'the marker is removed') 'no record is no reason here'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Diff selects an entry the diff adds or changes in the manifest' {
+    $root = New-ScopeFixture
+    try {
+        $path = Join-Path $root 'sabotage.json'
+        $json = [System.IO.File]::ReadAllText($path) | ConvertFrom-Json
+        $json.sabotages[0].why = 'a reason that changed'
+        [System.IO.File]::WriteAllText($path, ($json | ConvertTo-Json -Depth 8))
+        $changed = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Diff', 'HEAD')
+        Assert-Equal 0 $changed.ExitCode $changed.Output
+        Assert-Match 'Diff HEAD: 1 of 2 entries' $changed.Output
+        Assert-Match 'the marker is removed  \[the entry changed\]' $changed.Output
+        Assert-False ($changed.Output -match 'other is broken') 'unchanged, and its file is untouched'
+
+        $json.sabotages += [ordered]@{
+            name = 'a new one'; file = 'src/other.rs'; expect = 'caught'; why = 'x'
+            find = @('fn t_other() {}'); replace = @('')
+        }
+        [System.IO.File]::WriteAllText($path, ($json | ConvertTo-Json -Depth 8))
+        $added = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Diff', 'HEAD')
+        Assert-Match 'a new one  \[the entry is new\]' $added.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Diff measures from the revision it is given, so a commit is a diff' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'src\other.rs') -Value '// changed'
+        Invoke-Native { git -C $root add -A } | Out-Null
+        Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m edit } | Out-Null
+        $none = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Diff', 'HEAD')
+        Assert-Match 'Diff HEAD: 0 of 2 entries' $none.Output
+        $last = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Diff', 'HEAD~1')
+        Assert-Match 'Diff HEAD~1: 1 of 2 entries' $last.Output
+        Assert-Match 'other is broken' $last.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Diff sweeps the entries it selected, and nothing else' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'src\other.rs') -Value '// changed'
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Diff', 'HEAD')
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'Sweeping 1 entry' $result.Output
+        Assert-False ($result.Output -match 'the marker is removed') 'not swept'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Diff with nothing in the diff sweeps nothing and builds nothing' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'README.md') -Value 'changed'
+        $mark = Join-Path $root 'stubs\cargo-ran'
+        $stub = Join-Path $root 'stubs\marking.cmd'
+        [System.IO.File]::WriteAllText($stub, "@echo off`r`necho ran>`"$mark`"`r`nexit /b 0`r`n")
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Diff', 'HEAD')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'could have been affected; nothing to sweep' $result.Output
+        Assert-False (Test-Path -LiteralPath $mark) 'not even the baseline was built'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Diff from a base it cannot measure from sweeps every entry' {
+    $root = New-ScopeFixture
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Diff', 'no-such-revision')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'every entry: this clone has no merge base' $result.Output
+        Assert-Match 'the marker is removed' $result.Output
+        Assert-Match 'other is broken' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Diff and -Since together are refused before anything is built' {
+    $root = New-ScopeFixture
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Diff', 'HEAD', '-Since', 'HEAD')
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match '-Since and -Diff each choose the entries' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
 # --- the working tree is never touched --------------------------------------
 #
 # The premise of the whole design. Each of these was a real defect: the tree was

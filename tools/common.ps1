@@ -1328,6 +1328,59 @@ function Select-SabotageEntry {
     if ($affected.Count -eq 0 -and -not $now.Reached) { $reason = 'nothing it builds on changed' }
     return [pscustomobject]@{ All = $false; Entries = $affected; Reasons = $reasons; Reason = $reason }
 }
+# The entries a diff touches, for `-Diff`: those whose patched file is among the
+# changed paths, and those the manifest adds or edits in the diff. Nothing else.
+# This is deliberately narrower than Select-SabotageEntry, which also reaches an
+# entry through a crate it builds on, a shared input, an entry with no record of
+# what caught it, or a changed catching test. None of those is consulted here, so
+# a change that only a catching test, a dependency or a test helper carries goes
+# unswept until the nightly sweep, which is the backstop (DESIGN-NOTES.md,
+# "sabotage-diff-scope"). A change git cannot report is not measured, and every
+# entry is selected then, as for -Since.
+# Returns the same shape: `All`, `Entries`, `Reasons`, `Reason`.
+function Select-SabotageDiffEntry {
+    param([string] $RepositoryRoot, [string] $Manifest, [object[]] $Entries, [string] $SourceRoot, $Change)
+    $Entries = @($Entries)
+    if ($null -eq $Change -or -not $Change.Known) {
+        $why = if ($null -eq $Change) { 'no change was measured' } else { $Change.Reason }
+        $reasons = @{}
+        foreach ($entry in $Entries) { $reasons[$entry.name] = $why }
+        return [pscustomobject]@{ All = $true; Entries = $Entries; Reasons = $reasons; Reason = "every entry: $why" }
+    }
+    $changed = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in @($Change.Paths)) { if ($path) { [void]$changed.Add($path) } }
+
+    $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
+    $old = $null
+    if ($changed.Contains($Manifest)) {
+        $text = Get-SabotageFileAt -RepositoryRoot $RepositoryRoot -Commit $Change.Base -Path $Manifest
+        if ($null -ne $text) { try { $old = $text | ConvertFrom-Json } catch { $old = $null } }
+    }
+    $reasons = @{}
+    $affected = @(foreach ($entry in $Entries) {
+            $why = $null
+            if ($changed.Contains($Manifest)) {
+                $before = $null
+                if ($null -ne $old) { $before = @($old.sabotages | Where-Object { $_.name -eq $entry.name }) | Select-Object -First 1 }
+                if ($null -eq $before) { $why = 'the entry is new' }
+                elseif (-not [string]::Equals(($before | ConvertTo-Json -Depth 8 -Compress), ($entry | ConvertTo-Json -Depth 8 -Compress), [System.StringComparison]::Ordinal)) {
+                    $why = 'the entry changed'
+                }
+            }
+            if (-not $why) {
+                $full = [System.IO.Path]::GetFullPath((Join-Path $SourceRoot $entry.file))
+                $relative = if ($full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $full.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
+                } else { $full.Replace('\', '/') }
+                if ($changed.Contains($relative)) { $why = "the file it patches changed: $($entry.file)" }
+            }
+            if ($why) {
+                $reasons[$entry.name] = $why
+                $entry
+            }
+        })
+    return [pscustomobject]@{ All = $false; Entries = $affected; Reasons = $reasons; Reason = "$($affected.Count) of $($Entries.Count) entries" }
+}
 # Whether a run of `CargoArgs` can be narrowed by naming tests: not when they
 # already name some. libtest runs a test that matches ANY name it is given, so a
 # name added to a filter the manifest set would widen the run past the suite it

@@ -241,6 +241,19 @@
     TESTNAME before it, is never narrowed to its recorded tests. Needs cargo on
     PATH, for `cargo metadata`. `-List` shows each entry's reason.
 
+.PARAMETER Diff
+    A base revision, as for `-Since`, for a narrower selection: only the
+    entries whose patched file is in the diff, and those the diff adds to the
+    manifest or changes. A change to a crate this one builds on, to a shared
+    input, to a test, or to a test helper selects nothing here, and an entry
+    with no record of what caught it is not swept for that alone; the
+    nightly sweep covers what this leaves. Measured as `-Since` is, from the
+    merge base against the working tree, so `-Diff HEAD` is what is
+    uncommitted and `-Diff HEAD~1` adds the last commit. A change git cannot
+    report sweeps every entry. Cannot be combined with `-Since`. The rule is
+    `Select-SabotageDiffEntry` in [common.ps1](common.ps1), and the choice is
+    in DESIGN-NOTES.md, "sabotage-diff-scope". `-List` shows each entry's reason.
+
 .PARAMETER CatcherRecord
     The record of which tests caught each entry that `-Since` reads, and a
     sweep reads and writes. Defaults to `catchers.json` in the output directory.
@@ -296,6 +309,8 @@ param(
     [switch] $CheckPatches,
 
     [string] $Since,
+
+    [string] $Diff,
 
     [string] $CatcherRecord,
 
@@ -1218,6 +1233,9 @@ if ($ShardCount -lt 1) {
 if ($Shard -lt 0 -or $Shard -ge $ShardCount) {
     Exit-WithMessage "-Shard must be in 0..$($ShardCount - 1) for -ShardCount $ShardCount; got $Shard." 2
 }
+if (-not [string]::IsNullOrWhiteSpace($Since) -and -not [string]::IsNullOrWhiteSpace($Diff)) {
+    Exit-WithMessage '-Since and -Diff each choose the entries to sweep; give one.' 2
+}
 
 # Two sets from here on, and the distinction is load-bearing.
 #
@@ -1286,6 +1304,14 @@ if (-not [string]::IsNullOrWhiteSpace($Since)) {
     $scoped = @($scope.Entries)
     $scopeReasons = $scope.Reasons
     $scopeNote = "Since ${Since}: $($scope.Reason)."
+}
+elseif (-not [string]::IsNullOrWhiteSpace($Diff)) {
+    $change = Get-SabotageChange -RepositoryRoot $repoRoot -Since $Diff
+    $scope = Select-SabotageDiffEntry -RepositoryRoot $repoRoot -Manifest $catcherKey -Entries $manifestSelected `
+        -SourceRoot $sourceRoot -Change $change
+    $scoped = @($scope.Entries)
+    $scopeReasons = $scope.Reasons
+    $scopeNote = "Diff ${Diff}: $($scope.Reason)."
 }
 # Ordered by FILE, then cut into equal contiguous blocks. NOT whole groups
 # dealt to the lightest shard -- that is the earlier revision described further

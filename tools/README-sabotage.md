@@ -27,6 +27,9 @@ below for what that buys and why it is the premise rather than a nicety.
 .\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -Since origin/main -List
 .\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -Since origin/main
 
+# Sweep only the entries whose patched file the last commit and your edits touched
+.\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -Diff HEAD~1 -List
+
 # Check that every patch still applies, building nothing (one manifest, then all)
 .\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -CheckPatches
 .\tools\check-sabotage-patches.ps1
@@ -76,7 +79,17 @@ scoped run in a clone is a full one. Sweep the whole manifest, without
 tests, or code elsewhere in a crate that decides whether a sabotaged line is
 reached.
 
-| Exit | Meaning |
+`-Diff <rev>` is the narrower local mode, for the edit in hand. It measures the change the
+same way, so `-Diff HEAD` is what is uncommitted and `-Diff HEAD~1` adds the last commit, and
+it sweeps only the entries whose patched file is among the changed paths, plus the entries
+the diff adds to the manifest or changes. A shared input such as `Cargo.lock`, a crate it
+builds on, an entry with no record, and a changed catching test select nothing, so it
+neither needs the record nor is made a full sweep by a lockfile change. It will
+not see a change that reaches an entry only through its catching test or a shared test
+helper, and the nightly sweep is what finds that; use `-Since` before opening a pull
+request. `-List -Diff <rev>` shows what would run and why, and the two flags cannot be
+combined. The choice is in
+[DESIGN-NOTES.md](../DESIGN-NOTES.md#sabotage-diff-scope).
 |---|---|
 | 0 | Every sabotage behaved as declared. |
 | 1 | The sweep ran and at least one sabotage did not behave as declared. |
