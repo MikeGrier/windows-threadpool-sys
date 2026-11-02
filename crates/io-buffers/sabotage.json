@@ -9,7 +9,7 @@
       "expect": "caught",
       "why": "A null address is the one the kernel would be handed. Compared against the Vec's own pointer, not against another call to the same function, which a constant would satisfy.",
       "find": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
-      "replace": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+      "replace": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        core::ptr::null()\n"]
     },
     {
       "name": "IB-1.1: a Vec reports its capacity as its length",
@@ -25,7 +25,7 @@
       "expect": "caught",
       "why": "The mutable trait's obligation is that its address equals the shared one, so the kernel writes where the owner reads.",
       "find": ["unsafe impl IoBufMut for Vec<u8> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        self.as_mut_ptr()\n"],
-      "replace": ["unsafe impl IoBufMut for Vec<u8> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        std::ptr::null_mut()\n"]
+      "replace": ["unsafe impl IoBufMut for Vec<u8> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        core::ptr::null_mut()\n"]
     },
     {
       "name": "IB-1.1: a boxed slice reports no address",
@@ -33,7 +33,7 @@
       "expect": "caught",
       "why": "As for a Vec.",
       "find": ["unsafe impl IoBuf for Box<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
-      "replace": ["unsafe impl IoBuf for Box<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+      "replace": ["unsafe impl IoBuf for Box<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        core::ptr::null()\n"]
     },
     {
       "name": "IB-1.1: a boxed slice reports half its length",
@@ -49,7 +49,7 @@
       "expect": "caught",
       "why": "As for a Vec.",
       "find": ["unsafe impl IoBufMut for Box<[u8]> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        self.as_mut_ptr()\n"],
-      "replace": ["unsafe impl IoBufMut for Box<[u8]> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        std::ptr::null_mut()\n"]
+      "replace": ["unsafe impl IoBufMut for Box<[u8]> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        core::ptr::null_mut()\n"]
     },
     {
       "name": "IB-1.1: a shared slice reports no address",
@@ -57,7 +57,7 @@
       "expect": "caught",
       "why": "The case the ring crate's mutation testing found: comparing the function to itself passes even when it returns null, so the test names the allocation independently.",
       "find": ["unsafe impl IoBuf for Arc<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
-      "replace": ["unsafe impl IoBuf for Arc<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+      "replace": ["unsafe impl IoBuf for Arc<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        core::ptr::null()\n"]
     },
     {
       "name": "IB-1.1: a shared slice reports no length",
@@ -73,7 +73,7 @@
       "expect": "caught",
       "why": "As for a Vec.",
       "find": ["unsafe impl IoBuf for &'static [u8] {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
-      "replace": ["unsafe impl IoBuf for &'static [u8] {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+      "replace": ["unsafe impl IoBuf for &'static [u8] {\n    fn stable_ptr(&self) -> *const u8 {\n        core::ptr::null()\n"]
     },
     {
       "name": "IB-1.1: a static mutable slice reports no mutable address",
@@ -81,7 +81,7 @@
       "expect": "caught",
       "why": "The one reference type that is a legal destination: its mutable address must be the slice's.",
       "find": ["        <[u8]>::as_mut_ptr(self)\n"],
-      "replace": ["        std::ptr::null_mut()\n"]
+      "replace": ["        core::ptr::null_mut()\n"]
     },
     {
       "name": "IB-1.1: a static mutable slice reports its length plus one",
@@ -193,7 +193,7 @@
       "expect": "caught",
       "why": "The mutable trait's address must be the shared one. May be scored as a process abort by the tests that read through it; the correspondence test fails an assertion on its own.",
       "find": ["    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        self.pointer.as_ptr()\n"],
-      "replace": ["    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        std::ptr::null_mut()\n"]
+      "replace": ["    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        core::ptr::null_mut()\n"]
     },
     {
       "name": "IB-1.4: Debug prints the contents",
