@@ -6,10 +6,10 @@
   "notCoveredHere": "No test can produce these failures: durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing), and the durability core's debug assertions for a flush or a token it has no record of. The Windows driver's own absences are in ../win-durable-ioring/sabotage.json.",
   "sabotages": [
     {
-      "name": "DI-3.2.1: a domain repeated within one file counts twice",
+      "name": "DI-3.2.1 equivalent: the provider's interned domains skip their dedup",
       "file": "src/domains.rs",
-      "expect": "caught",
-      "why": "A file's domains are a set; a repeat would make intersection and containment checks see a domain more than once.",
+      "expect": "survives",
+      "why": "An equivalent mutant, kept so a sweep keeps saying so. intern_all once interned each target's domains, where a repeat reached this dedup; since the domain lists were made at construction it interns only the provider's, which with_provider has already refused for any repeat (first_repeat), so the dedup sees none. A target's repeated domain is collapsed where its list is claimed, pinned by 'DI-23.12.4.4: a list keeps a domain twice'.",
       "find": ["    ids.dedup();"],
       "replace": [""]
     },
@@ -2604,10 +2604,10 @@
       "replace": ["                lost = Some((what, write.op));\n            }\n            false"]
     },
     {
-      "name": "DI-23.5.2.2: a core declaring no lineage is built",
+      "name": "DI-23.5.2.2 equivalent: build's early refusal of no lineage is skipped",
       "file": "src/io_core.rs",
-      "expect": "caught",
-      "why": "The default lineage is one of the lineages declared, so a capacity declaring none is not one an instance can be built with; built anyway, its first mint is refused for a count that never admitted the default.",
+      "expect": "survives",
+      "why": "An equivalent mutant, kept so a sweep keeps saying so. Since the ordered tables were put on fixed storage, Durability::new refuses NoLineages itself, because the default lineage cannot be put in a table made for none; build's check answers the same, earlier and without making the first table. The refusal is pinned by the tests that build with no lineage, which a patch removing both checks would fail.",
       "find": ["        if capacity.lineages == 0 {\n            return Err(ConstructionError::NoLineages);\n        }\n        let instance"],
       "replace": ["        let instance"]
     },

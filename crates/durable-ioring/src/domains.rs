@@ -137,6 +137,8 @@ pub(crate) fn intern_all(
         tagged(tag::DOMAINS_INTERN_ALL_ID, || ids.push(id));
     }
     ids.sort_unstable();
+    // Its one caller, `with_provider`, refuses a repeated domain first, so this finds none today; it
+    // keeps the promise in the doc above should another caller come.
     ids.dedup();
     Ok(tagged(tag::DOMAINS_INTERN_ALL_SHARED, || ids.into()))
 }

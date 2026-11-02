@@ -253,6 +253,8 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         capacity: Capacity,
         served: usize,
     ) -> Result<Self, ConstructionError> {
+        // `Durability::new` refuses the same, since the default lineage cannot be put in a table
+        // made for none; this answers before any table is made.
         if capacity.lineages == 0 {
             return Err(ConstructionError::NoLineages);
         }
