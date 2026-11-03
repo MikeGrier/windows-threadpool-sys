@@ -42,6 +42,9 @@ for the process, and the last gives it back. Any other sink is given in its plac
 or `DebugOutputDiagnostics` for text, or `FanOutDiagnostics` to send events to several. A reader of the trace needs the
 provider's manifest to see names and fields; the instance does not.
 
+`EtwDiagnostics` is re-exported as part of this crate's public API, and its type identity comes from
+`durable-ioring-events`. A breaking release of that dependency is therefore a breaking release of this crate too.
+
 `DeliveryMode::Pool`, `DeliveryMode::Signalled` and `EntryDelivery::new` take
 `windows-threadpool-sys`'s `CallbackEnviron`, so that crate's types are part of this crate's public
 API. A minor release of `windows-threadpool-sys` that changes those types is a minor release of this
