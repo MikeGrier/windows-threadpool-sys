@@ -1671,10 +1671,12 @@
       "why": "An empty queue answers S_FALSE with no completion to fail. Spending the plan on it uses up the failure before any completion exists, so the one a test armed for never fails.",
       "find": [
         "        if answer == S_OK",
+        "            && !cqe.is_null()",
         "            && let Some(code) = Fail::spend(&mut lock(&self.shared).completions)"
       ],
       "replace": [
-        "        if let Some(code) = Fail::spend(&mut lock(&self.shared).completions)"
+        "        if !cqe.is_null()",
+        "            && let Some(code) = Fail::spend(&mut lock(&self.shared).completions)"
       ]
     },
     {

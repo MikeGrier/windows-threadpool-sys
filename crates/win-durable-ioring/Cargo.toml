@@ -2,7 +2,7 @@
 
 [package]
 name = "win-durable-ioring"
-version = "0.5.0"
+version = "0.5.1"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -18,7 +18,7 @@ readme = "README.md"
 durable-ioring = { version = "0.4.0", path = "../durable-ioring" }
 # The ring crate (DI-D-16 in durable-ioring's DESIGN-NOTES.md): the release that carries the typed
 # ring, `leave_queued` and the registrations this driver is built on.
-windows-ioring-sys = { version = "0.9.0", path = "../windows-ioring-sys" }
+windows-ioring-sys = { version = "0.9.1", path = "../windows-ioring-sys" }
 # The file target's type (DI-D-29): a consumer's file is a `SharedHandle`, and this crate hands that
 # same handle to the ring, which takes the type directly.
 win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
