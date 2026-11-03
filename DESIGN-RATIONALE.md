@@ -1057,3 +1057,23 @@ select fewer entries than a full one would.
 **Not decided.** Whether the cache should be removed once the branch is shown to work. It is kept beside the
 branch on purpose, so a defect in the new path cannot cost a run its record, and the merge-or-delete
 decision is parked with the post-merge observation that would settle it.
+
+## <a id="why-a-long-haul-tier"></a>Why a long-haul tier, and what it was measured from
+
+The post-merge sabotage sweeps of `c714e83b` and `13f06742` each failed on a `win-durable-ioring` control
+that timed out. Neither was a hang. The failed shards' transcripts showed the same code on the same runner
+taking far longer than its own baseline: the library tests in one, the `blocking_push` example in the other,
+with almost no CPU used while they waited. The stall moved between test binaries, so it was the runner and
+not one test; but a suite doing less real file I/O gives a stall fewer places to land.
+
+Measured locally on 2026-11-03 by timing every test in the workspace one at a time: 22 tests take a second
+or more and account for nearly half of the serial total. They fall into three kinds. Scale for its own sake
+(a directory of thousands of entries, large running enumerations, a large roster), whose claims hold at a
+size just past one batch. Probes run at full workload where the test checks the shape of their output. And
+waits that are the claim, such as a bound that must kill a process, which shrink only if the bound can.
+
+**Alternatives not taken.** Raising the sweep's timeout for the crate, or re-running a control that times
+out: both answer the symptom, and are parked behind the reduction (`M45+.1`) until it is known how often a
+stall still reaches a control. Deleting the heavy tests: the scale is evidence the smaller form does not
+give, so it moves to a daily tier instead. Running the heavy tier inside the sabotage sweep: the sweep runs
+the whole suite once per entry, which is exactly the cost this removes.

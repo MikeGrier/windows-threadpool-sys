@@ -19,3 +19,16 @@ milestone of [CHECKLIST.md](CHECKLIST.md), and the file is deleted when it is em
   `record` job's dependence on two stores; keeping it costs a second copy that can disagree with the
   first, which the merge by latest result already tolerates. Either way, the merge-or-delete is made
   when the new path is proven and is not pre-empted by a testing or efficiency shortcut.
+
+## <a id="m45-plus"></a>M45+ -- What a sabotage sweep does with a control that times out (parked behind M45.10)
+
+- [ ] **M45+.1** -- Decide whether a sabotage entry declared `survives` that times out is run again once before
+  it is reported caught, or whether a crate whose suite does real I/O gets a manifest `timeoutSeconds` well
+  above its baseline, or neither.
+
+  **Gate:** [M45.10](CHECKLIST.md), the re-measurement after the suites are reduced. The question arose from controls in
+  `win-durable-ioring` timing out on runners whose tests stalled while idle (post-merge sweeps of
+  `c714e83b` and `13f06742`); the engineer, 2026-11-03, chose first to make the suites do less, and this
+  is left until it is known how often a stall still reaches a control once they do. A control's patch
+  changes nothing, so a timeout on one cannot be a detection; a timeout on an entry declared `caught`
+  can be, and stays one either way.

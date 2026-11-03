@@ -601,3 +601,63 @@ yanks are needed, is [DE-D-8](crates/durable-ioring-events/DESIGN-NOTES.md#de-d-
   The engineer's own step, with their crates.io login: `cargo yank --version 0.1.1 durable-ioring-events`, then
   `cargo yank --version 0.5.0 win-durable-ioring` and `cargo yank --version 0.5.1 win-durable-ioring`.
   Both driver releases require the events crate at 0.1.1 or later within 0.1, so all three go, and the replacements must exist first.
+
+## M45 -- A long-haul tier, a probation tier, and suites that do only what their claims need
+
+Each pull request's CI, and each sabotage entry, runs a crate's whole suite, so every test pays its cost
+on every one of them. Measured locally, 22 of the workspace's tests take a second or more and account
+for nearly half of its serial test time; on GitHub runners, tests doing real file I/O have stalled for
+many seconds while idle, which failed sabotage controls on the post-merge sweeps of `c714e83b` and
+`13f06742`. So a test's scale is kept only where the claim needs it, and the scale for its own sake moves
+to a long-haul tier that runs daily. Tests that have never run anywhere start on probation. The decision
+is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-a-long-haul-tier).
+
+- [ ] **M45.1** -- The tiers' convention and its census. A long-haul test is
+  `#[ignore = "long-haul: <what it costs>"]` and sits in a module named `long_haul`; a probation test is
+  `#[ignore = "probation: <what it costs>"]` in a module named `probation`, since libtest filters by name
+  and not by ignore reason. A census script fails when a reason and its module path disagree in either
+  direction, so a test cannot be marked into a tier that never selects it; it runs in CI on every push,
+  with tests of its own for both directions. DEVELOPMENT.md states the convention.
+
+- [ ] **M45.2** -- `long-haul.yml`: daily, and only when `main` has moved since the last completed run,
+  plus manual dispatch. It runs `--ignored long_haul` across the workspace, and a failure there fails the
+  run. Then it runs `--ignored probation`, whose failures do not fail the run. Separate from the
+  sabotage sweep, which never passes `--ignored` and so never pays for either tier.
+
+- [ ] **M45.3** -- Keep each probation test's results across runs, and report them. The report gives each
+  probation test's runs, passes and current run of passes, which is what promoting it from `probation`
+  to `long_haul` -- a code change -- is decided on. Where the results live is this item's to decide
+  (artifacts expire; the sabotage record's branch is the pattern that does not), and so is the
+  promotion threshold, which is a working position until the first results exist.
+
+- [ ] **M45.4** -- Put the never-run tests on probation: `windows-ioring-sys`' five flush-barrier stress
+  tests ("saturates a disk with background writers"; "writes tens of MiB per trial") and
+  `win-durable-ioring`'s test that allocates a buffer of more than 4 GiB.
+
+- [ ] **M45.5** -- `win-durable-ioring`'s `blocking_push` example: write past a small declared capacity, not
+  three times 256 writes, and keep the full scale as a long-haul test.
+
+- [ ] **M45.6** -- `windows-file-enumeration-sys`: the directory of thousands of entries and the two large
+  running enumerations that are cancelled or dropped. Each to the size its claim needs, the full size
+  long-haul.
+
+- [ ] **M45.7** -- `win-multi-file-tail-watcher`: the large roster dropped during a poll, the job log under the
+  tiny and default options, the children whose output is reassembled, and the real-writer tests. Shrink
+  where the scale is not the claim; where it is a timing claim (a reader quiet between bursts), say so
+  and leave it.
+
+- [ ] **M45.8** -- `windows-platform-probes`: the tests that run every registered probe, or a cost probe at a
+  multiplier, at full workload. Run the probes at the smallest workload that still shows what each test
+  checks, with full workload long-haul.
+
+- [ ] **M45.9** -- The tests whose wait is their claim: `win-job-launcher`'s bound killing a descendant or a
+  grandchild, `win-debugging-sys`' process that outlives its bound, and the registration bounds in
+  `win-durable-ioring`. Shorten a bound only where the claim holds at the shorter one; otherwise leave it
+  and say why.
+
+- [ ] **M45.10** -- Review the remaining tests of a second or more against the same rule, starting with
+  `windows-file-watcher`'s scenario stress and `windows-ioring-sys`' properties under every resolution, by
+  re-measuring the workspace once M45.5 to M45.9 are in.
+
+  > **-> UNBLOCKS PARKED WORK:** completing this unblocks `M45+` in [PARKED.md](PARKED.md#m45-plus).

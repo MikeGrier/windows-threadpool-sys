@@ -3027,6 +3027,36 @@ last learned and not from nothing, which is what a clone's first scoped sweep ot
 
 The alternatives and what building it found are in
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-the-record-came-to-a-branch).
+
+<a id="long-haul-tier"></a>**A test's scale is kept where its claim needs it; scale for its own sake runs daily in a long-haul tier, and a test that has never run starts on probation.**
+The engineer, 2026-11-03, on the sabotage controls that timed out because a runner stalled under a
+suite doing real file I/O: "do less in each of these tests", since a lighter suite helps all of CI, and
+"perhaps we should have some heavy / long-haul runs for post-merge runs ... (but not as part of the
+sabotage full runs)". Every pull request's CI and every sabotage entry runs a crate's whole suite, so a
+test's cost is paid on each; a test whose claim holds at a small size is written at that size.
+
+- **The tiers are named, not inferred.** A long-haul test is `#[ignore = "long-haul: <what it costs>"]`
+  in a module named `long_haul`; a probation test is `#[ignore = "probation: <what it costs>"]` in a
+  module named `probation`. libtest selects by name, not by ignore reason, so the module path is what
+  runs a tier and the reason is what tells a reader why; a census fails when the two disagree, since a
+  test marked into a tier its name does not select would never run. The cost in the reason is
+  documentation (the engineer: "I don't know what the value of the 'cost' is other than pure
+  documentation but that's ok").
+- **The scale is moved, not dropped.** A test reduced to the size its claim needs keeps its full-scale
+  form as a long-haul test, so nothing that ran before stops running; it runs daily instead of on every
+  push.
+- **Cadence: daily, and only when `main` has moved** (the engineer), plus manual dispatch, in a workflow
+  of its own. Not part of the sabotage sweep, which never passes `--ignored` and so never pays for either
+  tier.
+- **Probation is for a test that has never run in CI** (the engineer: a set "which run after the main
+  tests which don't fail the run but we gather data on whether they succeed or fail and we can promote
+  them to non-probationary once they succeed for enough runs"). It runs after the long-haul tier, its
+  failures do not fail the run, and its results are kept across runs. Promotion is a code change, moving
+  the test to `long_haul`. **Working positions, not decisions:** how many passes are enough, and where the
+  results are kept; both are `M45.3`'s, decided once there are results to look at.
+
+The work is [CHECKLIST.md](CHECKLIST.md) `M45`. What prompted it, and the measurements, are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-a-long-haul-tier).
 ## <a id="compile-fail-pins-its-code"></a>A `compile_fail` doctest names the error it exists to produce
 
 **Every `compile_fail` doctest pins its expected error code -- ```` ```compile_fail,E0502 ```` -- and CI
