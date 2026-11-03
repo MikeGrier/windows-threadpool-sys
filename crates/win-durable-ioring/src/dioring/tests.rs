@@ -243,7 +243,7 @@ pub(crate) struct TempFile(pub(crate) PathBuf);
 /// Removes `path` if it exists, clearing the read-only attribute a test may have created it with.
 /// Best effort: this runs from a destructor and from setup, where a failure has nothing to report to.
 #[allow(clippy::permissions_set_readonly_false)]
-fn remove_leftover(path: &Path) {
+pub(crate) fn remove_leftover(path: &Path) {
     if let Ok(metadata) = fs::metadata(path) {
         let mut permissions = metadata.permissions();
         permissions.set_readonly(false);

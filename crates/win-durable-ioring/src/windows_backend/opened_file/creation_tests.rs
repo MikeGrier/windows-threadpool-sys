@@ -22,7 +22,7 @@ use super::{
     Cached, DataAccess, Disposition, FileAttributes, FileOptions, FileRights, OpenedFile,
     ReadWrite, SecurityDescriptor, Unbuffered,
 };
-use crate::dioring::tests::{TempFile, wtf};
+use crate::dioring::tests::{TempFile, remove_leftover, wtf};
 
 fn create_new() -> FileOptions<ReadWrite> {
     FileOptions::new()
@@ -61,6 +61,10 @@ fn a_stale_read_only_sibling_left_by_a_killed_run_does_not_refuse_the_create() {
         std::process::id()
     ));
     let stale = name.with_extension("fresh");
+    // This test's own name is fixed per process, so a run killed inside it leaves the file this
+    // makes, read-only, and a later process given the same id would fail here before the
+    // behaviour under test.
+    remove_leftover(&stale);
     fs::write(&stale, b"left behind").expect("leave a stale file");
     let mut permissions = fs::metadata(&stale).expect("metadata").permissions();
     permissions.set_readonly(true);
