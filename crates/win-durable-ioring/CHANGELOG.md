@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.5.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.4.0...win-durable-ioring-v0.5.0) (2026-11-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **durable-ioring:** a refusal carrying a backend fault passes the backend's report through
+* **durable-ioring:** DurableRing loses failure_suspects and failure_markings, UnknownFailure and Entry::Marked are removed, and ConformanceOracle loses suspects and observe_from in favour of observer and reading; a consumer reads a failure's suspect writes and markings through a FailureObserver given at construction.
+* **durable-ioring:** win-durable-ioring's Setup gains a failure_observer field.
+* **durable-ioring:** give the failure inventory to a visitor  failures() no longer hands out a Vec of copies. On the DurableRing trait and the core it takes a visitor and gives each unresolved failure, in the order observed, as a FailureInfo<'a, V> whose cause is lent for the visit as &'a FailureCause -- the way LineageInfo already lends its description (DI-D-103). Leftover::Failure from close() carries the lent form. The visitor runs under the instance's lock and must not call back into it. Neither the inventory nor a close with failures allocates: the "failures queried" phase of the allocation test is now zero, and its three allocation tags are gone.  win-durable-ioring implements the new signature in Dioring, the delivery wrapper and the fake; its tests count the inventory, and its close helper keeps failure identities. The core's tests read the inventory through a test-only failures_listed() that copies each out, so their assertions kept their shape.  Swept "failures()"/"FailureInfo"/"inventory" across CONTRACT.md, DESIGN-NOTES.md, both READMEs and both crates' src: CONTRACT.md "The inventory" (1), DI-D-103 as-built (1), the trait and core rustdoc (2), win-durable-ioring's README example (1); API.md left as the superseded sketch.  Sabotage: one entry added (the core's inventory visiting nothing, caught by the driver's tests) and the two existing inventory entries re-swept; all as declared.  BREAKING CHANGE: DurableRing::failures and DurableIoCore::failures take a visitor instead of returning Vec[FailureInfo]; FailureInfo gains a lifetime and lends its cause.  Completed item: DI-23.12.3.7: The inventory as a visitor (DI-D-103, DI-D-108): failures() gives each unresolved failure to a visitor, lending its cause, rather than handing out a Vec of copies, as the lineages and the holds already are; close() lends its failures the same way.  Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+* **durable-ioring:** Failed loses suspect; Abandoned and Healed carry only the failure; FailureInfo loses suspect and markings; SuspectSet is removed; DurableRing gains failure_suspects and failure_markings; a resolved failure's holds, and an import's count, are let go when its resolution entry is popped; the oracle requires each Failed's suspect set.
+* **durable-ioring:** LineageInfo is LineageInfo<'a, V> with description: Option<&'a str>, and Leftover is Leftover<'a, V, B, C>. DurableRing::lineages and close take visitors over the lent types, so a visitor written as a bare function over one lifetime, such as drop, no longer fits; |_| {} does.
+* **durable-ioring:** LineageHandle::mint returns None when its home is gone or has no slot free, and the driver's Home trait gains slots(). A handle whose home is gone, or a detached one, counts no copies, so it is never the last.
+* **durable-ioring:** DurableRing::lineages and close take a visitor and return nothing; close gives a Leftover enum in place of Leftovers; target_holds and lineage_holds are new required trait methods; IoTargetBusy loses lowest_gates and uncovered_through and its type parameter, and its failures and LineageBusy's are counts; RemoveTargetError loses its type parameter; the engine's take_requests is drain_requests.
+* **durable-ioring:** DurableIoCore::new and with_provider take a Capacity and return a Result; DuplicateDomain is replaced by ConstructionError; mint_lineage returns a Result; import_failure returns ImportError; PushRefusal and AddTargetCause gain AtCapacity; Setup gains a capacity field and SetupRefusal gains Construction and AtCapacity.
+* **durable-ioring:** IoFault.error is an ErrorReport, not an Arc of io::Error; DomainCompletion::fail and DomainOutcome::Failed take an ErrorReport; DurableRing, RegisteredBufferRing and Waitable report IoFault where they reported io::Error; PumpedSetup's error is an IoFault; scripted_fault takes a static str. In win-durable-ioring, DeliveryEvent::Failure carries an IoFault and the registered-buffer methods of DeliveryHandle report IoFault.
+
+### Features
+
+* **durable-ioring:** a fault's report is an rc-errors ErrorReport, and io::Error leaves the portable boundary ([92c34e7](https://github.com/MikeGrier/windows-threadpool-sys/commit/92c34e799d0740831ee667d5f742681a630f1f3a))
+* **durable-ioring:** a refusal carrying a backend fault passes the backend's report through ([f4123ef](https://github.com/MikeGrier/windows-threadpool-sys/commit/f4123efd7e95476f824c30517419877b4a5cac6b))
+* **durable-ioring:** count lineage handles' copies in slots made at construction ([5c07f50](https://github.com/MikeGrier/windows-threadpool-sys/commit/5c07f50f49111834e98de020f5c581dbae09e264))
+* **durable-ioring:** declare a capacity at construction and refuse past it ([81ab43b](https://github.com/MikeGrier/windows-threadpool-sys/commit/81ab43bbfe06b1d01dd0d7532da4b55e5065e5f7))
+* **durable-ioring:** give the failure inventory to a visitor  failures() no longer hands out a Vec of copies. On the DurableRing trait and the core it takes a visitor and gives each unresolved failure, in the order observed, as a FailureInfo&lt;'a, V&gt; whose cause is lent for the visit as &'a FailureCause -- the way LineageInfo already lends its description (DI-D-103). Leftover::Failure from close() carries the lent form. The visitor runs under the instance's lock and must not call back into it. Neither the inventory nor a close with failures allocates: the "failures queried" phase of the allocation test is now zero, and its three allocation tags are gone.  win-durable-ioring implements the new signature in Dioring, the delivery wrapper and the fake; its tests count the inventory, and its close helper keeps failure identities. The core's tests read the inventory through a test-only failures_listed() that copies each out, so their assertions kept their shape.  Swept "failures()"/"FailureInfo"/"inventory" across CONTRACT.md, DESIGN-NOTES.md, both READMEs and both crates' src: CONTRACT.md "The inventory" (1), DI-D-103 as-built (1), the trait and core rustdoc (2), win-durable-ioring's README example (1); API.md left as the superseded sketch.  Sabotage: one entry added (the core's inventory visiting nothing, caught by the driver's tests) and the two existing inventory entries re-swept; all as declared.  BREAKING CHANGE: DurableRing::failures and DurableIoCore::failures take a visitor instead of returning Vec[FailureInfo]; FailureInfo gains a lifetime and lends its cause.  Completed item: DI-23.12.3.7: The inventory as a visitor (DI-D-103, DI-D-108): failures() gives each unresolved failure to a visitor, lending its cause, rather than handing out a Vec of copies, as the lineages and the holds already are; close() lends its failures the same way.  Co-authored-by: Copilot &lt;223556219+Copilot@users.noreply.github.com&gt; ([cb5b55e](https://github.com/MikeGrier/windows-threadpool-sys/commit/cb5b55e6106f4f3a0525a2cd1c2743eb5f5402bb))
+* **durable-ioring:** hand the clean paths' collections to visitors ([a39a6ce](https://github.com/MikeGrier/windows-threadpool-sys/commit/a39a6ce01d53de0b9617d734b36079521f6c2a01))
+* **durable-ioring:** keep a lineage's description as given and lend it to visitors ([cd5d957](https://github.com/MikeGrier/windows-threadpool-sys/commit/cd5d95746009bbb67b575175f5cd265b6fd0b95f))
+* **durable-ioring:** lend a failure's records until its resolution is popped ([d92d2a5](https://github.com/MikeGrier/windows-threadpool-sys/commit/d92d2a525653cd95df3632320ade0caac9ece594))
+* **durable-ioring:** read a failure's detail only through its observer ([8614f37](https://github.com/MikeGrier/windows-threadpool-sys/commit/8614f37ad6da5f49dcc71b141f43a70c80ba8f25))
+* **durable-ioring:** tell a failure observer given at construction ([fab1810](https://github.com/MikeGrier/windows-threadpool-sys/commit/fab1810ef63c10a8575a9485b555d20f2bcb7c0c))
+
+
+### Bug Fixes
+
+* **win-durable-ioring:** seal and pop as the blocking-push demonstration goes, so it can write past its capacity ([994df28](https://github.com/MikeGrier/windows-threadpool-sys/commit/994df28dbc7da8b4fe397bd377510256a150a839))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * durable-ioring bumped from 0.3.0 to 0.4.0
+    * durable-ioring-events bumped from 0.1.0 to 0.1.1
+
 ## [0.4.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.3.2...win-durable-ioring-v0.4.0) (2026-10-22)
 
 
