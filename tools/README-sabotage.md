@@ -90,6 +90,8 @@ helper, and the nightly sweep is what finds that; use `-Since` before opening a 
 request. `-List -Diff <rev>` shows what would run and why, and the two flags cannot be
 combined. The choice is in
 [DESIGN-NOTES.md](../DESIGN-NOTES.md#sabotage-diff-scope).
+
+| Exit | Meaning |
 |---|---|
 | 0 | Every sabotage behaved as declared. |
 | 1 | The sweep ran and at least one sabotage did not behave as declared. |
