@@ -1,0 +1,128 @@
+{
+  "description": "Sabotages for tools/check-test-tiers.ps1, the check that a test's ignore reason and its module agree about which tier it is in, judged by test-check-test-tiers.ps1. Run with tools/run-sabotage.ps1 -Manifest tools/sabotage-tiers.json -CargoCommand tools/sabotage-tiers-runner.cmd; see tools/README-sabotage.md.",
+  "root": "..",
+  "package": "sabotage-tiers",
+  "testArgs": ["--suite"],
+  "sabotages": [
+    {
+      "name": "a marked test outside its tier's module is accepted",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "The tier's run selects by the module name, so a test marked long-haul that sits anywhere else is one nothing runs: it is skipped on every push and never picked up by the run that exists for it, and the build stays green.",
+      "find": ["            if ($marked -and -not $inModule) {"],
+      "replace": ["            if ($false) {"]
+    },
+    {
+      "name": "a marker with nothing after it is accepted",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "The text after the marker is where what a test costs is written. A bare marker passes the selection and leaves a reader of the ignore list nothing to judge it by.",
+      "find": ["$reason.Substring($tier.Marker.Length).Trim().Length -eq 0"],
+      "replace": ["$reason.Substring($tier.Marker.Length).Trim().Length -lt 0"]
+    },
+    {
+      "name": "an unmarked test in a tier module is accepted",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "A test in the module that is not ignored runs on every push although it was meant for the tier; one ignored for another reason is picked up by the tier's run for a reason that is not its own. Both are the same unmarked test.",
+      "find": ["            elseif ($inModule -and -not $marked) {"],
+      "replace": ["            elseif ($false) {"]
+    },
+    {
+      "name": "a path that only contains the filter is accepted",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "libtest's filter is a substring match, so `long_haul::` also selects `not_long_haul::t`. Without this check a test is swept into a tier by the spelling of an unrelated module.",
+      "find": ["            elseif ($selected -and -not $inModule) {"],
+      "replace": ["            elseif ($false) {"]
+    },
+    {
+      "name": "a misspelt marker is accepted",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "`Long-haul:` or `long_haul:` is meant as the marker and is not one, so the test is ignored for a reason the tier does not recognise and nothing says so.",
+      "find": ["            elseif ($reason -match $tier.Pattern -and -not $marked) {"],
+      "replace": ["            elseif ($false) {"]
+    },
+    {
+      "name": "the module name is matched without regard to case",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "libtest's filter is case-sensitive, so a module spelt `Long_Haul` is never selected by `long_haul::`. PowerShell's `-contains` ignores case and would call it in the module, which is the wrong answer exactly where the check exists to be right.",
+      "find": ["$inModule = $modules -ccontains $tier.Module"],
+      "replace": ["$inModule = $modules -contains $tier.Module"]
+    },
+    {
+      "name": "the test's own name counts as one of its modules",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "The filter `long_haul::` selects a path with a segment of that name FOLLOWED by another, so a test that is itself called `long_haul` is not selected. Counting the last segment as a module accepts it.",
+      "find": ["@($segments[0..($segments.Count - 2)])"],
+      "replace": ["@($segments)"]
+    },
+    {
+      "name": "the marker is matched without regard to case",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "The marker is spelt one way so that it can be searched for. Accepting `Long-haul:` makes the spelling a matter of who wrote the test, and it is the lookalike rule that would have said so.",
+      "find": ["$marked = $reason.StartsWith($tier.Marker, [System.StringComparison]::Ordinal)"],
+      "replace": ["$marked = $reason.StartsWith($tier.Marker, [System.StringComparison]::OrdinalIgnoreCase)"]
+    },
+    {
+      "name": "a target with its own harness is ignored",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "The check runs every test executable with libtest's arguments; one with `harness = false` would run its own main instead. The refusal exists so that is a decision made here and not something found in a CI run.",
+      "find": ["    if ($custom.Count -gt 0) {"],
+      "replace": ["    if ($custom.Count -gt 99) {"]
+    },
+    {
+      "name": "a build that failed is not noticed",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "A census taken over tests that did not build saw fewer tests than exist and would pass for the wrong reason. The exit code is what says the build worked.",
+      "find": ["        if ($LASTEXITCODE -ne 0) {"],
+      "replace": ["        if ($LASTEXITCODE -eq 99) {"]
+    },
+    {
+      "name": "a test that breaks a rule exits zero",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "The exit code is the only thing CI reads.",
+      "find": ["    exit 1"],
+      "replace": ["    exit 0"]
+    },
+    {
+      "name": "a missing listing exits zero",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "A census that could not be taken must not look like one that found nothing wrong.",
+      "find": ["Write-Host \"No listing at $ListingPath.\"; exit 2"],
+      "replace": ["Write-Host \"No listing at $ListingPath.\"; exit 0"]
+    },
+    {
+      "name": "a line libtest wrote with an unescaped backslash reads every test as not ignored",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "libtest does not escape a backslash in an ignore reason, so a reason that names a path (the administrative-share tests have one) is not valid JSON and is read by shape. A reading that gets `ignore` wrong turns a marked test into an unmarked one in its module.",
+      "find": ["ignore = ($shape.Groups['ignore'].Value -eq 'true')"],
+      "replace": ["ignore = ($shape.Groups['ignore'].Value -eq 'false')"]
+    },
+    {
+      "name": "a line libtest wrote with an unescaped backslash loses its reason",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "The same reading, losing the text: the marker is the start of the reason, so a reason read as empty is an unmarked test.",
+      "find": ["ignore_message = $shape.Groups['message'].Value }"],
+      "replace": ["ignore_message = '' }"]
+    },
+    {
+      "name": "CONTROL: the problems are listed in another order",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "survives",
+      "why": "The manifest checking itself. This changes the order a reader sees problems in and nothing a test claims, so it MUST survive -- if it comes back caught, the suite is matching on incidental ordering rather than behaviour, and its other results are worth less than they look.",
+      "find": ["Sort-Object Binary, Name, Problem"],
+      "replace": ["Sort-Object Name, Binary, Problem"]
+    }
+  ]
+}

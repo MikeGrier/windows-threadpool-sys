@@ -4183,3 +4183,30 @@ crates' checklists; this is only the order and the links, and each item's own ch
 - [x] **M44.3** -- `windows-waitable-queues`: its doorbell's `duplicate` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
 
 - [x] **M44.4** -- `win-job-launcher`: `duplicate_inheritable` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
+
+## Moved 2026-11-03 18:41:21 -05:00 -- M45.1: the test tiers' convention and its census
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m451"></a>M45.1 -- The tiers' convention and its census: `tools/check-test-tiers.ps1` refuses a test whose ignore reason and module disagree about its tier, in CI on every push. *(completed 2026-11-03 18:41:21 -05:00)*
+
+- [x] **M45.1** -- The tiers' convention and its census. A long-haul test is
+  `#[ignore = "long-haul: <what it costs>"]` and sits in a module named `long_haul`; a probation test is
+  `#[ignore = "probation: <what it costs>"]` in a module named `probation`, since libtest filters by name
+  and not by ignore reason. A census script fails when a reason and its module path disagree in either
+  direction, so a test cannot be marked into a tier that never selects it; it runs in CI on every push,
+  with tests of its own for both directions. DEVELOPMENT.md states the convention.
+
+**Done.** [tools/check-test-tiers.ps1](tools/check-test-tiers.ps1) asks every test executable for its list
+(`--list --format json`, which carries each test's ignore reason) and exits 0 consistent, 1 for a test that
+breaks a rule, 2 when the census could not be taken: a `harness = false` target, a build that failed, or a
+missing listing. It runs in the all-features `build + test` job after `cargo test`.
+[tools/test-check-test-tiers.ps1](tools/test-check-test-tiers.ps1) tests each rule in both directions from
+recorded listings, and against a fixture workspace whose real executable is asked, on PowerShell 7 and
+Windows PowerShell 5.1; [tools/sabotage-tiers.json](tools/sabotage-tiers.json) re-injects each rule's
+defect. The convention is in [DEVELOPMENT.md](DEVELOPMENT.md#test-tiers).
+
+libtest writes an ignore reason into its JSON without escaping a backslash, so the reason of the
+administrative-share tests (`\\localhost\C$`) is not valid JSON and a strict parse refuses the line. The
+census reads such a line by its shape. The branch that refuses a line that is neither is not reached by any
+test, because no executable the suite can build writes one.

@@ -215,6 +215,16 @@ must stamp the file with the current time. The entry is caught.
 That is the argument for this file in one paragraph. A test suite cannot tell
 you what it fails to look at; only injecting the defect can.
 
+[sabotage-tiers.json](sabotage-tiers.json) is the same arrangement for
+[check-test-tiers.ps1](check-test-tiers.ps1), judged by
+[test-check-test-tiers.ps1](test-check-test-tiers.ps1) through
+[sabotage-tiers-runner.cmd](sabotage-tiers-runner.cmd):
+
+```powershell
+.\tools\run-sabotage.ps1 -Manifest tools\sabotage-tiers.json `
+    -CargoCommand (Resolve-Path tools\sabotage-tiers-runner.cmd).Path
+```
+
 Runs on **Windows PowerShell 5.1 and PowerShell 7 alike**, like the other
 scripts in this directory, and the full sweep is verified on both. Worth stating
 because the two differ in ways that bite here specifically: 5.1 rejects

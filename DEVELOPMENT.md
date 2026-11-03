@@ -53,6 +53,39 @@ the directory override in `rustup`'s resolution order and forces those jobs onto
 the actual floating toolchain. The `msrv` job intentionally has no such
 override, since it is meant to run the pinned version.
 
+## Test tiers
+
+A test too slow for every push, or not yet trusted, is `#[ignore]`d with a reason that names its tier and
+sits in a module of the same name. The two spellings are what a run selects by, so they must agree:
+
+| Tier | Ignore reason starts with | Module | A run selects it with |
+|---|---|---|---|
+| long-haul | `long-haul:` | `long_haul` | `--ignored long_haul::` |
+| probation | `probation:` | `probation` | `--ignored probation::` |
+
+```rust
+mod long_haul {
+    #[test]
+    #[ignore = "long-haul: about 3s, a roster of 4096 files"]
+    fn the_whole_roster() { /* ... */ }
+}
+```
+
+The text after the marker says what the test costs. Nothing reads it but a person deciding whether to run
+the tier, so it is documentation, and it should say something.
+
+An integration test (a file under a crate's `tests/`) puts its tiered tests in a `mod long_haul` or
+`mod probation` inside that file, the same as a unit test does.
+
+libtest filters by name and cannot filter by ignore reason, which is why the module is part of the
+convention. [tools/check-test-tiers.ps1](tools/check-test-tiers.ps1) asks every test executable for its
+list and refuses a test whose reason and module disagree: marked but not in the module (nothing would run
+it), in the module but not marked (it would run on every push, or be swept into the tier for another
+reason), a path that contains `long_haul::` without a module of that name, and a reason that reads like a
+marker but is not spelled as one. CI runs it after the all-features `cargo test`, and
+[tools/test-check-test-tiers.ps1](tools/test-check-test-tiers.ps1) tests it. The reasoning is in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
 ## Release process
 
 `release-please` owns version changes, tags, and changelog updates. Each crate

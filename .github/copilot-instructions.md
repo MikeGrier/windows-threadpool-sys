@@ -2252,6 +2252,13 @@ The data does not have to be necessarily stable. A guideline might be that small
 a separate file or somehow encoded in source files. Larger data sets may be generated at run time, whether exhaustively or
 via random techniques.
 
+### Test tiers
+
+A test too slow for every push is `#[ignore = "long-haul: <cost>"]` in a module named `long_haul`; one not yet
+trusted is `#[ignore = "probation: <cost>"]` in a module named `probation`. A tier's run selects by the module
+name and the reason names the tier, so the two must agree, and `tools/check-test-tiers.ps1` refuses a test where
+they do not. The convention, and what an integration test does, is in [DEVELOPMENT.md](../DEVELOPMENT.md#test-tiers).
+
 ## Architectural pre-steps
 
 **Never call `stdout`/`stderr`/`print`/`eprintln` (or the language equivalent) from

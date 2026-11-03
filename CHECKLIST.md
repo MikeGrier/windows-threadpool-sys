@@ -613,12 +613,7 @@ to a long-haul tier that runs daily. Tests that have never run anywhere start on
 is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it are in
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-a-long-haul-tier).
 
-- [ ] **M45.1** -- The tiers' convention and its census. A long-haul test is
-  `#[ignore = "long-haul: <what it costs>"]` and sits in a module named `long_haul`; a probation test is
-  `#[ignore = "probation: <what it costs>"]` in a module named `probation`, since libtest filters by name
-  and not by ignore reason. A census script fails when a reason and its module path disagree in either
-  direction, so a test cannot be marked into a tier that never selects it; it runs in CI on every push,
-  with tests of its own for both directions. DEVELOPMENT.md states the convention.
+- [x] **M45.1** -- The tiers' convention and its census: `tools/check-test-tiers.ps1` refuses a test whose ignore reason and module disagree about its tier, in CI on every push. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m451)
 
 - [ ] **M45.2** -- `long-haul.yml`: daily, and only when `main` has moved since the last completed run,
   plus manual dispatch. It runs `--ignored long_haul` across the workspace, and a failure there fails the

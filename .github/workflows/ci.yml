@@ -218,6 +218,16 @@ jobs:
       - name: Run test-sabotage-records.ps1 (Windows PowerShell 5.1)
         shell: powershell
         run: ./tools/test-sabotage-records.ps1
+      # The check that a test's ignore reason and its module agree about its tier, driven
+      # both from recorded listings and against a real fixture workspace, because the
+      # JSON libtest writes is what it reads and is not always valid JSON. Both hosts:
+      # an ordinary script a developer may run under either.
+      - name: Run test-check-test-tiers.ps1
+        shell: pwsh
+        run: ./tools/test-check-test-tiers.ps1
+      - name: Run test-check-test-tiers.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-check-test-tiers.ps1
       # pwsh only, and deliberately not repeated under 5.1 like the step above:
       # check-encoding.ps1 carries curated mojibake with no BOM, so 5.1 decodes
       # it as ANSI and cannot parse it. The suite says so and refuses to run
@@ -327,6 +337,15 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test --workspace ${{ matrix.flags }} --locked --no-fail-fast
+      # A test's ignore reason and the module it sits in must agree about its tier, because
+      # the long-haul and probation runs select by module name: a test that disagrees is one
+      # nothing runs, and nothing else says so. It asks every test executable for its list,
+      # so it needs the all-features build above and nothing more. See DEVELOPMENT.md,
+      # "Test tiers".
+      - name: check test tiers
+        if: ${{ matrix.variant == 'all features' }}
+        shell: pwsh
+        run: ./tools/check-test-tiers.ps1
       # The UNC current-directory test is ignored by default because it needs a
       # reachable administrative share (`\\localhost\C$`), which an ordinary
       # developer account does not have -- running it by default would report an
