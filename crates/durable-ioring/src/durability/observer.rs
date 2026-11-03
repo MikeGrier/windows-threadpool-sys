@@ -6,6 +6,7 @@
 use alloc::sync::Arc;
 
 use super::{Durability, V};
+use crate::alloc_tags::{tag, tagged};
 use crate::clock::Instant;
 use crate::contract::EpochId;
 use crate::observer::FailureObserver;
@@ -32,7 +33,13 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
             return;
         };
         let failure = &self.failures[at];
-        observer.failed(failure.id, &failure.cause, failure.observed);
-        self.visit_suspects(failure, |write| observer.suspected(failure.id, write));
+        tagged(tag::DURABILITY_OBSERVER_FAILED, || {
+            observer.failed(failure.id, &failure.cause, failure.observed);
+        });
+        self.visit_suspects(failure, |write| {
+            tagged(tag::DURABILITY_OBSERVER_SUSPECTED, || {
+                observer.suspected(failure.id, write);
+            });
+        });
     }
 }

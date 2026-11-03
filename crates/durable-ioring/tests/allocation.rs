@@ -65,6 +65,31 @@ impl FailureObserver<V> for TallyObserver {
     }
 }
 
+/// A failure observer that keeps what it is told, a string for each call, so every call allocates:
+/// what an observer of a consumer's may do (DI-D-97). The core has to count it under its own calls.
+#[derive(Default)]
+struct KeepingObserver(Mutex<Vec<String>>);
+
+impl KeepingObserver {
+    fn keep(&self, what: &str) {
+        self.0.lock().expect("not poisoned").push(what.to_owned());
+    }
+}
+
+impl FailureObserver<V> for KeepingObserver {
+    fn failed(&self, _: <V as durable_ioring::Identities>::FailureId, _: &FailureCause<V>, _: u64) {
+        self.keep("failed");
+    }
+
+    fn suspected(&self, _: <V as durable_ioring::Identities>::FailureId, _: SuspectWrite<V>) {
+        self.keep("suspected");
+    }
+
+    fn marked(&self, _: <V as durable_ioring::Identities>::FailureId, _: &Marking<V>) {
+        self.keep("marked");
+    }
+}
+
 thread_local! {
     /// Whether this thread is inside a call into the core.
     static COUNTING: Cell<bool> = const { Cell::new(false) };
@@ -322,7 +347,17 @@ struct Rig {
 impl Rig {
     /// Build the core over `backend`, with `KEY` and `OTHER` attached: the first phase.
     fn new(backend: MemoryBackend) -> Self {
-        Self::built(backend, None, "construction, with two targets")
+        Self::built(backend, None, "construction, with two targets", None)
+    }
+
+    /// As [`new`](Self::new), for a core given `observer` and not the one that only counts.
+    fn observed(backend: MemoryBackend, observer: Arc<dyn FailureObserver<V>>) -> Self {
+        Self::built(
+            backend,
+            None,
+            "construction, with two targets",
+            Some(observer),
+        )
     }
 
     /// As [`new`](Self::new), for a core whose provider serves `domains`, which `KEY` declares, and
@@ -332,6 +367,7 @@ impl Rig {
             backend,
             Some(domains),
             "construction, with a provider and its request buffer",
+            None,
         )
     }
 
@@ -339,13 +375,14 @@ impl Rig {
         mut backend: MemoryBackend,
         provider: Option<Vec<FlushDomain>>,
         first: &'static str,
+        given: Option<Arc<dyn FailureObserver<V>>>,
     ) -> Self {
         let diagnostics = Arc::new(NoDiagnostics);
         let served = provider.clone().unwrap_or_default();
         // Made before anything is counted: what is measured is the core telling it, which the
         // failure paths do (DI-D-113).
         let told = Arc::new(TallyObserver::default());
-        let observer: Arc<dyn FailureObserver<V>> = told.clone();
+        let observer: Arc<dyn FailureObserver<V>> = given.unwrap_or_else(|| told.clone());
         let (mut core, requests) = counted(|| {
             let (core, requests) = match provider {
                 Some(domains) => {
@@ -723,11 +760,22 @@ fn clean() -> Vec<Measured> {
 /// The failure paths: a commit that fails, the inventory queried, a heal taking effect, an import,
 /// and an abandon.
 fn failures() -> Vec<Measured> {
+    failures_told(None)
+}
+
+/// The failure scenario with the core told by `observer`, or by the one that only counts. The
+/// counting observer's tally is checked only when it is the one given.
+fn failures_told(observer: Option<Arc<dyn FailureObserver<V>>>) -> Vec<Measured> {
     let script = FaultScript::new().on(
         When::any().op(ScriptOp::Commit).target(KEY).nth(1),
         Fault::Fail(scripted_fault("the flush failed")),
     );
-    let mut rig = Rig::new(MemoryBackend::new(nz(64), nz(128)).with_script(script));
+    let backend = MemoryBackend::new(nz(64), nz(128)).with_script(script);
+    let counting = observer.is_none();
+    let mut rig = match observer {
+        Some(observer) => Rig::observed(backend, observer),
+        None => Rig::new(backend),
+    };
     let default = rig.core.default_lineage();
 
     rig.round(default, 1);
@@ -798,7 +846,7 @@ fn failures() -> Vec<Measured> {
     assert_eq!(unmatched, 1, "the unknown name was reported");
     rig.phase("an import naming a domain never given, abandoned");
     assert!(
-        rig.told.0.load(Ordering::Relaxed) >= 4,
+        !counting || rig.told.0.load(Ordering::Relaxed) >= 4,
         "the observer was told of both failures, a suspect write and a marking"
     );
 
@@ -1568,6 +1616,44 @@ fn the_provider_path_allocates_as_recorded() {
         (PROVIDERS, PROVIDERS_TAGS),
         ("PROVIDERS", "PROVIDERS_TAGS"),
     );
+}
+
+#[test]
+fn a_failure_observer_that_allocates_is_counted_under_its_own_tags() {
+    // What the observer allocates is its own (DI-D-97), so the phases are not held to zero here.
+    // What is held is that every one of its allocations is counted under the core's call to it,
+    // which is what an untagged one would hide: each of its three calls has a tag, and nothing is
+    // counted with none.
+    let kept = Arc::new(KeepingObserver::default());
+    let measured = failures_told(Some(kept.clone()));
+    assert!(
+        kept.0.lock().expect("not poisoned").len() >= 4,
+        "the observer was told of a failure, a suspect write and a marking"
+    );
+    let untagged: Vec<_> = measured
+        .iter()
+        .filter(|m| m.untagged > 0)
+        .map(|m| format!("{}: {} untagged", m.phase, m.untagged))
+        .collect();
+    assert!(
+        untagged.is_empty(),
+        "allocations counted with no tag:\n{}",
+        untagged.join("\n")
+    );
+    let seen = by_tag(&measured);
+    for name in [
+        "durability::observer::failed",
+        "durability::observer::suspected",
+        "durability::observer::marked",
+    ] {
+        assert!(
+            seen.iter().any(|&(_, tag, count)| tag == name && count > 0),
+            "the observer's allocation was counted under {name}: {seen:?}"
+        );
+    }
+    for m in &measured {
+        assert!(m.conflicts.is_empty(), "{}: {:?}", m.phase, m.conflicts);
+    }
 }
 
 #[test]

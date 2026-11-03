@@ -3584,7 +3584,7 @@
       "file": "src/durability/observer.rs",
       "expect": "caught",
       "why": "The suspect writes are what the observer is for: what a failure put at risk, which the ring will not lend once DI-23.12.3.9 is done.",
-      "find": ["        self.visit_suspects(failure, |write| observer.suspected(failure.id, write));"],
+      "find": ["        self.visit_suspects(failure, |write| {", "            tagged(tag::DURABILITY_OBSERVER_SUSPECTED, || {", "                observer.suspected(failure.id, write);", "            });", "        });"],
       "replace": ["        let _ = observer;"]
     },
     {
@@ -3592,7 +3592,7 @@
       "file": "src/durability.rs",
       "expect": "caught",
       "why": "Each marking is told once for each failure it goes to, as it is made (DI-D-113).",
-      "find": ["            observer.marked(failure.id, &marking);"],
+      "find": ["            tagged(tag::DURABILITY_OBSERVER_MARKED, || {", "                observer.marked(failure.id, &marking);", "            });"],
       "replace": ["            let _: (_, _, &Marking<V<E, I>>) = (observer, failure, &marking);"]
     },
     {
@@ -3898,6 +3898,38 @@
       "why": "A seal opens a pair for each served domain it touched as well as its file's flush, so an instance with a provider needs the operations times one plus the served domains; sized for the operations alone, it is full before the bound once seals ask the provider.",
       "find": ["        self.operations.checked_mul(served.checked_add(1)?)"],
       "replace": ["        self.operations.checked_mul(served.checked_sub(served)?.checked_add(1)?)"]
+    },
+    {
+      "name": "DI-D-104: the failure observer's failed call is not tagged",
+      "file": "src/durability/observer.rs",
+      "expect": "caught",
+      "why": "The failure observer is plugged into the core as the backend, the provider, the diagnostics and the clock are, and what it allocates is its own (DI-D-97), so the rule is that the core counts it under its call to it and not as an untagged allocation. Found in the review of PR #167: the three calls were made bare. The allocating-observer test in the allocation test is what sees it.",
+      "find": ["        tagged(tag::DURABILITY_OBSERVER_FAILED, || {", "            observer.failed(failure.id, &failure.cause, failure.observed);", "        });"],
+      "replace": ["        observer.failed(failure.id, &failure.cause, failure.observed);"]
+    },
+    {
+      "name": "DI-D-104: the failure observer's suspected call is not tagged",
+      "file": "src/durability/observer.rs",
+      "expect": "caught",
+      "why": "The failure observer is plugged into the core as the backend, the provider, the diagnostics and the clock are, and what it allocates is its own (DI-D-97), so the rule is that the core counts it under its call to it and not as an untagged allocation. Found in the review of PR #167: the three calls were made bare. The allocating-observer test in the allocation test is what sees it.",
+      "find": ["            tagged(tag::DURABILITY_OBSERVER_SUSPECTED, || {", "                observer.suspected(failure.id, write);", "            });"],
+      "replace": ["            observer.suspected(failure.id, write);"]
+    },
+    {
+      "name": "DI-D-104: the failure observer's marked call is not tagged",
+      "file": "src/durability.rs",
+      "expect": "caught",
+      "why": "The failure observer is plugged into the core as the backend, the provider, the diagnostics and the clock are, and what it allocates is its own (DI-D-97), so the rule is that the core counts it under its call to it and not as an untagged allocation. Found in the review of PR #167: the three calls were made bare. The allocating-observer test in the allocation test is what sees it.",
+      "find": ["            tagged(tag::DURABILITY_OBSERVER_MARKED, || {", "                observer.marked(failure.id, &marking);", "            });"],
+      "replace": ["            observer.marked(failure.id, &marking);"]
+    },
+    {
+      "name": "DI-D-104: the failure observer's suspected call is counted under the failed call's tag",
+      "file": "src/durability/observer.rs",
+      "expect": "caught",
+      "why": "A tag names one call and no two calls share one, which the allocation test enforces by seeing a tag from two places in the source. Sharing the failed call's tag with suspected would also leave the suspected tag unseen in the test that gives the core an observer that allocates.",
+      "find": ["            tagged(tag::DURABILITY_OBSERVER_SUSPECTED, || {"],
+      "replace": ["            tagged(tag::DURABILITY_OBSERVER_FAILED, || {"]
     }
   ]
 }

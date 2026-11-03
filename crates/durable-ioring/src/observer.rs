@@ -19,7 +19,8 @@ use crate::types::{FailureCause, Marking, SuspectWrite};
 ///
 /// **What it may do.** It is called synchronously, while the instance's lock is held: it must not
 /// call back into the instance, and any lock it takes is a leaf beneath the instance's, as a
-/// diagnostic sink's is (DI-D-90). What it is lent it copies if it keeps it.
+/// diagnostic sink's is (DI-D-90). What it is lent it copies if it keeps it. What it allocates is
+/// its own (DI-D-97), and an allocation-counting test sees it under the core's call to it.
 pub trait FailureObserver<V: Identities>: Send + Sync {
     /// Failure `failure` was observed, for `cause`, lent for the call, at `observed` -- the stamp
     /// its `Failed` entry carries.

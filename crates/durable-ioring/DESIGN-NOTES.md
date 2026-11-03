@@ -2094,7 +2094,9 @@ through `Vec`, `BTreeMap` or `Arc`. So the code says, and the allocator reads wh
   are made before it, since an allocation inside the closure is counted under its tag: a call there into code that
   allocates without a tag of its own would be hidden rather than reported as untagged.
 - **Calls into what is plugged in are tagged at the call:** a backend's `push`, `check`, `submit` and `pop`, a provider, a
-  notification's wait, a diagnostic sink's `wants` and `report`, and the clock. What they allocate is theirs (DI-D-97), and
+  notification's wait, a diagnostic sink's `wants` and `report`, the clock, and a failure observer's `failed`,
+  `suspected` and `marked` (added 2026-11-02, from the review of PR #167; the observer is plugged in as the others are, and
+  its calls had been left out). What they allocate is theirs (DI-D-97), and
   is counted under the core's call to them.
 - **One tag per allocating call, and no tag shared.** The engineer, 2026-10-23: "If I had my choice, I would have a unique
   tag for each and every memory allocation. I realize that we cannot change, for example, a container's source code, so

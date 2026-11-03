@@ -24,7 +24,8 @@
 //!
 //! **Calls into what is plugged into the core are tagged too:** a backend's `push`, `check`,
 //! `submit` and `pop`, a provider, a notification's wait, a diagnostic sink's `wants` and
-//! `report`, and the clock. What they allocate is theirs to decide ([DI-D-97]), and is counted
+//! `report`, the clock, and a failure observer's `failed`, `suspected` and `marked`. What they
+//! allocate is theirs to decide ([DI-D-97]), and is counted
 //! under the call the core made to them, so a plugged-in type that allocates is seen, and seen
 //! where it was called. A diagnostic sink that fans out to others is a sink, and its sinks are
 //! counted under its caller's tag.
@@ -186,8 +187,14 @@ pub(crate) mod tag {
     pub(crate) const DURABILITY_SEAL_REPORT: Tag = Tag::new("durability::seal::report");
     pub(crate) const DURABILITY_OBSERVE_CLOCK: Tag = Tag::new("durability::observe::clock");
     pub(crate) const DURABILITY_MARK_CLOCK: Tag = Tag::new("durability::mark::clock");
+    pub(crate) const DURABILITY_OBSERVER_MARKED: Tag = Tag::new("durability::observer::marked");
     pub(crate) const DURABILITY_START_SEALS_REPORT: Tag =
         Tag::new("durability::start_seals::report");
+
+    // durability/observer.rs
+    pub(crate) const DURABILITY_OBSERVER_FAILED: Tag = Tag::new("durability::observer::failed");
+    pub(crate) const DURABILITY_OBSERVER_SUSPECTED: Tag =
+        Tag::new("durability::observer::suspected");
 
     // durability/lineages.rs
 

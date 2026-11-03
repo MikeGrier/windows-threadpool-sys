@@ -1193,7 +1193,9 @@ impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
             kind,
         };
         for failure in suspecting {
-            observer.marked(failure.id, &marking);
+            tagged(tag::DURABILITY_OBSERVER_MARKED, || {
+                observer.marked(failure.id, &marking);
+            });
         }
     }
 
