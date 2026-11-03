@@ -26,6 +26,14 @@ assert!(sink.is_registered());
 assert_eq!(PROVIDER_NAME, "durable-ioring-events");
 ```
 
+## Which durable-ioring it is for
+
+`EtwDiagnostics` implements durable-ioring's `DiagnosticSink`, so that trait is part of this crate's own surface, and
+each version of this crate works with one breaking version of durable-ioring: the one its `Cargo.toml` requires. A
+breaking release of durable-ioring is therefore a breaking release of this crate, and its version moves with it
+([DE-D-8](DESIGN-NOTES.md#de-d-8)). A project that uses durable-ioring through a version other than that one needs
+the version of this crate that was released for it.
+
 ## Reading the events
 
 Without the manifest a trace shows the provider's GUID, each event's id, level and keyword, and its data as bytes. With it a

@@ -69,6 +69,15 @@ dependent crate released first then fails `cargo publish` against the registry
 copy of that dependency. The run's log line `Splitting N commits by path` shows
 the window in use; compare it with `git rev-list --count <last release commit>..origin/main`.
 
+A crate whose public surface is a workspace dependency's -- it implements one of its traits, or re-exports its types --
+is released breaking when that dependency is. The `cargo-workspace` plugin gives a dependent of a released crate a
+patch bump and moves its requirement, and cannot tell that the dependent's surface is the dependency's:
+`durable-ioring-events` was released as a patch while it implemented `DiagnosticSink` of a durable-ioring that had gone
+from 0.3 to 0.4, which would have given a project on the older one a sink for a trait it does not use
+([DE-D-8](crates/durable-ioring-events/DESIGN-NOTES.md#de-d-8)). Such a dependent gets its own breaking commit in the
+same release, a `!` subject with a `Release-As` footer when the exact version matters, and the release pull request is
+read for it before it merges.
+
 `release-please` also reads the body of the merged release pull request as HTML to
 decide which components to release, and it copies a `BREAKING CHANGE:` footer
 into that body unescaped (a subject is escaped, except inside backticks). A
