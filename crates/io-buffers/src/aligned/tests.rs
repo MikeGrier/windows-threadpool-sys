@@ -303,7 +303,10 @@ fn equality_is_by_contents_and_alignment_not_by_address() {
 fn debug_shows_the_shape_and_never_the_contents() {
     let secret = AlignedBuf::from_bytes(b"correct horse battery", 16).expect("a buffer");
     let text = format!("{secret:?}");
-    assert!(text.contains("AlignedBuf"), "debug output missing type marker");
+    assert!(
+        text.contains("AlignedBuf"),
+        "debug output missing type marker"
+    );
     assert!(
         text.contains("len: 21") && text.contains("align: 16"),
         "debug output missing shape metadata"
