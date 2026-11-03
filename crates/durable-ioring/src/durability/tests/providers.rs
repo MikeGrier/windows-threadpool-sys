@@ -50,12 +50,12 @@ fn serve(lineage: &mut Lineage, ids: &[u32]) {
     );
 }
 
+/// Each file's key with the writes the request named for it.
+type FileWrites = Vec<(IoTargetKey, Vec<OpId>)>;
+
 /// What a request asks, as it is once drained into the driver's buffer (DI-D-115): each domain it
 /// asked about, ascending, with each file's writes named for it.
-fn drained(
-    lineage: &Lineage,
-    asked: &ProviderCall,
-) -> Vec<(FlushDomain, Vec<(IoTargetKey, Vec<OpId>)>)> {
+fn drained(lineage: &Lineage, asked: &ProviderCall) -> Vec<(FlushDomain, FileWrites)> {
     let durability = &lineage.0;
     let mut buf = RequestBuf::<V<u64, Stamp>>::new(&durability.capacity, durability.served_count)
         .expect("a buffer for the request");
