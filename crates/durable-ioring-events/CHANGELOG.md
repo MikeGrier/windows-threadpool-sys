@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/durable-ioring-events-v0.1.1...durable-ioring-events-v0.2.0) (2026-11-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **durable-ioring-events:** 0.1.1 required durable-ioring 0.4 but was released as a patch of 0.1, so it is not the release for durable-ioring 0.3; this crate's version follows durable-ioring's breaking versions, and 0.2.0 is the release for durable-ioring 0.4. 0.1.1 is yanked; with durable-ioring 0.3 use 0.1.0.
+
+### Bug Fixes
+
+* **durable-ioring-events:** release as 0.2.0, the version 0.1.1 should have been ([7db3dff](https://github.com/MikeGrier/windows-threadpool-sys/commit/7db3dffcf131a6568f964bc5f4fae996863018e1))
+
 ## [0.1.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/durable-ioring-events-v0.1.0...durable-ioring-events-v0.1.1) (2026-11-03)
 
 
