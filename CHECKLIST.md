@@ -577,7 +577,7 @@ yanks are needed, is [DE-D-8](crates/durable-ioring-events/DESIGN-NOTES.md#de-d-
   requiring it at 0.2.0. Read the release pull request first: it must carry 0.2.0 for the events crate and its own
   `fix(win-durable-ioring)!` breaking release trigger with `Release-As: 0.6.0`, not a dependent patch bump.
 
-- [ ] **M43.2** -- Yank `durable-ioring-events` 0.1.1 and `win-durable-ioring` 0.5.0, once `M43.1` is done.
+- [ ] **M43.2** -- Yank `durable-ioring-events` 0.1.1 and `win-durable-ioring` 0.5.0 and 0.5.1, once `M43.1` is done.
   The engineer's own step, with their crates.io login: `cargo yank --version 0.1.1 durable-ioring-events`, then
-  `cargo yank --version 0.5.0 win-durable-ioring`. `win-durable-ioring` 0.5.0 requires the events crate at 0.1.1 or later
-  within 0.1, so both go, and the replacements must exist first.
+  `cargo yank --version 0.5.0 win-durable-ioring` and `cargo yank --version 0.5.1 win-durable-ioring`.
+  Both driver releases require the events crate at 0.1.1 or later within 0.1, so all three go, and the replacements must exist first.
