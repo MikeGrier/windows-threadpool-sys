@@ -104,7 +104,7 @@ the field, never a raw PowerShell error: the tool is a diagnostic instrument, so
 its own failures must not need diagnosing, and must not take a calling script
 down with them. Missing file, invalid JSON, absent `package` or `sabotages`, an
 empty `sabotages`, an unresolvable `root`, a missing per-sabotage field, an `expect` that is not
-one of `caught`, `survives` and `refused-by-build`, and a `buildError` that is
+one of `caught`, `survives`, `refused-by-build` and `hardware-dependent`, and a `buildError` that is
 missing where it is required or present where it is ignored are each reported this way, as
 are running from outside a git repository, an `-OutputDirectory` git does not
 ignore, and a `testArgs` carrying `--target-dir`.
@@ -352,6 +352,17 @@ If such an entry's build fails with some *other* error, it is reported as
 `MANIFEST DOES NOT COMPILE (the build failed, but not with '...')`; if it builds
 cleanly, the guard did not fire, and the result says `BUILT CLEANLY` first.
 
+**`... -- on this machine; either is declared`** -- the entry declared
+`hardware-dependent`, and this is the verdict the tests gave on the machine that
+ran them. Both `caught` and `survived` count as declared: the sabotage measures
+the device as much as the tests, so one machine catches it and another does not,
+and a single `expect` would fail every sweep on whichever machine disagreed. The
+line keeps which it was, so two runs can still be compared. Anything that is not a
+verdict on the tests -- `MANIFEST DOES NOT COMPILE`, `INFRASTRUCTURE` -- still
+fails, since it measured nothing. Use it only where the `why` can say what about
+the machine decides the result; an entry whose result is merely unreliable is a
+defect in the entry or the tests, not a property of the hardware.
+
 **`MANIFEST DOES NOT COMPILE`** -- the patch is not valid Rust, so the tests
 never got a chance to notice it. Reported for a build-phase failure and,
 separately, for `a doctest would not build`: `--no-run` cannot pre-build
@@ -535,7 +546,7 @@ Inside each entry of `sabotages`:
 |---|---|---|
 | `name` | yes | Unique; also the `-Name` filter key and the transcript filename. Two names that differ only in punctuation are rejected, as is `baseline`. |
 | `file` | yes | Source to patch, relative to `root`. |
-| `expect` | yes | `caught` for a defect the tests must notice, `survives` for a control, `refused-by-build` for a defect a compile-time guard must reject. |
+| `expect` | yes | `caught` for a defect the tests must notice, `survives` for a control, `refused-by-build` for a defect a compile-time guard must reject, `hardware-dependent` for one whose result depends on the machine it runs on (either verdict counts, and the line says which). |
 | `buildError` | with `refused-by-build` only | Literal text the build's error output must contain -- the guard's own message, e.g. `a policy is missing from Policy::ALL`. Required for `refused-by-build` and rejected for anything else. |
 | `why` | yes | What breaks, and why the suite should or should not notice. This is the part a future reader needs; the patch only says what changed. |
 | `find` | yes | Lines to replace. Must match **exactly once**. |
