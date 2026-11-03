@@ -129,6 +129,17 @@ jobs:
           path: .scratch/sabotage/catchers.json
           key: sabotage-catchers-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: sabotage-catchers-
+      # The record the `sabotage-records` branch holds, merged into what the cache
+      # restored (DESIGN-NOTES.md, "sabotage-records"). The cache is still the
+      # first source and this adds to it, so a cache that was evicted, or that a
+      # run of an older commit last saved, no longer leaves a run with nothing.
+      # Not fatal: the record only ever narrows a sweep, and a branch that is not
+      # there yet, or a remote that will not answer, makes a sweep larger and
+      # nothing else.
+      - name: Adopt the record published to the sabotage-records branch
+        shell: pwsh
+        continue-on-error: true
+        run: ./tools/fetch-sabotage-catchers.ps1 -Output .scratch/sabotage/catchers.json
       # Rewritten even when nothing was restored, so the snapshot always exists:
       # a missing record merges as an empty one.
       - name: Snapshot the record for this run
@@ -311,6 +322,12 @@ jobs:
     needs: [plan, sweep]
     if: always() && needs.plan.outputs.jobs != '0'
     runs-on: windows-latest
+    # The only job here that writes to the repository, and it writes one branch:
+    # `sabotage-records`, which holds nothing but this record. It runs the
+    # publisher from the checkout of the commit this run is for, and none of the
+    # code a sweep patched, which ran in other jobs with read-only access.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       # The snapshot, `catchers-snapshot`, and every shard's record,
@@ -328,3 +345,13 @@ jobs:
         with:
           path: .scratch/sabotage/catchers.json
           key: sabotage-catchers-${{ github.run_id }}-${{ github.run_attempt }}
+      # The same record, to the branch a clone can fetch and the cache cannot
+      # lose (DESIGN-NOTES.md, "sabotage-records"). Beside the cache and not in
+      # place of it, until the branch is proven; see PARKED.md. Not fatal, for
+      # the same reason as the adoption in the plan job: a failure here costs
+      # the next run some narrowing and no verdict, and a red run for it would
+      # be read as a sabotage that failed.
+      - name: Publish the record to the sabotage-records branch
+        shell: pwsh
+        continue-on-error: true
+        run: ./tools/publish-sabotage-catchers.ps1 -Record .scratch/sabotage/catchers.json

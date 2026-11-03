@@ -72,9 +72,11 @@ changed, edits not yet committed included. A branch behind its base is also
 charged with what the base changed since they parted, which may be in crates the
 branch never touched, so rebase first to keep the scope to the branch's own work.
 It reads the record from the output
-directory, which a clone has only once it has swept the manifest from a clean
-checkout; an entry with no usable record is taken whatever changed, so the first
-scoped run in a clone is a full one. Sweep the whole manifest, without
+directory, which a clone gets by sweeping the manifest from a clean checkout, or by
+running [fetch-sabotage-catchers.ps1](fetch-sabotage-catchers.ps1), which adopts the record CI
+publishes to the `sabotage-records` branch (see below). With neither, an entry with no usable
+record is taken whatever changed, so the first scoped run in a clone is a full one. Sweep the
+whole manifest, without
 `-Since`, when a change is one scoping cannot see: a test helper shared by a crate's
 tests, or code elsewhere in a crate that decides whether a sabotaged line is
 reached.
@@ -184,6 +186,17 @@ Because the harness sets the working directory to its own working copy, the
 suite that runs is the copy's -- testing the copy's `run-sabotage.ps1`, the one
 carrying the injected defect. There is no recursion: the inner suite builds its
 fixtures under `TEMP`, never inside the copy.
+
+[sabotage-records.json](sabotage-records.json) does the same for the scripts that move the catcher
+record through a git remote -- [publish-sabotage-catchers.ps1](publish-sabotage-catchers.ps1),
+[fetch-sabotage-catchers.ps1](fetch-sabotage-catchers.ps1), and the helper they share in
+[common.ps1](common.ps1) -- judged by [test-sabotage-records.ps1](test-sabotage-records.ps1)
+through [sabotage-records-runner.cmd](sabotage-records-runner.cmd), the same arrangement:
+
+```powershell
+.\tools\run-sabotage.ps1 -Manifest tools\sabotage-records.json `
+    -CargoCommand (Resolve-Path tools\sabotage-records-runner.cmd).Path
+```
 
 Each entry runs the whole suite, so the cost is roughly
 `(entries + 1) x <suite time>` -- about five and a half minutes for these eight
@@ -627,12 +640,28 @@ and a later run uses it only if that commit is in its own history, so a record
 from another branch, or from a run of a later commit, makes it run more, never
 less; one from an earlier commit is judged against everything since. A sweep of
 a tree with uncommitted changes records no commit, so what it learns there does
-not narrow a later run, and it says so. It is never committed, and deleting it only makes a scoped sweep run more.
-In CI the plan job restores the latest record from the Actions cache once and
-passes that one snapshot to every shard, so the shards select the entries the
-plan counted; each shard uploads its copy, and the `record` job merges them with
-[merge-sabotage-catchers.ps1](merge-sabotage-catchers.ps1) and saves the result
-to the cache for the next run.
+not narrow a later run, and it says so. It is never committed to `main`, and deleting it only makes a scoped sweep run more.
+In CI the plan job restores the latest record from the Actions cache once, merges into it what the
+`sabotage-records` branch holds, and passes that one snapshot to every shard, so the shards select
+the entries the plan counted; each shard uploads its copy, and the `record` job merges them with
+[merge-sabotage-catchers.ps1](merge-sabotage-catchers.ps1), saves the result to the cache for the
+next run, and publishes it to the branch with
+[publish-sabotage-catchers.ps1](publish-sabotage-catchers.ps1).
+
+**The `sabotage-records` branch** holds one generated file, `catchers.json`, and a readme saying so.
+It shares no history with `main`, so `main` gains no commit per merge, and only the `record` job,
+which runs no code a sweep patched, has write access to it. The publisher merges the record it is
+given into the one the branch holds, keeping each entry's latest, and commits nothing when that
+changes nothing; it writes the commit with git plumbing, so it never touches a working tree or
+index, and a push another publisher beat it to is retried from a fresh fetch, never forced. The
+publisher leaves out of what it is given the entries that name no commit, and the fetch drops the
+clone's own, before either merges: such an entry comes from a sweep of a tree that was not a commit, no
+clone can use it, and being the newer it would displace a published entry that can be used. Names in the
+record are read back as UTF-8 whatever the console's code page, since an entry or test name need not be
+ASCII. A record on the branch from a commit a clone does
+not have is not used there, so adopting one cannot make a sweep select fewer entries than it
+should. The branch's history may be squashed or deleted at any time. The reasoning is in
+[DESIGN-NOTES.md](../DESIGN-NOTES.md#sabotage-records).
 
 **`-List` is inert**: it creates no directories, copies no tree, and writes and
 deletes nothing. All of that setup happens after the listing path has exited.

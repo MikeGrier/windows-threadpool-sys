@@ -825,8 +825,10 @@ function Get-SabotageSourceRoot {
 # A sweep records, per entry it judged, the tests that failed under its patch,
 # so that a later sweep can tell which test changes could alter that entry's
 # result. It is derived data, not committed: a sweep writes it beside its
-# transcripts and CI keeps it in the Actions cache. Its absence only makes a
-# scoped sweep larger; see DESIGN-NOTES.md, "sabotage-scope".
+# transcripts and CI keeps it in the Actions cache, and publishes it to the
+# `sabotage-records` branch, which a clone can fetch (Get-SabotageRecordBranch).
+# Its absence only makes a scoped sweep larger; see DESIGN-NOTES.md,
+# "sabotage-scope".
 #
 # The shape, written by Write-SabotageCatcherRecord:
 #
@@ -972,6 +974,102 @@ function Write-SabotageCatcherRecord {
     $directory = Split-Path -Parent $Path
     if ($directory -and -not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
     [System.IO.File]::WriteAllText($Path, $json + "`n", [System.Text.UTF8Encoding]::new($false))
+}
+
+# The record published to a branch of its own, as `Remote` holds it now. The
+# record is derived data, so the branch is where a clone and CI both find the
+# latest one without either being the other's source: it is not on `main`, where
+# it would be a commit per merge, and not in an Actions cache, which evicts and
+# which no clone can read.
+#
+# Asked of the remote itself -- `ls-remote`, then a fetch into a remote-tracking
+# ref -- and never of a local ref, which is whatever the last fetch left. The
+# branch not existing is an answer (`Present` false, `Error` $null) and is not the
+# remote being unreachable (`Error` set), because a publisher that read an
+# unreachable remote as an empty branch would publish a root commit over history
+# it could not see. Returns `Present`, `Error`, `Commit` (the tip) and `Text` (the
+# tip's `catchers.json`, $null when the tip has none).
+function Get-SabotageRecordBranch {
+    param([string] $RepositoryRoot, [string] $Remote, [string] $Branch)
+    $result = {
+        param($present, $err, $commit, $text)
+        [pscustomobject]@{ Present = $present; Error = $err; Commit = $commit; Text = $text }
+    }
+    # The full ref: ls-remote matches a pattern against the tail of each ref's
+    # name, so a bare branch name would also match `refs/heads/some/<branch>`.
+    $asked = Invoke-NativeSplit { git -C $RepositoryRoot ls-remote --exit-code --heads $Remote "refs/heads/$Branch" }
+    # 2 is `--exit-code`'s "no matching ref", the one answer that means absent.
+    if ($asked.ExitCode -eq 2) { return & $result $false $null $null $null }
+    if ($asked.ExitCode -ne 0) {
+        return & $result $false "git could not ask '$Remote' about '$Branch' (exit $($asked.ExitCode)): $($asked.Stderr)" $null $null
+    }
+    $ref = "refs/remotes/$Remote/$Branch"
+    $fetched = Invoke-NativeSplit { git -C $RepositoryRoot fetch --quiet $Remote "+refs/heads/${Branch}:$ref" }
+    if ($fetched.ExitCode -ne 0) {
+        return & $result $false "git could not fetch '$Branch' from '$Remote' (exit $($fetched.ExitCode)): $($fetched.Stderr)" $null $null
+    }
+    # Captured whole and indexed, never piped to `Select-Object -First 1`: that stops the
+    # command early, and on Windows PowerShell 5.1 `$LASTEXITCODE` is then not its own.
+    $found = @(Invoke-NativeStdout { git -C $RepositoryRoot rev-parse --verify $ref })
+    if ($LASTEXITCODE -ne 0 -or $found.Count -eq 0) { return & $result $false "git could not read '$ref' after fetching it" $null $null }
+    $commit = ([string]$found[0]).Trim()
+    $text = Get-GitBlobUtf8 -RepositoryRoot $RepositoryRoot -Spec "${commit}:catchers.json"
+    return & $result $true $null $commit $text
+}
+
+# The text of the blob `Spec` (`<commit>:<path>`) names, decoded as UTF-8, or $null
+# when there is none. The record is UTF-8 and holds entry and test names, which are
+# not always ASCII; PowerShell decodes a native command's output with the console's
+# code page, which on Windows PowerShell 5.1 need not be UTF-8, so a name read through
+# it comes back as other characters while the JSON around it stays valid, and the
+# fetcher would save them and the publisher write them back to the shared branch. The
+# bytes are read here by the process object, with the decoder named, and no host's
+# console is asked. `cat-file blob` and not `show`, so nothing is filtered or converted.
+function Get-GitBlobUtf8 {
+    param([string] $RepositoryRoot, [string] $Spec)
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = 'git'
+    $info.Arguments = (@('-C', $RepositoryRoot, 'cat-file', 'blob', $Spec) | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' '
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $process = [System.Diagnostics.Process]::Start($info)
+    try {
+        # Stderr is read on its own thread, so a command that fills its pipe cannot
+        # wait on us while we wait on its stdout.
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $text = $process.StandardOutput.ReadToEnd()
+        $process.WaitForExit()
+        [void]$stderr.Result
+        if ($process.ExitCode -ne 0) { return $null }
+        return $text
+    }
+    finally { $process.Dispose() }
+}
+
+# `Record` without the entries that name no commit, and how many there were. A sweep
+# of a tree that was not a commit records what it learned with none, and no scoped
+# sweep ever uses such an entry (Get-SabotageCatcherTests); but it is the newer, so
+# merged as it stands it displaces a committed entry that can be used. This is the
+# one place the rule is written: the publisher applies it to what it is given and the
+# fetcher to a clone's own, so neither shared copy nor clone loses a usable entry to
+# one that is not. Returns `Record` and `Dropped`.
+function Select-SabotageCommittedRecord {
+    param([hashtable] $Record)
+    $kept = New-SabotageCatcherRecord
+    $dropped = 0
+    foreach ($manifest in $Record.Keys) {
+        foreach ($entry in $Record[$manifest].Keys) {
+            $value = $Record[$manifest][$entry]
+            if ($value.Commit) {
+                Set-SabotageCatcher -Record $kept -Manifest $manifest -Entry $entry -Tests $value.Tests -At $value.At -Commit $value.Commit
+            }
+            else { $dropped++ }
+        }
+    }
+    return [pscustomobject]@{ Record = $kept; Dropped = $dropped }
 }
 
 # Which entries of one manifest a change could have affected, and why each.
