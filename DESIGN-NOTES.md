@@ -2975,6 +2975,50 @@ patch what the change touched. A change to a catching test or a shared test help
 patched file in the diff sweeps nothing under `-Diff`, and a PR's gate is still `-Since`. A change
 git cannot report sweeps every entry under either flag, and the two flags cannot be combined.
 The work is [CHECKLIST.md](CHECKLIST.md) `M34.19`.
+
+<a id="sabotage-records"></a>**The catcher record is published to a branch of its own, `sabotage-records`; `main` never holds it.**
+The engineer, 2026-11-02, asked whether the CI job could check its results into the repository, and
+agreed to a branch of their own over `main`. The `record` job of
+[sabotage-sweep.yml](.github/workflows/sabotage-sweep.yml) merges the shards' records, saves the
+result to the cache as before, and publishes it with
+[publish-sabotage-catchers.ps1](tools/publish-sabotage-catchers.ps1) to a branch that holds one
+generated file, `catchers.json`, and a readme saying so, with no history shared with `main`. The plan
+job adopts what the branch holds, with [fetch-sabotage-catchers.ps1](tools/fetch-sabotage-catchers.ps1),
+before it snapshots the record for the shards, and a clone runs the same script to start from what CI
+last learned and not from nothing, which is what a clone's first scoped sweep otherwise lacks.
+
+- **Why not `main`.** A record names the commit each entry was swept at and the tests that caught it,
+  so it changes with nearly every merge: on `main` it is a bot commit after almost every real one and
+  after every nightly run, two overlapping runs rewrite the same file and conflict there, and the job
+  needs write access to a protected branch. It is derived from a sweep, and the sweep is the artifact
+  that owns it; a copy on `main` is one a reader could mistake for source.
+- **Why not the cache alone.** It evicts, and no clone can read it, so every clone's first scoped sweep
+  of a manifest is a full one. **Why not an artifact:** it expires.
+- **A published record cannot make a sweep smaller than it should be.** An entry is used only if the
+  commit it names is in the checkout's history (`Get-SabotageCatcherTests`), so a record from a commit a
+  clone does not have is held and unused. The fetch drops the clone's own entries that name no commit
+  before it merges, since being the newer they would displace a published entry that can be used.
+- **The remote being unreachable is not the branch being absent.** `ls-remote --exit-code` tells them
+  apart, and a publisher that took the first for the second would write a root commit over history it
+  could not see. The branch is asked for by its full ref, since `ls-remote` matches a pattern against
+  the tail of a ref's name.
+- **The publisher never forces and never touches a working tree.** It merges the record it is given into
+  the one the branch holds, keeping each entry's latest, and commits nothing when that changes nothing;
+  it writes a blob, a tree and a commit with plumbing, in an index of its own, and pushes a
+  fast-forward. A push another publisher beat it to is retried from a fresh fetch, so what that
+  publisher pushed is merged and not overwritten.
+- **Write access is as narrow as the job that needs it.** Only `record` has `contents: write`; it runs
+  after the sweep jobs, which keep read-only access and are the ones that run patched code, and it runs
+  the scripts of the checkout the run is for.
+- **A failure here costs narrowing and no verdict.** Both steps are `continue-on-error`: the record only
+  ever makes a sweep smaller than a full one, and a red run for a publish that failed would be read as
+  a sabotage that did.
+- **The cache is kept beside the branch, not replaced by it,** until the branch is shown to work. The
+  merge-or-delete decision is parked in [PARKED.md](PARKED.md), gated on the post-merge run that shows
+  it, and tracked from [CHECKLIST.md](CHECKLIST.md) `M34.24`.
+
+The alternatives and what building it found are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-the-record-came-to-a-branch).
 ## <a id="compile-fail-pins-its-code"></a>A `compile_fail` doctest names the error it exists to produce
 
 **Every `compile_fail` doctest pins its expected error code -- ```` ```compile_fail,E0502 ```` -- and CI

@@ -262,6 +262,26 @@ changes.
 
 - [x] **M34.19** -- `run-sabotage.ps1 -Diff`: sweep only the entries whose patched file changed.
 
+The items below publish the catcher record to a branch of its own, so a clone can start from what CI
+last learned. The decision and its alternatives are in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#sabotage-records) and
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-the-record-came-to-a-branch).
+
+- [x] **M34.20** -- Publish and fetch scripts for the catcher record, with their tests and sabotage entries.
+
+- [x] **M34.21** -- Publish the record to the `sabotage-records` branch from the sweep workflow's `record` job.
+
+- [x] **M34.22** -- Adopt the branch's record in the plan job, before the snapshot the shards start from.
+
+- [x] **M34.23** -- Document the branch in the design notes, the rationale, the README and the instructions.
+
+- [ ] **M34.24** -- After the first post-merge run, confirm the branch holds a stamped record and a clone can adopt it.
+  Done when the `sabotage-records` branch exists on the remote, `catchers.json` on it names a commit
+  for the entries a run swept, `tools/fetch-sabotage-catchers.ps1` in a fresh clone writes them, and a
+  `-Since` run there selects fewer entries than it did without them.
+
+  > **-> UNBLOCKS PARKED WORK:** completing this unblocks `M34.25` in [PARKED.md](PARKED.md#m3425-plus).
+
 ## M37 -- Discharge the failable-call standard across the workspace
 
 Numbered M37, not M22. This section arrived from PR #84, which numbered it M22 without knowing

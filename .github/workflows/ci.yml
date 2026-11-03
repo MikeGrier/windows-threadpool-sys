@@ -208,6 +208,16 @@ jobs:
       - name: Run test-plan-sabotage-matrix.ps1 (Windows PowerShell 5.1)
         shell: powershell
         run: ./tools/test-plan-sabotage-matrix.ps1
+      # The two scripts that move the catcher record through a git remote, against a
+      # bare repository standing in for it. A defect in either is quiet: the
+      # sweep workflow still goes green, having published less than it claimed. Both
+      # hosts, as the planner's suite is.
+      - name: Run test-sabotage-records.ps1
+        shell: pwsh
+        run: ./tools/test-sabotage-records.ps1
+      - name: Run test-sabotage-records.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-sabotage-records.ps1
       # pwsh only, and deliberately not repeated under 5.1 like the step above:
       # check-encoding.ps1 carries curated mojibake with no BOM, so 5.1 decodes
       # it as ANSI and cannot parse it. The suite says so and refuses to run

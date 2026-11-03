@@ -972,7 +972,8 @@ that prompted this is the full sweep itself. Scoping by the patched file alone: 
 changes above, which are the case sabotage exists to check. Committing the record of catching tests to
 the repository: it is derived from a sweep, it would be a copy that drifts, and a sweep must not write
 into the developer's tree; it is kept where sweeps run instead, and its absence only makes a scoped run
-larger.
+larger. (It is now also published to a branch of its own, never `main`:
+[how that was reached](#how-the-record-came-to-a-branch).)
 
 **What review rounds added.** Each review round of the branch found a way the selection could take
 fewer entries than the change warranted, and each fix resolved the doubt toward running more. Two of
@@ -987,3 +988,51 @@ catching test's module path now count as its file.
 
 **Not decided.** Whether a scoped sweep should also run on pull requests, and whether it should gate
 anything, were not raised; the post-merge sweep remains a report and not a gate.
+
+## <a id="how-the-record-came-to-a-branch"></a>How the catcher record came to a branch of its own
+
+The engineer, 2026-11-02, after a local `-Since origin/main` sweep ran every entry for hours: the sweep "is not durable. We sweep now, then we sweep again and again." The record is
+kept in an Actions cache, which a clone cannot read, so each clone had to learn it for itself. The
+question put was whether the CI job could check its results into the repository, and whether that is
+bad form. It is not bad form in general; it is the wrong place for this file, and the answer was a
+branch.
+
+**Alternatives not taken.**
+
+- **Commit it to `main`.** The record is derived data that changes with nearly every merge and every
+  nightly run, so the history of `main` would be mostly bot commits; overlapping runs rewrite one file and
+  conflict on the branch everyone merges to; and the job needs write access to a protected branch. A
+  record that names a commit and the tests that caught each entry is also exactly the kind of copy
+  CONTRACT INTEGRITY rule 6 asks not to store beside the artifact that owns it.
+- **Keep it in the cache only** (as before). Evicted by age and by size, and unreadable from a clone.
+- **An artifact, fetched with `gh run download`.** An artifact is kept for a few days at most, so a
+  record can be gone when it is wanted, and a clone would need an authenticated `gh`.
+- **A separate repository.** The same durability as a branch with a second thing to create, secure and
+  keep in step; a branch of this repository is the smaller step, and moves out later if it must.
+- **A release asset or a gh-pages style site.** Both are made to serve readers of a built output, and
+  this is a hint for the next sweep.
+
+**What the branch gives.** No expiry, history that may be squashed, `git fetch` as the only thing a clone
+needs, and nothing on `main`. A second property comes from the design and not from the branch: a record is
+used only if the commit it names is in the checkout's history, so a published record cannot make a sweep
+select fewer entries than a full one would.
+
+**What building it found**, each now pinned by a case in
+[test-sabotage-records.ps1](tools/test-sabotage-records.ps1) and re-injected by an entry of
+[sabotage-records.json](tools/sabotage-records.json):
+
+- A tree piped to `git mktree` from PowerShell was committed with every file name ending in a carriage
+  return, because PowerShell ends each piped line with CRLF and `mktree` takes it as part of the name. The
+  first publish "succeeded" and nothing could read the file back. The tree is now built in an index of the
+  publisher's own, which takes no stdin.
+- On Windows PowerShell 5.1 a native command piped into `Select-Object -First 1` is stopped early, and
+  `$LASTEXITCODE` afterwards is not its own; the helper read a good fetch as a failure. It captures the
+  whole output and indexes it.
+- `ls-remote` matches a pattern against the tail of a ref's name, so a bare branch name also finds
+  `other/sabotage-records`.
+- A machine whose git is configured with `safe.bareRepository=explicit` refuses `git -C <bare repository>`;
+  the tests read the stand-in remote with `--git-dir`.
+
+**Not decided.** Whether the cache should be removed once the branch is shown to work. It is kept beside the
+branch on purpose, so a defect in the new path cannot cost a run its record, and the merge-or-delete
+decision is parked with the post-merge observation that would settle it.

@@ -825,8 +825,10 @@ function Get-SabotageSourceRoot {
 # A sweep records, per entry it judged, the tests that failed under its patch,
 # so that a later sweep can tell which test changes could alter that entry's
 # result. It is derived data, not committed: a sweep writes it beside its
-# transcripts and CI keeps it in the Actions cache. Its absence only makes a
-# scoped sweep larger; see DESIGN-NOTES.md, "sabotage-scope".
+# transcripts and CI keeps it in the Actions cache, and publishes it to the
+# `sabotage-records` branch, which a clone can fetch (Get-SabotageRecordBranch).
+# Its absence only makes a scoped sweep larger; see DESIGN-NOTES.md,
+# "sabotage-scope".
 #
 # The shape, written by Write-SabotageCatcherRecord:
 #
@@ -972,6 +974,48 @@ function Write-SabotageCatcherRecord {
     $directory = Split-Path -Parent $Path
     if ($directory -and -not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
     [System.IO.File]::WriteAllText($Path, $json + "`n", [System.Text.UTF8Encoding]::new($false))
+}
+
+# The record published to a branch of its own, as `Remote` holds it now. The
+# record is derived data, so the branch is where a clone and CI both find the
+# latest one without either being the other's source: it is not on `main`, where
+# it would be a commit per merge, and not in an Actions cache, which evicts and
+# which no clone can read.
+#
+# Asked of the remote itself -- `ls-remote`, then a fetch into a remote-tracking
+# ref -- and never of a local ref, which is whatever the last fetch left. The
+# branch not existing is an answer (`Present` false, `Error` $null) and is not the
+# remote being unreachable (`Error` set), because a publisher that read an
+# unreachable remote as an empty branch would publish a root commit over history
+# it could not see. Returns `Present`, `Error`, `Commit` (the tip) and `Text` (the
+# tip's `catchers.json`, $null when the tip has none).
+function Get-SabotageRecordBranch {
+    param([string] $RepositoryRoot, [string] $Remote, [string] $Branch)
+    $result = {
+        param($present, $err, $commit, $text)
+        [pscustomobject]@{ Present = $present; Error = $err; Commit = $commit; Text = $text }
+    }
+    # The full ref: ls-remote matches a pattern against the tail of each ref's
+    # name, so a bare branch name would also match `refs/heads/some/<branch>`.
+    $asked = Invoke-NativeSplit { git -C $RepositoryRoot ls-remote --exit-code --heads $Remote "refs/heads/$Branch" }
+    # 2 is `--exit-code`'s "no matching ref", the one answer that means absent.
+    if ($asked.ExitCode -eq 2) { return & $result $false $null $null $null }
+    if ($asked.ExitCode -ne 0) {
+        return & $result $false "git could not ask '$Remote' about '$Branch' (exit $($asked.ExitCode)): $($asked.Stderr)" $null $null
+    }
+    $ref = "refs/remotes/$Remote/$Branch"
+    $fetched = Invoke-NativeSplit { git -C $RepositoryRoot fetch --quiet $Remote "+refs/heads/${Branch}:$ref" }
+    if ($fetched.ExitCode -ne 0) {
+        return & $result $false "git could not fetch '$Branch' from '$Remote' (exit $($fetched.ExitCode)): $($fetched.Stderr)" $null $null
+    }
+    # Captured whole and indexed, never piped to `Select-Object -First 1`: that stops the
+    # command early, and on Windows PowerShell 5.1 `$LASTEXITCODE` is then not its own.
+    $found = @(Invoke-NativeStdout { git -C $RepositoryRoot rev-parse --verify $ref })
+    if ($LASTEXITCODE -ne 0 -or $found.Count -eq 0) { return & $result $false "git could not read '$ref' after fetching it" $null $null }
+    $commit = ([string]$found[0]).Trim()
+    $lines = @(Invoke-NativeStdout { git -C $RepositoryRoot show "${commit}:catchers.json" })
+    $text = if ($LASTEXITCODE -eq 0) { ($lines -join "`n") + "`n" } else { $null }
+    return & $result $true $null $commit $text
 }
 
 # Which entries of one manifest a change could have affected, and why each.

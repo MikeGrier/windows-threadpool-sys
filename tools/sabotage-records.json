@@ -1,0 +1,88 @@
+{
+  "description": "Sabotages for the scripts that move the sabotage catcher record through a git remote: publish-sabotage-catchers.ps1 and fetch-sabotage-catchers.ps1, with the one helper they share in common.ps1, judged by test-sabotage-records.ps1. Run with tools/run-sabotage.ps1 -Manifest tools/sabotage-records.json -CargoCommand tools/sabotage-records-runner.cmd; see tools/README-sabotage.md.",
+  "root": "..",
+  "package": "sabotage-records",
+  "testArgs": ["--suite"],
+  "sabotages": [
+    {
+      "name": "the published tree's file names end in a carriage return",
+      "file": "tools/publish-sabotage-catchers.ps1",
+      "expect": "caught",
+      "why": "The first version piped its tree to `git mktree` from PowerShell, which ends every line with CRLF; mktree took the CR as part of the name, so the branch held `catchers.json\\r` and nothing could ever fetch it. Re-injected here by putting the CR back in the name.",
+      "find": ["            $spec = \"100644,$($item[0]),$($item[1])\""],
+      "replace": ["            $spec = \"100644,$($item[0]),$($item[1])`r\""]
+    },
+    {
+      "name": "an unreachable remote is read as an absent branch",
+      "file": "tools/common.ps1",
+      "expect": "caught",
+      "why": "`ls-remote --exit-code` exits 2 for no matching ref and 128 for a remote it could not ask. Treating every failure as absent would have a publisher that cannot see the branch's history write a root commit over it, and a fetch report success having adopted nothing.",
+      "find": ["    if ($asked.ExitCode -eq 2) { return & $result $false $null $null $null }"],
+      "replace": ["    if ($asked.ExitCode -ne 0) { return & $result $false $null $null $null }"]
+    },
+    {
+      "name": "the branch is asked for by its bare name",
+      "file": "tools/common.ps1",
+      "expect": "caught",
+      "why": "ls-remote matches a pattern against the tail of each ref's name, so `sabotage-records` also matches `refs/heads/other/sabotage-records`; the fetch would then find a branch with no record on it and report that as the answer. The full ref is what makes the match exact.",
+      "find": ["git -C $RepositoryRoot ls-remote --exit-code --heads $Remote \"refs/heads/$Branch\" }"],
+      "replace": ["git -C $RepositoryRoot ls-remote --exit-code --heads $Remote $Branch }"]
+    },
+    {
+      "name": "the push is forced",
+      "file": "tools/publish-sabotage-catchers.ps1",
+      "expect": "caught",
+      "why": "A rejected push means another publisher moved the branch since the fetch. Forcing it past that overwrites what they published, the loss the retry from a fresh fetch exists to prevent.",
+      "find": ["    $pushed = Invoke-NativeSplit { git -C $RepositoryRoot push --quiet $Remote \"${commit}:refs/heads/$Branch\" }"],
+      "replace": ["    $pushed = Invoke-NativeSplit { git -C $RepositoryRoot push --quiet --force $Remote \"${commit}:refs/heads/$Branch\" }"]
+    },
+    {
+      "name": "the published record is the one given, not its merge with the branch's",
+      "file": "tools/publish-sabotage-catchers.ps1",
+      "expect": "caught",
+      "why": "A publisher that swept a few manifests would replace what another swept, so the record on the branch would only ever be the last run's slice.",
+      "find": ["    $merged = Merge-SabotageCatcherRecord -Records @($current, (Read-SabotageCatcherRecord -Path $Record))"],
+      "replace": ["    $merged = Merge-SabotageCatcherRecord -Records @((Read-SabotageCatcherRecord -Path $Record))"]
+    },
+    {
+      "name": "a record that adds nothing is committed anyway",
+      "file": "tools/publish-sabotage-catchers.ps1",
+      "expect": "caught",
+      "why": "Without the comparison every nightly run, and every merge that swept nothing new, would add a commit to the branch.",
+      "find": ["[string]::Equals((ConvertTo-RecordText $current), $mergedText, [System.StringComparison]::Ordinal)) {"],
+      "replace": ["$false) {"]
+    },
+    {
+      "name": "the publisher builds its tree in the repository's own index",
+      "file": "tools/publish-sabotage-catchers.ps1",
+      "expect": "caught",
+      "why": "The publisher runs from any checkout, a developer's included. Without its own index file, update-index stages the record and the readme in the index of whatever repository it ran in.",
+      "find": ["        $env:GIT_INDEX_FILE = Join-Path $workDirectory ('index-' + [guid]::NewGuid().ToString('N'))"],
+      "replace": ["        $null = 0"]
+    },
+    {
+      "name": "a clone keeps its local entries that name no commit",
+      "file": "tools/fetch-sabotage-catchers.ps1",
+      "expect": "caught",
+      "why": "An entry swept from a tree that was no commit names none, so no scoped sweep ever uses it; but it is the newer, so merged as it stands it displaces the published entry that could be used, and adopting the record gains nothing in exactly the clone that most wants it.",
+      "find": ["            if ($value.Commit) {"],
+      "replace": ["            if ($true) {"]
+    },
+    {
+      "name": "a branch that does not exist yet is an error to fetch",
+      "file": "tools/fetch-sabotage-catchers.ps1",
+      "expect": "caught",
+      "why": "Before the first nightly run there is nothing to adopt, which is not a failure; the plan job runs the fetch on every run and would fail every one of them.",
+      "find": ["    Write-Host \"No $Branch branch on $Remote yet; nothing to adopt.\""],
+      "replace": ["    Write-Host \"No $Branch branch on $Remote yet; nothing to adopt.\"; exit 1"]
+    },
+    {
+      "name": "CONTROL: the published message is reworded",
+      "file": "tools/publish-sabotage-catchers.ps1",
+      "expect": "survives",
+      "why": "The manifest checking itself. This changes what a reader sees and nothing a test claims, so it MUST survive -- if it comes back caught, the suite is matching on incidental wording rather than behaviour, and its other results are worth less than they look.",
+      "find": ["    Write-Host \"Published $count entries across"],
+      "replace": ["    Write-Host \"Pushed $count entries across"]
+    }
+  ]
+}
