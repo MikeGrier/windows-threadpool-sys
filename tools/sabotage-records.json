@@ -41,8 +41,8 @@
       "file": "tools/publish-sabotage-catchers.ps1",
       "expect": "caught",
       "why": "A publisher that swept a few manifests would replace what another swept, so the record on the branch would only ever be the last run's slice.",
-      "find": ["    $merged = Merge-SabotageCatcherRecord -Records @($current, (Read-SabotageCatcherRecord -Path $Record))"],
-      "replace": ["    $merged = Merge-SabotageCatcherRecord -Records @((Read-SabotageCatcherRecord -Path $Record))"]
+      "find": ["    $merged = Merge-SabotageCatcherRecord -Records @($current, $incoming)"],
+      "replace": ["    $merged = Merge-SabotageCatcherRecord -Records @($incoming)"]
     },
     {
       "name": "a record that adds nothing is committed anyway",
@@ -62,9 +62,9 @@
     },
     {
       "name": "a clone keeps its local entries that name no commit",
-      "file": "tools/fetch-sabotage-catchers.ps1",
+      "file": "tools/common.ps1",
       "expect": "caught",
-      "why": "An entry swept from a tree that was no commit names none, so no scoped sweep ever uses it; but it is the newer, so merged as it stands it displaces the published entry that could be used, and adopting the record gains nothing in exactly the clone that most wants it.",
+      "why": "An entry swept from a tree that was no commit names none, so no scoped sweep ever uses it; but it is the newer, so merged as it stands it displaces the published entry that could be used. The rule is written once, in the filter the fetcher applies to a clone's own entries and the publisher to the record it is given; keeping them is what both defects below are.",
       "find": ["            if ($value.Commit) {"],
       "replace": ["            if ($true) {"]
     },
@@ -83,6 +83,30 @@
       "why": "The manifest checking itself. This changes what a reader sees and nothing a test claims, so it MUST survive -- if it comes back caught, the suite is matching on incidental wording rather than behaviour, and its other results are worth less than they look.",
       "find": ["    Write-Host \"Published $count entries across"],
       "replace": ["    Write-Host \"Pushed $count entries across"]
+    },
+    {
+      "name": "the record branch's file is read through the console's code page",
+      "file": "tools/common.ps1",
+      "expect": "caught",
+      "why": "PowerShell decodes a native command's output with the console code page, which is not UTF-8 by default on Windows, so an entry or test name that is not ASCII comes back as other characters while the JSON around it stays valid; the fetcher saves them and the publisher writes them back to the shared branch. Found in the review of PR #176.",
+      "find": ["    $text = Get-GitBlobUtf8 -RepositoryRoot $RepositoryRoot -Spec \"${commit}:catchers.json\""],
+      "replace": ["    $lines = @(Invoke-NativeStdout { git -C $RepositoryRoot show \"${commit}:catchers.json\" })", "    $text = if ($LASTEXITCODE -eq 0) { ($lines -join \"`n\") + \"`n\" } else { $null }"]
+    },
+    {
+      "name": "the publisher publishes entries that name no commit",
+      "file": "tools/publish-sabotage-catchers.ps1",
+      "expect": "caught",
+      "why": "A publish from a sweep of a tree with uncommitted edits would put newer entries that name no commit on the shared branch, replacing committed ones a clone can use, and the narrowing would be lost until another clean sweep. Found in the review of PR #176.",
+      "find": ["$incoming = $committed.Record"],
+      "replace": ["$incoming = Read-SabotageCatcherRecord -Path $Record"]
+    },
+    {
+      "name": "a record with nothing in it creates the branch",
+      "file": "tools/publish-sabotage-catchers.ps1",
+      "expect": "caught",
+      "why": "When every entry of a record names no commit and the branch is not there yet, the publish would create it holding an empty record: a branch and a commit for nothing, and a first record a later clone adopts as if it were something.",
+      "find": ["    if ($count -eq 0) {"],
+      "replace": ["    if ($false) {"]
     }
   ]
 }

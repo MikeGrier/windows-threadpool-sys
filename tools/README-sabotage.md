@@ -654,8 +654,11 @@ which runs no code a sweep patched, has write access to it. The publisher merges
 given into the one the branch holds, keeping each entry's latest, and commits nothing when that
 changes nothing; it writes the commit with git plumbing, so it never touches a working tree or
 index, and a push another publisher beat it to is retried from a fresh fetch, never forced. The
-fetch drops the clone's own entries that name no commit before it merges, since being the newer they
-would displace a published entry that can be used. A record on the branch from a commit a clone does
+publisher leaves out of what it is given the entries that name no commit, and the fetch drops the
+clone's own, before either merges: such an entry comes from a sweep of a tree that was not a commit, no
+clone can use it, and being the newer it would displace a published entry that can be used. Names in the
+record are read back as UTF-8 whatever the console's code page, since an entry or test name need not be
+ASCII. A record on the branch from a commit a clone does
 not have is not used there, so adopting one cannot make a sweep select fewer entries than it
 should. The branch's history may be squashed or deleted at any time. The reasoning is in
 [DESIGN-NOTES.md](../DESIGN-NOTES.md#sabotage-records).

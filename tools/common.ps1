@@ -1013,9 +1013,63 @@ function Get-SabotageRecordBranch {
     $found = @(Invoke-NativeStdout { git -C $RepositoryRoot rev-parse --verify $ref })
     if ($LASTEXITCODE -ne 0 -or $found.Count -eq 0) { return & $result $false "git could not read '$ref' after fetching it" $null $null }
     $commit = ([string]$found[0]).Trim()
-    $lines = @(Invoke-NativeStdout { git -C $RepositoryRoot show "${commit}:catchers.json" })
-    $text = if ($LASTEXITCODE -eq 0) { ($lines -join "`n") + "`n" } else { $null }
+    $text = Get-GitBlobUtf8 -RepositoryRoot $RepositoryRoot -Spec "${commit}:catchers.json"
     return & $result $true $null $commit $text
+}
+
+# The text of the blob `Spec` (`<commit>:<path>`) names, decoded as UTF-8, or $null
+# when there is none. The record is UTF-8 and holds entry and test names, which are
+# not always ASCII; PowerShell decodes a native command's output with the console's
+# code page, which on Windows PowerShell 5.1 need not be UTF-8, so a name read through
+# it comes back as other characters while the JSON around it stays valid, and the
+# fetcher would save them and the publisher write them back to the shared branch. The
+# bytes are read here by the process object, with the decoder named, and no host's
+# console is asked. `cat-file blob` and not `show`, so nothing is filtered or converted.
+function Get-GitBlobUtf8 {
+    param([string] $RepositoryRoot, [string] $Spec)
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = 'git'
+    $info.Arguments = (@('-C', $RepositoryRoot, 'cat-file', 'blob', $Spec) | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' '
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $process = [System.Diagnostics.Process]::Start($info)
+    try {
+        # Stderr is read on its own thread, so a command that fills its pipe cannot
+        # wait on us while we wait on its stdout.
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $text = $process.StandardOutput.ReadToEnd()
+        $process.WaitForExit()
+        [void]$stderr.Result
+        if ($process.ExitCode -ne 0) { return $null }
+        return $text
+    }
+    finally { $process.Dispose() }
+}
+
+# `Record` without the entries that name no commit, and how many there were. A sweep
+# of a tree that was not a commit records what it learned with none, and no scoped
+# sweep ever uses such an entry (Get-SabotageCatcherTests); but it is the newer, so
+# merged as it stands it displaces a committed entry that can be used. This is the
+# one place the rule is written: the publisher applies it to what it is given and the
+# fetcher to a clone's own, so neither shared copy nor clone loses a usable entry to
+# one that is not. Returns `Record` and `Dropped`.
+function Select-SabotageCommittedRecord {
+    param([hashtable] $Record)
+    $kept = New-SabotageCatcherRecord
+    $dropped = 0
+    foreach ($manifest in $Record.Keys) {
+        foreach ($entry in $Record[$manifest].Keys) {
+            $value = $Record[$manifest][$entry]
+            if ($value.Commit) {
+                Set-SabotageCatcher -Record $kept -Manifest $manifest -Entry $entry -Tests $value.Tests -At $value.At -Commit $value.Commit
+            }
+            else { $dropped++ }
+        }
+    }
+    return [pscustomobject]@{ Record = $kept; Dropped = $dropped }
 }
 
 # Which entries of one manifest a change could have affected, and why each.

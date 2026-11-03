@@ -11,9 +11,11 @@
     with no usable record is always swept (DESIGN-NOTES.md, "sabotage-scope").
 
     The merge keeps each entry's latest result. Entries of the local record that
-    name no commit are dropped first: a sweep of a tree that was not a commit
-    records what it learned with none, and no scoped sweep ever uses such an
-    entry, but being the newer it would displace a published one that can be used.
+    name no commit are dropped first, by Select-SabotageCommittedRecord in
+    [common.ps1](common.ps1), which the publisher applies to what it publishes:
+    a sweep of a tree that was not a commit records what it learned with none,
+    and no scoped sweep ever uses such an entry, but being the newer it would
+    displace a published one that can be used.
 
     Adopting a record cannot make a sweep select fewer entries than it should. An
     entry is used only if the commit it names is in this clone's history, so one
@@ -74,18 +76,9 @@ try {
     [System.IO.File]::WriteAllText($published, $state.Text, [System.Text.UTF8Encoding]::new($false))
 
     $local = Read-SabotageCatcherRecord -Path $Output
-    $kept = New-SabotageCatcherRecord
-    $dropped = 0
-    foreach ($manifest in $local.Keys) {
-        foreach ($entry in $local[$manifest].Keys) {
-            $value = $local[$manifest][$entry]
-            if ($value.Commit) {
-                Set-SabotageCatcher -Record $kept -Manifest $manifest -Entry $entry -Tests $value.Tests -At $value.At -Commit $value.Commit
-            }
-            else { $dropped++ }
-        }
-    }
-    $merged = Merge-SabotageCatcherRecord -Records @($kept, (Read-SabotageCatcherRecord -Path $published))
+    $committed = Select-SabotageCommittedRecord -Record $local
+    $dropped = $committed.Dropped
+    $merged = Merge-SabotageCatcherRecord -Records @($committed.Record, (Read-SabotageCatcherRecord -Path $published))
     Write-SabotageCatcherRecord -Path $Output -Record $merged
 
     $entries = 0

@@ -14,8 +14,12 @@
 
     What is published is the merge of the record given and the record the branch
     already holds, each entry's latest result kept, so a publisher that swept a few
-    manifests does not discard what another swept. When that merge is what the
-    branch already holds, nothing is committed.
+    manifests does not discard what another swept. Entries of the record given that
+    name no commit are left out first (Select-SabotageCommittedRecord in
+    [common.ps1](common.ps1)): they come from a sweep of a tree that was not a commit,
+    no clone can use them, and being the newer they would replace committed entries
+    that a clone can. When that merge is what the branch already holds, nothing is
+    committed.
 
     A blob, a tree and a commit are written with git plumbing and pushed as a
     fast-forward: no working tree, index or checked-out branch is read or changed,
@@ -80,6 +84,17 @@ if (-not $RepositoryRoot) { $RepositoryRoot = Split-Path -Parent $PSScriptRoot }
 if ($Attempts -lt 1) { Write-Host "-Attempts must be at least 1; got $Attempts."; exit 2 }
 if (-not (Test-Path -LiteralPath $Record -PathType Leaf)) { Write-Host "No record to publish at $Record."; exit 2 }
 
+# What is published is the record's entries that name a commit. One swept from a tree
+# that was not a commit names none, and a clone cannot use it; but being the newer it
+# would replace a committed entry on the shared branch that a clone can, and the
+# narrowing would be lost until another clean sweep. Done once: the record does not
+# change between attempts.
+$committed = Select-SabotageCommittedRecord -Record (Read-SabotageCatcherRecord -Path $Record)
+$incoming = $committed.Record
+if ($committed.Dropped -gt 0) {
+    Write-Host "Leaving out $($committed.Dropped) entries of $Record that name no commit: they were swept from a tree that was not one."
+}
+
 # Names in the published tree. Changing either is a change to what a clone
 # fetches, so both are named once.
 $recordFile = 'catchers.json'
@@ -143,7 +158,13 @@ function Publish-Once {
         [System.IO.File]::WriteAllText($held, $state.Text, [System.Text.UTF8Encoding]::new($false))
         $current = Read-SabotageCatcherRecord -Path $held
     }
-    $merged = Merge-SabotageCatcherRecord -Records @($current, (Read-SabotageCatcherRecord -Path $Record))
+    $merged = Merge-SabotageCatcherRecord -Records @($current, $incoming)
+    $count = 0
+    foreach ($manifest in $merged.Keys) { $count += $merged[$manifest].Count }
+    if ($count -eq 0) {
+        Write-Host "Nothing to publish to $Branch on ${Remote}: the record has no entry that names a commit."
+        return $null
+    }
     $mergedText = ConvertTo-RecordText $merged
     if ($state.Present -and $null -ne $state.Text -and [string]::Equals((ConvertTo-RecordText $current), $mergedText, [System.StringComparison]::Ordinal)) {
         Write-Host "The $Branch branch on $Remote already holds this record; nothing to publish."
@@ -173,8 +194,6 @@ function Publish-Once {
         if ($null -eq $previousIndex) { Remove-Item Env:\GIT_INDEX_FILE -ErrorAction SilentlyContinue } else { $env:GIT_INDEX_FILE = $previousIndex }
     }
 
-    $count = 0
-    foreach ($manifest in $merged.Keys) { $count += $merged[$manifest].Count }
     $message = "sabotage-records: $count entries across $($merged.Count) manifest(s)"
     $arguments = @('-c', "user.name=$AuthorName", '-c', "user.email=$AuthorEmail", '-c', 'commit.gpgsign=false',
         'commit-tree', ([string]$tree).Trim())

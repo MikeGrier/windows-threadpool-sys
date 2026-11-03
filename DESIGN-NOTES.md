@@ -2996,8 +2996,16 @@ last learned and not from nothing, which is what a clone's first scoped sweep ot
   of a manifest is a full one. **Why not an artifact:** it expires.
 - **A published record cannot make a sweep smaller than it should be.** An entry is used only if the
   commit it names is in the checkout's history (`Get-SabotageCatcherTests`), so a record from a commit a
-  clone does not have is held and unused. The fetch drops the clone's own entries that name no commit
-  before it merges, since being the newer they would displace a published entry that can be used.
+  clone does not have is held and unused. An entry that names no commit comes from a sweep of a tree
+  that was not one and can be used nowhere, but being the newer it would displace a committed entry that
+  can: the publisher leaves such entries out of the record it is given, and the fetch drops the clone's
+  own, both through `Select-SabotageCommittedRecord`, the one place the rule is written (the review of
+  PR #176).
+- **A name is read back as UTF-8, whatever the console's code page.** An entry or test name need not be
+  ASCII, and PowerShell decodes a native command's output with the console's code page, which on
+  Windows is not UTF-8 by default: a name read through it comes back as other characters while the JSON
+  around it stays valid, and the publisher would write the corrupted name back to the shared branch. The
+  record is read from the branch by `Get-GitBlobUtf8`, with the decoder named (the review of PR #176).
 - **The remote being unreachable is not the branch being absent.** `ls-remote --exit-code` tells them
   apart, and a publisher that took the first for the second would write a root commit over history it
   could not see. The branch is asked for by its full ref, since `ls-remote` matches a pattern against

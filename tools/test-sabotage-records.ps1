@@ -229,8 +229,14 @@ $cases = @(
             $remote = New-Remote; $clone = New-Clone $remote; $other = New-Clone $remote
             $ours = New-RecordFile @(@{ M = $m1; E = 'mine'; T = @('a'); At = $t1; C = $sha })
             $theirs = New-RecordFile @(@{ M = $m2; E = 'theirs'; T = @('b'); At = $t2; C = $sha })
-            # Between our fetch and our push, another publisher creates the branch.
-            $race = { $null = Invoke-Publisher $other $theirs }.GetNewClosure()
+            # Between our fetch and our push, another publisher creates the branch. The callback is
+            # built from literal values: it runs inside the publisher, so a variable or function it
+            # names would be looked up from there, and a `GetNewClosure()` one runs in a module scope
+            # that cannot see this script's functions when the script is itself run from a nested
+            # scope, as CI's `. '<script>'` wrapper does. A literal needs neither.
+            $quote = { param($text) "'" + $text.Replace("'", "''") + "'" }
+            $race = [scriptblock]::Create(
+                "& $(& $quote $publisher) -Record $(& $quote $theirs) -RepositoryRoot $(& $quote $other) -Remote origin -RetryDelaySeconds 0 | Out-Null")
             $r = Invoke-Publisher $clone $ours @{ BeforePush = $race }
             Assert-Equal 0 $r.Exit $r.Output
             Assert-Match 'Attempt 1 of 5' $r.Output 'the first attempt is reported as refused'
@@ -354,6 +360,80 @@ $cases = @(
             Assert-Equal 0 $r.Exit $r.Output
             Assert-Match 'No sabotage-records branch' $r.Output 'the longer name is not it'
             Assert-True (-not (Test-Path -LiteralPath $output)) 'and nothing was written'
+        }
+    },
+    @{
+        Name = 'names-that-are-not-ascii-survive-a-publish-a-merge-and-a-fetch-under-a-console-that-is-not-utf-8'
+        Run  = {
+            $remote = New-Remote; $ci = New-Clone $remote; $dev = New-Clone $remote
+            # Built from code points, so this file stays ASCII: Windows PowerShell 5.1 reads a
+            # script with no byte order mark as the ANSI code page. An accent, two CJK
+            # characters, and one outside the basic plane, which is two UTF-16 units.
+            $face = [char]::ConvertFromUtf32(0x1F600)
+            $entry = 'caf' + [char]0xE9 + ' ' + [char]0x65E5 + [char]0x672C + ' ' + $face
+            $test = 'mod::t_' + [char]0xFC + $face
+            $first = New-RecordFile @(@{ M = $m1; E = $entry; T = @($test); At = $t1; C = $sha })
+            $second = New-RecordFile @(@{ M = $m2; E = 'plain'; T = @('x'); At = $t2; C = $sha })
+            # PowerShell decodes a native command's output with the console's code page. This is
+            # the case where that is not UTF-8, which is a Windows console's default, and the
+            # one that corrupted a name while leaving the JSON around it valid. If the host will
+            # not let the page be set, say so: the case then runs under the host's own.
+            $page = $null
+            try { $page = [Console]::OutputEncoding; [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(437) }
+            catch { $page = $null; Write-Host '        (the console code page could not be set here; this ran under the host''s own)' }
+            try {
+                Assert-Equal 0 (Invoke-Publisher $ci $first).Exit 'publish the name'
+                # The second publish reads the branch and writes what it read back, which is where
+                # a corrupted name would be put on the shared branch.
+                Assert-Equal 0 (Invoke-Publisher $ci $second).Exit 'publish another, merging with the first'
+                $output = Join-Path (New-Root) 'sabotage\catchers.json'
+                Assert-Equal 0 (Invoke-Fetcher $dev $output).Exit 'fetch'
+            }
+            finally { if ($null -ne $page) { [Console]::OutputEncoding = $page } }
+            $adopted = Read-SabotageCatcherRecord -Path $output
+            Assert-Entry $adopted $m1 $entry @($test) $t1
+            Assert-Entry $adopted $m2 'plain' @('x') $t2
+            Assert-Equal 2 (@($adopted[$m1].Keys).Count + @($adopted[$m2].Keys).Count) 'and no corrupted copy beside them'
+        }
+    },
+    @{
+        Name = 'an-entry-that-names-no-commit-is-never-published-and-never-displaces-one-that-does'
+        Run  = {
+            $remote = New-Remote; $ci = New-Clone $remote; $dev = New-Clone $remote
+            $committed = New-RecordFile @(@{ M = $m1; E = 'e1'; T = @('real'); At = $t1; C = $sha })
+            Assert-Equal 0 (Invoke-Publisher $ci $committed).Exit 'publish the committed entry'
+            $tip = Get-Tip $remote
+            # A sweep of a tree with uncommitted edits: newer than the published entry, naming no
+            # commit, and with one entry of its own that the branch does not hold.
+            $dirty = New-RecordFile @(
+                @{ M = $m1; E = 'e1'; T = @('dirty'); At = $t3; C = '' },
+                @{ M = $m1; E = 'e2'; T = @('dirty'); At = $t3; C = '' })
+            $r = Invoke-Publisher $ci $dirty
+            Assert-Equal 0 $r.Exit $r.Output
+            Assert-Match 'Leaving out 2 entries' $r.Output 'it says what it left out'
+            Assert-Equal $tip (Get-Tip $remote) 'nothing newer to publish, so the branch did not move'
+            $held = Read-Published $remote
+            Assert-Entry $held $m1 'e1' @('real') $t1
+            Assert-True (-not $held[$m1].ContainsKey('e2')) 'and the entry that names no commit was not added'
+            # Mixed with a committed one, the committed one goes and the other does not.
+            $mixed = New-RecordFile @(
+                @{ M = $m1; E = 'e1'; T = @('dirty'); At = $t3; C = '' },
+                @{ M = $m2; E = 'e3'; T = @('real'); At = $t2; C = $sha })
+            Assert-Equal 0 (Invoke-Publisher $ci $mixed).Exit 'publish a mixed record'
+            $held = Read-Published $remote
+            Assert-Entry $held $m1 'e1' @('real') $t1
+            Assert-Entry $held $m2 'e3' @('real') $t2
+        }
+    },
+    @{
+        Name = 'a-record-of-only-entries-that-name-no-commit-does-not-create-the-branch'
+        Run  = {
+            $remote = New-Remote; $ci = New-Clone $remote
+            $dirty = New-RecordFile @(@{ M = $m1; E = 'e1'; T = @('dirty'); At = $t1; C = '' })
+            $r = Invoke-Publisher $ci $dirty
+            Assert-Equal 0 $r.Exit $r.Output
+            Assert-Match 'no entry that names a commit' $r.Output 'it says why there is nothing to publish'
+            Assert-Equal $null (Get-Tip $remote) 'and the branch was not made, empty'
         }
     }
 )

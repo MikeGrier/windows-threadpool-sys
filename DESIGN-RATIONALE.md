@@ -1033,6 +1033,27 @@ select fewer entries than a full one would.
 - A machine whose git is configured with `safe.bareRepository=explicit` refuses `git -C <bare repository>`;
   the tests read the stand-in remote with `--git-dir`.
 
+**What the review of PR #176 found**, after the first CI run, and what it says about the first draft:
+
+- **The publisher put the records of a dirty sweep on the shared branch.** The fetcher already dropped a
+  clone's entries that name no commit, and the publisher, written first, did not, though the argument is
+  the same: such an entry is the newer and displaces a committed one a clone can use. The rule had been
+  written in the one script that needed it when it was found there, which is how a second site went without
+  it; it is now one function both call.
+- **A name was decoded by the console's code page.** The record was read back from the branch through a
+  native command's output, which PowerShell decodes with the console's code page, so a non-ASCII entry or
+  test name came back as other characters with the JSON around it valid, and the next publish would write it
+  back. Nothing in the first suite had a non-ASCII name, and this machine's consoles are UTF-8, so the
+  case forces another page around the publish, the merge and the fetch.
+- **A test's callback lost the script's functions under CI and not anywhere it had been run.** The race case
+  built its callback with `GetNewClosure()`, whose module scope cannot see the script's functions when the
+  script is called from inside another script, as a GitHub Actions step calls it (the step's text is a
+  temporary script that calls this one). It passed under `-File`, in a terminal, and on both hosts. The
+  case now builds its callback from literal values, which look nothing up. What guards it is the harness-tests
+  job, which runs the suite in that shape on every push: a sabotage entry for it would need the runner to
+  imitate GitHub's wrapper, and the first attempt, dot-sourcing inside a script block, swallowed the suite's
+  exit status and made every entry survive.
+
 **Not decided.** Whether the cache should be removed once the branch is shown to work. It is kept beside the
 branch on purpose, so a defect in the new path cannot cost a run its record, and the merge-or-delete
 decision is parked with the post-merge observation that would settle it.
