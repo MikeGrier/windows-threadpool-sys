@@ -2269,6 +2269,38 @@
       "why": "A test that panics before removing its read-only .fresh sibling would leak it, and the file is what the next run to be given the same process id collides with. The drop removes it, clearing the attribute first.",
       "find": ["        let _ = fs::remove_file(&self.0);\n        remove_leftover(&self.0.with_extension(\"fresh\"));"],
       "replace": ["        let _ = fs::remove_file(&self.0);"]
+    },
+    {
+      "name": "DI-7.4: the blocking push gives up at once on a ring at its operations",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "A push refused at the declared operations is cleared by the caller popping and sealing, which make_room does; classing it as not retryable returns it as NotRetryable on the first refusal, so a demonstration that writes past its capacity panics instead of taking back-pressure. Found in the review of PR #167.",
+      "find": ["            PushRefusal::AtCapacity(at) => at.limit == Limit::Operations,"],
+      "replace": ["            PushRefusal::AtCapacity(_) => false,"]
+    },
+    {
+      "name": "DI-7.4: the demonstration never seals as it goes",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "A write keeps its place until its completion is popped and a seal has covered it, so a run that seals only at the end is refused at the declared operations however fast it pops, and its push times out. This is the defect the review found: writes past 256 panicked.",
+      "find": ["        if in_epoch == EPOCH_WRITES {"],
+      "replace": ["        if false {"]
+    },
+    {
+      "name": "DI-7.4: making room does not pop",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "Popping a completion is half of what lets go of a write's place, so a make_room that only drains leaves a ring at its operations as full as it was, and the push times out.",
+      "find": ["                while let Some(entry) = next(ring) {"],
+      "replace": ["                while let Some(entry) = None::<EntryOf<Ring>> {"]
+    },
+    {
+      "name": "DI-7.4: a pop refused for want of room is a fault",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "Popping rings for the commit a seal queued, and the backend will not take it until its completions are drained: DrainNeeded. That is nothing to pop yet and a reason to make room; treating it as a fault ends the run at the first seal under a pumped delivery.",
+      "find": ["                        | RefusalKind::DrainNeeded"],
+      "replace": ["                        | RefusalKind::Busy"]
     }
   ]
 }
