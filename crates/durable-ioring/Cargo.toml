@@ -2,7 +2,7 @@
 
 [package]
 name = "durable-ioring"
-version = "0.3.0"
+version = "0.4.0"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,11 +20,11 @@ io-buffers = { version = "0.1.0", path = "../io-buffers" }
 # A fault's report, a static or a shared `dyn Error` (DI-D-105): the shared form needs `unsafe`, which
 # this crate forbids, so it lives below. release-please's workspace plugin moves this version with
 # rc-errors' first release.
-rc-errors = { version = "0.0.1", path = "../rc-errors" }
+rc-errors = { version = "0.0.2", path = "../rc-errors" }
 # The core's keyed tables, whose capacity is declared at construction and which refuse an insert
 # past it rather than grow (DI-D-106, DI-D-107). Heap storage, allocated once when the core is
 # built. release-please's workspace plugin moves this version with fixed-hash-table's first release.
-fixed-hash-table = { version = "0.0.1", path = "../fixed-hash-table", features = ["alloc"] }
+fixed-hash-table = { version = "0.0.2", path = "../fixed-hash-table", features = ["alloc"] }
 
 [features]
 default = ["std"]

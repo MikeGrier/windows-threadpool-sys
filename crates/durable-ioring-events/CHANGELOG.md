@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/durable-ioring-events-v0.1.0...durable-ioring-events-v0.1.1) (2026-11-03)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * durable-ioring bumped from 0.3.0 to 0.4.0
+
 ## [0.1.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/durable-ioring-events-v0.0.1...durable-ioring-events-v0.1.0) (2026-10-22)
 
 
