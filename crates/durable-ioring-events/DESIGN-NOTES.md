@@ -206,3 +206,35 @@ whose end never comes is the producer's to answer for.
 
 **Scheduled work.** None; [DI-22.2](../durable-ioring/COMPLETED-CHECKLIST.md#di-222) is this.
 
+
+## <a id="de-d-8"></a>DE-D-8: a version of this crate serves one breaking version of durable-ioring, and its own version moves with it
+
+**The rule.** `EtwDiagnostics` implements durable-ioring's `DiagnosticSink`, and a sink is handed to a durable-ioring
+that must be the one whose trait it implements, so durable-ioring is part of this crate's public surface and not an
+implementation detail. Each breaking release of durable-ioring (a new minor, while it is 0.x) is therefore a breaking
+release of this crate, made in the same release, with the dependency requirement moved to match.
+
+**What went wrong, 2026-11-03.** durable-ioring went from 0.3 to 0.4 and this crate was released as 0.1.1, a patch release
+that moved its requirement from durable-ioring 0.3 to 0.4. release-please's `cargo-workspace` plugin did it: it gives a
+workspace dependent of a bumped crate a patch bump, and has no way to know that the dependent implements the dependency's
+traits. A project on durable-ioring 0.3 with this crate at `0.1` would have been given 0.1.1 by an ordinary update, and with
+it a second durable-ioring and a sink for a trait the project does not use, which does not compile. The error was found by
+Copilot's review of the release pull request, after it had merged and all three crates had been published. Nothing on
+crates.io depended on either crate but `win-durable-ioring`, and 0.1.0 had been downloaded a few times.
+
+**The remedy, the engineer's ruling the same day ("option 2").** Release this crate as 0.2.0, the version 0.1.1 should
+have been, with a breaking commit and a `Release-As` footer so that release-please makes exactly that; release
+`win-durable-ioring` against it; and then yank 0.1.1 of this crate and 0.5.0 of `win-durable-ioring`. Both are yanked
+because 0.5.0 requires this crate at `0.1.1` or later within 0.1: yanking only this crate's 0.1.1 would leave 0.5.0
+uninstallable by anyone resolving afresh. A yank stops new resolutions and leaves existing lockfiles working, which is what
+the situation wants.
+
+**Why not leave it.** Nobody is known to be hurt, and that is the reason it is cheap to correct now: the registry's record
+of which version fits which durable-ioring is what a consumer reads, and once someone depends on 0.1.1 the correction costs
+them something. **Why not delete:** crates.io does not delete a published version, and a yank is its remedy.
+
+**What a release of this crate must now do.** When durable-ioring's next breaking version is released, this crate is
+released breaking in the same pull request. The workspace rule that covers every crate with a surface like this one is in
+[DEVELOPMENT.md](../../DEVELOPMENT.md), under the release process.
+
+**Scheduled work.** [CHECKLIST.md](../../CHECKLIST.md) `M43.1` releases the correction and `M43.2` yanks the two versions.
