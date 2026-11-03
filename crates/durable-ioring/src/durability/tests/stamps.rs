@@ -30,7 +30,7 @@ fn stamps(due: &Due<u64, &'static str, Stamp>) -> Vec<u64> {
     due.events
         .iter()
         .filter_map(|event| match event {
-            Event::Failed(failed) => Some(failed.observed),
+            Event::Failed { failed, .. } => Some(failed.observed),
             _ => None,
         })
         .collect()
@@ -39,7 +39,7 @@ fn stamps(due: &Due<u64, &'static str, Stamp>) -> Vec<u64> {
 /// The inventory's stamps, in observation order.
 fn inventory<K: StampClocked>(lineage: &One<K>) -> Vec<u64> {
     lineage
-        .failures()
+        .failures_listed()
         .iter()
         .map(|failure| failure.observed)
         .collect()
@@ -108,7 +108,7 @@ fn a_healed_failure_keeps_its_stamp_while_its_heal_is_pending() {
         .events
         .into_iter()
         .find_map(|event| match event {
-            Event::Failed(failed) => Some(failed.token),
+            Event::Failed { failed, .. } => Some(failed.token),
             _ => None,
         })
         .expect("the import's token");

@@ -4,11 +4,11 @@
 //! Every entry is reported to the conformance oracle, so each test also checks that an ended
 //! lineage answers nothing more.
 
-use super::empty;
 use super::pushes::{ADDED, GIVEN, Harness, given, instance, temp};
-use durable_ioring::driver::Home;
+use super::{empty, listed};
+use durable_ioring::driver::{Home, LineageSlots};
 use durable_ioring::{
-    DurabilityRequest, EndLineageRefusal, Entry, Epoch, ImportScope, Resolution,
+    DurabilityRequest, EndLineageRefusal, Entry, Epoch, ImportError, ImportScope, Resolution,
     RetireLineageRefusal, UnknownLineage,
 };
 use durable_ioring::{DurableRing, Identities, Lin};
@@ -18,7 +18,7 @@ use std::sync::{Arc, Weak};
 /// Written against the trait, as a consumer would: it must compile for any implementation.
 fn default_is_listed<D: DurableRing>(ring: &D) -> bool {
     let default: Lin<D> = D::Ids::handle_lineage(&ring.default_lineage());
-    ring.lineages()
+    listed(ring)
         .iter()
         .any(|info| info.is_default && info.lineage == default)
 }
@@ -34,7 +34,10 @@ fn two(given_temp: &super::TempFile, added_temp: &super::TempFile) -> (Harness, 
         vec![given(GIVEN, given_temp), given(ADDED, added_temp)],
         Vec::new(),
     ));
-    let minted = harness.ring.mint_lineage(Some("log".to_owned()));
+    let minted = harness
+        .ring
+        .mint_lineage(Some("log".to_owned()))
+        .expect("room for a lineage");
     (harness, minted)
 }
 
@@ -65,7 +68,7 @@ fn a_minted_lineage_is_listed_and_made_durable_on_its_own() {
     let (a, b) = (temp(&[0; 64]), temp(&[0; 64]));
     let (mut harness, minted) = two(&a, &b);
     let lineage = minted.lineage();
-    let listed = harness.ring.lineages();
+    let listed = listed(&harness.ring);
     assert_eq!(listed.len(), 2);
     assert_eq!(listed[1].lineage, lineage);
     assert_eq!(listed[1].description.as_deref(), Some("log"));
@@ -95,11 +98,11 @@ fn releasing_the_last_handle_ends_the_lineage_and_a_copy_keeps_it() {
         harness.ring.pop().expect("pop").is_none(),
         "a copy is still held"
     );
-    assert_eq!(harness.ring.lineages().len(), 2);
+    assert_eq!(listed(&harness.ring).len(), 2);
 
     drop(copy);
     assert_eq!(expect_ended(&mut harness, lineage), Some(3));
-    assert_eq!(harness.ring.lineages().len(), 1);
+    assert_eq!(listed(&harness.ring).len(), 1);
     assert_eq!(
         harness.ring.durable_through(lineage),
         Err(UnknownLineage(lineage))
@@ -109,8 +112,10 @@ fn releasing_the_last_handle_ends_the_lineage_and_a_copy_keeps_it() {
         Err(UnknownLineage(lineage))
     );
     assert_eq!(
-        harness.ring.import_failure(ImportScope::Lineage(lineage)),
-        Err(UnknownLineage(lineage))
+        harness
+            .ring
+            .import_failure(ImportScope::Lineage(lineage), |_| {}),
+        Err(ImportError::UnknownLineage(UnknownLineage(lineage)))
     );
     harness.finish();
 }
@@ -137,7 +142,7 @@ fn end_lineage_ends_through_the_last_handle_and_hands_back_any_other() {
         "the refused copy, dropped, was not the last"
     );
 
-    let foreign = empty().mint_lineage(None);
+    let foreign = empty().mint_lineage(None).expect("room for a lineage");
     let error = harness.ring.end_lineage(foreign).expect_err("foreign");
     assert!(matches!(error.reason, EndLineageRefusal::Foreign(_)));
 
@@ -152,6 +157,11 @@ struct Stranger;
 
 impl Home for Stranger {
     fn release(&self, _: durable_ioring::Lineage) {}
+
+    fn slots(&self) -> &LineageSlots {
+        static SLOTS: std::sync::OnceLock<LineageSlots> = std::sync::OnceLock::new();
+        SLOTS.get_or_init(|| LineageSlots::new(8).expect("eight slots"))
+    }
 }
 
 #[test]
@@ -170,7 +180,7 @@ fn a_handle_the_instance_did_not_mint_is_refused_and_disturbs_nothing() {
     let forgeries = |lineage| {
         [
             LineageHandle::detached(lineage),
-            LineageHandle::mint(lineage, home.clone()),
+            LineageHandle::mint(lineage, home.clone()).expect("a slot of the stranger's"),
         ]
     };
     for forged in forgeries(lineage) {
@@ -191,7 +201,7 @@ fn a_handle_the_instance_did_not_mint_is_refused_and_disturbs_nothing() {
     }
 
     assert!(harness.ring.pop().expect("pop").is_none(), "nothing ended");
-    assert_eq!(harness.ring.lineages().len(), 2);
+    assert_eq!(listed(&harness.ring).len(), 2);
     assert_eq!(harness.ring.sealed_through(lineage), Ok(None));
     // The genuine handle still ends it, once, and its release is not a second end.
     harness.ring.end_lineage(minted).expect("the genuine one");
@@ -214,10 +224,7 @@ fn retire_lineage_is_refused_while_anything_holds_it_and_abandons_nothing() {
         other => panic!("expected Busy, got {other:?}"),
     };
     assert_eq!(busy.lineage, lineage);
-    assert_eq!(
-        (busy.in_flight, busy.uncovered, busy.failures.len()),
-        (0, 1, 0)
-    );
+    assert_eq!((busy.in_flight, busy.uncovered, busy.failures), (0, 1, 0));
     let minted = error.handle;
 
     let copy = minted.clone();
@@ -229,7 +236,7 @@ fn retire_lineage_is_refused_while_anything_holds_it_and_abandons_nothing() {
         .retire_lineage(harness.default.clone())
         .expect_err("the default");
     assert!(matches!(error.reason, RetireLineageRefusal::Default));
-    let foreign = empty().mint_lineage(None);
+    let foreign = empty().mint_lineage(None).expect("room for a lineage");
     let error = harness.ring.retire_lineage(foreign).expect_err("foreign");
     assert!(matches!(error.reason, RetireLineageRefusal::Foreign(_)));
 
@@ -247,7 +254,7 @@ fn retire_lineage_is_refused_while_anything_holds_it_and_abandons_nothing() {
         harness.ring.sealed_through(lineage),
         Err(UnknownLineage(lineage))
     );
-    assert_eq!(harness.ring.lineages().len(), 1);
+    assert_eq!(listed(&harness.ring).len(), 1);
     harness.finish();
 }
 
@@ -263,11 +270,13 @@ fn an_import_scoped_to_a_lineage_suspects_only_its_writes() {
         (ImportScope::Lineage(harness.lineage()), vec![own]),
         (ImportScope::All, vec![own, theirs]),
     ] {
-        harness.ring.import_failure(scope.clone()).expect("import");
+        harness
+            .ring
+            .import_failure(scope.clone(), |_| {})
+            .expect("import");
         match harness.next_entry() {
             Entry::Failed(failed) => {
-                let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
-                assert_eq!(suspects, expected, "{scope:?}");
+                assert_eq!(harness.suspects(failed.id), expected, "{scope:?}");
             }
             other => panic!("expected Failed, got {other:?}"),
         }
@@ -280,7 +289,7 @@ fn a_handle_outliving_its_instance_releases_harmlessly() {
     let ring = instance(Vec::new(), Vec::new());
     let minted = {
         let mut ring = ring;
-        let minted = ring.mint_lineage(None);
+        let minted = ring.mint_lineage(None).expect("room for a lineage");
         drop(ring);
         minted
     };
@@ -305,7 +314,7 @@ fn ending_a_lineage_a_heal_waits_for_reports_the_heal() {
     harness.next_n(2);
     let id = harness
         .ring
-        .import_failure(ImportScope::All)
+        .import_failure(ImportScope::All, |_| {})
         .expect("import")
         .failure;
     let token = match harness.next_entry() {
@@ -314,12 +323,13 @@ fn ending_a_lineage_a_heal_waits_for_reports_the_heal() {
     };
     heal(&mut harness, token);
     harness.seal(1);
-    assert!(
-        matches!(harness.next_entry(), Entry::Marked { failure, .. } if failure == id),
-        "the seal's flush covered the default's suspect write"
-    );
     let one = harness.epoch(1);
     expect_durable(&mut harness, one);
+    assert_eq!(
+        harness.told.markings(id).map(|told| told.len()),
+        Some(1),
+        "the seal's flush covered the default's suspect write, and the observer was told"
+    );
 
     drop(minted);
     assert_eq!(expect_ended(&mut harness, lineage), Some(1));

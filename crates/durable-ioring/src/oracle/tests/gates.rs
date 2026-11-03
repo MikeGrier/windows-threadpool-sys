@@ -2,12 +2,12 @@
 //! The oracle's rules for gated operations (DI-3.2.5.2), each refused when broken and accepted when
 //! kept.
 
-use super::{LEN, Oracle, TestEntry, V, completion, done, op};
+use super::{FailedEntry, LEN, Oracle, Report, TestEntry, V, completion, done, op};
 use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::oracle::Violation;
 use crate::types::{
-    Entry, Epoch, Failed, FailureCause, ImportScope, OpKind, Outcome, SuspectSet, SuspectWrite,
+    Entry, Epoch, Failed, FailureCause, ImportScope, OpKind, Outcome, SuspectWrite,
 };
 
 fn at(instance: InstanceId, lineage: u64, id: u64) -> Epoch<V> {
@@ -32,36 +32,28 @@ fn durable(through: Epoch<V>) -> TestEntry {
     Entry::Durable { through }
 }
 
-fn failed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
-    Entry::Failed(Failed {
+fn failed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> FailedEntry {
+    let entry = Entry::Failed(Failed {
         id,
-        token: FailureToken::mint(id).0,
+        token: FailureToken::detached(id),
         cause: FailureCause::Imported {
             scope: ImportScope::All,
         },
-        suspect: SuspectSet::new(
-            writes
-                .iter()
-                .map(|&(op, epoch)| SuspectWrite {
-                    op,
-                    target: IoTargetKey(1),
-                    epoch,
-                })
-                .collect(),
-        ),
         observed: 0,
-    })
+    });
+    let suspect = writes
+        .iter()
+        .map(|&(op, epoch)| SuspectWrite {
+            op,
+            target: IoTargetKey(1),
+            epoch,
+        })
+        .collect();
+    FailedEntry(entry, suspect)
 }
 
-fn abandoned(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
-    let Entry::Failed(failed) = failed(id, writes) else {
-        unreachable!()
-    };
-    Entry::Abandoned {
-        failure: id,
-        suspect: failed.suspect,
-        markings: Vec::new(),
-    }
+fn abandoned(id: FailureId) -> TestEntry {
+    Entry::Abandoned { failure: id }
 }
 
 #[test]
@@ -139,11 +131,9 @@ fn never_issued_names_its_gate_or_own_epoch_once_reported_abandoned() {
             .pushed(suspect, write(epoch), LEN, 9)
             .expect("a write");
         oracle
-            .observe(&failed(failure, &[(suspect, epoch)]))
+            .report(failed(failure, &[(suspect, epoch)]))
             .expect("observed");
-        oracle
-            .observe(&abandoned(failure, &[(suspect, epoch)]))
-            .expect("abandoned");
+        oracle.observe(&abandoned(failure)).expect("abandoned");
         oracle
     };
 
@@ -228,12 +218,12 @@ fn no_failure_suspects_a_gated_write_before_its_gate_is_reported_durable() {
         .pushed_gated(held, write(own), LEN, 0, gate)
         .expect("a gated write");
     assert!(matches!(
-        oracle.observe(&failed(FailureId { instance, seq: 0 }, &[(held, own)])),
+        oracle.report(failed(FailureId { instance, seq: 0 }, &[(held, own)])),
         Err(Violation::SuspectStillHeld { op, .. }) if op == held
     ));
     oracle.sealed(gate);
     oracle.observe(&durable(gate)).expect("the gate");
     oracle
-        .observe(&failed(FailureId { instance, seq: 1 }, &[(held, own)]))
+        .report(failed(FailureId { instance, seq: 1 }, &[(held, own)]))
         .expect("released, so it may be in flight");
 }

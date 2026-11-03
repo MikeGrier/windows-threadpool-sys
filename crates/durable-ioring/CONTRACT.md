@@ -52,8 +52,9 @@ Everything below either sharpens one word of that sentence or states a condition
   anything about when an event happened in the storage beneath.
 - **Lineage.** One independent durability sequence within an instance: its own epoch space, seal
   point, high-water mark and set of failures ([DI-D-19](DESIGN-NOTES.md#di-d-19)). An instance has
-  a default lineage and may mint more at any time. Every rule in this document about epochs, seals
-  and the high-water mark applies within one lineage.
+  a default lineage and may mint more while it holds fewer than the instance was built for
+  ([DI-D-107](DESIGN-NOTES.md#di-d-107)). Every rule in this document about epochs, seals and the
+  high-water mark applies within one lineage.
 - **Lineage handle.** What the consumer holds a lineage through ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
   Copies may be made freely; the lineage lives while any copy does, and releasing the last ends it.
   A write's tag and a seal each borrow one, so neither can name a lineage that has ended. The
@@ -118,27 +119,45 @@ Everything below either sharpens one word of that sentence or states a condition
    stalls a request silently; a request waiting on a provider that has not answered stays pending,
    and that wait is reported to the diagnostic sink the instance was given -- ETW, unless the
    consumer chose another, for the Windows driver ([DI-D-26](DESIGN-NOTES.md#di-d-26),
-   [DI-D-51](DESIGN-NOTES.md#di-d-51)).
+   [DI-D-51](DESIGN-NOTES.md#di-d-51)). A request's `Durable` may be named for a later epoch
+   than its own: a request whose span holds no write, replaced before it is answered by a later
+   such request of its lineage, is answered by the later one's entry
+   ([DI-D-99](DESIGN-NOTES.md#di-d-99)); and a `Durable` the consumer has not popped when a later
+   one for its lineage is queued is replaced by it ([DI-D-101](DESIGN-NOTES.md#di-d-101)). A
+   `Durable { through: m }` with m above n says the mark has passed n too. A request's `Blocked`
+   the consumer has not popped is withdrawn once a later entry answers the same request: a
+   `Durable` of its lineage at or above it, its lineage's `LineageEnded`, or, for a request whose
+   span holds no write, the `Blocked` of the later such request that replaced it
+   ([DI-D-112](DESIGN-NOTES.md#di-d-112)). A consumer behind on popping sees the later answer, never
+   a wrong one.
 5. **Durable follows the writes it covers.** `Durable { through: n }` is delivered after the
    completion of every write of n's lineage tagged at or below n. Nothing further is promised about
-   order between lineages ([DI-D-18](DESIGN-NOTES.md#di-d-18)).
+   order between lineages ([DI-D-18](DESIGN-NOTES.md#di-d-18)). A lineage has at most one `Durable`
+   the consumer has not popped: a later one removes the older and is queued after every entry
+   already queued, never written over it in place, so a `Healed` queued between them still comes
+   before the `Durable` its heal lets through, and a consumer that pops slowly sees the mark at its
+   latest and never earlier than it was ([DI-D-101](DESIGN-NOTES.md#di-d-101)).
 6. **A late write is refused, not absorbed.** Once n is sealed, a write tagged at or below n in n's
    lineage is an API violation, refused before anything is reserved; nothing reaches the backend and
    the buffer is returned. Likewise, once an epoch is abandoned, a write tagged with it is refused,
    open or sealed: its writes were declared lost, and none may join them
-   ([DI-D-35](DESIGN-NOTES.md#di-d-35)).
+   ([DI-D-35](DESIGN-NOTES.md#di-d-35)). Once the mark passes it, the epoch is sealed, and the write
+   is refused as sealed.
 7. **Asking again about a sealed epoch reports its state.** `make_durable_through(m)` for m at or
    below an already-sealed number is a no-op that reports m's current state -- durable, pending,
-   failed, or abandoned.
+   failed, or abandoned -- an epoch at or below the high-water mark being reported as the mark
+   means it: durable, standing for durable or abandoned ("What resolution does to epochs").
 8. **Failures are reported, inventoried, and left to the consumer.** Every durability failure is
-   delivered as a `Failed` event carrying its suspect set, stays in the inventory until resolved, and
+   delivered as a `Failed` event, whose suspect set a failure observer given at construction is told
+   ([DI-D-113](DESIGN-NOTES.md#di-d-113)), stays in the inventory until resolved, and
    is resolved only by the consumer. dioring never resolves one on its own and never judges whether a
    repair was sufficient.
 9. **Gated operations wait for durability, not for resolution.** A gated operation on epoch n is
    released when the high-water mark of n's lineage reaches n and n is durable. The gate may name
-   any lineage of the instance, including another than the operation's own. If n is abandoned, the
-   operation fails with an error saying it was never issued, so the consumer knows no bytes were
-   written. The rules in full are under "Gates" below.
+   any lineage of the instance, including another than the operation's own. If n is abandoned while
+   the operation is held, the operation fails with an error saying it was never issued, so the
+   consumer knows no bytes were written; a gate on an epoch abandoned and already passed by the mark
+   is answered by the mark, as reached. The rules in full are under "Gates" below.
 
 ## What this contract does not guarantee
 
@@ -253,6 +272,18 @@ failure reports by the key the consumer gave it, so a report stays usable after 
   at all uses a separate instance** ([DI-D-19](DESIGN-NOTES.md#di-d-19)).
 - **Ordering of overlapping writes**, as above.
 - **Resolving failures.** Heal, abandon, or close each one; the high-water mark waits until it does.
+- **Making room when refused for capacity.** An instance is built for a declared capacity and refuses
+  growth past it; the consumer pops completions, seals what it writes, and resolves its failures, which
+  are what let go of room. A consumer that pushes writes and never seals them, or leaves failures
+  unresolved, is refused at submit, and nothing but its own calls can clear that
+  ("Capacity", below).
+- **A visitor does not call back into the instance.** What the instance lists on an I/O lifecycle
+  with no failure in it -- its lineages, what holds a target or a lineage, what `close()` leaves -- it
+  gives to a visitor the consumer passes, each item in turn, rather than handing out a collection it
+  would have to allocate ([DI-D-103](DESIGN-NOTES.md#di-d-103)). The visitor may run under the
+  instance's own lock, so it must not call the instance. What it is given may be lent for the visit
+  rather than owned -- a lineage's description is the consumer's own string, kept as it was given
+  ([DI-D-108](DESIGN-NOTES.md#di-d-108)) -- so a visitor that keeps something copies it.
 - **Honest heals.** A heal is the consumer's assertion that it has re-issued, under higher tags,
   everything the failure put at risk that it needs. dioring cannot check it.
 - **Reporting outside failures it learns of**, through the import, for every target whose warranty
@@ -361,7 +392,8 @@ time base ([DI-D-37](DESIGN-NOTES.md#di-d-37), [DI-D-38](DESIGN-NOTES.md#di-d-38
 [DI-D-50](DESIGN-NOTES.md#di-d-50)). Two facts about it are part of the contract:
 
 - **Stamps never decrease in observation order**: each `Failed` entry carries a stamp at or after
-  the one before it in the queue.
+  the one before it in the queue, and the stamps a failure observer is told of -- each failure's, and
+  each marking's -- never decrease in the order it is told them.
 - **The inventory reports the stamp the `Failed` entry carried**, not a reading taken when asked.
 
 Nothing else is promised. Equal stamps are normal -- interrupt time's resolution is the system
@@ -370,8 +402,9 @@ give the core a mock clock, which must promise the same.
 
 ### What happens to a suspect write afterwards
 
-A failure's record gains a **marking** whenever one of its suspect writes does something after the
-failure was observed ([DI-D-36](DESIGN-NOTES.md#di-d-36), [DI-D-39](DESIGN-NOTES.md#di-d-39)):
+A failure gains a **marking** whenever one of its suspect writes does something after the failure
+was observed ([DI-D-36](DESIGN-NOTES.md#di-d-36), [DI-D-39](DESIGN-NOTES.md#di-d-39)), and the
+failure observer is told of it ([DI-D-113](DESIGN-NOTES.md#di-d-113)):
 
 - **Nullified** -- the write completed with a fault, so it did not happen. The marking carries the
   fault.
@@ -380,12 +413,12 @@ failure was observed ([DI-D-36](DESIGN-NOTES.md#di-d-36), [DI-D-39](DESIGN-NOTES
   cites who answered: the built-in default's commit, which dioring observed, and the consumer's
   provider, whose answer is its own warranty ([DI-D-47](DESIGN-NOTES.md#di-d-47)).
 
-The kinds are open to more. A marking carries the write, its kind and when it was observed, and is
-reported by a `Marked` entry, kept in the inventory, and carried by the failure's final record. It
-exists so the history can be reconciled after the fact, and it **changes nothing**: not the
-high-water mark, not what a failure holds, and not what resolving it needs. A failure gains
-markings until it is abandoned or its heal takes effect, so its final record is the record as of
-that moment; a suspect write still in flight then is reported only by its own completion.
+The kinds are open to more. A marking carries the write, its kind and when it was observed, and the
+observer is told it once for each failure it goes to, as it is made; nothing else reports it and
+the instance keeps no copy. It exists so the history can be reconciled after the fact, and it
+**changes nothing**: not the high-water mark, not what a failure holds, and not what resolving it
+needs. A failure is told of markings until it is abandoned or its heal takes effect; a suspect
+write still in flight then is reported only by its own completion.
 
 **Where every report comes from** ([DI-D-47](DESIGN-NOTES.md#di-d-47),
 [DI-D-50](DESIGN-NOTES.md#di-d-50)). dioring relays every failure, and says from where. A fault a
@@ -402,11 +435,16 @@ dioring's own observation that the provider never answered.
 
 - **Heal.** The consumer asserts it has re-issued what it needs, under tags above everything already
   sealed (guarantee 6 forces that). The heal takes effect **in each lineage the failure holds
-  separately**, when that lineage's **first seal made after the heal that reaches the highest epoch
-  the lineage had been pushed by then** finishes with every part successful. That seal waits for
-  everything re-issued there before the heal, and commits it ([DI-D-41](DESIGN-NOTES.md#di-d-41),
-  [DI-D-46](DESIGN-NOTES.md#di-d-46)); a seal made after the heal that stops short of it releases
-  nothing. From then the failure no longer holds that lineage, whose high-water mark may pass it.
+  separately**, when that lineage's **first seal made after the heal that reaches every write of
+  the lineage pushed before the heal that is still to be committed** finishes with every part
+  successful. That seal waits for everything re-issued there before the heal, and commits it
+  ([DI-D-41](DESIGN-NOTES.md#di-d-41), [DI-D-46](DESIGN-NOTES.md#di-d-46),
+  [DI-D-114](DESIGN-NOTES.md#di-d-114)); a seal made after the heal that stops short of it releases
+  nothing. A write still to be committed is one in flight, completed and not yet covered, or held
+  for its gate: one that failed, or that a seal has already covered, has nothing left to commit and
+  is not waited for. The consumer learns of a failed write from its own completion, and of a
+  suspect write's fate from the failure observer, if it gave one. From then the failure no longer
+  holds that lineage, whose high-water mark may pass it.
   Once it holds none -- at once, for a failure that belongs to no lineage -- it is resolved as
   healed, and a `Healed` entry reports it, before any `Durable` that the last lineage's seal lets
   through. A lineage that ends no longer holds a heal back.
@@ -426,14 +464,49 @@ its tokens back. Resolution is per failure ([DI-D-12](DESIGN-NOTES.md#di-d-12)).
 - A request left `Blocked` by a failure receives its `Durable` as soon as the failure is resolved.
 - Gated operations on an abandoned epoch fail (guarantee 9), and a write tagged with one is refused
   (guarantee 6).
+- **An abandoned epoch is forgotten once the mark passes it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)).
+  Above the mark, `epoch_state` reports it abandoned, decided when its failure is abandoned, open or
+  sealed. At or below the mark it reports it `Durable`, as the mark means it: durable or abandoned,
+  and the `Abandoned` entry is where the consumer learned which. A consumer that needs to know later
+  keeps what that entry told it, and what its failure observer was told.
 
 ### The inventory
 
-Unresolved failures can be enumerated and each queried for its identity, cause, suspect set, the
-time it was observed, and its markings so far.
-Resolved failures leave no memory. Because identities are never reused, an identity no longer in the
-inventory means resolved; its `Healed` or `Abandoned` entry was the final record, with its suspect
-set and every marking it gained.
+Unresolved failures can be enumerated, in the order observed: `failures` gives each to a visitor the
+consumer supplies, with its identity, the time it was observed, whether its token is live, and its
+cause, lent for the visit from the instance's own storage, so enumerating allocates nothing
+([DI-D-103](DESIGN-NOTES.md#di-d-103)). A consumer that keeps a cause clones it. The visitor runs under
+the instance's lock and must not call back into it. `close()` gives what is left of each the same
+way.
+
+**A failure's detail is told, not carried** ([DI-D-113](DESIGN-NOTES.md#di-d-113)). Its suspect set
+and its markings are in no entry and in no query: a consumer that wants them gives the instance a
+failure observer when it is built (below), and keeps what it is told in its own storage. The
+instance holds a failure -- and the places of its suspect writes -- until its `Abandoned` or
+`Healed` entry is popped, which lets them go, after which the failure is unknown to the instance;
+that is what keeps the queue within its bound ([DI-D-112](DESIGN-NOTES.md#di-d-112)).
+
+Resolved failures leave no other memory. Because identities are never reused, an identity no longer
+in the inventory means resolved.
+
+### The failure observer
+
+A consumer may give an instance a **failure observer** when it is built, and only then
+([DI-D-113](DESIGN-NOTES.md#di-d-113)): one observer, implementing `FailureObserver`, whose fan-out
+to several subscribers is the consumer's. The instance tells it what happens, as it happens:
+
+- **Each failure as it is observed**: its identity, its cause, lent for the call, and the stamp its
+  `Failed` entry carries; then **each write it suspects**, in push order. All of this before the
+  failure's `Failed` can be popped, so a consumer that pops it can find its own record.
+- **Each marking as it is made**, once for each failure it goes to, in the order the failures were
+  observed. A failure already resolved is told nothing more.
+
+The observer is called synchronously, while the instance's lock is held: it must not call back into
+the instance, and any lock it takes is a leaf beneath the instance's
+([DI-D-90](DESIGN-NOTES.md#di-d-90)). What it is lent it copies if it keeps it. Through it a consumer
+can attribute a failure to its own operations, lineages and epochs in its own storage; the instance
+keeps only what its own answers need. A consumer that gives no observer cannot learn what a failure
+suspected or what became of those writes: nothing else reports either.
 
 ### Importing a failure
 
@@ -444,21 +517,81 @@ import answers "writes not yet durable may already have been lost"; it never say
 durable were not", and it cannot retract a `Durable` already reported. It is only as useful as how
 promptly the consumer learns.
 
+## Capacity
+
+An instance is built for a **declared capacity** ([DI-D-98](DESIGN-NOTES.md#di-d-98),
+[DI-D-107](DESIGN-NOTES.md#di-d-107)), which the library gives no default, so every consumer states its
+own. It counts five things: the **operations** outstanding at once, the **lineages** not yet retired, the
+unresolved **imported failures**, the **targets** attached, and the distinct flush **domains** the instance
+has been given. Its tables are made when it is built, at sizes those counts bound, and never grow;
+construction is refused if a count is more than a table can be or the allocator can provide, or if the
+capacity declares no lineage or fewer domains than the provider serves.
+
+- **What is refused.** Growth the consumer starts: a push, as `PushRefusal::AtCapacity`; minting a
+  lineage; importing a failure; and adding a target, which is also refused when its flush domains would
+  take the instance past the domains it was built for. A refusal is backpressure: it names the count
+  that was reached, hands back what the call was given, changes nothing, and spends no identity, and it
+  is distinct from the contract's own refusals -- a sealed epoch, a lineage the instance cannot answer
+  for, a gate that cannot be released. The core's own refusals for a call come first.
+- **A seal is never refused for capacity** ([DI-D-98](DESIGN-NOTES.md#di-d-98)). Its cost is fixed by
+  writes already admitted, and a seal is what lets go of them.
+- **What holds a place of the submit window**, one place for each operation however many hold it
+  ([DI-D-100](DESIGN-NOTES.md#di-d-100)):
+  - **the operation**, from its push, a gated one included, until its completion is popped;
+  - **the write**, while it is uncovered: until a seal covers it successfully, it fails, or its lineage
+    ends. The instance keeps a write's record until then, to name it in a later failure's suspect set,
+    so popping a write's completion does not let go of its place;
+  - **each failure suspecting it**, until the failure is healed or abandoned and its `Healed` or
+    `Abandoned` entry is popped -- until then the instance keeps the write's record, to name it in
+    what the failure holds;
+  - **a seal the high-water mark has not passed**, which holds the place of the first write it covers
+    ([DI-D-110](DESIGN-NOTES.md#di-d-110)) from when it is made until the mark passes it or its lineage
+    ends. The place is one the write already holds, so a seal adds none; it keeps the place after the
+    write is covered or fails;
+  - **an abandoned epoch above the high-water mark**, which holds the place of one of its writes
+    ([DI-D-109](DESIGN-NOTES.md#di-d-109)) from when its failure is abandoned until the mark passes
+    it or its lineage ends or is retired. The place is one the failure already holds, so this adds
+    none; it keeps the place after the failure's `Abandoned` entry is popped. An abandoned epoch the
+    consumer never seals past therefore keeps a place for as long.
+
+  **Unresolved failures therefore shrink the submit window**: a consumer that leaves failures unresolved
+  is refused at submit for capacity, however many completions it has popped, until it heals or abandons
+  them and pops what that reports. The same is true of writes it never seals, and of seals behind a mark that a failure holds:
+  each finishes and is answered `Blocked`, and keeps its place until the failure is resolved and the mark
+  passes it.
+- **What counts until it is let go.** A lineage counts until it is retired, so an ended one counts until
+  its operations in flight have completed, the commits out for its sealed writes have answered, and its
+  `LineageEnded` has been popped ([DI-D-112](DESIGN-NOTES.md#di-d-112)); an
+  imported failure counts until it is resolved and its `Abandoned` or `Healed` entry is popped, a heal
+  waiting for its seal included; a flush domain
+  counts for the life of the instance, a removed target's included.
+- **Clearing a refusal for operations**, in the order a consumer usually has them to hand: pop
+  completions; seal what it has written, so the writes are covered; resolve its failures, healing or
+  abandoning, and pop the `Abandoned` or `Healed` entries that report it. The worked examples show
+  [a push refused at capacity and cleared by a seal](../win-durable-ioring/README.md#refused-at-capacity-and-cleared-by-a-seal),
+  and
+  [another cleared by resolving a failure](../win-durable-ioring/README.md#refused-at-capacity-and-cleared-by-resolving-a-failure).
+- **Not declared:** the completion queue and the storage a failure holds. Both follow from the
+  operations, lineages and failures above and are not counted separately; how they are laid out is
+  not part of this contract. The queue never refuses an entry: what the rules above let go of -- an
+  operation's completion, a failure's resolution, a lineage's end, each when popped -- and the
+  entries withdrawn when a later one supersedes them are what keep it within the room it was made with
+  ([DI-D-112](DESIGN-NOTES.md#di-d-112)).
+
 ## The completion queue
 
 The consumer pops **dioring's** completion queue, not the backend's. It holds every completion
-the consumer should observe -- reads and writes, passed through -- plus seven events dioring
+the consumer should observe -- reads and writes, passed through -- plus the events dioring
 synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-30)):
 
 | Event | When |
 |---|---|
-| `Durable { through: n }` | the high-water mark has reached n |
-| `Failed { failure, token, cause, suspect, observed }` | a durability failure was observed (a target's commit, or a provider's domain, failed; or an import) |
-| `Blocked { through: n, by: failure }` | a request's commits succeeded, but an unresolved failure at or below n prevents reporting it |
-| `Marked { failure, marking }` | a suspect write of an unresolved failure was nullified or covered |
-| `Abandoned { failure, suspect, markings }` | the consumer abandoned a failure: its final record |
-| `Healed { failure, suspect, markings }` | a heal took effect: the failure's final record |
-| `LineageEnded { lineage, abandoned_through }` | a lineage ended -- its last handle was released, or given to `end_lineage` -- and every epoch of it not yet durable is abandoned |
+| `Durable { through: n }` | the high-water mark has reached n; at most one per lineage waits un-popped, a later replacing an older |
+| `Failed { failure, token, cause, observed }` | a durability failure was observed (a target's commit, or a provider's domain, failed; or an import) |
+| `Blocked { through: n, by: failure }` | a request's commits succeeded, but an unresolved failure at or below n prevents reporting it; withdrawn if not yet popped when a later entry answers the request (guarantee 4) |
+| `Abandoned { failure }` | the consumer abandoned a failure; popping it lets go of what the instance held for the failure |
+| `Healed { failure }` | a heal took effect; popping it lets go of what the instance held for the failure |
+| `LineageEnded { lineage, abandoned_through }` | a lineage ended -- its last handle was released, or given to `end_lineage` -- and every epoch of it not yet durable is abandoned; the lineage counts against the lineages declared until it is popped |
 
 ## The readiness signal
 
@@ -481,8 +614,9 @@ implementation of this contract and whoever waits on the signal, and the conform
 
 ## Ending an instance
 
-An instance ends by `close()` or by being dropped. Both end it the same way; `close()` also hands
-back what is left ([DI-D-25](DESIGN-NOTES.md#di-d-25)).
+An instance ends by `close()` or by being dropped. Both end it the same way; `close()` also gives
+what is left to the consumer's visitor, each item by value ([DI-D-25](DESIGN-NOTES.md#di-d-25),
+[DI-D-103](DESIGN-NOTES.md#di-d-103)).
 
 - **No implicit durability.** Ending issues no final seal and no commit. A write not already
   reported durable gets no promise.
@@ -496,8 +630,9 @@ back what is left ([DI-D-25](DESIGN-NOTES.md#di-d-25)).
   as abandoned rather than holding the end up; one kept anywhere else is waited for. Every answer
   given once ending has begun, and every operation that completes after it, is discarded
   unreported.
-- **What is left.** Gated operations the backend never saw, unresolved failures, and each lineage's
-  final high-water mark are returned by `close()` and discarded by a drop. Nothing reported is
+- **What is left.** Gated operations the backend never saw, in push order, then the unresolved
+  failures, then each lineage with its final high-water mark, are given to `close()`'s visitor once
+  the wait is over, and discarded by a drop. Nothing reported is
   undone: an epoch reported durable stays durable whether or not its event was popped.
 - **No callback after the end.** Under Model A (threadless dispatch), no delivery callback runs once
   ending has returned.
@@ -519,17 +654,22 @@ back -- while another copy is held ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
   completions are delivered. There is no lifetime or durability dependency to wait for, unlike
   ending an instance.
 - **It answers nothing more.** No handle to it remains, and the instance answers its name as one it
-  cannot answer for. It is retired once its operations in flight have drained; their completions
-  are delivered, and a failure that already suspected one of them still gains its marking.
+  cannot answer for. It is retired once its operations in flight have drained, the commits out
+  for its sealed writes have answered, and its `LineageEnded` has been popped
+  ([DI-D-112](DESIGN-NOTES.md#di-d-112)); their completions are delivered, and a failure that already
+  suspected one of them is still told of its marking.
 - **A failure shared with another lineage stays unresolved** for that lineage; ending one lineage
   resolves nothing on another's behalf. A heal waiting for the ended lineage's next seal no longer
   waits for it.
 - **The default lineage cannot be ended**; a consumer walking away from it ends the instance.
 
 **Retiring** a lineage, through its last handle, ends it without abandoning anything, so it is
-refused -- handing the handle back, with everything still holding the lineage -- unless nothing of
-it is in flight or uncovered and no unresolved failure holds it. A retired lineage is reported by no
-entry: nothing about it changed.
+refused -- handing the handle back, with everything still holding the lineage counted, the failures
+among it named by a query -- unless nothing of it is in flight or uncovered and no unresolved
+failure holds it. Removing a target is refused the same way while anything holds it, the gates,
+uncovered epochs and failures holding it named by a query. A retired lineage is reported by no
+entry: nothing about it changed. Its `Durable`, if the consumer has not popped it, is withdrawn: the
+consumer is done with the lineage, and it no longer counts ([DI-D-112](DESIGN-NOTES.md#di-d-112)).
 
 ## Gates
 
@@ -543,20 +683,26 @@ A gate holds an operation until an epoch is durable -- release-after-durable
 - **A held write is a write of its lineage.** A seal at or above its epoch waits for it as for a
   write in flight, so `Durable` still follows every write it covers (guarantee 5). It is not
   suspected by a failure until it has been released, because until then nothing was written.
-- **Never issued.** A held operation whose gate is abandoned first ends as never issued, naming the
+- **Never issued.** A held operation whose gate is abandoned while it is held ends as never issued, naming the
   gate, with its buffer and context; so does a held write whose own epoch is abandoned first, since
   no write may join an abandoned epoch (guarantee 6), naming that epoch. When both are, the gate
   is named.
 - **Refused.** A gate naming a lineage the instance cannot answer for -- another instance's, or
-  one ended or retired -- is refused, as is a gate on an epoch already abandoned. So is a gated
+  one ended or retired -- is refused, as is a gate on an epoch abandoned and above its lineage's
+  mark. A gate on an epoch the mark has passed is already reached, abandoned or not
+  ([DI-D-109](DESIGN-NOTES.md#di-d-109)): the instance no longer tells them apart, and the
+  consumer, which popped the `Abandoned` entry, does. So is a gated
   write that would close a **cycle**: one whose gate's lineage reaching it already needs this write
-  to complete. The error names the cycle.
+  to complete. **The refusal does not name the cycle** ([DI-D-115](DESIGN-NOTES.md#di-d-115)): every edge of it
+  is the consumer's own -- each held write's epoch and gate were given at its push, it is held because the consumer has
+  not seen it complete, and a heal a seal's cycle passes through is one the consumer made -- so a consumer that wants the
+  cycle rebuilds it from the gated writes it kept.
 - **A seal can close a cycle too, and is refused.** Which held writes a lineage must complete to
   reach an epoch depends on the seal that will cover it -- a seal through n waits for every write
   at or below n, and a pending heal waits for the next seal made after it. So
   `make_durable_through` refuses a seal whose writes include a held write that, transitively,
-  waits for the seal itself; nothing is sealed, and the error names the cycle. Sealing lower first
-  releases the gates that were in the way.
+  waits for the seal itself; nothing is sealed, and the error, which names nothing either, is `SealError::GateCycle`.
+  Sealing lower first releases the gates that were in the way.
 - **Reads take no part in durability**, so a gated read is on no cycle.
 
 Only gates dioring holds are seen. A consumer that waits in its own code for one lineage before
@@ -572,4 +718,5 @@ Nothing is left unspecified at the contract's level. The concrete types are spec
 They run the Windows driver, so they are in
 [win-durable-ioring's README](../win-durable-ioring/README.md#worked-examples), compiled and run as
 doctests there: a change that breaks one breaks that crate's build. This crate has no driver of
-its own to run them against.
+its own to run them against. They include a push refused at capacity and cleared by a seal, and
+another cleared by resolving a failure ("Capacity", above).

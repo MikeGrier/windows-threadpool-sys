@@ -6,9 +6,11 @@
 //! capabilities and data access. The driver hands the target itself to the backend, which runs its
 //! I/O, and its [`IoTargetDescription`] to the core, which decides with it (DI-D-52).
 
-use std::fmt;
+use alloc::vec::Vec;
+use core::fmt;
 
 use crate::access::Access;
+use crate::alloc_tags::{tag, tagged};
 use crate::types::FlushDomain;
 
 #[cfg(test)]
@@ -50,7 +52,7 @@ impl fmt::Display for GeometryError {
     }
 }
 
-impl std::error::Error for GeometryError {}
+impl core::error::Error for GeometryError {}
 
 fn power_of_two(alignment: u32) -> Result<u32, GeometryError> {
     if alignment.is_power_of_two() {
@@ -200,7 +202,9 @@ pub trait IoTarget: Send {
     /// Everything it states, as the core takes it.
     fn describe(&self) -> IoTargetDescription {
         IoTargetDescription {
-            flush_domains: self.flush_domains().to_vec(),
+            flush_domains: tagged(tag::IO_TARGET_DESCRIBE_DOMAINS, || {
+                self.flush_domains().to_vec()
+            }),
             warranty: self.warranty(),
             geometry: self.geometry(),
             capabilities: self.capabilities(),

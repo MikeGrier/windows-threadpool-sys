@@ -46,7 +46,13 @@ fn a_windows_fault_names_the_ring_and_carries_the_code_of_its_error() {
     let fault = windows_fault(io::Error::from_raw_os_error(IO_DEVICE.cast_signed()));
     assert_eq!(fault.source, WINDOWS_IORING);
     assert_eq!(fault.code, Some(error_code_from_win32(IO_DEVICE)));
-    assert_eq!(fault.error.raw_os_error(), Some(IO_DEVICE.cast_signed()));
+    assert_eq!(
+        fault
+            .error
+            .downcast_ref::<io::Error>()
+            .and_then(io::Error::raw_os_error),
+        Some(IO_DEVICE.cast_signed())
+    );
 }
 
 #[test]

@@ -13,17 +13,24 @@
 //! not yet popped as the completion queue holds -- so a completion always has room -- and with
 //! [`RefusalCause::SubmitAndDrainNeeded`] when both hold.
 
-use std::collections::{HashMap, TryReserveError, VecDeque};
-use std::io;
-use std::num::NonZeroU32;
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
-use std::time::Duration;
+use alloc::collections::{BTreeMap, TryReserveError, VecDeque};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::num::NonZeroU32;
+#[cfg(not(feature = "std"))]
+use core::sync::atomic::{AtomicUsize, Ordering};
+use core::time::Duration;
+#[cfg(feature = "std")]
+use std::sync::{Condvar, Mutex, PoisonError};
+
+use rc_errors::{ErrorReport, StaticError};
 
 use crate::access::Access;
 use crate::backend::{
     Completion, DuplicateTarget, IoBackend, RefusalCause, Refused, RegisteredRegion, Submission,
     SubmissionData, SubmissionOp, SubmissionToken,
 };
+use crate::fault_report::shared_or;
 use crate::io_target::{Capabilities, Geometry, IoTarget, WarrantyClass};
 use crate::pump::Waitable;
 use crate::types::{FlushDomain, IoFault, IoTargetKey};
@@ -38,20 +45,30 @@ use script::{Point, Probe, ScriptState};
 /// The source every fault the in-memory backend reports names.
 pub const MEMORY: &str = "memory";
 
-fn memory_fault(message: &str) -> IoFault {
+/// The backend's own faults, which need no storage (DI-D-105).
+static DETACHED: StaticError = StaticError::new("the target was detached");
+static COULD_NOT_GROW: StaticError =
+    StaticError::new("the target could not grow to hold the write");
+/// A scripted fault whose shared report could not be allocated.
+static SCRIPTED_UNSHARED: StaticError =
+    StaticError::new("a scripted fault, which could not be reported: allocating its report failed");
+
+fn memory_fault(error: ErrorReport) -> IoFault {
     IoFault {
         source: MEMORY,
         code: None,
-        error: Arc::new(io::Error::other(message.to_owned())),
+        refusal: None,
+        error,
     }
 }
 
 /// A fault from the in-memory backend with this message and no code, for a [`FaultScript`] to fail
 /// an operation with: the same kind of fault the backend reports for its own failures, whose source
-/// is [`MEMORY`].
+/// is [`MEMORY`]. Its report is shared from the global allocator, so two scripted faults are two
+/// faults even with one message; should that allocation fail, it is a static report saying so.
 #[must_use]
-pub fn scripted_fault(message: &str) -> IoFault {
-    memory_fault(message)
+pub fn scripted_fault(message: &'static str) -> IoFault {
+    memory_fault(shared_or(StaticError::new(message), &SCRIPTED_UNSHARED))
 }
 
 /// A target whose bytes are held in memory: what was written, and what the last successful commit
@@ -190,9 +207,16 @@ impl IoTarget for MemoryTarget {
 /// raisings its own waits have seen, which starts at none -- so a raising before a notification's
 /// first wait is seen by it, as the Windows ring's setup signal makes one that was raised before
 /// the wait began seen.
+///
+/// A wait parks the thread, which only `std` can do (DI-D-97): without the `std` feature a wait
+/// only asks whether it was raised, and returns at once, and [`wait_past`](Self::wait_past) is not
+/// there.
 #[derive(Clone, Debug, Default)]
 pub struct MemoryNotification {
+    #[cfg(feature = "std")]
     count: Arc<(Mutex<u64>, Condvar)>,
+    #[cfg(not(feature = "std"))]
+    count: Arc<AtomicUsize>,
     /// The count at the end of the last [`Waitable::wait`] that saw a raising.
     seen: u64,
 }
@@ -201,16 +225,28 @@ impl MemoryNotification {
     /// How many times it has been raised.
     #[must_use]
     pub fn raised(&self) -> u64 {
+        self.load()
+    }
+
+    #[cfg(feature = "std")]
+    fn load(&self) -> u64 {
         *self.count.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    #[cfg(not(feature = "std"))]
+    fn load(&self) -> u64 {
+        u64::try_from(self.count.load(Ordering::Acquire)).unwrap_or(u64::MAX)
+    }
+
     /// Wait up to `timeout` for it to have been raised more than `seen` times; the count then.
+    #[cfg(feature = "std")]
     #[must_use]
     pub fn wait_past(&self, seen: u64, timeout: Duration) -> u64 {
         self.count_past(seen, Some(timeout))
     }
 
     /// [`wait_past`](Self::wait_past), with no limit for `None`.
+    #[cfg(feature = "std")]
     fn count_past(&self, seen: u64, timeout: Option<Duration>) -> u64 {
         let (count, raised) = &*self.count;
         let guard = count.lock().unwrap_or_else(PoisonError::into_inner);
@@ -228,15 +264,27 @@ impl MemoryNotification {
         *guard
     }
 
+    /// The count now, without waiting: there is no thread to park.
+    #[cfg(not(feature = "std"))]
+    fn count_past(&self, _seen: u64, _timeout: Option<Duration>) -> u64 {
+        self.raised()
+    }
+
+    #[cfg(feature = "std")]
     fn raise(&self) {
         let (count, raised) = &*self.count;
         *count.lock().unwrap_or_else(PoisonError::into_inner) += 1;
         raised.notify_all();
     }
+
+    #[cfg(not(feature = "std"))]
+    fn raise(&self) {
+        self.count.fetch_add(1, Ordering::AcqRel);
+    }
 }
 
 impl Waitable for MemoryNotification {
-    fn wait(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
+    fn wait(&mut self, timeout: Option<Duration>) -> Result<bool, IoFault> {
         let count = self.count_past(self.seen, timeout);
         let raised = count > self.seen;
         self.seen = count;
@@ -248,7 +296,7 @@ impl Waitable for MemoryNotification {
 /// read's the most it transfers.
 #[derive(Debug)]
 pub struct MemoryBackend {
-    targets: HashMap<IoTargetKey, MemoryTarget>,
+    targets: BTreeMap<IoTargetKey, MemoryTarget>,
     registered: Vec<Vec<u8>>,
     queued: VecDeque<Submission<Vec<u8>>>,
     completed: VecDeque<Completion<Vec<u8>>>,
@@ -271,15 +319,25 @@ struct Held {
 impl MemoryBackend {
     /// A backend whose submission queue holds `submission_queue_size` submissions and whose
     /// completion queue holds `completion_queue_size` completions, with no registered buffers.
+    ///
+    /// Both queues are made at their declared sizes, as a ring's are, so that queueing a
+    /// submission and completing it allocate nothing (DI-23.12.9): the sizes bound them, so they
+    /// never outgrow what was reserved. A size the allocator cannot give leaves the queue to grow
+    /// as it fills instead.
     #[must_use]
     pub fn new(submission_queue_size: NonZeroU32, completion_queue_size: NonZeroU32) -> Self {
+        let (submissions, completions) = (size(submission_queue_size), size(completion_queue_size));
+        let mut queued = VecDeque::new();
+        let _ = queued.try_reserve_exact(submissions);
+        let mut completed = VecDeque::new();
+        let _ = completed.try_reserve_exact(completions);
         Self {
-            targets: HashMap::new(),
+            targets: BTreeMap::new(),
             registered: Vec::new(),
-            queued: VecDeque::new(),
-            completed: VecDeque::new(),
-            submission_queue_size: size(submission_queue_size),
-            completion_queue_size: size(completion_queue_size),
+            queued,
+            completed,
+            submission_queue_size: submissions,
+            completion_queue_size: completions,
             notification: MemoryNotification::default(),
             script: ScriptState::default(),
             held: Vec::new(),
@@ -494,7 +552,7 @@ impl MemoryBackend {
     fn ripen(&mut self) -> Vec<Completion<Vec<u8>>> {
         let mut ripe = Vec::new();
         let mut kept = Vec::with_capacity(self.held.len());
-        for mut held in std::mem::take(&mut self.held) {
+        for mut held in core::mem::take(&mut self.held) {
             if let Some(left) = held.late.as_mut() {
                 *left -= 1;
                 if *left == 0 {
@@ -526,7 +584,7 @@ impl MemoryBackend {
         let Some(target) = self.targets.get_mut(&target) else {
             return Completion {
                 token,
-                result: Err(memory_fault("the target was detached")),
+                result: Err(memory_fault(ErrorReport::from_static(&DETACHED))),
                 buffer: owned_buffer(op),
             };
         };
@@ -586,7 +644,7 @@ impl MemoryBackend {
 fn could_not_grow(token: SubmissionToken, buffer: Option<Vec<u8>>) -> Completion<Vec<u8>> {
     Completion {
         token,
-        result: Err(memory_fault("the target could not grow to hold the write")),
+        result: Err(memory_fault(ErrorReport::from_static(&COULD_NOT_GROW))),
         buffer,
     }
 }

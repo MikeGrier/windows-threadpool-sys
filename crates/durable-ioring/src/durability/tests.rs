@@ -3,7 +3,7 @@
 
 use std::io;
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use super::{
     Accepted, DEFAULT_LINEAGE, Due, Durability, Event, Flush, Key, Reach, Routing, Sealing, State,
@@ -14,8 +14,9 @@ use crate::diagnostics::NoDiagnostics;
 use crate::diagnostics::tests::Recording;
 use crate::domains::DomainId;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, OpId};
-use crate::test_support::{ManualClock, Ticks, fault};
-use crate::types::{FailureCause, IoFault, IoTargetKey, MarkingKind, SuspectWrite};
+use crate::observer::FailureObserver;
+use crate::test_support::{CAPACITY, ManualClock, Ticks, fault};
+use crate::types::{FailureCause, IoFault, IoTargetKey, Marking, MarkingKind, SuspectWrite};
 
 /// What a stamp is in these tests: a plain number, read from a clock the test moves by hand.
 type Stamp = u64;
@@ -37,14 +38,48 @@ mod markings;
 mod lineages;
 // Gates, and the cycles a push or a seal would close: DI-3.2.5.2.
 mod gates;
+mod heals;
 // The consumer's durability provider: DI-3.2.6.
 mod providers;
 // What holds a file, for `remove_target`: DI-3.2.7.
 mod files;
+// What a seal's work on a file is charged to: DI-23.6.
+mod spans;
+// Seals that cover no writes: DI-23.7.
+mod empties;
+// The submit window's places: DI-23.8.1.
+mod window;
+// Abandoned epochs above the mark: DI-23.12.5.
+mod abandoned;
 
 /// The core, answering for its default lineage: the one every test here exercises unless it mints
-/// another. Every other method is the core's own, through `Deref`.
-struct One<K = ManualClock>(Durability<u64, &'static str, Stamp, K>);
+/// another. Every other method is the core's own, through `Deref`. It is built with an observer
+/// that keeps the markings it is told of, which the tests read as [`Told`] gives them.
+struct One<K = ManualClock>(Durability<u64, &'static str, Stamp, K>, Arc<Told>);
+
+/// The markings a core's observer was told of (DI-D-113), in the order told, and how many have been
+/// read as new.
+#[derive(Default)]
+struct Told {
+    markings: Mutex<Markings>,
+}
+
+/// Each marking told, with its failure, and how many have been read as new.
+type Markings = (Vec<(FailureId, Marking<Ids>)>, usize);
+
+impl FailureObserver<Ids> for Told {
+    fn failed(&self, _failure: FailureId, _cause: &FailureCause<Ids>, _observed: Stamp) {}
+
+    fn suspected(&self, _failure: FailureId, _write: SuspectWrite<Ids>) {}
+
+    fn marked(&self, failure: FailureId, marking: &Marking<Ids>) {
+        self.markings
+            .lock()
+            .expect("a test's lock")
+            .0
+            .push((failure, marking.clone()));
+    }
+}
 
 impl<K> Deref for One<K> {
     type Target = Durability<u64, &'static str, Stamp, K>;
@@ -60,6 +95,31 @@ impl<K> DerefMut for One<K> {
     }
 }
 
+impl<K> One<K> {
+    /// The markings told since they were last read, by failure, write and kind.
+    fn marked(&self) -> Vec<Seen> {
+        let mut told = self.1.markings.lock().expect("a test's lock");
+        let new = told.0[told.1..]
+            .iter()
+            .map(|(failure, marking)| {
+                Seen::Marked(failure.seq, marking.write.seq, marking.kind.clone())
+            })
+            .collect();
+        told.1 = told.0.len();
+        new
+    }
+
+    /// Every marking told for failure `seq`, in the order told.
+    fn markings_of(&self, seq: u64) -> Vec<Marking<Ids>> {
+        let told = self.1.markings.lock().expect("a test's lock");
+        told.0
+            .iter()
+            .filter(|(failure, _)| failure.seq == seq)
+            .map(|(_, marking)| marking.clone())
+            .collect()
+    }
+}
+
 impl<K: StampClocked> One<K> {
     fn with_clock(clock: K) -> Self {
         Self::reporting(clock, Arc::new(NoDiagnostics))
@@ -67,7 +127,11 @@ impl<K: StampClocked> One<K> {
 
     /// A core reporting to `sink`.
     fn reporting(clock: K, sink: Arc<dyn crate::diagnostics::DiagnosticSink>) -> Self {
-        Self(Durability::new(InstanceId::next(), clock, sink))
+        let told = Arc::new(Told::default());
+        let mut core = Durability::new(InstanceId::next(), clock, sink, &CAPACITY, SERVED)
+            .expect("a valid capacity");
+        assert!(core.observed_by(told.clone()), "no observer was given yet");
+        Self(core, told)
     }
 
     fn sealed_through(&self) -> Option<u64> {
@@ -148,6 +212,9 @@ fn nullified() -> MarkingKind {
 }
 /// A covered marking for a file only the built-in default answers for, as every file here is
 /// unless a test routes it otherwise: the flush was observed, and no provider was asked.
+/// The most domains a test here has a provider serve, which the tables are made for.
+const SERVED: usize = 8;
+
 const COVERED: MarkingKind = MarkingKind::Covered {
     flushed: true,
     provider: false,
@@ -215,7 +282,8 @@ impl Ops {
             seq: self.next,
         };
         self.next += 1;
-        let domains: Arc<[DomainId]> = domains.iter().map(|&d| DomainId(d)).collect();
+        let ids: Vec<DomainId> = domains.iter().map(|&d| DomainId(d)).collect();
+        let domains = lineage.0.test_domains(&ids);
         lineage.pushed(Accepted {
             op,
             lineage: key,
@@ -257,13 +325,16 @@ enum Seen {
     /// The lineage, and the highest epoch abandoned.
     LineageEnded(Key, Option<u64>),
     Failed(u64, Vec<u64>),
-    /// Failure, suspect writes, and each marking's write and kind.
-    Abandoned(u64, Vec<u64>, Vec<(u64, MarkingKind)>),
-    Healed(u64, Vec<u64>, Vec<(u64, MarkingKind)>),
-    /// Failure, the write marked, and how.
+    /// Failure, and suspect writes.
+    Abandoned(u64, Vec<u64>),
+    Healed(u64, Vec<u64>),
+    /// Told to the observer, not made due: read with [`One::marked`]. Failure, the write marked, and
+    /// how.
     Marked(u64, u64, MarkingKind),
     /// The operation never issued, and the lineage and epoch named abandoned.
     NeverIssued(u64, Key, u64),
+    /// An answered empty seal replaced: the lineage, and the seal whose `Blocked` is withdrawn.
+    Superseded(Key, u64),
 }
 
 fn seen(due: &Due<u64, &'static str, Stamp>) -> Vec<Seen> {
@@ -291,24 +362,35 @@ fn seen(due: &Due<u64, &'static str, Stamp>) -> Vec<Seen> {
                 lineage,
                 abandoned_through,
             } => Seen::LineageEnded(*lineage, *abandoned_through),
-            Event::Failed(failed) => Seen::Failed(failed.id.seq, ops(failed.suspect.writes())),
-            Event::Abandoned {
-                failure,
-                suspect,
-                markings,
-            } => Seen::Abandoned(failure.seq, ops(suspect.writes()), marks(markings)),
-            Event::Healed {
-                failure,
-                suspect,
-                markings,
-            } => Seen::Healed(failure.seq, ops(suspect.writes()), marks(markings)),
-            Event::Marked { failure, marking } => {
-                Seen::Marked(failure.seq, marking.write.seq, marking.kind.clone())
+            Event::Failed { failed, snapshot } => {
+                Seen::Failed(failed.id.seq, ops(&snapshot.suspect))
             }
+            Event::Abandoned { failure, snapshot } => {
+                Seen::Abandoned(failure.seq, ops(&snapshot.suspect))
+            }
+            Event::Healed { failure, snapshot } => {
+                Seen::Healed(failure.seq, ops(&snapshot.suspect))
+            }
+            Event::Superseded { lineage, through } => Seen::Superseded(*lineage, *through),
             Event::NeverIssued { op, abandoned } => {
                 Seen::NeverIssued(op.seq, abandoned.lineage, abandoned.epoch)
             }
         })
+        .collect()
+}
+
+/// The writes failure `seq` suspects, by sequence number, as the core holds them.
+fn suspects_of<K: StampClock<Instant = Stamp>>(lineage: &One<K>, seq: u64) -> Vec<u64> {
+    let id = crate::ids::FailureId {
+        instance: lineage.0.instance,
+        seq,
+    };
+    lineage
+        .0
+        .suspects_listed(id)
+        .unwrap_or_else(|| panic!("the core holds failure {seq}'s records"))
+        .iter()
+        .map(|write| write.op.seq)
         .collect()
 }
 
@@ -335,7 +417,7 @@ fn tokens(due: Due<u64, &'static str, Stamp>) -> Vec<FailureToken> {
     due.events
         .into_iter()
         .filter_map(|event| match event {
-            Event::Failed(failed) => Some(failed.token),
+            Event::Failed { failed, .. } => Some(failed.token),
             _ => None,
         })
         .collect()
@@ -364,7 +446,8 @@ fn an_inconsistency_reaches_the_sink_before_the_panic() {
     let sink = Recording::wanting();
     let instance = InstanceId::next();
     let mut core: Durability<u64, &'static str, Stamp, ManualClock> =
-        Durability::new(instance, ManualClock::default(), sink.clone());
+        Durability::new(instance, ManualClock::default(), sink.clone(), &CAPACITY, 0)
+            .expect("a valid capacity");
     let never = OpId { instance, seq: 99 };
     inconsistent(
         "a write completed that was never recorded as pushed",
@@ -389,7 +472,8 @@ fn an_inconsistency_is_not_given_to_a_sink_that_does_not_want_it() {
     let sink = std::sync::Arc::new(Recording::default());
     let instance = InstanceId::next();
     let mut core: Durability<u64, &'static str, Stamp, ManualClock> =
-        Durability::new(instance, ManualClock::default(), sink.clone());
+        Durability::new(instance, ManualClock::default(), sink.clone(), &CAPACITY, 0)
+            .expect("a valid capacity");
     let never = OpId { instance, seq: 99 };
     inconsistent(
         "a write completed that was never recorded as pushed",
@@ -408,14 +492,17 @@ fn the_core_reads_its_clock_once_for_each_failure_it_stamps() {
         InstanceId::next(),
         Ticks::default(),
         Arc::new(NoDiagnostics),
-    );
+        &CAPACITY,
+        0,
+    )
+    .expect("a valid capacity");
     for _ in 0..2 {
         let cause = FailureCause::Imported {
             scope: ImportScope::All,
         };
         core.import(cause, &Reach::All, None);
     }
-    let stamps: Vec<u64> = core.failures().iter().map(|f| f.observed).collect();
+    let stamps: Vec<u64> = core.failures_listed().iter().map(|f| f.observed).collect();
     assert_eq!(stamps, [0, 1]);
 }
 
@@ -427,7 +514,7 @@ fn submitted(sealing: Sealing<u64, &'static str, Stamp>) -> Due<u64, &'static st
     match sealing {
         Sealing::Submitted(due) => due,
         Sealing::AlreadySealed(state) => panic!("expected a new seal, got {state:?}"),
-        Sealing::Cycle(cycle) => panic!("expected a new seal, got a cycle {cycle:?}"),
+        Sealing::Cycle => panic!("expected a new seal, got a cycle"),
     }
 }
 
@@ -435,7 +522,7 @@ fn already(sealing: Sealing<u64, &'static str, Stamp>) -> State {
     match sealing {
         Sealing::AlreadySealed(state) => state,
         Sealing::Submitted(due) => panic!("expected a request below the seal, got {due:?}"),
-        Sealing::Cycle(cycle) => panic!("expected a request below the seal, got {cycle:?}"),
+        Sealing::Cycle => panic!("expected a request below the seal, got a cycle"),
     }
 }
 

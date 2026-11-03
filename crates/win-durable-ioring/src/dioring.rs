@@ -37,6 +37,7 @@ use windows_ioring_sys::{
 };
 use windows_threadpool_sys::callback_env::CallbackEnviron;
 
+use crate::error_code::windows_fault;
 use crate::windows_backend::pool::{PoolDelivery, PoolEngine};
 use crate::windows_backend::signalled::SignalledDelivery;
 use crate::windows_backend::{
@@ -47,24 +48,22 @@ use durable_ioring::DiagnosticSink;
 use durable_ioring::DurableIoCore;
 use durable_ioring::IoTarget;
 use durable_ioring::StampClock;
-use durable_ioring::backend::{IoBackend, RegisteredRegion, SubmissionData};
-use durable_ioring::driver::Home;
+use durable_ioring::backend::{IoBackend, RegisteredRegion, SubmissionData, refusal_fault};
+use durable_ioring::driver::Answer;
 use durable_ioring::driver::LockWatch;
 use durable_ioring::driver::PumpedDelivery;
 use durable_ioring::driver::first_repeat;
-use durable_ioring::driver::{Answer, DomainCall};
 use durable_ioring::driver::{Engine, EngineGuard};
+use durable_ioring::driver::{Home, LineageSlots};
 use durable_ioring::{
-    Access, AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal,
-    Epoch, EpochState, FailureInfo, FlushDomain, ImportScope, Imported, IoTargetKey, Leftovers,
-    LineageInfo, ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
-    RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
+    Access, AddTargetCause, AddTargetError, AtCapacity, Capacity, ConstructionError,
+    DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState, FailureInfo,
+    FailureObserver, FlushDomain, Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey,
+    Leftover, LineageInfo, ReadOptions, RemoveTargetError, Resolution, ResolveError,
+    RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 use durable_ioring::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle};
-use durable_ioring::{
-    DomainCompletion, DomainRequest, DurabilityProvider, FlushRequest, ProviderPart,
-    ProviderRequest,
-};
+use durable_ioring::{DurabilityProvider, RequestBuf};
 use durable_ioring::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
 use durable_ioring::{ReadKey, TargetKey, WriteKey};
 use durable_ioring_events::EtwDiagnostics;
@@ -145,11 +144,19 @@ pub struct Setup<'env, 'pool, E: EpochId + 'static, R> {
     /// The consumer's durability provider, if any. `None` leaves every domain to the built-in
     /// default.
     pub provider: Option<Box<dyn DurabilityProvider<WindowsIds<E>>>>,
+    /// What the instance holds at most of each thing it counts, and refuses past (DI-D-107). The
+    /// library gives it no default. The targets given here count against it as targets added later
+    /// do, and so do the provider's domains and those the targets declare.
+    pub capacity: Capacity,
     /// Where the instance's diagnostics go (DI-D-51). `None` is the driver's default, [`EtwDiagnostics`]: the instance's begin and
     /// end events go to the ETW provider `durable-ioring-events`, for a session that is listening, and cost a test of whether one
     /// is when none is. Any sink can be given in its place, [`NoDiagnostics`](durable_ioring::NoDiagnostics) among them.
     /// Building an instance with the default registers the provider for the process, if no instance has.
     pub diagnostics: Option<Arc<dyn DiagnosticSink>>,
+    /// Told of each failure the instance observes, its suspect writes, and what becomes of them, as
+    /// it happens (DI-D-113): a consumer that wants a failure's detail keeps it there. Given only
+    /// here, as the instance is built. `None` tells no one.
+    pub failure_observer: Option<Arc<dyn FailureObserver<WindowsIds<E>>>>,
     /// How the instance's completions are drained (DI-D-52, DI-D-55).
     pub delivery: DeliveryMode<'env, 'pool>,
 }
@@ -229,6 +236,12 @@ pub enum SetupRefusal {
     },
     /// The provider named a domain twice.
     DuplicateProviderDomain(FlushDomain),
+    /// The capacity is not one an instance can be built with: it declares no lineage, or fewer
+    /// domains than the provider serves (DI-D-107).
+    Construction(ConstructionError),
+    /// A target given at construction would take the instance past its capacity: past the targets
+    /// declared, or the domains (DI-D-107).
+    AtCapacity(AtCapacity),
     /// Creating the ring, making a registration, or wiring the ring's delivery failed.
     Ring(io::Error),
 }
@@ -286,6 +299,10 @@ pub struct Dioring<
     pub(crate) delivery: Option<Delivery<E, B, C, K, R>>,
     pub(crate) hub: Arc<Hub<E, B, C, K, R>>,
     pub(crate) provider: Option<Box<dyn DurabilityProvider<WindowsIds<E>>>>,
+    /// The provider's requests, moved out of the engine and not yet made: made when the instance
+    /// is, with room for every one it can have at once, so moving them out allocates nothing
+    /// (DI-D-115). The provider is called from it, one call at a time, as `&mut self` allows.
+    pub(crate) requests: RequestBuf<DioringIds<E, K::Instant>>,
     /// A copy of the default lineage's handle, so the default lineage lives as long as the
     /// instance does (DI-D-40).
     pub(crate) default: LineageHandle,
@@ -351,7 +368,9 @@ where
             files,
             buffers,
             provider,
+            capacity,
             diagnostics,
+            failure_observer,
             delivery,
         } = setup;
         let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::new()));
@@ -395,11 +414,34 @@ where
                 });
             }
         };
-        let mut core = if provider.is_some() {
-            DurableIoCore::with_provider(clock, Arc::clone(&diagnostics), provider_domains)
-                .expect("a domain named twice was refused above")
+        let built = if provider.is_some() {
+            DurableIoCore::with_provider(
+                clock,
+                Arc::clone(&diagnostics),
+                capacity,
+                provider_domains,
+            )
         } else {
-            DurableIoCore::new(clock, Arc::clone(&diagnostics))
+            DurableIoCore::new(clock, Arc::clone(&diagnostics), capacity)
+        };
+        let made = built.and_then(|core| {
+            let requests = core.request_buf()?;
+            Ok((core, LineageSlots::new(capacity.lineages)?, requests))
+        });
+        let (core, slots, requests) = match made {
+            Ok(made) => made,
+            Err(refused) => {
+                return Err(SetupError {
+                    reason: SetupRefusal::Construction(refused),
+                    files,
+                    buffers: Some(buffers),
+                    provider,
+                });
+            }
+        };
+        let mut core = match failure_observer {
+            Some(observer) => core.observed_by(observer),
+            None => core,
         };
         let keys: Vec<IoTargetKey> = files.iter().map(|f| f.key).collect();
         // Kept so that a failed construction hands the files back as they were given.
@@ -408,8 +450,20 @@ where
             .filter_map(|f| f.declared.map(|declared| (f.key, declared)))
             .collect();
         for file in &files {
-            core.add_target(file.key, file.target.describe())
-                .expect("the keys were checked unique above");
+            if let Err(refused) = core.add_target(file.key, file.target.describe()) {
+                let reason = match refused.cause {
+                    AddTargetCause::AtCapacity(at) => SetupRefusal::AtCapacity(at),
+                    _ => {
+                        unreachable!("the keys were checked unique, and the access covered, above")
+                    }
+                };
+                return Err(SetupError {
+                    reason,
+                    files,
+                    buffers: Some(buffers),
+                    provider,
+                });
+            }
         }
         let targets = files
             .into_iter()
@@ -458,6 +512,7 @@ where
             // Nothing sets the signal the pool's wake would: entries are made poppable by the
             // pump, which sets the readiness event itself, as every other path does.
             DeliveryMode::Pumped => PumpedDelivery::new(engine)
+                .map_err(|(fault, engine)| (io::Error::from(fault), engine))
                 .map(|pumped| pumped.with_lock_watch(watch.clone()))
                 .map(Delivery::Pumped),
             DeliveryMode::Signalled(environment) => {
@@ -492,14 +547,16 @@ where
             default_lineage.instance,
             diagnostics,
             watch,
+            slots,
         ));
-        let default = LineageHandle::mint(default_lineage, home(&hub));
+        let default = minted(&hub, default_lineage);
         let handle = default.clone();
         Ok((
             Self {
                 delivery: Some(delivery),
                 hub,
                 provider,
+                requests,
                 default,
             },
             handle,
@@ -535,6 +592,26 @@ fn home<T: Home + 'static>(hub: &Arc<T>) -> Weak<dyn Home> {
     home
 }
 
+/// A handle to `lineage`, which the core has just admitted, homed at `hub`. A slot is free: a
+/// lineage with a copy out is one the core holds, and the core admitted this one within the
+/// lineages it was built for, which the slots number (DI-D-108). None free is an inconsistency.
+fn minted<E, B, C, K, R>(hub: &Arc<Hub<E, B, C, K, R>>, lineage: Lineage) -> LineageHandle
+where
+    E: EpochId + Send + Sync + 'static,
+    B: IoBuf + Send + 'static,
+    C: Send + 'static,
+    K: StampClock,
+    R: IoBufMut + Send + 'static,
+{
+    LineageHandle::mint(lineage, home(hub)).unwrap_or_else(|| {
+        hub.inconsistent(
+            "a lineage the core admitted found no handle slot free",
+            format_args!("lineage {lineage:?}"),
+        );
+        LineageHandle::detached(lineage)
+    })
+}
+
 /// Where an instance's provider completions answer.
 fn answers<T: Answer + 'static>(hub: &Arc<T>) -> Weak<dyn Answer> {
     let answers: Weak<T> = Arc::downgrade(hub);
@@ -555,8 +632,8 @@ where
     type Readiness = Event;
     type Target = Win32FileTarget;
 
-    fn readiness(&mut self) -> io::Result<Event> {
-        self.hub.readiness()
+    fn readiness(&mut self) -> Result<Event, IoFault> {
+        self.hub.readiness().map_err(windows_fault)
     }
 
     fn add_target<T: TargetKey>(
@@ -574,10 +651,13 @@ where
         if let Some(cause) = cause {
             return Err(AddTargetError { key, target, cause });
         }
-        engine
-            .core
-            .add_target(key, target.describe())
-            .expect("the key is free, checked above");
+        if let Err(refused) = engine.core.add_target(key, target.describe()) {
+            return Err(AddTargetError {
+                key,
+                target,
+                cause: refused.cause,
+            });
+        }
         engine
             .backend
             .attach(key, target)
@@ -585,16 +665,17 @@ where
         Ok(())
     }
 
-    fn remove_target(
-        &mut self,
-        key: IoTargetKey,
-    ) -> Result<Win32FileTarget, RemoveTargetError<Self::Ids>> {
+    fn remove_target(&mut self, key: IoTargetKey) -> Result<Win32FileTarget, RemoveTargetError> {
         let mut engine = self.engine();
         engine.core.remove_target(key)?;
         Ok(engine
             .backend
             .detach(key)
             .expect("a target the core decided for is attached"))
+    }
+
+    fn target_holds(&self, key: IoTargetKey, visit: impl FnMut(Hold<Self::Ids>)) {
+        self.engine().core.target_holds(key, visit);
     }
 
     fn write_with<T: WriteKey>(
@@ -654,7 +735,7 @@ where
         pushed
     }
 
-    fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>> {
+    fn pop(&mut self) -> Result<Option<EntryOf<Self>>, IoFault> {
         // A push is submitted as it is made, by the engine's doorbell, so what is left to submit
         // here is what a failed one left queued, and the driver told the consumer so (DI-7+.2). It
         // is reported only when there is no entry to return instead: an entry is progress, and
@@ -674,8 +755,8 @@ where
             match engine.core.pop() {
                 Some(entry) => Ok(Some(entry)),
                 None => match (engine.take_fault(), submitted) {
-                    (Some(fault), _) => Err(io::Error::other(fault)),
-                    (None, Err(cause)) => Err(io::Error::other(cause)),
+                    (Some(fault), _) => Err(fault),
+                    (None, Err(cause)) => Err(refusal_fault(cause)),
                     (None, Ok(())) => Ok(None),
                 },
             }
@@ -714,13 +795,17 @@ where
         self.default.clone()
     }
 
-    fn mint_lineage(&mut self, description: Option<String>) -> LineageHandle {
-        let lineage = self.engine().core.mint_lineage(description);
-        LineageHandle::mint(lineage, home(&self.hub))
+    fn mint_lineage(&mut self, description: Option<String>) -> Result<LineageHandle, AtCapacity> {
+        let lineage = self.engine().core.mint_lineage(description)?;
+        Ok(minted(&self.hub, lineage))
     }
 
-    fn lineages(&self) -> Vec<LineageInfo<Self::Ids>> {
-        self.engine().core.lineages()
+    fn lineages(&self, visit: impl FnMut(LineageInfo<'_, Self::Ids>)) {
+        self.engine().core.lineages(visit);
+    }
+
+    fn lineage_holds(&self, lineage: Lineage, visit: impl FnMut(Hold<Self::Ids>)) {
+        self.engine().core.lineage_holds(lineage, visit);
     }
 
     fn end_lineage(&mut self, handle: LineageHandle) -> Result<(), EndLineageError<Self::Ids>> {
@@ -805,12 +890,13 @@ where
     fn import_failure(
         &mut self,
         scope: ImportScope<Self::Ids>,
-    ) -> Result<Imported<Self::Ids>, UnknownLineage<Self::Ids>> {
+        unmatched: impl FnMut(&FlushDomain),
+    ) -> Result<Imported<Self::Ids>, ImportError<Self::Ids>> {
         let imported = {
             let mut engine = self.engine();
             engine
                 .core
-                .import_failure(scope)
+                .import_failure(scope, unmatched)
                 .map(|(imported, actions)| (imported, engine.act(actions)))
         };
         let (imported, deliver) = imported?;
@@ -818,21 +904,17 @@ where
         Ok(imported)
     }
 
-    fn failures(&self) -> Vec<FailureInfo<Self::Ids>> {
-        self.engine().core.failures()
+    fn failures(&self, visit: impl FnMut(FailureInfo<'_, Self::Ids>)) {
+        self.engine().core.failures(visit);
     }
 
     fn take_token(&mut self, failure: FailureId) -> Option<FailureToken> {
         self.engine().core.take_token(failure)
     }
 
-    fn close(mut self) -> Leftovers<Self::Ids, B, C> {
+    fn close(mut self, visit: impl FnMut(Leftover<'_, Self::Ids, B, C>)) {
         // `close` consumes the instance, so nothing has ended it before.
-        self.end().unwrap_or_else(|| Leftovers {
-            held: Vec::new(),
-            failures: Vec::new(),
-            lineages: Vec::new(),
-        })
+        self.end(visit);
     }
 }
 
@@ -885,7 +967,7 @@ where
             ));
         };
         self.settled(pumped.ready);
-        pumped.waited.map(|_| pumped.ready)
+        pumped.waited.map(|_| pumped.ready).map_err(io::Error::from)
     }
 
     /// A clone of the event the thread pool sets whenever completions may be waiting, for the
@@ -970,25 +1052,27 @@ where
 
     /// Make every request for the consumer's provider made so far, in order, with the engine's lock
     /// released: the provider may answer inside its call, and the answer takes the lock
-    /// (DI-D-44). Every request is built before the first is made, so a panic in the provider drops
-    /// the completions of those after it unanswered: each a failure of its domain, as DI-D-27 says.
+    /// (DI-D-44). Every request is read out of the core before the first is made, into the buffer
+    /// made with the instance, so a panic in the provider leaves those after it to be abandoned as
+    /// the buffer's iterator is dropped: each a failure of its domain, as DI-D-27 says.
     fn call_provider(&mut self) {
-        let requests = self.engine().take_requests();
-        if requests.is_empty() {
+        self.delivery
+            .as_ref()
+            .expect("an instance is live until it ends")
+            .engine()
+            .drain_requests(&mut self.requests);
+        if self.requests.is_empty() {
             return;
         }
         let home = answers(&self.hub);
-        let requests: Vec<FlushRequest<WindowsIds<E>>> = requests
-            .into_iter()
-            .map(|request| flush_request(request, &home))
-            .collect();
         let provider = self
             .provider
             .as_mut()
             .expect("only a provider's domains make requests");
-        for request in requests {
+        for request in self.requests.requests(&home) {
             provider.make_durable(request);
         }
+        self.requests.clear();
     }
 }
 
@@ -1010,10 +1094,12 @@ impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Dioring<B, E
         handle.is_homed_at(&self.hub)
     }
 
-    /// End the instance, as the module's "Ending" says, returning what is left; `None` if it has
-    /// ended already.
-    pub(crate) fn end(&mut self) -> Option<Leftovers<DioringIds<E, K::Instant>, B, C>> {
-        let delivery = self.delivery.take()?;
+    /// End the instance, as the module's "Ending" says, giving `visit` what is left; nothing if it
+    /// has ended already.
+    pub(crate) fn end(&mut self, visit: impl FnMut(Leftover<'_, DioringIds<E, K::Instant>, B, C>)) {
+        let Some(delivery) = self.delivery.take() else {
+            return;
+        };
         // Stops the wake, waiting for a drain in progress, and takes the engine out of its slot.
         let engine = delivery.into_engine();
         // Before the wait: a completion the provider keeps in itself is answered, as abandoned, by
@@ -1021,40 +1107,11 @@ impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Dioring<B, E
         self.provider = None;
         self.hub.wait_for_answers();
         let Engine { core, backend, .. } = engine;
-        let leftovers = core.close();
-        // The ring runs down every operation still in flight as it goes.
+        // The ring runs down every operation still in flight as it goes, before the consumer is
+        // given anything.
         drop(backend);
-        Some(leftovers)
+        core.close(visit);
     }
-}
-
-/// A request in the core's terms, as the provider is handed it: each domain's part, with the
-/// completion that answers it through `home`.
-fn flush_request<E: EpochId + 'static>(
-    request: ProviderRequest<WindowsIds<E>>,
-    home: &Weak<dyn Answer>,
-) -> FlushRequest<WindowsIds<E>> {
-    let ProviderRequest {
-        lineage,
-        seal,
-        domains,
-    } = request;
-    let domains = domains
-        .into_iter()
-        .map(|ProviderPart { domain, targets }| DomainRequest {
-            completion: DomainCompletion::new(
-                Weak::clone(home),
-                DomainCall {
-                    lineage,
-                    seal,
-                    name: domain.clone(),
-                },
-            ),
-            domain,
-            files: targets,
-        })
-        .collect();
-    FlushRequest { domains }
 }
 
 /// A span of the registered buffers, as the backend names it.
@@ -1091,16 +1148,28 @@ where
 {
     type Registered = R;
 
-    fn with_registered_buffer<T>(&mut self, i: u32, f: impl FnOnce(&[u8]) -> T) -> io::Result<T> {
-        self.engine().backend.registered_buffer(i).map(f)
+    fn with_registered_buffer<T>(
+        &mut self,
+        i: u32,
+        f: impl FnOnce(&[u8]) -> T,
+    ) -> Result<T, IoFault> {
+        self.engine()
+            .backend
+            .registered_buffer(i)
+            .map(f)
+            .map_err(windows_fault)
     }
 
     fn with_registered_buffer_mut<T>(
         &mut self,
         i: u32,
         f: impl FnOnce(&mut [u8]) -> T,
-    ) -> io::Result<T> {
-        self.engine().backend.registered_buffer_mut(i).map(f)
+    ) -> Result<T, IoFault> {
+        self.engine()
+            .backend
+            .registered_buffer_mut(i)
+            .map(f)
+            .map_err(windows_fault)
     }
 
     fn write_registered_with<T: WriteKey>(
@@ -1147,7 +1216,7 @@ impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Drop
         // Ends the instance on this thread, never inside one of delivery's own calls, where
         // stopping delivery would wait for itself. Nothing to do after `close()`, which has ended
         // it already; drop discards what it would have returned.
-        let _ = self.end();
+        self.end(|_| {});
     }
 }
 /// Register `files` with `ring`, in order, and wait for the registration to complete. `None` for

@@ -1033,8 +1033,12 @@ fn the_core_writes_a_write_only_buffer_type_over_the_windows_backend() {
     backend
         .attach(ADDED, Win32FileTarget::new(added.open()))
         .expect("a new key");
-    let core: DurableIoCore<u64, Arc<[u8]>, u32, InterruptStamps> =
-        DurableIoCore::new(InterruptStamps, Arc::new(NoDiagnostics));
+    let core: DurableIoCore<u64, Arc<[u8]>, u32, InterruptStamps> = DurableIoCore::new(
+        InterruptStamps,
+        Arc::new(NoDiagnostics),
+        crate::dioring::tests::CAPACITY,
+    )
+    .expect("a valid capacity");
     let mut engine = Engine::new(core, backend);
     for key in [GIVEN, ADDED] {
         let description = engine.backend.target(key).expect("attached").describe();
@@ -1086,6 +1090,7 @@ fn the_core_runs_over_the_windows_backend_under_the_oracle() {
 
     use durable_ioring::DurableIoCore;
     use durable_ioring::NoDiagnostics;
+    use durable_ioring::driver::Engine;
     use durable_ioring::oracle::ConformanceOracle;
     use durable_ioring::{DurabilityRequest, Entry, Epoch, OpKind, WriteOptions};
 
@@ -1094,19 +1099,25 @@ fn the_core_runs_over_the_windows_backend_under_the_oracle() {
         TempFile::new("wb-core-given"),
         TempFile::new("wb-core-added"),
     );
-    let mut backend = backend(&given, &added);
-    let mut core: DurableIoCore<u64, Vec<u8>, u32, InterruptStamps> =
-        DurableIoCore::new(InterruptStamps, Arc::new(NoDiagnostics));
+    let backend = backend(&given, &added);
+    let mut core: DurableIoCore<u64, Vec<u8>, u32, InterruptStamps> = DurableIoCore::new(
+        InterruptStamps,
+        Arc::new(NoDiagnostics),
+        crate::dioring::tests::CAPACITY,
+    )
+    .expect("a valid capacity");
     let mut oracle: ConformanceOracle<V, u32> = ConformanceOracle::new();
     for key in [GIVEN, ADDED] {
         let description = backend.target(key).expect("attached").describe();
         core.add_target(key, description).expect("a new key");
     }
     let lineage = core.default_lineage();
+    let mut engine = Engine::new(core, backend);
     for (i, key) in [GIVEN, ADDED, GIVEN].into_iter().enumerate() {
         let epoch = Epoch::new(lineage, 1);
         let context = u32::try_from(i).expect("small");
-        let id = core
+        let id = engine
+            .core
             .write(
                 key,
                 u64::from(context) * 4,
@@ -1114,7 +1125,7 @@ fn the_core_runs_over_the_windows_backend_under_the_oracle() {
                 epoch,
                 context,
                 WriteOptions::new(),
-                &mut backend,
+                &mut engine.backend,
             )
             .expect("accepted");
         oracle
@@ -1122,33 +1133,30 @@ fn the_core_runs_over_the_windows_backend_under_the_oracle() {
             .expect("the oracle accepts the push");
     }
     let through = Epoch::new(lineage, 1);
-    let (answer, actions) = core
+    let (answer, actions) = engine
+        .core
         .make_durable_through(through)
         .expect("the default lineage");
     assert_eq!(answer, DurabilityRequest::Submitted);
     oracle.sealed(through);
-    let mut pending = actions.submit;
+    engine.act(actions);
     let mut entries = Vec::new();
     let started = Instant::now();
     while entries.len() < 4 {
-        for submission in pending.drain(..) {
-            backend.push(submission).expect("room");
-        }
-        backend.submit().expect("submitted");
-        if let Some(completion) = backend.pop().expect("pop") {
-            pending.extend(core.complete(completion).submit);
-        } else {
-            assert!(started.elapsed() < BOUND, "stalled with {entries:?}");
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        while let Some(entry) = core.pop() {
+        engine.drain();
+        let before = entries.len();
+        while let Some(entry) = engine.core.pop() {
             oracle
                 .observe(&entry)
                 .expect("the oracle accepts the entry");
             entries.push(entry);
         }
+        if entries.len() == before {
+            assert!(started.elapsed() < BOUND, "stalled with {entries:?}");
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
     assert!(matches!(entries[3], Entry::Durable { through: t } if t == through));
-    assert_eq!(core.durable_through(lineage), Ok(Some(1)));
+    assert_eq!(engine.core.durable_through(lineage), Ok(Some(1)));
     oracle.finish().expect("every operation completed");
 }

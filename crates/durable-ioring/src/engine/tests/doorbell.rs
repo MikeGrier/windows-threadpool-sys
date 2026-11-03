@@ -77,7 +77,11 @@ impl IoBackend for Scripted {
             return Err(IoFault {
                 source: "test",
                 code: None,
-                error: Arc::new(io::Error::other(format!("pop {}", self.pops_failed))),
+                refusal: None,
+                error: crate::report_io_error(io::Error::other(format!(
+                    "pop {}",
+                    self.pops_failed
+                ))),
             });
         }
         self.inner.pop()
@@ -100,7 +104,12 @@ fn scripted(submissions: u32, completions: u32) -> Eng {
         rings: 0,
         pops_failed: 0,
     };
-    let core = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
+    let core = Core::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     let mut engine = Engine::new(core, backend);
     for key in [ONE, TWO] {
         let target = MemoryTarget::new().with_domains([FlushDomain::new(b"log".as_slice())]);
@@ -173,7 +182,8 @@ fn a_full_queue_is_rung_and_the_push_made_once_more() {
         .expect("the default lineage");
     assert_eq!(engine.backend.queued(), 0);
     assert_eq!(engine.backend.completed(), 2, "both commits ran");
-    assert!(engine.core.retry().is_empty(), "nothing was kept");
+    let retried = engine.core.retry();
+    assert!(engine.core.taken(retried).is_empty(), "nothing was kept");
 }
 
 #[test]

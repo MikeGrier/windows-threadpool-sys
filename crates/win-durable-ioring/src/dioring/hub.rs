@@ -25,7 +25,7 @@ use durable_ioring::StampClock;
 use durable_ioring::driver::inconsistent;
 use durable_ioring::driver::{Answer, DomainCall};
 use durable_ioring::driver::{ENGINE_LOCK, LockWatch, lock};
-use durable_ioring::driver::{Home, InstanceId};
+use durable_ioring::driver::{Home, InstanceId, LineageSlots};
 
 /// What an instance shares with its paths off the consumer's thread.
 pub(crate) struct Hub<E, B, C, K, R>
@@ -52,6 +52,8 @@ where
     unanswered: Mutex<usize>,
     /// Notified when the last unanswered completion is answered.
     answered: Condvar,
+    /// The copy counts of the lineage handles this instance mints (DI-D-108).
+    slots: LineageSlots,
 }
 
 impl<E, B, C, K, R> Hub<E, B, C, K, R>
@@ -61,13 +63,15 @@ where
     R: IoBufMut,
     K: StampClock,
 {
-    /// A hub over `engine`'s slot, setting `readiness`, reporting to `diagnostics` as `instance`.
+    /// A hub over `engine`'s slot, setting `readiness`, reporting to `diagnostics` as `instance`,
+    /// counting its lineage handles' copies in `slots`.
     pub(crate) fn new(
         engine: Shared<E, B, C, K, R>,
         readiness: Event,
         instance: InstanceId,
         diagnostics: Arc<dyn DiagnosticSink>,
         watch: LockWatch,
+        slots: LineageSlots,
     ) -> Self {
         Self {
             engine,
@@ -77,6 +81,7 @@ where
             watch,
             unanswered: Mutex::new(0),
             answered: Condvar::new(),
+            slots,
         }
     }
 
@@ -155,6 +160,10 @@ where
                 format_args!("lineage {lineage:?}, refused as {refusal:?}"),
             ),
         }
+    }
+
+    fn slots(&self) -> &LineageSlots {
+        &self.slots
     }
 }
 

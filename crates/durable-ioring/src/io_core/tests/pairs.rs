@@ -17,7 +17,7 @@ use crate::types::{DurabilityRequest, Epoch, FlushDomain, Resolution};
 
 /// A sink that wants the kinds it is given, checks every event it is handed against the pairing
 /// rule, and keeps the pairs' lines. It records under a mutex it holds only for that.
-struct Checked {
+pub(super) struct Checked {
     wants: Vec<DiagnosticKind>,
     state: Mutex<State>,
 }
@@ -37,7 +37,7 @@ impl Checked {
         })
     }
 
-    fn pairs() -> Arc<Self> {
+    pub(super) fn pairs() -> Arc<Self> {
         Self::wanting(&[DiagnosticKind::Seal, DiagnosticKind::Flush])
     }
 
@@ -48,7 +48,7 @@ impl Checked {
     }
 
     /// The stream so far keeps the rule, with nothing left open.
-    fn finished(&self) {
+    pub(super) fn finished(&self) {
         let mut state = self.state.lock().expect("the record");
         assert_eq!(state.violation, None, "{:?}", state.lines);
         let checker = std::mem::take(&mut state.checker);
@@ -83,11 +83,12 @@ fn domain(name: &str) -> FlushDomain {
 fn rig(sink: &Arc<Checked>, script: FaultScript, served: &[&str], declared: &[&str]) -> Rig {
     let sink: Arc<dyn DiagnosticSink> = Arc::clone(sink) as Arc<dyn DiagnosticSink>;
     let core = if served.is_empty() {
-        Core::new(Ticks::default(), sink)
+        Core::new(Ticks::default(), sink, crate::test_support::CAPACITY).expect("a valid capacity")
     } else {
         Core::with_provider(
             Ticks::default(),
             sink,
+            crate::test_support::CAPACITY,
             served.iter().map(|name| domain(name)).collect(),
         )
         .expect("no repeats")
@@ -268,7 +269,10 @@ fn a_failed_flush_ends_its_pair_failed_and_its_seals_failed_and_a_later_seal_end
 fn a_provider_domain_is_a_flush_pair_that_ends_as_the_provider_answers() {
     for (outcome, ends) in [
         (DomainOutcome::Succeeded, "succeeded"),
-        (DomainOutcome::Failed(std::io::Error::other("no")), "failed"),
+        (
+            DomainOutcome::Failed(crate::report_io_error(std::io::Error::other("no"))),
+            "failed",
+        ),
         (DomainOutcome::Abandoned, "abandoned"),
     ] {
         let sink = Checked::pairs();
@@ -309,7 +313,7 @@ fn ending_a_lineage_ends_its_open_seal_unanswered_and_its_open_flush_abandoned()
     let sink = Checked::pairs();
     let script = FaultScript::new().on(When::any().op(ScriptOp::Commit), Fault::Hold);
     let mut rig = rig(&sink, script, &[], &[]);
-    let minted = rig.core.mint_lineage(None);
+    let minted = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(KEY, Epoch::new(minted, 1), 0, b"x", Default::default())
         .expect("accepted");
     rig.run();
@@ -336,6 +340,49 @@ fn ending_a_lineage_ends_its_open_seal_unanswered_and_its_open_flush_abandoned()
 }
 
 #[test]
+fn ending_a_lineage_ends_its_own_open_flush_pairs_and_no_other_lineages() {
+    let sink = Checked::pairs();
+    let script = FaultScript::new().on(When::any().op(ScriptOp::Commit), Fault::Hold);
+    let mut rig = rig(&sink, script, &[], &[]);
+    let ended = rig.core.mint_lineage(None).expect("room for a lineage");
+    let kept = rig.core.mint_lineage(None).expect("room for a lineage");
+    for lineage in [ended, kept] {
+        rig.write_with(KEY, Epoch::new(lineage, 1), 0, b"x", Default::default())
+            .expect("accepted");
+    }
+    rig.run();
+    for lineage in [ended, kept] {
+        rig.seal_in(lineage, 1);
+    }
+    rig.run();
+    let actions = rig.core.end_lineage(ended).expect("live, not the default");
+    rig.act(actions);
+    let ending = |suffix: &str| {
+        sink.lines()
+            .iter()
+            .filter(|line| line.contains("flush of file 1") && line.ends_with(suffix))
+            .count()
+    };
+    assert_eq!(ending("abandoned"), 1, "the ended lineage's flush only");
+    rig.backend.release_all();
+    rig.run();
+    rig.entries();
+    assert_eq!(
+        ending("succeeded"),
+        1,
+        "the other lineage's flush pair was still open, and ends as its flush answers"
+    );
+    let reported = sink.lines().len();
+    drop(rig);
+    assert_eq!(
+        sink.lines().len(),
+        reported,
+        "nothing is left open for the core to end again as it goes"
+    );
+    sink.finished();
+}
+
+#[test]
 fn closing_the_core_ends_every_pair_still_open() {
     let sink = Checked::pairs();
     let script = FaultScript::new().on(When::any().op(ScriptOp::Commit), Fault::Hold);
@@ -351,7 +398,7 @@ fn closing_the_core_ends_every_pair_still_open() {
         3
     );
     let Rig { core, .. } = rig;
-    drop(core.close());
+    core.close(|_| {});
     let lines = sink.lines();
     assert_eq!(
         lines
@@ -486,7 +533,7 @@ fn a_seal_with_a_file_and_a_domain_is_a_flush_pair_for_each_part() {
 fn a_minted_lineages_pairs_name_its_lineage() {
     let sink = Checked::pairs();
     let mut rig = plain(&sink);
-    let minted = rig.core.mint_lineage(None);
+    let minted = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(KEY, Epoch::new(minted, 3), 0, b"x", Default::default())
         .expect("accepted");
     rig.run();

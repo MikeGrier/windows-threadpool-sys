@@ -10,11 +10,22 @@ use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::capacity::Capacity;
 use crate::clock::StampClock;
 use crate::error_code::ErrorCode;
 use crate::types::IoFault;
 
 mod tests;
+
+/// The small declaration the crate's tests build a core with (DI-D-107): enough that no test not
+/// about capacity reaches it, and few enough that one about capacity can.
+pub(crate) const CAPACITY: Capacity = Capacity {
+    operations: 64,
+    lineages: 16,
+    imports: 8,
+    targets: 8,
+    domains: 16,
+};
 
 /// A clock that counts its readings: each one is a number higher than the last, so a core's
 /// stamps are plain numbers and a test can read them off in order. Clones share one count.
@@ -66,6 +77,27 @@ pub(crate) fn fault(error: io::Error) -> IoFault {
     IoFault {
         source: SOURCE,
         code: error.raw_os_error().map(ErrorCode::from_hresult),
-        error: Arc::new(error),
+        refusal: None,
+        error: crate::report_io_error(error),
+    }
+}
+
+/// A lineage as the enumeration lent it, owned so a test can keep it past the visit.
+#[derive(Clone, Debug)]
+pub(crate) struct Listed<V: crate::contract::Identities> {
+    pub(crate) lineage: V::Lineage,
+    pub(crate) description: Option<String>,
+    pub(crate) is_default: bool,
+    pub(crate) durable_through: Option<V::EpochId>,
+}
+
+impl<V: crate::contract::Identities> From<crate::types::LineageInfo<'_, V>> for Listed<V> {
+    fn from(info: crate::types::LineageInfo<'_, V>) -> Self {
+        Self {
+            lineage: info.lineage,
+            description: info.description.map(str::to_owned),
+            is_default: info.is_default,
+            durable_through: info.durable_through,
+        }
     }
 }

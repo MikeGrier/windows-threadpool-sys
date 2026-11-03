@@ -16,11 +16,12 @@
 //!
 //! **A refusal names its cause** (DI-D-52), so the caller takes the action that clears it --
 //! submit, drain -- without probing for why. A backend that cannot tell says so with
-//! [`RefusalCause::Unknown`], carrying what it was told.
+//! [`RefusalCause::Unknown`], carrying what it was told. A refusal the core ends as a fault names
+//! its cause in the fault's `refusal` field, as a [`RefusalKind`] (DI-D-109).
 
-use std::fmt;
-use std::io;
-use std::sync::Arc;
+use core::fmt;
+
+use rc_errors::ErrorReport;
 
 use crate::io_target::IoTarget;
 use crate::types::{IoFault, IoTargetKey, WriteCaching};
@@ -130,7 +131,52 @@ pub enum RefusalCause {
     Unknown(IoFault),
 }
 
+/// What a [`RefusalCause`] is, without what it carries: the cause a refused submission's [`IoFault`]
+/// names in its `refusal` field, beside its code, so a consumer reads the cause from the fault and
+/// nothing is allocated to carry it (DI-D-109). New kinds may be added with new causes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RefusalKind {
+    /// [`RefusalCause::SubmitNeeded`].
+    SubmitNeeded,
+    /// [`RefusalCause::DrainNeeded`].
+    DrainNeeded,
+    /// [`RefusalCause::SubmitAndDrainNeeded`].
+    SubmitAndDrainNeeded,
+    /// [`RefusalCause::Busy`].
+    Busy,
+    /// [`RefusalCause::UnknownTarget`].
+    UnknownTarget,
+    /// [`RefusalCause::Unsupported`].
+    Unsupported,
+    /// [`RefusalCause::Invalid`].
+    Invalid,
+    /// [`RefusalCause::AccessDenied`].
+    AccessDenied,
+    /// [`RefusalCause::Unusable`]: the fault's code and report are the backend's.
+    Unusable,
+    /// [`RefusalCause::Unknown`]: the fault's code and report are the backend's.
+    Unknown,
+}
+
 impl RefusalCause {
+    /// What the cause is, without what it carries.
+    #[must_use]
+    pub fn kind(&self) -> RefusalKind {
+        match self {
+            Self::SubmitNeeded => RefusalKind::SubmitNeeded,
+            Self::DrainNeeded => RefusalKind::DrainNeeded,
+            Self::SubmitAndDrainNeeded => RefusalKind::SubmitAndDrainNeeded,
+            Self::Busy => RefusalKind::Busy,
+            Self::UnknownTarget => RefusalKind::UnknownTarget,
+            Self::Unsupported => RefusalKind::Unsupported,
+            Self::Invalid => RefusalKind::Invalid,
+            Self::AccessDenied => RefusalKind::AccessDenied,
+            Self::Unusable(_) => RefusalKind::Unusable,
+            Self::Unknown(_) => RefusalKind::Unknown,
+        }
+    }
+
     /// Whether submitting what is queued is part of clearing it.
     #[must_use]
     pub fn needs_submit(&self) -> bool {
@@ -173,10 +219,10 @@ impl fmt::Display for RefusalCause {
 
 /// The cause is the error: [`Unusable`](RefusalCause::Unusable) and [`Unknown`](RefusalCause::Unknown)
 /// name what the backend reported as their source.
-impl std::error::Error for RefusalCause {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for RefusalCause {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
-            Self::Unusable(fault) | Self::Unknown(fault) => Some(fault.error.as_ref()),
+            Self::Unusable(fault) | Self::Unknown(fault) => Some(&*fault.error),
             _ => None,
         }
     }
@@ -184,27 +230,46 @@ impl std::error::Error for RefusalCause {
 
 /// The source of the fault that ends a submission of the core's own -- an operation its gate
 /// released, or a commit -- when the backend refuses it for a cause that is not retryable
-/// (DI-D-54). Its code is the backend's, where the cause carries one, and its error is the
-/// [`RefusalCause`] itself, recovered by downcasting.
+/// (DI-D-54). The fault's `refusal` names the cause, so a consumer reads it from there; its code is
+/// the backend's, where the cause carries one.
+///
+/// A cause that carries nothing is reported by a `static` of the cause, and
+/// [`Unusable`](RefusalCause::Unusable) and [`Unknown`](RefusalCause::Unknown) pass the backend's
+/// own code and report through, so a refusal allocates nothing (DI-D-109).
 pub const REFUSED: &str = "refused";
 
-/// The fault a submission refused for `cause` ends with: see [`REFUSED`].
-pub(crate) fn refusal_fault(cause: RefusalCause) -> IoFault {
-    let code = match &cause {
-        RefusalCause::Unusable(fault) | RefusalCause::Unknown(fault) => fault.code,
-        _ => None,
-    };
-    let kind = match cause {
-        RefusalCause::Unsupported => io::ErrorKind::Unsupported,
-        RefusalCause::Invalid => io::ErrorKind::InvalidInput,
-        RefusalCause::UnknownTarget => io::ErrorKind::NotFound,
-        RefusalCause::AccessDenied => io::ErrorKind::PermissionDenied,
-        _ => io::ErrorKind::Other,
+/// The fault a submission refused for `cause` ends with: see [`REFUSED`]. A driver reports a
+/// refusal of its own -- a submit its `pop` rang for again and was refused again -- through this,
+/// so a consumer reads every refusal the same way.
+#[must_use]
+pub fn refusal_fault(cause: RefusalCause) -> IoFault {
+    static SUBMIT_NEEDED: RefusalCause = RefusalCause::SubmitNeeded;
+    static DRAIN_NEEDED: RefusalCause = RefusalCause::DrainNeeded;
+    static SUBMIT_AND_DRAIN_NEEDED: RefusalCause = RefusalCause::SubmitAndDrainNeeded;
+    static BUSY: RefusalCause = RefusalCause::Busy;
+    static UNKNOWN_TARGET: RefusalCause = RefusalCause::UnknownTarget;
+    static UNSUPPORTED: RefusalCause = RefusalCause::Unsupported;
+    static INVALID: RefusalCause = RefusalCause::Invalid;
+    static ACCESS_DENIED: RefusalCause = RefusalCause::AccessDenied;
+
+    let refusal = Some(cause.kind());
+    let named = |cause: &'static RefusalCause| (None, ErrorReport::from_static(cause));
+    let (code, error) = match cause {
+        RefusalCause::SubmitNeeded => named(&SUBMIT_NEEDED),
+        RefusalCause::DrainNeeded => named(&DRAIN_NEEDED),
+        RefusalCause::SubmitAndDrainNeeded => named(&SUBMIT_AND_DRAIN_NEEDED),
+        RefusalCause::Busy => named(&BUSY),
+        RefusalCause::UnknownTarget => named(&UNKNOWN_TARGET),
+        RefusalCause::Unsupported => named(&UNSUPPORTED),
+        RefusalCause::Invalid => named(&INVALID),
+        RefusalCause::AccessDenied => named(&ACCESS_DENIED),
+        RefusalCause::Unusable(fault) | RefusalCause::Unknown(fault) => (fault.code, fault.error),
     };
     IoFault {
         source: REFUSED,
         code,
-        error: Arc::new(io::Error::new(kind, cause)),
+        refusal,
+        error,
     }
 }
 

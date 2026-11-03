@@ -41,7 +41,9 @@ fn instance(temp: &TempFile, buffers: Vec<Vec<u8>>) -> Ring {
         files: vec![TargetSetup::new(FILE, Win32FileTarget::new(temp.open()))],
         buffers,
         provider: None,
+        capacity: crate::dioring::tests::CAPACITY,
         diagnostics: None,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(None),
     })
     .expect("build an instance")
@@ -234,8 +236,14 @@ fn a_failure_resolved_through_the_handle_is_delivered_with_what_follows_it() {
         std::mem::forget(delivery);
         panic!("expected the write, then its failure, abandonment and Durable: {op:?} {rest:?}");
     }
-    assert!(delivery.failures().is_empty());
-    assert_eq!(delivery.epoch_state(epoch), Ok(EpochState::Abandoned));
+    let mut unresolved = 0;
+    delivery.failures(|_| unresolved += 1);
+    assert_eq!(unresolved, 0);
+    assert_eq!(
+        delivery.epoch_state(epoch),
+        Ok(EpochState::Durable),
+        "the mark passed the abandoned epoch, and answers for it (DI-D-109)"
+    );
 }
 
 #[test]
@@ -417,9 +425,9 @@ fn the_handle_reports_the_instances_lineages() {
     let temp = temp();
     let (delivery, _rx) = forwarding(instance(&temp, Vec::new()));
     let lineage = delivery.default_lineage().lineage();
-    let lineages = delivery.lineages();
-    assert_eq!(lineages.len(), 1);
-    assert_eq!(lineages[0].lineage, lineage);
+    let mut lineages = Vec::new();
+    delivery.lineages(|info| lineages.push(info.lineage));
+    assert_eq!(lineages, [lineage]);
     assert_eq!(delivery.into_inner().default_lineage().lineage(), lineage);
 }
 
@@ -431,7 +439,7 @@ fn close_quiesces_delivery_and_hands_back_what_is_left() {
     delivery.read(FILE, 0, vec![0; 4], 1).expect("push a read");
     assert_eq!(context(&rx.recv_timeout(BOUND).expect("the read")), 1);
     // In another lineage: a write at 1 gated on its own lineage's 9 would close a cycle.
-    let other = delivery.mint_lineage(None);
+    let other = delivery.mint_lineage(None).expect("room for a lineage");
     let gate = Epoch::new(other.lineage(), 9);
     let held = delivery
         .write_with(
@@ -444,7 +452,8 @@ fn close_quiesces_delivery_and_hands_back_what_is_left() {
         )
         .expect("push a gated write");
 
-    let left = delivery.close();
+    let mut left = crate::dioring::tests::Closed::new();
+    delivery.close(|leftover| left.keep(leftover));
     assert_eq!(
         left.held.len(),
         1,
@@ -540,7 +549,7 @@ fn a_failed_pop_is_reported_to_the_handler_once_and_delivery_goes_on() {
     // Setting the signal at the handover is the wake: the first pop fails.
     assert_eq!(
         rx.recv_timeout(BOUND).expect("the failure is reported"),
-        "failure: the fake's pop was told to fail"
+        "failure: fake reported: the fake's pop was told to fail"
     );
     assert!(
         rx.recv_timeout(Duration::from_millis(300)).is_err(),

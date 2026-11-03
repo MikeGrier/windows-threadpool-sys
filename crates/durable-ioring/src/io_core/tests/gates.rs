@@ -2,12 +2,12 @@
 //! Gates (DI-D-23, DI-D-43): holding an operation until an epoch is durable, releasing it, and
 //! ending it as `NeverIssued`.
 
-use super::{KEY, Rig, V, shown};
+use super::{KEY, Rig, V, closed, shown, target_holds};
 use crate::backend::{IoBackend, RefusalCause};
 use crate::ids::OpId;
 use crate::types::{
-    Entry, Epoch, ImportScope, OpKind, Outcome, PushRefusal, ReadOptions, RemoveTargetError,
-    Resolution, WriteOptions,
+    Entry, Epoch, Hold, ImportScope, IoTargetKey, OpKind, Outcome, PushRefusal, ReadOptions,
+    RemoveTargetError, Resolution, WriteOptions,
 };
 
 fn gated(gate: Epoch<V>) -> WriteOptions<V> {
@@ -69,7 +69,7 @@ fn a_gated_read_is_held_then_released() {
         .expect("held");
     rig.backend.submit().expect("submit");
     let write = rig.backend.pop().expect("never fails").expect("the write");
-    let actions = rig.core.complete(write);
+    let actions = rig.completed(write);
     assert!(actions.submit.is_empty(), "the gate is not yet sealed");
     rig.act(actions);
     rig.seal(1);
@@ -88,7 +88,9 @@ fn a_gate_in_another_core_is_refused() {
     let other = super::Core::new(
         super::Ticks::default(),
         std::sync::Arc::new(crate::NoDiagnostics),
-    );
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     let foreign = Epoch::new(other.default_lineage(), 1);
     let refused = rig
         .write_with(KEY, rig.epoch(1), 0, b"x", gated(foreign))
@@ -100,7 +102,7 @@ fn a_gate_in_another_core_is_refused() {
 #[test]
 fn a_gate_on_an_ended_lineage_is_refused() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     let actions = rig_end(&mut rig, lineage);
     rig.act(actions);
     let refused = rig
@@ -109,7 +111,7 @@ fn a_gate_on_an_ended_lineage_is_refused() {
     assert!(matches!(refused.reason, PushRefusal::UnknownLineage(_)));
 }
 
-fn rig_end(rig: &mut Rig, lineage: crate::ids::Lineage) -> super::CoreActions<V, Vec<u8>> {
+fn rig_end(rig: &mut Rig, lineage: crate::ids::Lineage) -> super::CoreActions {
     rig.core
         .end_lineage(lineage)
         .expect("live, not the default")
@@ -122,7 +124,7 @@ fn a_gate_on_an_abandoned_epoch_is_refused() {
     rig.run();
     let (_, actions) = rig
         .core
-        .import_failure(ImportScope::All)
+        .import_failure(ImportScope::All, |_| {})
         .expect("all is always in scope");
     rig.act(actions);
     let token = only_failure(&mut rig);
@@ -138,6 +140,47 @@ fn a_gate_on_an_abandoned_epoch_is_refused() {
     assert!(matches!(refused.reason, PushRefusal::GateAbandoned { .. }));
 }
 
+/// Once the mark passes an abandoned epoch it is forgotten, and a gate on it is answered by the
+/// mark: the operation is pushed at once, as for a gate already durable (DI-D-109). The consumer
+/// learned it was abandoned from the `Abandoned` entry; the oracle, which saw that entry, checks
+/// the operation as ungated.
+#[test]
+fn a_gate_on_an_abandoned_epoch_the_mark_has_passed_holds_nothing() {
+    let mut rig = Rig::new();
+    rig.write(1, 0, b"x").expect("accepted");
+    rig.run();
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("all is always in scope");
+    rig.act(actions);
+    let token = only_failure(&mut rig);
+    let actions = rig
+        .core
+        .resolve(vec![(token, Resolution::Abandon)])
+        .expect("our token");
+    rig.act(actions);
+    rig.seal(1);
+    rig.run();
+    let drained = shown(&mut rig);
+    assert_eq!(
+        drained.last().map(String::as_str),
+        Some("durable 1"),
+        "{drained:?}"
+    );
+    let gate = rig.epoch(1);
+    assert_eq!(
+        rig.core.epoch_state(gate),
+        Ok(crate::types::EpochState::Durable),
+        "the mark answers for it"
+    );
+    rig.write_with(KEY, rig.epoch(2), 0, b"y", gated(gate))
+        .expect("pushed at once");
+    assert_eq!(rig.backend.queued(), 1, "nothing held");
+    rig.run();
+    assert_eq!(shown(&mut rig), ["op1 write@2 1 write"]);
+}
+
 #[test]
 fn a_held_operation_whose_gate_is_abandoned_never_issues() {
     let mut rig = Rig::new();
@@ -148,7 +191,10 @@ fn a_held_operation_whose_gate_is_abandoned_never_issues() {
     let held = rig
         .write_with(KEY, rig.epoch(2), 0, b"held", gated(gate))
         .expect("held");
-    let (_, actions) = rig.core.import_failure(ImportScope::All).expect("in scope");
+    let (_, actions) = rig
+        .core
+        .import_failure(ImportScope::All, |_| {})
+        .expect("in scope");
     rig.act(actions);
     let token = only_failure(&mut rig);
     let actions = rig
@@ -177,7 +223,7 @@ fn a_held_operation_whose_gate_is_abandoned_never_issues() {
 #[test]
 fn a_held_write_whose_own_lineage_ends_never_issues() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write(1, 0, b"x").expect("accepted");
     let gate = rig.epoch(1);
     rig.write_with(KEY, Epoch::new(lineage, 1), 0, b"mine", gated(gate))
@@ -196,24 +242,21 @@ fn a_held_write_whose_own_lineage_ends_never_issues() {
 #[test]
 fn a_write_closing_a_gate_cycle_is_refused() {
     let mut rig = Rig::new();
-    let a = rig.core.mint_lineage(None);
-    let b = rig.core.mint_lineage(None);
+    let a = rig.core.mint_lineage(None).expect("room for a lineage");
+    let b = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(KEY, Epoch::new(a, 1), 0, b"a", gated(Epoch::new(b, 5)))
         .expect("held");
     let refused = rig
         .write_with(KEY, Epoch::new(b, 1), 0, b"b", gated(Epoch::new(a, 1)))
         .expect_err("a cycle");
-    let PushRefusal::GateCycle { cycle } = refused.reason else {
-        panic!("a cycle: {:?}", refused.reason);
-    };
-    assert_eq!(cycle.first(), Some(&Epoch::new(b, 1)));
+    assert!(matches!(refused.reason, PushRefusal::GateCycle));
     assert_eq!(refused.buffer.as_deref(), Some(b"b".as_slice()));
 }
 
 #[test]
 fn a_target_is_busy_while_an_operation_waits_for_a_gate() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write(1, 0, b"x").expect("accepted");
     rig.run();
     for id in [4, 2] {
@@ -224,13 +267,59 @@ fn a_target_is_busy_while_an_operation_waits_for_a_gate() {
         panic!("busy");
     };
     assert_eq!(busy.held_for_gate, 2);
-    assert_eq!(busy.lowest_gates, [Epoch::new(lineage, 2)]);
+    assert_eq!(
+        target_holds(&rig.core, KEY),
+        [
+            Hold::Gate(Epoch::new(lineage, 2)),
+            Hold::Uncovered(rig.epoch(1))
+        ],
+        "the lowest gate of the two, and the uncovered write"
+    );
+}
+
+#[test]
+fn a_targets_gates_are_named_lowest_first_once_per_lineage_in_lineage_order() {
+    let mut rig = Rig::new();
+    let first = rig.core.mint_lineage(None).expect("room for a lineage");
+    let second = rig.core.mint_lineage(None).expect("room for a lineage");
+    for gate in [
+        Epoch::new(second, 7),
+        Epoch::new(first, 5),
+        Epoch::new(second, 3),
+        Epoch::new(first, 9),
+    ] {
+        rig.read_with(0, 1, ReadOptions::new().gate(gate))
+            .expect("held");
+    }
+    rig.read_with(0, 1, ReadOptions::new().gate(Epoch::new(first, 1)))
+        .expect("held");
+    rig.core
+        .add_target(
+            super::OTHER,
+            crate::io_target::IoTarget::describe(&crate::memory::MemoryTarget::new()),
+        )
+        .expect("a new key");
+    assert_eq!(
+        target_holds(&rig.core, KEY),
+        [
+            Hold::Gate(Epoch::new(first, 1)),
+            Hold::Gate(Epoch::new(second, 3))
+        ]
+    );
+    assert!(
+        target_holds(&rig.core, super::OTHER).is_empty(),
+        "a target nothing holds names nothing"
+    );
+    assert!(
+        target_holds(&rig.core, IoTargetKey(99)).is_empty(),
+        "a key with no target names nothing"
+    );
 }
 
 #[test]
 fn close_hands_back_held_operations_in_push_order() {
     let mut rig = Rig::new();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     let gate = Epoch::new(lineage, 1);
     let first = rig
         .write_with(KEY, rig.epoch(1), 0, b"one", gated(gate))
@@ -238,7 +327,7 @@ fn close_hands_back_held_operations_in_push_order() {
     let second = rig
         .read_with(0, 2, ReadOptions::new().gate(gate))
         .expect("held");
-    let leftovers = rig.core.close();
+    let leftovers = closed(rig.core);
     let ids: Vec<OpId> = leftovers.held.iter().map(|held| held.id).collect();
     assert_eq!(ids, [first, second]);
     assert_eq!(leftovers.held[0].gate, gate);
@@ -252,7 +341,7 @@ fn a_released_operation_the_backend_refuses_is_kept_and_emitted_again() {
     let mut rig = Rig::with_queues(1, 16);
     rig.seal(1);
     rig.entries();
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(KEY, Epoch::new(lineage, 1), 0, b"g", WriteOptions::new())
         .expect("accepted");
     rig.backend.submit().expect("submit");
@@ -266,19 +355,17 @@ fn a_released_operation_the_backend_refuses_is_kept_and_emitted_again() {
     rig.backend.submit().expect("submit");
     let commit = rig.backend.pop().expect("never fails").expect("the commit");
     rig.read(0, 1).expect("fills the queue");
-    let actions = rig.core.complete(commit);
+    let actions = rig.completed(commit);
     assert_eq!(actions.submit.len(), 1, "the released read");
     let refused = rig
         .backend
         .push(actions.submit.into_iter().next().expect("one"))
         .expect_err("full");
     assert_eq!(refused.cause, RefusalCause::SubmitNeeded);
-    assert!(
-        rig.core.refused(refused).is_empty(),
-        "kept, so nothing is due"
-    );
+    let kept = rig.core.refused(refused);
+    assert!(rig.core.taken(kept).is_empty(), "kept, so nothing is due");
     rig.backend.submit().expect("submit");
-    let again = rig.core.retry();
+    let again = rig.retried();
     assert_eq!(again.submit.len(), 1, "kept");
     rig.act(again);
     rig.run();

@@ -1,70 +1,98 @@
 // Copyright (c) 2026 Mike Grier
 //! What the core holds of one file (DI-3.2.7): the part of `remove_target`'s refusal the core
-//! answers. Operations in flight and held for a gate are the I/O core's to count.
+//! answers, counted, and named through visitors (DI-D-103). Operations in flight and held for a
+//! gate are the I/O core's to count.
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use super::{Durability, Key, Stage, V};
+use super::{Durability, Key, Stage, V, Write};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::ids::FailureId;
 use crate::types::{Epoch, IoTargetKey};
 
-/// The core's holds on a file.
+/// The core's holds on a file, counted.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct FileHolds<E: EpochId + 'static, I: Instant> {
+pub(crate) struct FileHolds {
     /// Writes to the file that completed and are not yet covered successfully, outside every
     /// failure's suspect set.
     pub(crate) uncovered: usize,
-    /// The highest epoch among those writes, in each lineage that has one, in lineage order.
-    pub(crate) uncovered_through: Vec<Epoch<V<E, I>>>,
-    /// Unresolved failures whose suspect sets include a write to the file, in observation order.
-    pub(crate) failures: Vec<FailureId>,
+    /// Unresolved failures whose suspect sets include a write to the file.
+    pub(crate) failures: usize,
 }
 
-impl<E: EpochId + 'static, I: Instant> FileHolds<E, I> {
+impl FileHolds {
     /// Whether the core holds the file at all.
     pub(crate) fn is_empty(&self) -> bool {
-        self.uncovered == 0 && self.failures.is_empty()
+        self.uncovered == 0 && self.failures == 0
     }
 }
 
 impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     Durability<E, T, I, K>
 {
-    /// What holds `file` here. A write in flight is the I/O core's to count, and a write of an ended
-    /// lineage is no longer recorded once it has completed.
-    pub(crate) fn file_holds(&self, file: IoTargetKey) -> FileHolds<E, I> {
-        let mut suspect = BTreeSet::new();
-        let mut failures = Vec::new();
-        for failure in &self.failures {
-            let mut names_file = false;
-            for write in failure.suspect.writes().iter().filter(|w| w.target == file) {
-                names_file = true;
-                suspect.insert(write.op.seq);
-            }
-            if names_file {
-                failures.push(failure.id);
-            }
-        }
-        let mut uncovered = 0;
-        let mut through: BTreeMap<Key, E> = BTreeMap::new();
-        for write in self.writes.values().filter(|write| {
-            write.file == file && write.stage != Stage::InFlight && !suspect.contains(&write.op.seq)
-        }) {
-            uncovered += 1;
-            through
-                .entry(write.lineage)
-                .and_modify(|highest| *highest = (*highest).max(write.epoch))
-                .or_insert(write.epoch);
-        }
+    /// What holds `file` here, counted. A write in flight is the I/O core's to count, and a write of
+    /// an ended lineage is not counted once it has completed: the commit out for it is the I/O
+    /// core's to count as well.
+    pub(crate) fn file_holds(&self, file: IoTargetKey) -> FileHolds {
         FileHolds {
-            uncovered,
-            uncovered_through: through
-                .into_iter()
-                .map(|(lineage, epoch)| Epoch::new(self.name(lineage), epoch))
-                .collect(),
-            failures,
+            uncovered: self
+                .writes
+                .values()
+                .filter(|write| self.holds_uncovered(write, file))
+                .count(),
+            failures: self
+                .failures
+                .iter()
+                .filter(|failure| self.suspects_a_write_to(failure, file))
+                .count(),
+        }
+    }
+
+    /// For each lineage with an uncovered write holding `file`, in lineage order, the highest epoch
+    /// among them: what a seal must reach to clear it.
+    pub(crate) fn file_uncovered(&self, file: IoTargetKey, mut visit: impl FnMut(Epoch<V<E, I>>)) {
+        for &lineage in self.lineages.keys() {
+            let highest = self
+                .writes
+                .values()
+                .filter(|write| write.lineage == lineage && self.holds_uncovered(write, file))
+                .map(|write| write.epoch)
+                .max();
+            if let Some(epoch) = highest {
+                visit(Epoch::new(self.name(lineage), epoch));
+            }
+        }
+    }
+
+    /// Each unresolved failure whose suspect set includes a write to `file`, in observation order.
+    pub(crate) fn file_failures(&self, file: IoTargetKey, mut visit: impl FnMut(FailureId)) {
+        for failure in &self.failures {
+            if self.suspects_a_write_to(failure, file) {
+                visit(failure.id);
+            }
+        }
+    }
+
+    /// Whether `write` holds `file` as uncovered: a completed write to it, of a live lineage,
+    /// suspected by no unresolved failure, which holds it instead.
+    fn holds_uncovered(&self, write: &Write<E, T>, file: IoTargetKey) -> bool {
+        write.file == file
+            && write.stage != Stage::InFlight
+            && self
+                .lineages
+                .get(&write.lineage)
+                .is_some_and(|state| !state.ended)
+            && !self
+                .failures
+                .iter()
+                .any(|failure| self.suspects(failure, write.op))
+    }
+
+    /// Each unresolved failure holding `lineage`, in observation order.
+    pub(crate) fn lineage_failures(&self, lineage: Key, mut visit: impl FnMut(FailureId)) {
+        for failure in &self.failures {
+            if self.holds_within(failure, lineage, ..) {
+                visit(failure.id);
+            }
         }
     }
 }

@@ -117,6 +117,7 @@ fn a_seals_end_is_its_identity_its_pair_and_how_it_ended() {
         (SealOutcome::Failed, "failed"),
         (SealOutcome::Blocked, "blocked"),
         (SealOutcome::Ended, "ended unanswered"),
+        (SealOutcome::Superseded, "superseded"),
     ] {
         let event = Diagnostic::SealEnded {
             instance: 2,

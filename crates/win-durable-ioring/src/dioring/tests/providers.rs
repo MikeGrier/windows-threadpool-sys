@@ -12,7 +12,8 @@ use windows_threadpool_sys::wait::ThreadpoolWait;
 
 use super::pushes::{BOUND, GIVEN, Harness, Ring, temp};
 use super::{
-    FlushDomain, FlushRequest, Keeper, Kept, TargetSetup, TempFile, V, domain, file, keeper, setup,
+    FlushDomain, FlushRequest, Keeper, Kept, KeptRequest, TargetSetup, TempFile, V, domain, file,
+    keeper, setup,
 };
 use durable_ioring::DurabilityProvider;
 use durable_ioring::DurableRing;
@@ -44,18 +45,18 @@ fn instance(
 }
 
 /// The requests the provider has been handed so far, taken.
-fn taken(kept: &Kept) -> Vec<FlushRequest<V>> {
+fn taken(kept: &Kept) -> Vec<KeptRequest> {
     std::mem::take(&mut *kept.lock().expect("the requests"))
 }
 
 /// The only request the provider has been handed.
-fn only(kept: &Kept) -> FlushRequest<V> {
+fn only(kept: &Kept) -> KeptRequest {
     let mut requests = taken(kept);
     assert_eq!(requests.len(), 1, "{requests:?}");
     requests.remove(0)
 }
 
-fn succeed(request: FlushRequest<V>) {
+fn succeed(request: KeptRequest) {
     for part in request.domains {
         part.completion.succeed();
     }
@@ -93,8 +94,8 @@ impl DurabilityProvider<V> for Answers {
         self.0.clone()
     }
 
-    fn make_durable(&mut self, request: FlushRequest<V>) {
-        succeed(request);
+    fn make_durable(&mut self, request: FlushRequest<'_, V>) {
+        succeed(KeptRequest::of(request));
     }
 }
 
@@ -107,7 +108,7 @@ impl DurabilityProvider<V> for Panics {
         self.0.clone()
     }
 
-    fn make_durable(&mut self, _: FlushRequest<V>) {
+    fn make_durable(&mut self, _: FlushRequest<'_, V>) {
         panic!("the provider panics");
     }
 }
@@ -296,18 +297,24 @@ fn a_provider_failure_is_reported_with_its_domain_and_error_and_holds_the_seal()
         .domains
         .remove(0)
         .completion
-        .fail(std::io::Error::from_raw_os_error(IO_DEVICE));
+        .fail(durable_ioring::report_io_error(
+            std::io::Error::from_raw_os_error(IO_DEVICE),
+        ));
 
     let failed = next_failed(&mut harness);
     match &failed.cause {
         FailureCause::Provider { domain, error } => {
             assert_eq!(domain.bytes(), b"log");
-            assert_eq!(error.raw_os_error(), Some(IO_DEVICE));
+            assert_eq!(
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::raw_os_error),
+                Some(IO_DEVICE)
+            );
         }
         other => panic!("expected a provider failure, got {other:?}"),
     }
-    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
-    assert_eq!(suspects, [write]);
+    assert_eq!(harness.suspects(failed.id), [write]);
     assert_eq!(harness.state(1), EpochState::Blocked(failed.id));
     assert!(harness.ring.pop().expect("pop").is_none(), "one answer");
     harness.finish();
@@ -392,7 +399,7 @@ fn routed(files: Vec<TargetSetup>) -> (Harness, Kept, Kept) {
 }
 
 /// The files `requested` names, each with its writes.
-fn named(request: &FlushRequest<V>) -> Vec<(String, IoTargetKey, Vec<OpId>)> {
+fn named(request: &KeptRequest) -> Vec<(String, IoTargetKey, Vec<OpId>)> {
     request
         .domains
         .iter()
@@ -478,19 +485,25 @@ fn one_routed_provider_failing_fails_only_the_files_in_its_domains() {
     log.domains
         .remove(0)
         .completion
-        .fail(std::io::Error::from_raw_os_error(IO_DEVICE));
+        .fail(durable_ioring::report_io_error(
+            std::io::Error::from_raw_os_error(IO_DEVICE),
+        ));
 
     let failed = next_failed(&mut harness);
     match &failed.cause {
         FailureCause::Provider { domain, error } => {
             assert_eq!(domain.bytes(), b"log");
-            assert_eq!(error.raw_os_error(), Some(IO_DEVICE));
+            assert_eq!(
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::raw_os_error),
+                Some(IO_DEVICE)
+            );
         }
         other => panic!("expected the log provider's failure, got {other:?}"),
     }
-    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
     assert_eq!(
-        suspects,
+        harness.suspects(failed.id),
         [log_write],
         "the disk's file is not in the log's domain"
     );
@@ -511,7 +524,9 @@ fn a_file_whose_domains_span_routed_providers_fails_when_either_fails() {
     disk.domains
         .remove(0)
         .completion
-        .fail(std::io::Error::from_raw_os_error(IO_DEVICE));
+        .fail(durable_ioring::report_io_error(
+            std::io::Error::from_raw_os_error(IO_DEVICE),
+        ));
 
     let failed = next_failed(&mut harness);
     assert!(
@@ -519,8 +534,7 @@ fn a_file_whose_domains_span_routed_providers_fails_when_either_fails() {
         "{:?}",
         failed.cause
     );
-    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
-    assert_eq!(suspects, [write]);
+    assert_eq!(harness.suspects(failed.id), [write]);
     assert_eq!(harness.state(1), EpochState::Blocked(failed.id));
     harness.finish();
 }

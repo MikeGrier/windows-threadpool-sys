@@ -260,6 +260,8 @@ changes.
 
 - [x] **M34.18** -- Lint every `COMPLETED-CHECKLIST.md` mechanically, locally and in CI. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3418)
 
+- [x] **M34.19** -- `run-sabotage.ps1 -Diff`: sweep only the entries whose patched file changed.
+
 ## M37 -- Discharge the failable-call standard across the workspace
 
 Numbered M37, not M22. This section arrived from PR #84, which numbered it M22 without knowing

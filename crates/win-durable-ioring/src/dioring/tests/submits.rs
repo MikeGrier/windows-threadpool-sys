@@ -20,7 +20,7 @@ use super::gates::expect_durable;
 use super::pumped::{next as pumped_next, pumped, readiness_set};
 use super::pushes::{BOUND, GIVEN, Harness, RingEntry, given, instance, temp};
 use durable_ioring::DurableRing;
-use durable_ioring::backend::{RefusalCause, SubmissionData};
+use durable_ioring::backend::{RefusalKind, SubmissionData};
 use durable_ioring::{DurabilityRequest, Entry, OpKind, ReadOptions};
 
 /// `ERROR_IO_DEVICE`: no condition the ring names, so a failed submit of unknown cause.
@@ -28,20 +28,12 @@ fn device() -> InjectedFailure {
     InjectedFailure::Win32(1117)
 }
 
-/// The cause a failed `pop` reported, recovered from its error.
-fn cause_of(error: &std::io::Error) -> &RefusalCause {
-    error
-        .get_ref()
-        .and_then(|source| source.downcast_ref::<RefusalCause>())
-        .expect("a pop's failed submit is reported as its RefusalCause")
-}
-
-/// Whether `cause` is the failure `device` arms.
-fn is_the_armed_failure(cause: &RefusalCause) -> bool {
-    matches!(
-        cause,
-        RefusalCause::Unknown(fault) if fault.code.and_then(crate::win32_code_of) == Some(1117)
-    )
+/// Whether `fault`, a failed `pop`'s, is the failure `device` arms: a refusal of unknown cause, as
+/// the core reports one, passing the ring's own code through.
+fn is_the_armed_failure(fault: &crate::IoFault) -> bool {
+    assert_eq!(fault.source, durable_ioring::backend::REFUSED);
+    fault.refusal == Some(RefusalKind::Unknown)
+        && fault.code.and_then(crate::win32_code_of) == Some(1117)
 }
 
 /// The next entry, within the bound, popping through the failures a failing submit makes `pop`
@@ -80,11 +72,11 @@ fn a_pop_whose_submit_fails_reports_its_cause_and_the_work_is_issued_once_submit
         .pop()
         .expect_err("nothing to return, and the submit that is owed fails");
     assert!(
-        is_the_armed_failure(cause_of(&error)),
+        is_the_armed_failure(&error),
         "reported with its cause: {error}"
     );
     let again = harness.ring.pop().expect_err("a report is not consumed");
-    assert!(is_the_armed_failure(cause_of(&again)));
+    assert!(is_the_armed_failure(&again));
 
     faults.clear();
     let done = harness.next();
@@ -158,7 +150,7 @@ fn a_drain_whose_submit_fails_on_a_pool_thread_leaves_the_work_queued_for_the_ne
             .ring
             .pop()
             .expect_err("nothing to return, and a submit is owed");
-        assert!(is_the_armed_failure(cause_of(&error)));
+        assert!(is_the_armed_failure(&error));
         std::thread::sleep(Duration::from_millis(1));
     }
 
@@ -186,7 +178,7 @@ fn a_seal_whose_commit_submit_fails_is_made_durable_once_submits_succeed() {
         .ring
         .pop()
         .expect_err("the commit is queued, not issued, and its submit fails");
-    assert!(is_the_armed_failure(cause_of(&error)));
+    assert!(is_the_armed_failure(&error));
     assert_eq!(
         harness.durable(),
         None,
@@ -198,14 +190,6 @@ fn a_seal_whose_commit_submit_fails_is_made_durable_once_submits_succeed() {
     expect_durable(&mut harness, one);
     assert_eq!(harness.durable(), Some(1));
     harness.finish();
-}
-
-/// The fault a pop reported, recovered from its error.
-fn fault_of(error: &std::io::Error) -> &crate::IoFault {
-    error
-        .get_ref()
-        .and_then(|source| source.downcast_ref::<crate::IoFault>())
-        .expect("a pop's unreadable ring is reported as its IoFault")
 }
 
 /// Long enough for a wake's two drains to have run, one before the ring's wait is armed again and
@@ -229,7 +213,7 @@ fn a_write_whose_doorbell_fails_sets_the_readiness_signal_once_and_the_pop_repor
     );
     assert!(!readiness_set(&mut harness), "once");
     let error = harness.ring.pop().expect_err("the doorbell fails again");
-    assert!(is_the_armed_failure(cause_of(&error)));
+    assert!(is_the_armed_failure(&error));
 
     faults.clear();
     assert!(
@@ -258,10 +242,7 @@ fn a_ring_that_cannot_be_read_sets_the_readiness_signal_and_the_pop_reports_it_o
         "the drain that could not read told the consumer"
     );
     let error = harness.ring.pop().expect_err("nothing to return, and why");
-    assert_eq!(
-        fault_of(&error).code.and_then(crate::win32_code_of),
-        Some(1117)
-    );
+    assert_eq!(error.code.and_then(crate::win32_code_of), Some(1117));
     assert!(
         harness.ring.pop().expect("nothing more to say").is_none(),
         "reported once"
@@ -291,10 +272,7 @@ fn a_pumped_instance_whose_ring_could_not_be_read_reads_it_at_the_next_pump() {
         .ring
         .pop()
         .expect_err("the unreadable ring, reported");
-    assert_eq!(
-        fault_of(&error).code.and_then(crate::win32_code_of),
-        Some(1117)
-    );
+    assert_eq!(error.code.and_then(crate::win32_code_of), Some(1117));
     let Entry::Op(done) = pumped_next(&mut harness) else {
         panic!("the write's completion");
     };

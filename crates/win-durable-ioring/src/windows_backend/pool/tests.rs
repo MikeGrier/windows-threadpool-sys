@@ -47,7 +47,12 @@ fn engine(file: &TempFile) -> Eng {
     })
     .expect("build the backend");
     let mut engine = Engine::new(
-        DurableIoCore::new(InterruptStamps, Arc::new(NoDiagnostics)),
+        DurableIoCore::new(
+            InterruptStamps,
+            Arc::new(NoDiagnostics),
+            crate::dioring::tests::CAPACITY,
+        )
+        .expect("a valid capacity"),
         backend,
     );
     engine.core.add_target(KEY, description).expect("a new key");

@@ -50,7 +50,27 @@ fn plain(submissions: u32, completions: u32) -> Eng {
     engine(
         submissions,
         completions,
-        Core::new(Ticks::default(), Arc::new(NoDiagnostics)),
+        Core::new(
+            Ticks::default(),
+            Arc::new(NoDiagnostics),
+            crate::test_support::CAPACITY,
+        )
+        .expect("a valid capacity"),
+    )
+}
+
+/// As [`plain`], its core given the failure observer `oracle` reads from (DI-D-113).
+fn observed(oracle: &ConformanceOracle<V, u32>, submissions: u32, completions: u32) -> Eng {
+    engine(
+        submissions,
+        completions,
+        Core::new(
+            Ticks::default(),
+            Arc::new(NoDiagnostics),
+            crate::test_support::CAPACITY,
+        )
+        .expect("a valid capacity")
+        .observed_by(oracle.observer()),
     )
 }
 
@@ -82,9 +102,12 @@ fn entries(
     engine: &mut Eng,
     oracle: &mut ConformanceOracle<V, u32>,
 ) -> Vec<Entry<V, Vec<u8>, u32>> {
-    let entries: Vec<_> = std::iter::from_fn(|| engine.core.pop()).collect();
-    for entry in &entries {
-        oracle.observe(entry).expect("the oracle accepts the entry");
+    let mut entries = Vec::new();
+    while let Some(entry) = engine.core.pop() {
+        oracle
+            .observe(&entry)
+            .expect("the oracle accepts the entry");
+        entries.push(entry);
     }
     entries
 }
@@ -170,8 +193,8 @@ fn a_commit_the_backend_refuses_is_kept_and_issued_by_a_later_drain() {
 fn a_commit_the_backend_refuses_for_good_is_ended_and_what_that_makes_due_is_acted_on() {
     // DI-D-54: the refusal's own actions are acted on in turn, so the failure it makes due is
     // delivered by the call that met the refusal.
-    let mut engine = plain(8, 16);
     let mut oracle = ConformanceOracle::new();
+    let mut engine = observed(&oracle, 8, 16);
     write(&mut engine, &mut oracle, ONE, b"one");
     engine.drain();
     entries(&mut engine, &mut oracle);
@@ -182,7 +205,8 @@ fn a_commit_the_backend_refuses_for_good_is_ended_and_what_that_makes_due_is_act
     oracle.sealed(at(&engine, 1));
     assert!(deliver, "the ended commit's failure became poppable");
     assert_eq!(engine.backend.queued(), 0, "nothing was pushed");
-    assert!(engine.core.retry().is_empty(), "nothing was kept");
+    let retried = engine.core.retry();
+    assert!(engine.core.taken(retried).is_empty(), "nothing was kept");
     let entries = entries(&mut engine, &mut oracle);
     assert!(
         matches!(entries.as_slice(), [Entry::Failed(_)]),
@@ -196,6 +220,7 @@ fn a_drain_keeps_provider_requests_for_the_driver() {
     let core = Core::with_provider(
         Ticks::default(),
         Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
         vec![FlushDomain::new(b"log".as_slice())],
     )
     .expect("no repeats");
@@ -207,11 +232,13 @@ fn a_drain_keeps_provider_requests_for_the_driver() {
         .expect("the default lineage");
     oracle.sealed(at(&engine, 1));
     engine.drain();
-    let requests = engine.take_requests();
-    assert_eq!(requests.len(), 1, "the seal asked the provider once");
-    assert!(engine.take_requests().is_empty(), "taken once");
+    let mut buf = engine.request_buf().expect("a buffer for the requests");
+    engine.drain_requests(&mut buf);
+    assert_eq!(buf.len(), 1, "the seal asked the provider once");
+    let [request] = <[_; 1]>::try_from(buf.owned()).expect("one request");
+    engine.drain_requests(&mut buf);
+    assert!(buf.is_empty(), "drained once");
     entries(&mut engine, &mut oracle);
-    let request = &requests[0];
     let actions = engine.core.provided(
         request.lineage,
         request.seal,

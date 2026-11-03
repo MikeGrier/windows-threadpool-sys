@@ -4222,3 +4222,888 @@ What was done. Recorded as [DE-D-7](../durable-ioring-events/DESIGN-NOTES.md#de-
 [encode/tests.rs](../durable-ioring-events/src/encode/tests.rs), and one session test that decodes the event as a reader does.
 Evidence, in [sabotage.json](../durable-ioring-events/sabotage.json): three entries caught and a control.
 
+
+## Moved 2026-10-23 11:21:01 -04:00 -- DI-23.1: allocation measured by phase
+
+### <a id="di-231"></a>DI-23.1 -- Allocations in the core are measured, phase by phase, by a counting global allocator. *(completed 2026-10-23 11:21:01 -04:00)*
+
+The item as written:
+
+- [x] **DI-23.1** -- **Measure allocation by phase** ([DI-D-97](DESIGN-NOTES.md#di-d-97)). An integration test with a counting
+  global allocator: build an instance, reset the count, and drive a workload through the in-memory backend -- writes and
+  reads, gated writes, seals that cover writes and seals that cover none, lineages minted and ended, targets added and
+  removed, and each failure path -- recording the allocations each phase makes. It asserts today's counts, so each later
+  item lowers a number it can see, and asserts zero for a phase once that phase is done.
+
+What was done. [tests/allocation.rs](tests/allocation.rs) installs a global allocator that counts allocations, zeroed
+allocations and reallocations, per thread, and only inside calls into the core: the test's buffers, the backend's work and
+the test's bookkeeping are not counted. Two scenarios over the in-memory backend, the clean paths of
+[DI-D-103](DESIGN-NOTES.md#di-d-103) and the failure paths, each split into named phases, are compared with the tables in
+the test, which are the counts today; a change that moves one fails and prints the new table to paste. Each scenario is run
+twice and must give the same counts, which is what makes exact tables usable. A third test holds the counter itself: an
+allocation outside a counted call is not counted, and an allocation and a reallocation inside are.
+
+The counts are in the test and are not restated here. Evidence: the entry "DI-23.1: popping an entry allocates" in
+[sabotage.json](sabotage.json), caught by both scenarios.
+
+## Moved 2026-10-23 12:39:42 -04:00 -- DI-23.2: every allocation the core makes is tagged
+
+### <a id="di-232"></a>DI-23.2 -- Every allocation the core makes is tagged by the call that makes it, and the allocation test counts by tag. *(completed 2026-10-23 12:39:42 -04:00)*
+
+The item as written:
+
+- [x] **DI-23.2** -- **Tag every allocation the core makes** ([DI-D-104](DESIGN-NOTES.md#di-d-104)). An RAII guard that sets the
+  thread's current allocation tag and restores the previous one when dropped, recording where it was made with
+  `#[track_caller]`, compiled to nothing unless the `alloc-tags` feature is on; the tags as named constants defined in one
+  place, one per allocating call and none shared; a guard scoped to every call in the core that can allocate; and
+  [tests/allocation.rs](tests/allocation.rs) counting by phase and tag, asserting that no counted allocation is untagged,
+  that no tag is seen from two places, and that each phase's tags add up to its total.
+
+What was done. [alloc_tags.rs](src/alloc_tags.rs) holds `tagged(tag, || call)`, the guard inside it, the thread's current
+tag under the `alloc-tags` feature, and every tag as a named constant in one module, grouped by the file of its call. On the
+engineer's ruling the call site is a functor, not a macro (DI-D-104). Every call the core makes that can allocate is tagged:
+found first by reading every file of the core, then confirmed by running the scenarios with a temporary trace of any
+allocation counted untagged, which found none in the core. Calls into what is plugged in -- the backend, a provider, a
+notification, a diagnostic sink, the clock -- are tagged at the call. A tagged closure holds only its allocating call, so an
+untagged allocation elsewhere is not hidden under a neighbour's tag; where a call had several allocations in one expression,
+it was split so each has its own. The crate enables the feature for its own tests through a dev-dependency on itself.
+
+[tests/allocation.rs](tests/allocation.rs) now counts by phase and tag in fixed thread-local storage, and fails on an untagged
+allocation, on a tag seen from two places (naming both), and on tags that do not add up to a phase's total; the tables by
+tag are pinned beside the totals. The first run with the rules on reported two untagged allocations in the resolve phases:
+the test was building the call's argument inside the counted call, so it counted its own allocation as the core's. Fixed in
+the test; the two resolve phases' recorded totals each drop by one, which was the over-count, not a change in the core.
+
+Evidence, in [sabotage.json](sabotage.json): a tagged call that sets no tag, and two calls sharing a tag, are caught; renaming
+a tag no scenario reaches survives, which is the limit stated in DI-D-104 (the rules see only the paths the scenarios reach).
+Tagging moved 41 lines that existing sabotage entries patch, here and in
+[win-durable-ioring's](../win-durable-ioring/sabotage.json); each was re-anchored to the same sabotage on the new text, and
+all 45 were swept: every one behaved as declared.
+
+## Moved 2026-10-23 13:28:25 -04:00 -- DI-23.3: core and alloc paths, behind a default std feature
+
+### <a id="di-233"></a>DI-23.3 -- Every std path with a core or alloc equivalent is named by it, here and in io-buffers, and StderrDiagnostics is behind a default std feature. *(completed 2026-10-23 13:28:25 -04:00)*
+
+The item as written:
+
+- [x] **DI-23.3** -- **Name `core` and `alloc` paths, behind a default `std` feature** ([DI-D-97](DESIGN-NOTES.md#di-d-97)), in
+  this crate and `io-buffers`: every `std::` path with a `core` or `alloc` equivalent, `core::error::Error` for
+  `std::error::Error`, and `StderrDiagnostics` behind `std`. No behaviour changes.
+
+What was done. Both crates declare `extern crate alloc;` and name `core` and `alloc` paths in their library source wherever
+`std` has an equivalent; the tests keep `std`. What this crate still spells `std::` is exactly what needs it, the remaining
+blockers DI-D-97 names: `io` (the fault's report, `DI-23.4`), `Mutex` and `Condvar`, `HashMap` and `HashSet`, and
+`thread::panicking()` (all settled at `DI-23.10`). `io-buffers` names no `std::` path at all. A new `std` feature, on by
+default, gates `StderrDiagnostics`; `alloc-tags` requires it. Neither crate is `no_std` yet: that waits for the blockers.
+
+`StderrDiagnostics` behind a feature is a breaking change for a consumer building with `default-features = false`, which no
+consumer in the workspace does; the commit says so. No behaviour changed: both crates' suites pass unchanged, and the
+allocation test's tables did not move. Two sabotage entries whose patches named `std::mem::take` were re-anchored on
+`core::mem::take` and swept: both are caught.
+
+## Moved 2026-10-23 16:38:35 -04:00 -- DI-23.4.1: the rc-errors crate is created, with its first milestone
+
+### <a id="di-2341"></a>DI-23.4.1 -- The rc-errors crate is created, registered, and given its decisions and its first milestone. *(completed 2026-10-23 16:38:35 -04:00)*
+
+Per [DI-D-105](DESIGN-NOTES.md#di-d-105). The item as it stood at completion:
+
+**Create `crates/rc-errors`**, `no_std` with `alloc`: a workspace member registered for release and publication, with its
+own `COMPONENT.md`, `DESIGN-NOTES.md`, `CHECKLIST.md` and `PLANS.md` row. Its first milestone, which this item writes, holds
+the copied `Allocator` interface (`allocate`, `deallocate`, `AllocError`, `Global`), the one-count shared pointer with its
+allocator in the header, the two-form report, and their tests, among them a test allocator that checks every deallocation's
+pointer and layout; its design notes record the credit to the standard library, and its `PARKED.md` holds running Miri.
+
+What was done. The crate is a workspace member at version `0.0.1`, unreleased, registered as `win-job-launcher` was: in
+release-please's config and manifest, in the publish workflow's tags, choices and crate list, and in CI's `portable` job.
+Its library is `#![no_std]` and holds only the crate documentation, its README; the code is
+[RCE-M1](../rc-errors/CHECKLIST.md). Its decisions are [RCE-D-1 to RCE-D-9](../rc-errors/DESIGN-NOTES.md), which link
+DI-D-105 for the engineer's rulings rather than restating them. One is the assistant's, raised with the engineer:
+[RCE-D-6](../rc-errors/DESIGN-NOTES.md#rce-d-6), a static error holding only a message, since `ErrorCode` is this crate's
+type and DI-D-105 already carries a refusal's code beside its report; DI-D-105's wording was corrected to match. Miri is
+parked as [RCE-inf.1](../rc-errors/PARKED.md#m-inf----the-horizon).
+
+## Moved 2026-10-23 20:17:36 -04:00 -- DI-23.4: a fault's report through rc-errors
+
+### <a id="di-234"></a>DI-23.4 -- A fault's report is a static or a shared dyn Error, shared through rc-errors, in three steps. *(completed 2026-10-23 20:17:36 -04:00)*
+
+Per [DI-D-105](DESIGN-NOTES.md#di-d-105). Re-planned on 2026-10-23 into DI-23.4.1 to DI-23.4.3, after
+[DI-D-102](DESIGN-NOTES.md#di-d-102)'s associated types were superseded before any code was written. Its steps are below
+and at [DI-23.4.1](#di-2341).
+
+### <a id="di-2342"></a>DI-23.4.2 -- The core's faults carry the report, and io::Error leaves the portable boundary. *(completed 2026-10-23 20:17:36 -04:00)*
+
+The item as it stood at completion: **The core's faults carry the report.** `IoFault`, `FailureCause::Provider`,
+`DomainCompletion` and `DomainOutcome`, the `DurableRing` trait, the notification and the pump's setup lose `io::Error`; the
+core's refusals are static descriptors; `std` interop is behind the feature. Breaking for this crate.
+
+What was done is recorded in DI-D-105's "what building it settled": `IoFault`'s error is an `ErrorReport`; the trait,
+`Waitable` and the pump report `IoFault`; a payload-free refusal is a `static` of its cause and a refusal carrying a fault is
+shared, falling back to the backend's report; `refusal_fault`, `report_io_error` and `From<IoFault> for io::Error` (keeping
+the kind) are public; the in-memory backend's own faults are statics. Each fallback is reached by a test through a seam
+taking the allocator, given `rc-errors`' new `Refusing`. Twelve sabotage entries across both crates' manifests that anchored
+on rewritten lines were re-anchored, two added, and all fourteen swept: each caught.
+
+### <a id="di-2343"></a>DI-23.4.3 -- win-durable-ioring reports through the report, landed with DI-23.4.2. *(completed 2026-10-23 20:17:36 -04:00)*
+
+The item as it stood at completion: **`win-durable-ioring` reports through it**: `windows_fault` makes the shared form from an
+`io::Error`, and its callers' downcasts to `RefusalCause` and `SharingViolation` go through `dyn Error`. Breaking for
+`win-durable-ioring`.
+
+**A checklist defect, named:** this item and DI-23.4.2 could not land apart, since `win-durable-ioring` implements the traits
+whose signatures DI-23.4.2 changed, so they are one commit. `windows_fault` reports its `io::Error` through
+`report_io_error`; the driver's `pop` returns the backend's fault as it is and a refused submit as `refusal_fault`; its
+`io::Error` APIs convert through `From`. `SharingViolation`'s downcasts are on the open path's own `io::Error`s, which do not
+cross the portable boundary, so they did not change. Running the suite found two things the compiler did not: a delivery's
+failure now displays as the fault does, and `Dioring::pump` lost its kind, which is why the `From` keeps it.
+
+## Moved 2026-10-23 20:56:56 -04:00 -- DI-23.5.1: the fixed-hash-table crate is created, with its first milestone
+
+### <a id="di-2351"></a>DI-23.5.1 -- The fixed-hash-table crate is created, registered, and given its decisions and its first milestone. *(completed 2026-10-23 20:56:56 -04:00)*
+
+Per [DI-D-106](DESIGN-NOTES.md#di-d-106). The item as it stood at completion:
+
+**Create `crates/fixed-hash-table`**, `no_std` and allocation-free by default, with generics for clients that want `std` and
+`alloc`: a workspace member registered for release and publication, with its own `COMPONENT.md`, `DESIGN-NOTES.md`,
+`CHECKLIST.md` and `PLANS.md` row. Its first milestone, which this item writes, holds a fixed-capacity open-addressed map that
+refuses an insert when full, with the hasher a `BuildHasher` type parameter, the usual collection affordances, and their
+tests; its design notes settle the storage generics, the default hasher, and which affordances it keeps.
+
+What was done. The crate is a workspace member at version `0.0.1`, unreleased, registered as `rc-errors` was, with `alloc` and
+`std` as additive features. Its library is `#![no_std]` and `#![forbid(unsafe_code)]` and holds only its documentation; the
+code is [FHT-M1](../fixed-hash-table/CHECKLIST.md). Its decisions are
+[FHT-D-1 to FHT-D-8](../fixed-hash-table/DESIGN-NOTES.md): FHT-D-1 and FHT-D-2 are the engineer's rulings from DI-D-106, and
+FHT-D-3 to FHT-D-8 are the assistant's, raised with the engineer -- storage a type parameter (inline, or boxed under `alloc`),
+linear probing with backward-shift deletion and capacity distinct from slots, the default a zero-sized seedless hasher, no
+`unsafe`, a full table handing the entry back, and the affordances kept and left out.
+
+## Moved 2026-10-23 22:50:03 -04:00 -- DI-23.6: a seal's work charged to span entries
+
+### <a id="di-236"></a>DI-23.6 -- A seal's work on a file is charged to a (lineage, file, seal span) entry, made at push and released with its last uncovered write. *(completed 2026-10-23 22:50:03 -04:00)*
+
+Per [DI-D-98](DESIGN-NOTES.md#di-d-98) and [DI-D-107](DESIGN-NOTES.md#di-d-107). The item as it stood at completion:
+
+**Charge a seal's work to the (lineage, file, seal span)**: the first write to a file in its lineage's unsealed span pays
+for the flush, the flush pair and the provider's parts; the charge stays with the span's entry while any write to the file
+remains in it.
+
+What was done. [spans.rs](src/durability/spans.rs) holds the entries: one per (lineage, file, span) with an uncovered write
+in it, the span being the lineage's unsealed span or one seal's. A push joins the unsealed entry, made by the file's first
+write; a seal moves each write it names to an entry of its own, so a seal naming some of a file's writes and not the rest
+divides the entry. The seal's flush of a file, and whether it answered and succeeded, are recorded in the file's entry,
+replacing the list of files a seal built when it started; coverage reads it there. Every place a write leaves the uncovered
+writes now goes through one let-go, which takes it out of its entry and releases the entry with its last write. The flush
+pairs and the provider's domain parts stay in their per-seal tables: one pair per entry or per served domain, which
+DI-D-107 now records as bounded by the window and the provider's domains, so DI-23.5.2 sizes them. Under `cfg(test)` the
+core checks after every push and every advance that the entries are exactly the uncovered writes' spans, so the whole
+suite checks the census, and [tests/spans.rs](src/durability/tests/spans.rs) covers the entries directly. The allocation test's records were remeasured:
+the span table's first growth on push, and one allocation fewer per seal for the file list it no longer builds. Six
+sabotage entries were added to [sabotage.json](sabotage.json), five caught and one surviving control; the answered-twice
+entry first survived, because the test answered with success, which releases the entry before the second answer arrives,
+and a test whose first answer fails now catches it. Five existing entries whose lines the change rewrote (DI-3.2.3,
+DI-3.2.4, DI-3.2.4.2 and DI-3.2.5.1) were re-anchored to the same defect in the new code and swept: all caught, the
+provider-hold one as a hang.
+
+## Moved 2026-10-23 23:32:57 -04:00 -- DI-23.7: a seal that covers no writes makes no record
+
+### <a id="di-237"></a>DI-23.7 -- A seal that covers no writes makes no record, kept in a slot, evaluated in order, and overwritten by a later one whose pair ends Superseded. *(completed 2026-10-23 23:32:57 -04:00)*
+
+Per [DI-D-99](DESIGN-NOTES.md#di-d-99), whose "What building it settled" records the engineer's ruling on the one case
+it got wrong and how it was built. The item as it stood at completion:
+
+**A seal that covers no writes makes no record** (DI-D-99), held in the trailing field and the per-lineage slot,
+releasing heals and the mark in order, with an overwritten one's pair ended as `Superseded`.
+
+What was done. [durability/empties.rs](src/durability/empties.rs) holds the empty seal, its two slots -- trailing a
+recorded seal, or leading with none queued -- and the passes over them: finishing an empty seal and releasing its heals,
+advancing the mark over recorded and empty seals in order, and answering `Blocked`. `advance_mark` moved there from
+[durability.rs](src/durability.rs), and the queries over seals (an epoch's state, a gate's extent) now read every seal
+point, recorded or empty. `SealOutcome::Superseded` is new, and CONTRACT.md's guarantee 4 says how a replaced request is
+answered. Before building it, the assistant found that DI-D-99's claim about mark advances fails while a failure holds an
+epoch between two empty seals; the engineer accepted the delay ("I choose a"), and a test pins it. Tests are in
+[tests/empties.rs](src/durability/tests/empties.rs). Sabotage: nine entries added, eight caught and one surviving control;
+six existing entries whose lines moved into the new module re-anchored and swept, all caught.
+
+## Moved 2026-10-23 23:56:15 -04:00 -- DI-23.8.1: the window's places counted per operation
+
+### <a id="di-2381"></a>DI-23.8.1 -- An operation holds its place in the window until its last holder lets go: its completion popped, the write covered, and each failure suspecting it resolved. *(completed 2026-10-23 23:56:15 -04:00)*
+
+Per [DI-D-100](DESIGN-NOTES.md#di-d-100) and [DI-D-107](DESIGN-NOTES.md#di-d-107), after the split the engineer asked for
+("take path a"). The item as it stood at completion:
+
+**A write holds its place in the window until its last holder lets go** (DI-D-100, DI-D-107): the places are counted per
+write, the holders being the operation until its completion is popped, the write while it is uncovered, and each
+unresolved failure suspecting it. The count refuses nothing yet: it is checked against a census under `cfg(test)`, and
+`DI-23.5.2` compares it with `operations`.
+
+What was done. [window.rs](src/durability/window.rs) holds a place per operation, with three holders -- the operation, the
+write while uncovered, and one hold for each unresolved failure suspecting it -- and ends the place with the last. The
+operation's hold is taken when a push is accepted, held for a gate included, and let go when
+[`DurableIoCore::pop`](src/io_core.rs) returns its completion; the write's is taken where the core records the write
+uncovered and let go in the one place a write leaves that record (`let_go`, from DI-23.6); a failure's is taken when it
+suspects the write and let go when it is abandoned or its heal takes effect. `DurableIoCore::window_places` reports the
+count, the one public addition, which DI-23.5.2 compares with `operations`. Under `cfg(test)` the durability core checks
+after every advance that the places the writes and failures hold are exactly the uncovered writes and the failures'
+suspect sets, and the I/O core checks after every push, completion, pop and act that the operations it holds in flight,
+held and queued are exactly the ones whose place the operation holds, so the whole suite checks the census; 22 tests cover
+the holders directly, in [window/tests.rs](src/durability/window/tests.rs),
+[tests/window.rs](src/durability/tests/window.rs) and [io_core/tests/window.rs](src/io_core/tests/window.rs). The
+allocation test's records were remeasured: the window's table grows as operations are admitted, which is what DI-23.5.2
+preallocates; holding a write uncovered or suspected finds its place already made and allocates nothing. Twelve sabotage
+entries were added to [sabotage.json](sabotage.json), eleven caught (one as a hang) and one surviving control; five
+existing entries whose lines moved were re-anchored to the same defect and swept, all caught or, for the one control,
+surviving as declared.
+
+## Moved 2026-10-24 00:06:01 -04:00 -- DI-23.9: coalescing Durable
+
+### <a id="di-239"></a>DI-23.9 -- A lineage has at most one un-popped Durable: a later one removes the older and goes to the tail. *(completed 2026-10-24 00:06:01 -04:00)*
+
+Per [DI-D-101](DESIGN-NOTES.md#di-d-101), whose "As built" records how. The item as it stood at completion:
+
+**Coalesce `Durable`** (DI-D-101): remove the older un-popped entry and append the new one at the tail; the oracle and the
+tests that expect one `Durable` per seal follow.
+
+What was done. [io_core.rs](src/io_core.rs)'s `enqueue`, the one place an event becomes a queue entry, removes an
+un-popped `Durable` of the same lineage before appending a new one, so a replacement stands after everything already
+queued and a `Healed` queued between two `Durable`s is never passed. A replacement does not raise the readiness signal
+again, the queue being non-empty before and after. Nothing allocates, so the allocation records did not move. The oracle
+already accepted fewer entries, since it never required one per request or a rising sequence; its documentation now says
+why, and that the queue's at-most-one is a property only the core's tests can check, which they do after every `act`.
+CONTRACT.md's guarantees 4 and 5 and its table of events say it. The tests that expected one `Durable` per seal follow:
+four in the core's `flush_failures` tests, and one in `win-durable-ioring` whose two seals are answered before it pops
+depending on timing, which now asserts what holds either way and ran forty times without a failure; before the change it
+failed in the sweep's baseline run. New tests are in [tests/coalescing.rs](src/io_core/tests/coalescing.rs). Sabotage:
+four entries added, three caught and one surviving control.
+
+## Moved 2026-10-24 01:10:00 -04:00 -- DI-23.5.2.1: a flush's places outlive its lineage
+
+### <a id="di-23521"></a>DI-23.5.2.1 -- A flush's places outlive its lineage: ending a lineage keeps the writes named to a seal whose flush is out, with their span entries and places, until it answers. *(completed 2026-10-24 01:10:00 -04:00)*
+
+**A flush's places outlive its lineage** ([DI-D-98](DESIGN-NOTES.md#di-d-98), "released when the span empties or its flush
+completes"; the engineer, 2026-10-24: "a, yes, i think that is the obvious outcome"): ending a lineage no longer lets go of
+the writes named to a seal whose flush is still out, nor their span entries and window places; the flush's answer does, so
+the commits in flight are bounded by the window.
+
+What was done. [spans.rs](src/durability/spans.rs)'s `let_go_ended` lets go an ended lineage's uncovered writes except
+those named to a seal whose span entry for their file is flushed and not answered. [lineages.rs](src/durability/lineages.rs)'s
+`end` keeps, of the lineage's seals, only those with a flush out, and drops the empty-seal slots. `Durability::flushed`
+answers an ended lineage's flush through that seal, reports nothing, lets go the writes named to it on that file, drops
+the seal when its last flush has answered, and retires the lineage once nothing is out, which `retire_if_drained` now
+also waits for. A file's holds do not count an ended lineage's writes, as before, since the commit out for them is the
+I/O core's to count. Nothing allocates beyond what it did, so the allocation records did not move. CONTRACT.md and API.md
+say when an ended lineage is retired. New tests are in the durability `lineages`, `window`, `spans` and `files` tests and
+the core's `window` tests, among them a write, seal, end and mint loop whose places are one per commit still out.
+Sabotage: fourteen entries added, thirteen caught and one surviving control; three entries re-anchored.
+
+## Moved 2026-10-24 06:50:34 -04:00 -- DI-23.5.2.2: capacity declared, and refused past
+
+### <a id="di-23522"></a>DI-23.5.2.2 -- A `Capacity` of five counts, with no library default, is declared at construction, and a push, a mint, an import and an `add_target` are refused past it. *(completed 2026-10-24 06:50:34 -04:00)*
+
+**Declare capacity, construct fallibly, refuse past it**: a `Capacity` of `operations`, `lineages`, `imports`, `targets` and
+`domains`, which the library gives no default (the engineer: "agree no default in library"), with examples in the
+documentation; construction in the core and in `Dioring` fallible; a push, a mint, an import and an `add_target` refused at
+capacity, and a provider serving more domains than declared refused at construction. Breaking for this crate and
+`win-durable-ioring`: `mint_lineage` returns a `Result` in the trait.
+
+What was done. [capacity.rs](src/capacity.rs) holds `Capacity`, `Limit`, `AtCapacity` and `ConstructionError`, which
+replaces `DuplicateDomain`. `DurableIoCore::new` and `with_provider` take the declaration and refuse as
+`NoLineages`, `DuplicateDomain` and `TooManyDomains`, in that order. A push is refused as `PushRefusal::AtCapacity` when the
+window holds as many places as `operations`, after the core's own checks and before the backend's, so it reserves nothing and
+spends no identity; `mint_lineage` returns `Result<_, AtCapacity>` in the core and in `DurableRing`; `import_failure`
+returns the new `ImportError`, which names an unknown lineage first and being at capacity second, counting only imported
+failures; `add_target` hands the description back with `AddTargetCause::AtCapacity`, counting only the domains the core has
+not been given and interning none when it refuses. The driver's `Setup` carries the declaration, and a construction
+refused for it hands every file back (`SetupRefusal::Construction`, `SetupRefusal::AtCapacity`); its `add_target` attaches
+nothing when the core refuses. Allocation records did not move. The tests build with a small named declaration; the README's
+examples and the blocking-push example state theirs. New tests are in the core's `capacity` tests and the driver's.
+Sabotage: twenty entries added, all caught. "Too large or a refused allocation" waits for DI-23.5.2.3, which makes the
+allocations; the contract's prose on the refusals is DI-23.8.2's.
+
+## Moved 2026-10-24 09:47:05 -04:00 -- DI-23.5.2.3: the core's tables onto fixed-hash-table, and DI-23.5 and DI-23.5.2 complete
+
+### <a id="di-23523"></a>DI-23.5.2.3 -- The core's keyed tables are `fixed-hash-table` tables made when it is built, each sized from the declared counts, so nothing hashed allocates after construction. *(completed 2026-10-24 09:47:05 -04:00)*
+
+**The core's keyed tables onto `fixed-hash-table`**: `targets`, `domains`, `per_target`, `in_flight`, `spans`, `window`,
+`flush_pairs` and `served_names`, each sized from the declared counts: `targets`, `domains`, `operations`, and for the flush
+pairs `operations` times one plus the served domains. The queue and the observed-failure storage are not sized here (the
+engineer: "2: ok"): they follow what `DI-23.10` settles, in `DI-23.12`.
+
+What was done. The crate depends on `fixed-hash-table` with heap storage. [capacity.rs](src/capacity.rs) sizes the open flush
+pairs and makes a table, failing as the new `ConstructionError::Table`, which names it, for a count too large for a table or
+the allocator. `Durability::new` and `DurableIoCore::new` make the eight tables, each in a tagged call of its own, so the
+build is where they allocate; the inserts no longer are, and their tags went with them. A table refusing inside its bound is
+reported as an inconsistency, as every other is. `in_flight` is sized for `operations`, not twice that: an operation in flight
+and a commit in flight hold distinct places, and the places never exceed `operations` (DI-D-107's "As built"). `end_pairs`
+takes a lineage's pairs out with `retain`, there being no `extract_if`. The allocation records moved as they should: the
+phases that inserted into a hashed table allocate less (the first round of writes from seventeen allocations to seven), and
+construction more. New tests fill each table to its bound -- operations and commits in flight together, the pairs of four
+seals of a provider's two domains, one span entry for each operation, the per-target table -- and let go, and refuse a count
+too large. Sabotage: fourteen entries added, two re-anchored, and a test added for the two that first survived, which showed
+nothing checked that ending a lineage leaves another's open flush pair open, or takes its own out of the table.
+
+### <a id="di-2352"></a>DI-23.5.2 -- Capacity is declared and refused past, in three steps: a flush's places outlive its lineage, the declaration and its refusals, and the core's tables on `fixed-hash-table`. *(completed 2026-10-24 09:47:05 -04:00)*
+
+**Declare capacity and refuse past it** ([DI-D-107](DESIGN-NOTES.md#di-d-107)), in three steps, split 2026-10-24 on the
+engineer's approval ("4: split approved") after the findings in DI-D-107's "Split": [DI-23.5.2.1](#di-23521),
+[DI-23.5.2.2](#di-23522) and [DI-23.5.2.3](#di-23523). It carried a `CROSS-COMPONENT PREREQUISITE`, that
+`crates/fixed-hash-table`'s first milestone land first, which it did.
+
+### <a id="di-235"></a>DI-23.5 -- Capacity is declared at construction and construction is fallible, over fixed-capacity preallocated tables, in the crate `DI-23.5.1` made and the steps of `DI-23.5.2`. *(completed 2026-10-24 09:47:05 -04:00)*
+
+**Capacity declared at construction, and construction fallible** ([DI-D-97](DESIGN-NOTES.md#di-d-97),
+[DI-D-98](DESIGN-NOTES.md#di-d-98)). Re-planned 2026-10-23: the tables are fixed-capacity and preallocated
+([DI-D-106](DESIGN-NOTES.md#di-d-106)), so the crate that provides them comes first. Re-planned again 2026-10-23
+([DI-D-107](DESIGN-NOTES.md#di-d-107)'s "Order"): `DI-23.5.2` follows `DI-23.9`, whose work bounds three of its sizes. What
+remains of what it named -- the queue's size and the failure storage's -- is `DI-23.10`'s and `DI-23.12`'s, by the rulings
+recorded in DI-D-107's "Split".
+
+## Moved 2026-10-24 09:53:12 -04:00 -- DI-23.8.2: capacity and the unresolved-failure window in the contract and the documentation
+
+### <a id="di-2382"></a>DI-23.8.2 -- Capacity, its refusals, and the places unresolved failures hold are in the contract and the documentation, with compiled worked examples of a push refused at capacity and cleared by a seal and by resolving a failure. *(completed 2026-10-24 09:53:12 -04:00)*
+
+**Say so in the contract and the documentation** ([DI-D-100](DESIGN-NOTES.md#di-d-100)): [CONTRACT.md](CONTRACT.md)'s
+"Capacity" section and consumer-requirements bullet, the trait documentation of the pushes, and two worked examples in
+[win-durable-ioring's README](../win-durable-ioring/README.md#worked-examples), compiled and run as doctests there.
+Documentation only, so no sabotage entry: the examples are the tests, and a change to the refusal or to the places a failure
+holds breaks them.
+
+## Moved 2026-10-24 14:52:05 -04:00 -- DI-23.10: the open designs settled
+
+### <a id="di-2310"></a>DI-23.10 -- The open designs are settled: a failure's storage and the shared handles (DI-D-108), and what arrives unasked bounded by derivation with the rest (DI-D-109). *(completed 2026-10-24 14:52:05 -04:00)*
+
+The item's text and the reasoning are in [DI-D-108](DESIGN-NOTES.md#di-d-108), [DI-D-109](DESIGN-NOTES.md#di-d-109) and
+[the design session](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md#di-2310-a-failures-storage-the-shared-handles-and-the-tables-continued-2026-10-24).
+The engineer decided the failure's storage, the handles and the token, then approved the assistant's proposal for the rest
+whole, which reversed a declared `failures` count once a derived bound was found.
+
+## Moved 2026-10-24 15:46:10 -04:00 -- DI-23.11: the clean paths hand out no allocated collection
+
+### <a id="di-2311"></a>DI-23.11 -- The clean paths hand out no allocated collection: provider requests, lineages and `close()` go to visitors, and the busy refusals count what `target_holds` and `lineage_holds` name. *(completed 2026-10-24 15:46:10 -04:00)*
+
+**The clean paths hand out no allocated collection** ([DI-D-103](DESIGN-NOTES.md#di-d-103)): visitors for provider
+requests, lineages and `close()`, and visitor queries behind `IoTargetBusy` and `LineageBusy`. What was built is DI-D-103's
+"As built". A breaking change to both crates, in one commit because the `DurableRing` trait couples them. Whether a
+failure suspects a write to a file, which the count and the visitor both ask, was made one method rather than left at two
+sites. Sabotage: fifteen entries re-anchored to where their behaviour now lives, and seven added.
+
+## Moved 2026-10-24 16:21:55 -04:00 -- DI-23.12.1.1: the ordered tables on fixed storage
+
+### <a id="di-231211"></a>DI-23.12.1.1 -- The ordered tables but the seal queue are on fixed storage of the crate's own, shared across lineages and keyed by lineage first where they were per lineage. *(completed 2026-10-24 16:21:55 -04:00)*
+
+**The ordered tables onto fixed storage** ([DI-D-109](DESIGN-NOTES.md#di-d-109)): the push-sequence tables (`writes`, both
+`held`) and the lineage table, the per-epoch counts and `gated`, on one fixed-capacity ordered table type, with `waiting`
+removed. What was built is DI-D-109's "As built (DI-23.12.1)". Construction makes six more allocations and the clean
+path's writes, gates and holds none for these tables. Sabotage: six entries re-anchored, ten added; one first survived,
+which showed nothing checked that a held write ended as never issued lets go of its edge in the gate table, and a test
+filling the held tables after such writes now does. The seal queue was
+left for `DI-23.12.1.2`, which waits for the engineer.
+
+## Moved 2026-10-24 17:36:24 -04:00 -- DI-23.12.1.2 and DI-23.12.1: the seal queue bounded and on fixed storage
+
+### <a id="di-231212"></a>DI-23.12.1.2 -- A recorded seal holds the place of the first write it covers until the mark passes it, and the seal queue is one fixed table for every lineage. *(completed 2026-10-24 17:36:24 -04:00)*
+
+**The seal queue onto fixed storage**, once the engineer decides what bounds a finished seal the mark has not passed:
+blocked behind an unresolved failure, such seals accumulate with nothing holding a place for them, and each queues a
+`Blocked` entry, so `DI-23.12.3`'s completion-queue bound depends on the answer too. Options brought with
+`DI-23.12.1.1`: a finished seal the mark has not passed holds a place of the window, as an abandoned epoch above the mark
+does ([DI-D-109](DESIGN-NOTES.md#di-d-109)); or consecutive finished seals coalesce into the latest, as `Durable` entries
+do (DI-D-101). Either is a contract change.
+
+What was decided and built is [DI-D-110](DESIGN-NOTES.md#di-d-110): the first option, taken from the engineer's
+"implement di-23.12.1.2" as accepting the assistant's recommendation, with the hold starting when the seal is made. The
+window gained a fourth holder; the seal queue moved from a per-lineage `VecDeque` onto one `Ordered` table keyed by
+lineage and seal number, made for `operations`, so construction makes one more allocation and a recorded seal none.
+[CONTRACT.md](CONTRACT.md#capacity) names the new holder and the refusal it causes behind a held mark. Tests: the write,
+seal and flush loop behind a failed commit refused at capacity and lifted by resolving it, which fills the seal table
+exactly; a seal keeping its pinned write's place when that write fails before the seal starts; an ending lineage letting
+go of a dropped seal's place; the holder in the window's own tests. Sabotage: fifteen entries re-anchored, seven added.
+
+### <a id="di-23121"></a>DI-23.12.1 -- The ordered tables, the seal queue among them, are on fixed storage of the crate's own, and a recorded seal holds a place of the window until the mark passes it (DI-D-110). *(completed 2026-10-24 17:36:24 -04:00)*
+
+The parent of [DI-23.12.1.1](#di-231211) and [DI-23.12.1.2](#di-231212); what was built is
+[DI-D-109](DESIGN-NOTES.md#di-d-109)'s "As built (DI-23.12.1)" and [DI-D-110](DESIGN-NOTES.md#di-d-110).
+
+## Moved 2026-10-24 19:38:41 -04:00 -- DI-23.12.2: the per-call lists on storage made at construction
+
+### <a id="di-23122"></a>DI-23.12.2 -- The core's per-call scratch and the lists a call hands the driver are made at construction, each for a stated bound, and `CoreActions` carries no lists (DI-D-111). *(completed 2026-10-24 19:38:41 -04:00)*
+
+**The core's per-call scratch and the lists a call returns onto storage made at construction**
+([DI-D-97](DESIGN-NOTES.md#di-d-97)): what `advance`, `cover` and `end_pairs` collect into, the gate search's work lists,
+and `Due`'s events, flushes and submissions with the `CoreActions` a call hands the driver, drained in place as
+`drain_requests` is, so their storage is kept. Added 2026-10-24 when `DI-23.12.1` began: the allocation test's tags showed
+these lists allocating on every clean-path call and no step owning them. A change to the driver's side of the core, not to
+the consumer's contract.
+
+What was built is [DI-D-111](DESIGN-NOTES.md#di-d-111), which amends DI-D-50 P11's `CoreActions` shape. The clean paths
+of the allocation test now allocate nothing after construction but in three places owned elsewhere: the memory backend's
+own queue, the completion queue (`DI-23.12.3`), and a new target's domains (`DI-23.12.4`). The failure path is down to a
+failure's own storage. [io_core/tests/lists.rs](src/io_core/tests/lists.rs) has one call reach each list's bound. The
+cycle search's work list was first sized at twice the operations and tightened to the operations once its bound was argued.
+A provider request's contents and a gate cycle's report, found unowned, were queued as `DI-23.12.8` for the engineer. A
+win-durable-ioring test that read `CoreActions` directly was moved onto the engine first, in its own commit. Sabotage:
+nineteen entries re-anchored and sixteen added, swept with every entry on the files this rewrote.
+
+## Moved 2026-10-24 20:08:28 -04:00 -- DI-23.12.3.1: the failure table bounded by derivation
+
+### <a id="di-231231"></a>DI-23.12.3.1 -- The unresolved failures are kept in a table made at construction for the flush parts plus the imports, with the bound argued and filled by a test. *(completed 2026-10-24 20:08:28 -04:00)*
+
+**The failure table on fixed storage, bounded by derivation** ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s first item): the
+unresolved failures kept in observation order in a table made at construction for `operations` times one plus the served
+domains, plus `imports`, a failure recorded past it an inconsistency. Proof obligations: every observed failure answers one
+part of one seal and suspects that part's named write, which holds a place until the failure is resolved, and a part
+answers once -- with a provider's answer, a flush's answer and a refused commit for an ended lineage shown to observe
+nothing -- and a test filling the table to the bound. Internal: a failure's own suspect list, markings and epochs still
+allocate until the steps below.
+
+What was built is DI-D-109's "As built (DI-23.12.3.1)": `Capacity::failures` carries the argument, the table is a list
+pushed onto within its room, and [io_core/tests/tables.rs](src/io_core/tests/tables.rs) fills it with a failed commit and
+a failed provider answer for each operation and every import. A provider's failed or abandoned answer for an ended
+lineage is now shown to observe nothing; a flush's answer for one already was. Construction makes one more allocation and
+an observed failure one fewer. Sabotage: three entries added, swept with the ended-lineage entry they rest on.
+
+## Moved 2026-10-24 20:34:19 -04:00 -- DI-23.12.3.2: a suspected write's record and its marking kept once
+
+### <a id="di-231232"></a>DI-23.12.3.2 -- A suspected write keeps its record and its marking once, in a table made at construction for the operations, and a failure's markings are read from those records. *(completed 2026-10-24 20:34:19 -04:00)*
+
+**Write records kept while a failure could name them, each with its marking once**
+([DI-D-108](DESIGN-NOTES.md#di-d-108)): a write that stops being uncovered -- covered, nullified, or let go with its
+lineage -- keeps its record, marked with where it stopped and, once, with its marking, for as long as an unresolved
+failure suspects it; the table holds at most a record for each place, which the places already bound. A failure's
+markings are read from its suspects' records in observation order, so `mark` writes one marking and none per failure.
+Internal: the inventory and the resolution entries still copy the markings out until `DI-23.12.3.4`.
+
+What was built is DI-D-108's "As built (DI-23.12.3.2)": [kept.rs](src/durability/kept.rs) holds the records and the
+order they were marked in, with the bound argued in its module doc, and its own unit tests;
+[io_core/tests/tables.rs](src/io_core/tests/tables.rs) fills it to the operations declared. The window's census now also
+checks that the kept records are exactly the suspected writes no longer uncovered. A failure no longer carries a list of
+markings, so marking a suspected write no longer allocates; construction makes two more allocations, and the inventory
+and the resolution entries collect their markings until DI-23.12.3.4. Sabotage: eight entries added and five re-anchored, all swept as declared.
+
+## Moved 2026-10-24 21:09:03 -04:00 -- DI-23.12.3.3: the suspect set as the rule that made it
+
+### <a id="di-231233"></a>DI-23.12.3.3 -- A failure's suspects, its epochs and a heal's pending lineages are read from the write records by the rule observation applied, over a failure clock each record reads twice. *(completed 2026-10-24 21:09:03 -04:00)*
+
+**The suspect set as the rule that made it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)'s second item): a failure keeps its
+cut, its reach, its lineage if one was named, and what else observation filtered on, and a write is its suspect when the
+records say so; the epochs it holds, which `blocking`, gates and abandoning read, and the lineages a heal is pending on,
+read from the same records. Internal: `SuspectSet` is still built for the entries until `DI-23.12.3.4`, and a heal's
+releases are still a map until `DI-23.12.3.6`; the window's census and the oracle check that the rule names exactly the
+writes the old list did.
+
+What was built is DI-D-109's "As built (DI-23.12.3.3)". The cut turned out to be the failure's own number: a write record
+reads the failure clock when it is recorded and when it stops being nameable, which is what makes a gated write issued
+after the failure, and a write of a lineage that had ended, fall outside the set as observation left them, and ending a
+lineage now stamps the writes it leaves in the table. [suspects.rs](src/durability/suspects.rs) holds the rule's readers;
+a kept record carries what the rule reads; `stop_held` lends the records to its predicate so abandoning can read them.
+The census compares each failure's rule with the list observation would have made, kept only under `cfg(test)`. A
+failure no longer builds an epoch map at observation; the inventory and the resolution entries build their suspect sets
+from the rule until DI-23.12.3.4. One test added: a write kept for one failure is not suspected by a later one, which
+the sabotage of a kept record that never stops being nameable showed nothing covered. Sabotage: ten entries added,
+seventeen re-anchored, all swept as declared.
+
+## Moved 2026-10-24 21:32:16 -04:00 -- DI-23.12.4.1: lineage handles as slots
+
+### <a id="di-231241"></a>DI-23.12.4.1 -- A lineage handle is its home, its lineage and a slot of copy counts made when the instance is built, so minting, cloning and releasing one allocate nothing. *(completed 2026-10-24 21:32:16 -04:00)*
+
+**Lineage handles as slots** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a handle is its home, its lineage and an index into
+the home's table of copy counts, made when the instance is built for `lineages`, the lineage's number standing as the
+slot's generation; minting claims a slot, cloning and dropping count in it without allocating, and the last drop ends
+the lineage as before. Proof obligation: a lineage with a copy out is one the core holds, so a slot is free whenever the
+core admits a mint. Breaking: `LineageHandle::mint` can refuse, and `Home` grows the table.
+
+What was built is DI-D-108's "As built for lineage handles". `LineageSlots` is in [ids.rs](src/ids.rs) and exported to
+drivers; win-durable-ioring's hub makes it with the core and reports a mint finding no slot free as an inconsistency.
+Taking the last copy disarms the handle by swapping in a home that never upgrades, rather than forgetting it, so the
+handle's `Weak` is still released. The argument is tested by minting to capacity, refusing, and releasing over several
+rounds; an ended lineage held by in-flight I/O was not made a test, because when the core retires it depends on the
+I/O's timing. Unit tests cover counting, the last release, `take_last`, slots full and reused, a gone home, a detached
+handle and a stale generation. Sabotage: five entries added and one re-anchored, all swept as declared.
+
+## Moved 2026-10-24 21:46:46 -04:00 -- DI-23.12.4.2: failure tokens as slots
+
+### <a id="di-231242"></a>DI-23.12.4.2 -- A failure token is its failure and a slot of liveness words made at construction for the failure bound, so observing a failure and handing out a token allocate nothing. *(completed 2026-10-24 21:46:46 -04:00)*
+
+**Failure tokens as slots** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): a token is an index into a table of liveness flags
+made at construction for the failure bound, the failure's number standing as the generation; DI-D-12's one live token
+kept. Breaking: `FailureToken`'s fields and its mint.
+
+What was built is DI-D-108's "As built for failure tokens". The item's "breaking" turned out not to be: the token's
+fields and its mint were crate-private, so no public signature changed. The word packs the generation and liveness
+together so a stale token's drop cannot clear a later failure's token between a check and a store. The fill test now
+also cycles abandons and heals past the slot count, which is what shows each path frees its slot; unit tests cover
+liveness, one live token, a stale drop after reclaim, and a token outliving its instance. Construction makes three more
+allocations, and an observed failure one fewer. Sabotage: five entries added and four re-anchored, all swept as
+declared.
+
+## Moved 2026-10-24 21:54:28 -04:00 -- DI-23.12.4.3: a lineage's description kept and lent
+
+### <a id="di-231243"></a>DI-23.12.4.3 -- A lineage's description is the consumer's string, kept as given and lent as `&str` by the enumeration and by `close()`. *(completed 2026-10-24 21:54:28 -04:00)*
+
+**A lineage's description kept and lent** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): the consumer's `String` kept as given,
+and `LineageInfo` lending it as `&str` for the visitor's duration. Breaking: `LineageInfo` gains a lifetime.
+
+What was built is DI-D-108's "As built" for the description. `Leftover` gained the lifetime too, which the item did not
+name: `close()` lends its lineages from the instance it consumes. The allocation test now mints with a description made
+before the count, and that phase stays at zero. Visitors written as `drop` no longer satisfy the higher-ranked bound
+and became `|_| {}`; tests that keep lineages hold owned copies. CONTRACT.md says a visitor's items may be lent.
+Sabotage: two entries added, swept as declared.
+
+## Moved 2026-10-24 22:17:56 -04:00 -- DI-23.12.4.4 and DI-23.12.4: domain lists as rows, and the group complete
+
+### <a id="di-231244"></a>DI-23.12.4.4 -- A target's domains and an import's are rows of one table made at construction, so adding a target and importing by domains allocate nothing. *(completed 2026-10-24 22:17:56 -04:00)*
+
+**A target's domains as a range in a fixed table** ([DI-D-108](DESIGN-NOTES.md#di-d-108)): sized from `targets` and
+`domains`, the writes, spans, kept records and a commit failure's reach naming the range; an import's reach in a table of
+its own sized from `imports` and `domains`. Proof obligation: a range is not reused while a failure's reach names it -- a
+commit failure suspects a write to its file, which keeps the target from being removed.
+
+What was built is DI-D-108's "A target's domains are a row in a fixed table". One table serves both, `targets` plus
+`imports` rows rather than two tables, and a provider failure's reach became a single domain needing no row. An import
+claims its row only once admitted, since at capacity every row may be held. The census in every change checks that
+nothing names a free row; tests cycle targets and imports, abandoned and healed in turn, past the rows made, and show a
+failed file's row stays the file's once its failure is resolved. "A target added" now allocates nothing. A declaration
+too large for a table now names the flush-domain lists for `targets` and `domains`, the first table either sizes.
+Sabotage: six entries added and nine re-anchored, all swept as declared, one only after the failed-file test was
+written for it.
+
+### <a id="di-23124"></a>DI-23.12.4 -- Lineage handles, failure tokens, descriptions and domain lists are fixed storage made at construction: slots, a lent string, and rows. *(completed 2026-10-24 22:17:56 -04:00)*
+
+**Handles, tokens, descriptions and domain lists as fixed storage** ([DI-D-108](DESIGN-NOTES.md#di-d-108)). Split when it
+began into [DI-23.12.4.1](#di-231241), [DI-23.12.4.2](#di-231242), [DI-23.12.4.3](#di-231243) and
+[DI-23.12.4.4](#di-231244); what each built is in its entry and in DI-D-108's "As built" notes.
+
+## Moved 2026-10-24 23:06:19 -04:00 -- DI-23.12.3.4: a failure's records lent, and held until its resolution is popped
+
+### <a id="di-231234"></a>DI-23.12.3.4 -- A failure's suspect writes and markings are lent to a visitor from the instance's own records, held until its Abandoned or Healed is popped, and no entry or inventory row carries them. *(completed 2026-10-24 23:06:19 -04:00)*
+
+**A failure's records lent by a scoped borrow** ([DI-D-108](DESIGN-NOTES.md#di-d-108)):
+`Failed`, `Abandoned`, `Healed` and `FailureInfo` carry the failure's identity, token, cause and stamp, and its suspect
+writes and markings are lent for the duration of a visitor; a resolved failure's records are kept until its `Abandoned`
+or `Healed` is popped. Breaking for both crates; CONTRACT.md, the READMEs' examples, and the oracle follow. The
+inventory itself -- `failures()` handing out a `Vec` of copied causes -- is `DI-23.12.3.7`.
+
+What was built is [DI-D-108](DESIGN-NOTES.md#di-d-108)'s "As built (DI-23.12.3.4)". `Failed`, `Abandoned`, `Healed` and
+`FailureInfo` carry no records and `SuspectSet` is gone; `failure_suspects` and `failure_markings` lend them on the ring
+trait and the core. A resolved failure stays in the table until the core pops its resolution entry and forgets it, so its
+places, token slot, kept records and an import's domain list and count are let go then; [CONTRACT.md](CONTRACT.md) says
+so, and the capacity example in [win-durable-ioring's README.md](../win-durable-ioring/README.md) shows a push still
+refused between the abandon and the pop. A resolved failure lends only the markings made before its resolution, since a
+kept record is shared. The oracle is owed each `Failed`'s suspect set (`suspects`, or `observe_from` reading it from
+the instance) and no longer compares resolution entries; the harnesses of both crates report it. Reading the records
+allocates nothing, a new phase of the allocation test, and the failure paths now allocate only in the inventory and in
+resolve. Sabotage: twelve entries added, eleven re-anchored, and four removed -- three healed twins of an abandoned entry,
+now that both let go at one site, and the oracle's final-record comparison, which is gone; all swept as declared, four
+only after the tests for a resolved failure's markings, its marking and its token were written.
+
+## Moved 2026-10-25 16:39:15 -04:00 -- DI-23.12.3.5: the completion queue within its derived bound
+
+### <a id="di-231235"></a>DI-23.12.3.5 -- The completion queue and a change's entries are made for a derived bound and pushed onto within it: a marking queued once per write, a Blocked withdrawn once a later entry answers its request, and a lineage counted until its LineageEnded is popped. *(completed 2026-10-25 16:39:15 -04:00)*
+
+**The completion queue and a change's entries within derived bounds**
+([DI-D-109](DESIGN-NOTES.md#di-d-109)'s third item): a `Marked` queued once per marked write and expanded at pop into one
+entry per failure observed before the marking that suspects the write, in observation order; the queue and `Due`'s
+entries list made for the derived bound and pushed onto within it; and a test filling the queue to the bound.
+
+Deriving the bound found two gaps, which the engineer settled on 2026-10-25 ("yes go ahead with your recommendations"),
+recorded as [DI-D-112](DESIGN-NOTES.md#di-d-112): entries about a lineage outlived its count, without bound, and `Blocked`
+outlived its seal, bounded only by a product. A lineage now counts until its `LineageEnded` is popped, retiring a live one
+withdraws its `Durable`, and a `Blocked` is withdrawn by its lineage's `Durable` at or above it, its `LineageEnded`, or
+the empty seal that replaced its own -- the last case found while building, and taken as within the rule. The queue is
+[io_core/queue.rs](src/io_core/queue.rs), made for `Capacity::entries`, which argues the bound; a change's entries list is
+made for `Capacity::change_entries`, and every push of either is within its room. The I/O core checks after every call that
+the queue is within its room, that every lineage an entry names counts, and that every `Blocked` names a seal above its
+lineage's mark; a popped marking is checked against what the marking found. The tests fill `Blocked` to twice the
+operations and the markings to the operations, and queue every kind at once; the terms are per kind and not reached
+together, which DI-D-112 says. Completions now allocate nothing, the queue's room made with the rest at construction. Eleven
+per-entry allocation tags went with the allocations they named. Sabotage: twelve entries added, one a
+control -- the expansion's resolution cutoff, which holds at every pop because a failure resolved before a marking is
+popped, and forgotten, ahead of it -- and fourteen re-anchored; two removed, one taken over by a new entry and one a control
+whose code went. All swept as declared, the drain tests rewritten first so that a lineage's flush, not its unpopped end, is
+what they see holding it.
+
+## Moved 2026-10-26 13:21:04 -04:00 -- DI-23.12.3.6: a heal's releases read from the records
+
+### <a id="di-231236"></a>DI-23.12.3.6 -- A heal records only when it was made; what it waits for in each lineage is read from the write records when a seal finishes, and a lineage keeps only the latest heal it released. *(completed 2026-10-26 13:21:04 -04:00)*
+
+**A heal's releases in storage made at construction** -- **awaiting the engineer's decision
+on the bound.** A heal records, for each lineage it is pending on, `Release { after, through }`: that lineage's next
+seal number and highest pushed epoch at the moment of the heal (DI-D-41, DI-D-46). Unlike the failures and the kept
+records, these have no derived bound below the failures times the lineages: one failure can suspect writes of every
+lineage, and a pending (failure, lineage) pair is named by no place of its own, since many failures suspect one
+write. Found 2026-10-24 while implementing `DI-23.12.3.3`, which reads the pending lineages from the records but still
+keeps the release values in a map made at the heal. Per lineage the pending releases are monotone in heal order, and a
+seal releases a prefix of them, so a per-lineage queue of distinct releases is a candidate shape; whether its length
+has a bound the capacities give, or the product must be declared, is the decision.
+
+The engineer asked, 2026-10-26, whether the releases could be an intrusive queue; the assistant's answer, that the
+elements are (failure, lineage) pairs with no node of their own to thread through but that the releases can be read from
+records already kept, was taken, and is [DI-D-114](DESIGN-NOTES.md#di-d-114). No bound is needed because nothing is kept
+for each lineage a heal waits on: a heal records `HealAt` (the push sequence and the seal clock), each seal its `made`
+stamp, and each lineage the latest heal released, which is enough because the heals a seal releases are a prefix in heal
+order. One change of behaviour, stated in [CONTRACT.md](CONTRACT.md): a heal no longer waits for a write pushed before it
+that has nothing left to commit -- one that failed, or one a seal covered though that seal failed elsewhere. The logic is
+[durability/heals.rs](src/durability/heals.rs); [durability/tests/heals.rs](src/durability/tests/heals.rs) tests the rule,
+both changed cases, and the prefix. Every existing heal test passed unchanged. Resolving a heal now allocates nothing,
+and its allocation tag is gone. Sabotage: five entries added, one a control -- a lineage's
+released heal taken as the latest without the max, which no test can see because a later seal re-releases every heal
+still healing -- and ten re-anchored to the derivation, one of them, the empty seal's number, moved to the seal clock it
+now protects; three new ones dropped as duplicates of entries already there. All swept as declared.
+
+## Moved 2026-10-26 13:51:12 -04:00 -- DI-23.12.3.7: the inventory as a visitor
+
+### <a id="di-231237"></a>DI-23.12.3.7 -- The inventory gives each unresolved failure to a visitor, its cause lent for the visit, and close() lends its failures the same way, so neither allocates. *(completed 2026-10-26 13:51:12 -04:00)*
+
+**The inventory as a visitor** ([DI-D-103](DESIGN-NOTES.md#di-d-103),
+[DI-D-108](DESIGN-NOTES.md#di-d-108)): `failures()` gives each unresolved failure to a visitor, lending its cause, rather
+than handing out a `Vec` of copies, as the lineages and the holds already are; `close()` lends its failures the same
+way. Split from `DI-23.12.3.4` on 2026-10-24: the inventory's collection is independent of where a failure's records
+live, and it changes every caller of `failures()`. Breaking for both crates.
+
+What was built is [DI-D-103](DESIGN-NOTES.md#di-d-103)'s "As built (DI-23.12.3.7)": `FailureInfo<'a, V>` lends its cause as
+`&'a FailureCause`, `failures(visit)` on the ring trait, the core, the delivery wrapper and the fake, and
+`Leftover::Failure` carries the lent form. The "failures queried" phase of the allocation test now allocates nothing,
+and its three tags are gone. The core's tests read the inventory through a test-only `failures_listed()` copying each
+out, so their assertions kept their shape; win-durable-ioring's count it, and its close helper keeps identities.
+[CONTRACT.md](CONTRACT.md)'s "The inventory" and win-durable-ioring's README example say how it is read. Sabotage: one
+entry added, the core's inventory visiting nothing, which win-durable-ioring's tests catch since the core's own read
+the inventory through `failures_listed`; the two existing inventory entries re-swept; all as declared.
+
+## Moved 2026-10-26 18:34:50 -04:00 -- DI-23.12.3.8: the failure observer
+
+### <a id="di-231238"></a>DI-23.12.3.8 -- A failure observer given at construction is told of each failure, its suspect writes in push order before its Failed can be popped, and each marking for each failure it goes to, beside the lending it will replace. *(completed 2026-10-26 18:34:50 -04:00)*
+
+**A failure observer given at construction** ([DI-D-113](DESIGN-NOTES.md#di-d-113)): a trait the
+consumer may implement and give the core and the Windows driver's setup when an instance is built, told of each failure
+as it is observed -- identity, cause and stamp, lent -- then each write it suspects in push order, before its `Failed` is
+poppable, and of each marking once for each failure it goes to, as made; called under the lock, not to call back in, its
+locks a leaf (DI-D-90). Built beside the lending, which stays until DI-23.12.3.9: the conformance oracle becomes an
+observer, and the core's tests compare what it is told with what the lending reads. Breaking for both crates.
+
+What was built is [DI-D-113](DESIGN-NOTES.md#di-d-113)'s "As built (DI-23.12.3.8)", and [CONTRACT.md](CONTRACT.md) has a
+section for it. `FailureObserver<V>` is in [observer.rs](src/observer.rs); the core takes it by `observed_by`, chained onto
+its constructor, which refuses as an inconsistency a core already in use or one given an observer twice, and the Windows
+driver by `Setup::failure_observer`. The oracle module's `ObservedFailures` keeps what it is told: the core's test rig
+gives one to every core and checks, at each `Failed` and `Marked` popped, that it matches what the lending reads, so
+every rig-driven test compares the two. [io_core/tests/observer.rs](src/io_core/tests/observer.rs) tests the order of
+telling, a failure suspecting nothing, a resolved failure told nothing more, and the three misuses; a driver test gives
+one through the setup. The allocation test's core has a counting observer, told on the failure paths, and no table moved.
+Sabotage: six entries, one in win-durable-ioring's manifest; all swept as declared, one only after its patch was
+corrected to compile without the call it removes.
+
+## Moved 2026-10-26 23:01:50 -04:00 -- DI-23.12.3.9: what the failure observer replaces
+
+### <a id="di-231239"></a>DI-23.12.3.9 -- A failure's suspect writes and markings reach a consumer only through its failure observer: the lending, `Marked` and the markings kept on the write records are withdrawn, and the oracle reads what the observer was told. *(completed 2026-10-26 23:01:50 -04:00)*
+
+**Withdraw what the observer replaces** ([DI-D-113](DESIGN-NOTES.md#di-d-113)): `failure_suspects` and
+`failure_markings`; `Marked` as an entry, with the expansion at pop and the markings term of `Capacity::entries`; the
+markings kept on the write records, their order and `Standing::Resolved`'s cutoff; and the oracle's owed suspect set.
+CONTRACT.md, the READMEs' examples, and the allocation records follow. Breaking for both crates.
+
+What was built is [DI-D-113](DESIGN-NOTES.md#di-d-113)'s "As built (DI-23.12.3.9)". The two lending calls are off the
+trait, the core, the Windows driver, its delivery handle and the fake, with `UnknownFailure`; `Entry::Marked` is gone and
+the queue holds only entries, bounded by three times the operations rather than four; the kept records carry no markings
+and no failure-clock reading for them. The oracle hands out the observer it reads (`observer`, or `reading` one built
+first), refuses a `Failed` its observer was not told of, and checks the markings told for a failure when the failure is
+resolved, and at `finish` for the rest, so the owed-suspect-set protocol and three of its violations are gone. The core
+keeps a test-only `suspects_listed` its rig compares with what the observer was told; the durability tests read markings
+through an observer of their own; the Windows tests' `setup` gives each instance a recorder its harness hands the
+oracle. [CONTRACT.md](CONTRACT.md) and win-durable-ioring's README examples say how a consumer reads them now. The
+allocation records were re-recorded: construction makes one table fewer.
+
+Sabotage: the entries for the withdrawn behaviours were dropped, the rest that named them re-anchored, and six added for
+the oracle reading the observer; all swept as declared, one only after its patch was corrected to name the queue's
+entries. 
+
+### <a id="di-23123"></a>DI-23.12.3 -- A failure's storage is a rule over write records kept while a failure could name them, in tables and a queue sized from derived bounds, with the failure's detail dispatched to an observer instead of lent. *(completed 2026-10-26 23:01:50 -04:00)*
+
+**A failure's storage** ([DI-D-108](DESIGN-NOTES.md#di-d-108),
+[DI-D-109](DESIGN-NOTES.md#di-d-109)): the suspect set as the rule that made it -- the cut, the reach, the lineage --
+over write records that keep where they stopped being uncovered and are kept while a failure could name them; a marking
+kept once per write; the failure's records lent by a scoped borrow, events and the inventory carrying its identity,
+token, cause and stamp; a resolved failure's records kept until its `Abandoned` or `Healed` is popped; a `Marked` queued
+once per marked write and expanded at pop; and the failure table, the completion queue, and the list of entries one
+change makes (`Due`'s events, made at construction by `DI-23.12.2` for the clean paths only) sized from the derived
+bounds, the entries list pushed onto within its room as the others are. Proof obligations: unresolved observed failures within `operations` times one plus the served domains, a
+provider's answer for an ended lineage included, and a test filling the table and the queue to their bounds. Breaking:
+`Failed`, `Abandoned`, `Healed`, `Marked`, `FailureInfo` and `SuspectSet` change shape in both crates, and the oracle
+follows. Split 2026-10-24 when it began into the steps below, in dependency order: today a covered write's record is let
+go at the moment its marking is made, which is why each failure keeps its own copies, so the records must outlive
+coverage before a failure can be a rule over them, and the consumer-facing change comes last, over storage already in
+place.
+
+Closed with its last step, `DI-23.12.3.9`. Two of the shapes named above were superseded on the way, by
+[DI-D-113](DESIGN-NOTES.md#di-d-113): the failure's records are not lent but told to a failure observer given at
+construction, and `Marked` is no entry, so there is no queued marking to expand. The steps are each archived under their
+own anchors.
+
+## Moved 2026-10-27 13:26:22 -04:00 -- DI-23.12.5: an abandoned epoch forgotten once the mark passes it
+
+### <a id="di-23125"></a>DI-23.12.5 -- An abandoned epoch is kept above the mark in a table made for the operations, pinning one of its writes' places, and forgotten once the mark passes it, where `epoch_state` reports it as the mark means it. *(completed 2026-10-27 13:26:22 -04:00)*
+
+**An abandoned epoch is forgotten once the mark passes it** ([DI-D-109](DESIGN-NOTES.md#di-d-109)):
+above the mark it holds a place of the window until the mark passes it; at or below the mark `epoch_state` reports it as
+the mark means it. A contract change: CONTRACT.md's epoch states, and win-durable-ioring's README example asserting
+`Abandoned` below the mark. Proof obligation: how far the table can be taken past `operations` where another failure
+still holds the abandoned writes, and a test reaching it.
+
+What was built is [DI-D-109](DESIGN-NOTES.md#di-d-109)'s "As built (DI-23.12.5)". The per-lineage `BTreeSet`, which
+allocated at each abandon, is replaced by [durability/abandoned.rs](src/durability/abandoned.rs)'s table made at
+construction, each epoch pinning a write's place as a fifth holder of the window; the mark forgets what it passes, and
+ending or retiring a lineage forgets all of its. The proof obligation's answer is that the table cannot pass
+`operations` at all, since each epoch takes over a place its failure already held; the test fills it to `operations`
+with a second failure suspecting every write. One consequence the item did not name, recorded in the decision: a gate on
+an abandoned epoch the mark has passed is answered as reached, and the oracle checks such an operation as ungated.
+[CONTRACT.md](CONTRACT.md)'s guarantees 6, 7 and 9, "What resolution does to epochs", "Capacity" and "Gates" say so, as do
+`EpochState`'s and `epoch_state`'s docs; win-durable-ioring's README example and a delivery test assert `Durable` below
+the mark. The allocation records were re-recorded: "an abandon resolved" now allocates nothing, construction one more.
+Sabotage: the abandoning entry re-anchored, seven added.
+
+## Moved 2026-10-27 15:53:06 -04:00 -- DI-23.12.6: a refusal carrying a backend fault passes the backend's report through
+
+### <a id="di-23126"></a>DI-23.12.6 -- A refusal carrying a backend fault passes the backend's report through, its cause named in a field of `IoFault` beside the code, so `Unusable` and `Unknown` allocate nothing. *(completed 2026-10-27 15:53:06 -04:00)*
+
+**A refusal carrying a backend fault passes the backend's report through** ([DI-D-109](DESIGN-NOTES.md#di-d-109), amending
+[DI-D-54](DESIGN-NOTES.md#di-d-54)): the cause carried beside the report in `IoFault`, as `ErrorCode` is, so `Unusable`
+and `Unknown` allocate nothing; their cause is read from that field rather than downcast. Breaking for both crates where
+they downcast.
+
+As built: `IoFault::refusal: Option<RefusalKind>`, `RefusalKind` being the payload-free classification of a
+`RefusalCause` (it cannot be the cause, which carries an `IoFault`); the as-built notes are in DI-D-109.
+
+## Moved 2026-10-27 16:14:32 -04:00 -- DI-23.12.7: the crate builds without `std`
+
+### <a id="di-23127"></a>DI-23.12.7 -- The crate is `no_std` without its `std` feature, builds for `x86_64-unknown-none`, and what only `std` provides is behind the feature or moved to `alloc` and `core`. *(completed 2026-10-27 16:14:32 -04:00)*
+
+**The crate builds without `std`** ([DI-D-97](DESIGN-NOTES.md#di-d-97), [DI-D-109](DESIGN-NOTES.md#di-d-109)): `no_std` unless
+the `std` feature is on; the driver's locking (`engine.rs`, `lock_watch.rs`) and the `thread::panicking()` guard behind
+`std`, an inconsistency without it panicking unconditionally; and every other use of `std` the crate still has moved to
+`core` or `alloc`, or behind the feature. Built here locally for a target without `std`; CI is `DI-23.13`.
+
+As built: the as-built notes are in DI-D-109. `io-buffers` became `no_std` too, as the crate cannot build without it.
+
+## Moved 2026-10-27 16:46:48 -04:00 -- DI-23.12.8.1: a gate cycle is refused without naming it
+
+### <a id="di-231281"></a>DI-23.12.8.1 -- A gate cycle is refused without naming it: `PushRefusal::GateCycle` and `SealError::GateCycle` carry nothing, and the naming search goes. *(completed 2026-10-27 16:46:48 -04:00)*
+
+**A gate cycle is refused without naming it** ([DI-D-115](DESIGN-NOTES.md#di-d-115), amending
+[DI-D-23](DESIGN-NOTES.md#di-d-23) and [DI-D-43](DESIGN-NOTES.md#di-d-43)): `PushRefusal::GateCycle` and
+`SealError::GateCycle` carry nothing; `Sealing::Cycle`, `write_cycle` and `seal_cycle` answer only whether; the naming
+search (`trace`, `trace_in`) and `io_core`'s `epochs` go. CONTRACT.md's "Gates" ("the error names the cycle"), the types'
+docs and `Display`, and the tests that compared traced cycles follow; the detection tests keep proving the refusal both
+ways. The allocation test gains a refused gated push and a refused seal, at zero. Breaking for both crates.
+
+As built: the as-built notes are in DI-D-115.
+
+## Moved 2026-10-28 16:07:00 -04:00 -- DI-23.12.8.2: a provider request's contents lent from a buffer made at construction
+
+### <a id="di-231282"></a>DI-23.12.8.2 -- A provider request's contents are read, when drained, into a buffer made at construction and lent to the provider for its call. *(completed 2026-10-28 16:07:00 -04:00)*
+
+**A provider request's contents onto storage made at construction**, in the shape the assistant recommended and the
+engineer took up ("implement di-23.12.8"): a seal's domain parts and the write lists in them, and the `ProviderRequest`
+built from them, were allocated where a seal started. The core now queues only which seal asked, keeps the domains it
+asked about in a table sized `operations * served`, and `drain_requests` reads the request into a `RequestBuf` the driver
+made at construction; the provider is lent a `FlushRequest<'_, V>` for its call, a domain it does not take is abandoned
+when the request is dropped, and a router hands each provider a narrowed view. The allocation test gains a provider-routed
+scenario, from a core built with `with_provider`. A contract change for both crates.
+
+As built: the as-built notes are in [DI-D-115](DESIGN-NOTES.md#di-d-115).
+
+## Moved 2026-10-28 16:07:00 -04:00 -- DI-23.12.8: a provider request's contents and a gate cycle's report allocate nothing after construction
+
+### <a id="di-23128"></a>DI-23.12.8 -- A provider request's contents and a gate cycle's report allocate nothing after construction: the cycle is refused unnamed, and the request is lent from a buffer made at construction. *(completed 2026-10-28 16:07:00 -04:00)*
+
+**A provider request's contents and a gate cycle's report allocate nothing after construction**
+([DI-D-97](DESIGN-NOTES.md#di-d-97)): both reach the consumer, a request through the provider and a cycle in
+`PushRefusal::GateCycle` and `SealError::GateCycle`. Each was allocated where it is made: a seal's domain parts and the
+write lists in them, the `ProviderRequest` built from them, and the traced cycle's `Vec` of epochs. Found 2026-10-24
+implementing `DI-23.12.2`, which moved the lists that carry these but not the contents. Split 2026-10-27 when the engineer
+decided the cycle's half ([DI-D-115](DESIGN-NOTES.md#di-d-115)); built as `DI-23.12.8.1` and `DI-23.12.8.2`.
+
+## Moved 2026-10-28 17:57:00 -04:00 -- DI-23.12.9: every phase after construction asserted at zero
+
+### <a id="di-23129"></a>DI-23.12.9 -- The allocation test asserts that every phase after construction allocates nothing, recording only construction's allocations; the in-memory backend's queues are made at their declared sizes. *(completed 2026-10-28 17:57:00 -04:00)*
+
+**The allocation test asserts zero after construction in every phase** (`DI-23.1`): the recorded tables became an
+assertion that every phase after construction allocates nothing, construction's allocations staying recorded, by phase
+and by tag. The one phase still counting, the first round of writes, was the in-memory backend's queues growing as
+submissions were queued; they are now made at their declared sizes, which bound them (`MemoryBackend::new`).
+
+As built: the as-built notes are in [DI-D-97](DESIGN-NOTES.md#di-d-97).
+
+## Moved 2026-10-28 17:57:00 -04:00 -- DI-23.12: what DI-23.10 settles, implemented
+
+### <a id="di-2312"></a>DI-23.12 -- Implement what `DI-23.10` settles, until the allocation test asserts zero allocations after construction in every phase. *(completed 2026-10-28 17:57:00 -04:00)*
+
+**Implement what `DI-23.10` settles** ([DI-D-108](DESIGN-NOTES.md#di-d-108), [DI-D-109](DESIGN-NOTES.md#di-d-109)), until
+`DI-23.1` asserts zero allocations after construction in every phase. Split 2026-10-24 into `DI-23.12.1` to
+`DI-23.12.9`; each is said in CONTRACT.md and the documentation as it landed, and each one's phases of the allocation
+test reached zero with it. Closed by `DI-23.12.9`.
+
+## Moved 2026-10-29 08:15:00 -04:00 -- DI-23.13: the crate builds without `std` in CI
+
+### <a id="di-2313"></a>DI-23.13 -- A CI job builds and lints this crate with `--no-default-features` for `x86_64-unknown-none`, a target with no `std`. *(completed 2026-10-29 08:15:00 -04:00)*
+
+**Build without `std` in CI**: the `durable-ioring-no-std` job in `.github/workflows/ci.yml`, beside the `alloc-only`
+job it follows, builds and lints the crate with `--no-default-features` for `x86_64-unknown-none`, which has no `std` and
+has 64-bit atomics (not `thumbv7em-none-eabi`; see [DI-D-109](DESIGN-NOTES.md#di-d-109), DI-23.12.7). The gate is not
+vacuous: building the same target with the `std` feature fails. The crate's tests are not run there, because its self
+dev-dependency turns `std` on for them, so a host run would not be a `no_std` run.
+
+As built: the as-built notes are in [DI-D-97](DESIGN-NOTES.md#di-d-97).
+
+## Moved 2026-10-29 08:15:00 -04:00 -- DI-M23: no `std`, and every allocation made at construction
+
+### <a id="di-m23"></a>DI-M23 -- No `std`, and every allocation made at construction. *(completed 2026-10-29 08:15:00 -04:00)*
+
+The engineer, 2026-10-22, for a no-std user-mode file-system driver stack: [DI-D-97](DESIGN-NOTES.md#di-d-97) to
+[DI-D-107](DESIGN-NOTES.md#di-d-107), from
+[DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md](../../design-sessions/DESIGN-SESSION-2026-10-22-durable-ioring-no-std-and-preallocation.md).
+The crate builds without `std` for a target that has none, and after construction no phase of the allocation test
+allocates. Each item is archived under its own ID, `DI-23.1` to `DI-23.13`; the stubs that stood in the checklist were
+removed with the milestone.
+
+## Moved 2026-10-29 14:45:00 -04:00 -- DI-21.1: the survey of common practice in database and file-system logs
+
+### <a id="di-211"></a>DI-21.1 -- The survey of common practice in database and file-system logs is recorded as a design session, extending the 2026-10-24 prior-art session, with each practice mapped to the durable-ioring facility a log would use or to none. *(completed 2026-10-29 14:45:00 -04:00)*
+
+**Survey common practice in database and file-system logs.** Write-ahead logging and its recovery (redo and undo, log
+sequence numbers and a page's own LSN, fuzzy checkpoints, compensation records -- ARIES and what followed it);
+file-system journaling (physical block journals and their ordering modes, metadata-only journals, a log with restart
+areas); and what every log faces: group commit, detecting a torn or partial record, a record's identity across a crash,
+reclaiming log space, and how a log and the data it protects are ordered. Each point is cited to its source, published
+papers and the systems' own documentation, and recorded as a design session in [design-sessions/](../../design-sessions/).
+The survey says what is common to both kinds of log, what differs and why, and, for each, which `durable-ioring` facility a
+log built on it would use -- epochs and seals, lineages, gates across lineages, flush domains, failures and their suspects
+-- or that none does.
+
+It extends [the 2026-10-24 prior-art session](../../design-sessions/DESIGN-SESSION-2026-10-24-durable-ioring-prior-art.md)
+and does not repeat it, adding what that session does not cover (fuzzy checkpoints, page LSNs and compensation records;
+journaling modes and NTFS's `$LogFile`; torn or partial record detection; a record's identity across a crash; reclaiming log
+space), with its sources continuing that session's numbering. The facility mapping includes what DI-M23 added: declared
+capacity ([DI-D-98](DESIGN-NOTES.md#di-d-98)), a failure holding the capacity of the writes it puts at risk
+([DI-D-100](DESIGN-NOTES.md#di-d-100)), the failure observer ([DI-D-113](DESIGN-NOTES.md#di-d-113)), and a provider's
+request lent for its call ([DI-D-115](DESIGN-NOTES.md#di-d-115)).
+
+**Done:** [DESIGN-SESSION-2026-10-29-database-and-file-system-log-practice.md](../../design-sessions/DESIGN-SESSION-2026-10-29-database-and-file-system-log-practice.md).
+Three research agents read the sources and the assistant re-fetched them and matched each quotation mechanically; a passage
+that did not match is not quoted as verified. Two agent claims were corrected by the re-check: ARIES mentions group commit
+once, in passing, about IMS Fast Path; and a RocksDB changelog entry could not be found as reported. The ARIES passage on
+truncating the log below what recovery needs is still not found. The session's section E maps each practice to a facility
+or to none, and its section F lists what bears on DI-21.2; it decides nothing and queues no work. No gap in
+`durable-ioring` beyond the one already recorded in the 2026-10-24 session was found, which is weak evidence, since nothing
+was built against the API.
+
+## Moved 2026-10-29 15:55:00 -04:00 -- DI-21.2: the sample log's scope settled
+
+### <a id="di-212"></a>DI-21.2 -- The sample's scope is settled: a ring of fixed-size segments with checked variable-length records, padded commits, zero-filled segments, fail-stop, and a gate step, running on every dioring (DI-D-116). *(completed 2026-10-29 15:55:00 -04:00)*
+
+**Bring the survey to the engineer, to settle the sample's scope.** Which practices the sample shows, which it names and
+leaves out, and where it lives were to be decided there, with three questions the survey brought: where it lives and how
+it stages a crash, whether it shows the allocate-at-construction discipline, and who retains data for a rewrite.
+
+**Done:** the engineer settled the shape on 2026-10-29, recorded as [DI-D-116](DESIGN-NOTES.md#di-d-116), with the exchange
+in [the survey's session](../../design-sessions/DESIGN-SESSION-2026-10-29-database-and-file-system-log-practice.md#di-212-the-samples-scope-continued-2026-10-29).
+A crash is staged on a dioring over the in-memory backend, which does not yet exist and is scheduled as `DI-M24`; the sample
+runs on every dioring; fail-stop removes the retention question for this sample; and the `no_std` discipline was not taken
+up. Two details stay open and are placed where they are needed: the blocking API, settled before `DI-21.3`, and where the
+sample's code lives, settled before `DI-21.5`. `DI-21.3`, which was "Build the sample log", was split into `DI-21.3` to
+`DI-21.8`, and the merge-or-delete decision for the duplicated driver is parked as `DI-21+.2`.

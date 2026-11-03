@@ -7,6 +7,7 @@
 
 use std::fs;
 use std::os::windows::io::AsRawHandle;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use windows_ioring_sys::RegisteredSpan;
@@ -22,7 +23,7 @@ use crate::dioring::{Dioring, Setup, TargetSetup, TimeBase};
 use crate::readiness::check_readiness;
 use crate::windows_backend::{Cached, FileOptions, OpenedFile, ReadOnly, Win32FileTarget};
 use durable_ioring::backend::RefusalCause;
-use durable_ioring::oracle::ConformanceOracle;
+use durable_ioring::oracle::{ConformanceOracle, ObservedFailures};
 use durable_ioring::{Access, IoTarget};
 use durable_ioring::{
     DurabilityRequest, Entry, Epoch, EpochState, ImportScope, IoTargetKey, OpCompletion, OpKind,
@@ -85,16 +86,21 @@ pub(super) fn given(key: IoTargetKey, temp: &TempFile) -> TargetSetup {
 pub(super) struct Harness<K: TimeBase = InterruptStamps> {
     pub(super) ring: Ring<K>,
     pub(super) oracle: ConformanceOracle<V, u32>,
+    /// What the instance's failure observer was told, which the oracle reads (DI-D-113).
+    pub(super) told: Arc<ObservedFailures<V>>,
     /// A handle to the instance's default lineage, which every write here is tagged in.
     pub(super) default: LineageHandle,
 }
 
 impl<K: TimeBase> Harness<K> {
+    /// A harness over `ring`, built from `setup`, whose failure observer the oracle reads.
     pub(super) fn new(ring: Ring<K>) -> Self {
+        let told = super::told_by_setup();
         Self {
             default: ring.default_lineage(),
             ring,
-            oracle: ConformanceOracle::new(),
+            oracle: ConformanceOracle::reading(told.clone()),
+            told,
         }
     }
 
@@ -172,6 +178,17 @@ impl<K: TimeBase> Harness<K> {
         self.oracle
             .pushed(id, kind, length, context)
             .expect("the oracle accepts the push");
+    }
+
+    /// The ops `failure` suspects, in push order, as the instance's observer was told them
+    /// (DI-D-113).
+    pub(super) fn suspects(&self, failure: durable_ioring::FailureId) -> Vec<OpId> {
+        self.told
+            .suspects(failure)
+            .expect("the observer was told of the failure before its Failed was popped")
+            .iter()
+            .map(|write| write.op)
+            .collect()
     }
 
     /// The next entry, within the bound, after the oracle has accepted it.
@@ -639,11 +656,19 @@ fn span_operations_on_an_instance_without_registered_buffers_are_refused() {
     let refused = ring
         .with_registered_buffer(0, |_| unreachable!("nothing is lent"))
         .expect_err("no registration to read");
-    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(kind_of(&refused), Some(std::io::ErrorKind::InvalidInput));
     let refused = ring
         .with_registered_buffer_mut(0, |_| unreachable!("nothing is lent"))
         .expect_err("no registration to fill");
-    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(kind_of(&refused), Some(std::io::ErrorKind::InvalidInput));
+}
+
+/// The kind of the `io::Error` a refused lending reports.
+fn kind_of(fault: &crate::IoFault) -> Option<std::io::ErrorKind> {
+    fault
+        .error
+        .downcast_ref::<std::io::Error>()
+        .map(std::io::Error::kind)
 }
 
 #[test]
@@ -698,10 +723,12 @@ fn a_span_the_registration_does_not_contain_is_refused_by_the_ring() {
     assert_eq!((error.buffer, error.context), (None, 8));
 
     assert_eq!(
-        ring.with_registered_buffer(1, |_| unreachable!("nothing is lent"))
-            .expect_err("out of range")
-            .kind(),
-        std::io::ErrorKind::InvalidInput
+        kind_of(
+            &ring
+                .with_registered_buffer(1, |_| unreachable!("nothing is lent"))
+                .expect_err("out of range")
+        ),
+        Some(std::io::ErrorKind::InvalidInput)
     );
     assert!(
         ring.pop().expect("pop").is_none(),
@@ -749,11 +776,14 @@ fn a_file_added_under_a_key_in_use_is_refused_and_handed_back() {
         );
         assert_eq!(error.target.flush_domains(), [super::domain("d")]);
     }
-    let imported = ring
-        .import_failure(ImportScope::Domains(vec![super::domain("d")]))
-        .expect("an import by domain");
+    let mut reported = Vec::new();
+    ring.import_failure(
+        ImportScope::Domains(std::sync::Arc::from([super::domain("d")])),
+        |domain| reported.push(domain.clone()),
+    )
+    .expect("an import by domain");
     assert_eq!(
-        imported.unmatched,
+        reported,
         [super::domain("d")],
         "a refused target's domains were never given to the instance"
     );

@@ -3,14 +3,41 @@
 
 use std::io;
 
-use super::Stamp;
 use super::{A, B, DEFAULT, FULL, Lineage, Ops, lineage, submitted, tokens};
-use crate::durability::files::FileHolds;
 use crate::durability::{DEFAULT_LINEAGE, Key, Reach};
+use crate::ids::FailureId;
 use crate::types::{Epoch, FailureCause, ImportScope, IoTargetKey, Resolution};
 
-fn holds(lineage: &Lineage, file: IoTargetKey) -> FileHolds<u64, Stamp> {
-    lineage.file_holds(file)
+/// The core's holds on a file as the refusal counts them and the visitors name them.
+#[derive(Debug, PartialEq, Eq)]
+struct Holds {
+    uncovered: usize,
+    uncovered_through: Vec<Epoch<super::Ids>>,
+    failures: Vec<FailureId>,
+}
+
+/// The holds on `file`: the counts, and what the visitors name, checked against each other.
+fn holds(lineage: &Lineage, file: IoTargetKey) -> Holds {
+    let counted = lineage.file_holds(file);
+    let mut uncovered_through = Vec::new();
+    lineage.file_uncovered(file, |through| uncovered_through.push(through));
+    let mut failures = Vec::new();
+    lineage.file_failures(file, |failure| failures.push(failure));
+    assert_eq!(
+        counted.failures,
+        failures.len(),
+        "each failure counted is named"
+    );
+    assert_eq!(
+        counted.uncovered == 0,
+        uncovered_through.is_empty(),
+        "a lineage is named exactly when an uncovered write is counted"
+    );
+    Holds {
+        uncovered: counted.uncovered,
+        uncovered_through,
+        failures,
+    }
 }
 
 /// Epoch `epoch` of the lineage keyed `key`, as a hold names it.
@@ -18,8 +45,8 @@ fn at(lineage: &Lineage, key: Key, epoch: u64) -> Epoch<super::Ids> {
     Epoch::new(lineage.0.name(key), epoch)
 }
 
-fn none() -> FileHolds<u64, Stamp> {
-    FileHolds {
+fn none() -> Holds {
+    Holds {
         uncovered: 0,
         uncovered_through: Vec::new(),
         failures: Vec::new(),
@@ -34,7 +61,7 @@ fn failed() -> io::Result<()> {
 fn a_file_nothing_was_written_to_is_held_by_nothing() {
     let lineage = lineage();
     assert_eq!(holds(&lineage, A), none());
-    assert!(holds(&lineage, A).is_empty());
+    assert!(lineage.file_holds(A).is_empty());
 }
 
 #[test]
@@ -49,13 +76,13 @@ fn a_completed_write_holds_its_file_until_it_is_covered() {
     let mut lineage = lineage();
     let write = Ops::new().push(&mut lineage, 1, A, DEFAULT);
     lineage.completed(write, FULL);
-    let expected = FileHolds {
+    let expected = Holds {
         uncovered: 1,
         uncovered_through: vec![at(&lineage, DEFAULT_LINEAGE, 1)],
         failures: Vec::new(),
     };
     assert_eq!(holds(&lineage, A), expected);
-    assert!(!holds(&lineage, A).is_empty());
+    assert!(!lineage.file_holds(A).is_empty());
 
     submitted(lineage.seal(1));
     assert_eq!(
@@ -83,7 +110,7 @@ fn the_highest_uncovered_epoch_is_reported_per_lineage_in_lineage_order() {
     }
     assert_eq!(
         holds(&lineage, A),
-        FileHolds {
+        Holds {
             uncovered: 3,
             uncovered_through: vec![at(&lineage, DEFAULT_LINEAGE, 3), at(&lineage, minted, 2)],
             failures: Vec::new(),
@@ -105,7 +132,7 @@ fn a_suspect_write_is_reported_through_its_failure_and_not_as_uncovered() {
     lineage.completed(later, FULL);
     assert_eq!(
         holds(&lineage, A),
-        FileHolds {
+        Holds {
             uncovered: 1,
             uncovered_through: vec![at(&lineage, DEFAULT_LINEAGE, 2)],
             failures: vec![token.id()],
@@ -113,10 +140,17 @@ fn a_suspect_write_is_reported_through_its_failure_and_not_as_uncovered() {
         "the write pushed after the failure is uncovered, the one before it suspect"
     );
 
+    let id = token.id();
     lineage
         .resolve(vec![(token, Resolution::Abandon)])
         .expect("abandon");
-    assert!(holds(&lineage, A).failures.is_empty(), "resolved");
+    assert_eq!(
+        holds(&lineage, A).failures,
+        [id],
+        "resolved, and holding the file until its Abandoned is popped (DI-D-108)"
+    );
+    lineage.0.forget(id);
+    assert!(holds(&lineage, A).failures.is_empty(), "popped");
 }
 
 #[test]
@@ -134,7 +168,7 @@ fn a_failure_holds_a_file_whose_suspect_write_was_covered_until_it_is_resolved()
     lineage.flushed(1, A, Ok(()));
     assert_eq!(
         holds(&lineage, A),
-        FileHolds {
+        Holds {
             uncovered: 0,
             uncovered_through: Vec::new(),
             failures: vec![id],
@@ -156,7 +190,7 @@ fn a_failure_suspecting_only_other_files_does_not_hold_this_one() {
     assert_eq!(holds(&lineage, A).failures, [id]);
     assert_eq!(
         holds(&lineage, B),
-        FileHolds {
+        Holds {
             uncovered: 1,
             uncovered_through: vec![at(&lineage, DEFAULT_LINEAGE, 1)],
             failures: Vec::new(),
@@ -173,5 +207,17 @@ fn an_ended_lineages_completed_writes_no_longer_hold_their_file() {
     lineage.completed(write, FULL);
     assert_eq!(holds(&lineage, A).uncovered, 1);
     lineage.end(minted);
+    assert_eq!(holds(&lineage, A), none());
+}
+
+#[test]
+fn an_ended_lineages_write_kept_for_its_flush_out_does_not_hold_its_file() {
+    let mut lineage = lineage();
+    let minted = lineage.mint(None);
+    let write = Ops::new().push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
+    lineage.completed(write, FULL);
+    super::submitted(lineage.0.seal(minted, 1));
+    lineage.end(minted);
+    assert_eq!(lineage.window_places(), 1, "kept, for its commit");
     assert_eq!(holds(&lineage, A), none());
 }

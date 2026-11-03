@@ -11,12 +11,16 @@
 //! came, so its answer goes straight back to the instance; the router answers nothing itself. A
 //! domain no provider serves is a caller breaking the protocol, and is panicked on (DI-D-46).
 
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-use std::fmt;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::collections::btree_map::Entry;
+use alloc::vec::Vec;
+use core::fmt;
 
+use crate::alloc_tags::{tag, tagged};
 use crate::contract::Identities;
-use crate::provider::{DomainRequest, DurabilityProvider, FlushRequest};
+use crate::provider::DurabilityProvider;
+use crate::request::FlushRequest;
 use crate::types::FlushDomain;
 
 /// Builds a [`RoutingProvider`] from providers registered with it in turn. Registrations are
@@ -38,7 +42,11 @@ impl<V: Identities> RouterBuilder<V> {
     /// [`build`](Self::build), not here.
     #[must_use]
     pub fn register(mut self, provider: impl DurabilityProvider<V> + 'static) -> Self {
-        self.providers.push(Box::new(provider));
+        let provider: Box<dyn DurabilityProvider<V>> =
+            tagged(tag::ROUTER_REGISTER_BOX, || Box::new(provider));
+        tagged(tag::ROUTER_REGISTER_PROVIDER, || {
+            self.providers.push(provider)
+        });
         self
     }
 
@@ -50,10 +58,12 @@ impl<V: Identities> RouterBuilder<V> {
     /// and each one's domains in the order it gave them. The providers already read are dropped
     /// with the builder, and those after it are not asked for their domains.
     pub fn build(self) -> Result<RoutingProvider<V>, RoutedTwice> {
-        let mut owners: HashMap<FlushDomain, usize> = HashMap::new();
-        let mut routes = Vec::with_capacity(self.providers.len());
+        let mut owners: BTreeMap<FlushDomain, usize> = BTreeMap::new();
+        let mut routes = tagged(tag::ROUTER_BUILD_ROUTES, || {
+            Vec::with_capacity(self.providers.len())
+        });
         for (registration, provider) in self.providers.into_iter().enumerate() {
-            let domains = provider.domains();
+            let domains = tagged(tag::ROUTER_BUILD_PROVIDER_DOMAINS, || provider.domains());
             for domain in &domains {
                 match owners.entry(domain.clone()) {
                     Entry::Occupied(owner) => {
@@ -64,11 +74,13 @@ impl<V: Identities> RouterBuilder<V> {
                         });
                     }
                     Entry::Vacant(vacant) => {
-                        vacant.insert(registration);
+                        tagged(tag::ROUTER_BUILD_OWNER, || vacant.insert(registration));
                     }
                 }
             }
-            routes.push(Route { provider, domains });
+            tagged(tag::ROUTER_BUILD_ROUTE, || {
+                routes.push(Route { provider, domains })
+            });
         }
         Ok(RoutingProvider { routes, owners })
     }
@@ -109,7 +121,7 @@ impl<V: Identities> fmt::Debug for RouterBuilder<V> {
 pub struct RoutingProvider<V: Identities> {
     routes: Vec<Route<V>>,
     /// Each domain's registration.
-    owners: HashMap<FlushDomain, usize>,
+    owners: BTreeMap<FlushDomain, usize>,
 }
 
 /// One registration: the provider and the domains it declared when the router was built.
@@ -128,35 +140,39 @@ impl<V: Identities> RoutingProvider<V> {
 
 impl<V: Identities> DurabilityProvider<V> for RoutingProvider<V> {
     fn domains(&self) -> Vec<FlushDomain> {
-        self.routes
-            .iter()
-            .flat_map(|route| route.domains.iter().cloned())
-            .collect()
+        tagged(tag::ROUTER_DOMAINS, || {
+            self.routes
+                .iter()
+                .flat_map(|route| route.domains.iter().cloned())
+                .collect()
+        })
     }
 
-    fn make_durable(&mut self, request: FlushRequest<V>) {
-        let mut parts: Vec<Vec<DomainRequest<V>>> =
-            self.routes.iter().map(|_| Vec::new()).collect();
-        for part in request.domains {
-            let Some(&registration) = self.owners.get(&part.domain) else {
+    fn make_durable(&mut self, request: FlushRequest<'_, V>) {
+        // Before any provider is called, so a domain nobody serves abandons every part of the
+        // request, as dropping it does.
+        for domain in request.domain_names() {
+            if !self.owners.contains_key(domain) {
                 panic!(
-                    "the routing provider was asked to make the flush domain {:?} durable, which no \
-                     provider registered with it serves",
-                    part.domain
+                    "the routing provider was asked to make the flush domain {domain:?} durable, \
+                     which no provider registered with it serves"
                 );
-            };
-            parts[registration].push(part);
+            }
         }
-        // A panic here unwinds through `parts`, dropping the parts of the providers not yet called,
-        // whose completions then answer as abandoned.
-        for (route, domains) in self.routes.iter_mut().zip(parts) {
-            if !domains.is_empty() {
-                route.provider.make_durable(FlushRequest { domains });
+        // A panic in a provider unwinds through `request`, whose drop abandons the parts of the
+        // providers not yet called.
+        let owners = &self.owners;
+        for (registration, route) in self.routes.iter_mut().enumerate() {
+            let owns = |domain: &FlushDomain| owners.get(domain) == Some(&registration);
+            let part = request.only(&owns);
+            if part.domain_count() > 0 {
+                tagged(tag::ROUTER_MAKE_DURABLE_PROVIDER, || {
+                    route.provider.make_durable(part);
+                });
             }
         }
     }
 }
-
 impl<V: Identities> fmt::Debug for RoutingProvider<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RoutingProvider")
@@ -205,7 +221,7 @@ impl fmt::Display for RoutedTwice {
     }
 }
 
-impl std::error::Error for RoutedTwice {}
+impl core::error::Error for RoutedTwice {}
 
 #[cfg(test)]
 mod tests;

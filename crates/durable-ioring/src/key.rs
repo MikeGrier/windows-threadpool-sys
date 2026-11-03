@@ -14,9 +14,9 @@
 //! only runtime step a typed key adds. A key that declares less than its target can do is accepted:
 //! it is a narrower view of the same target.
 
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
+use core::fmt;
+use core::hash::{Hash, Hasher};
+use core::marker::PhantomData;
 
 use crate::access::{Access, CanRead, CanWrite, HasData};
 use crate::types::{AddTargetCause, IoTargetKey};

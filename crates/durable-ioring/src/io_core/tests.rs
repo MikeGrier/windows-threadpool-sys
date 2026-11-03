@@ -6,7 +6,7 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use super::{CoreActions, DurableIoCore};
+use super::{CoreActions, DurableIoCore, Taken};
 use crate::backend::{
     Completion, IoBackend, RefusalCause, RegisteredRegion, Submission, SubmissionData,
     SubmissionOp, SubmissionToken,
@@ -16,21 +16,29 @@ use crate::ids::{DioringIds, Lineage, OpId};
 use crate::io_target::IoTarget;
 use crate::memory::{MemoryBackend, MemoryTarget};
 use crate::oracle::ConformanceOracle;
-use crate::provider::ProviderRequest;
-use crate::test_support::Ticks;
+use crate::request::OwnedRequest;
+use crate::test_support::{Listed, Ticks};
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, FailureCause, FlushDomain, IoTargetKey, OpKind,
-    Outcome, PushError, PushRefusal, ReadOptions, RemoveTargetError, SealError, WriteOptions,
+    DurabilityRequest, Entry, Epoch, EpochState, FailureCause, FlushDomain, HeldOperation, Hold,
+    IoTargetKey, Leftover, OpKind, Outcome, PushError, PushRefusal, ReadOptions, RemoveTargetError,
+    SealError, WriteOptions,
 };
 
+mod capacity;
+mod coalescing;
 mod failures;
 mod flush_failures;
 mod gates;
 mod lineages;
+mod lists;
+mod observer;
 mod pairs;
 mod provider;
+mod queue;
 mod refusals;
 mod scripted;
+mod tables;
+mod window;
 
 const KEY: IoTargetKey = IoTargetKey(1);
 const OTHER: IoTargetKey = IoTargetKey(2);
@@ -39,8 +47,84 @@ type Core = DurableIoCore<u64, Vec<u8>, &'static str, Ticks>;
 type V = DioringIds<u64, u64>;
 type Pushed = Result<OpId, PushError<V, Vec<u8>, &'static str>>;
 
+/// What a call left to do, as lists of its own.
+type Due = Taken<V, Vec<u8>>;
+
+/// What a test acts on: what a call returned, its submissions and requests still in the core, or
+/// those already taken out to look at.
+trait Acts {
+    fn taken(self, core: &mut Core) -> Due;
+}
+
+impl Acts for CoreActions {
+    fn taken(self, core: &mut Core) -> Due {
+        core.taken(self)
+    }
+}
+
+impl Acts for Due {
+    fn taken(self, _: &mut Core) -> Due {
+        self
+    }
+}
+
 fn nz(n: u32) -> NonZeroU32 {
     NonZeroU32::new(n).expect("non-zero")
+}
+
+/// Each live lineage, as the visitor gives them.
+fn listed(core: &Core) -> Vec<Listed<V>> {
+    let mut listed = Vec::new();
+    core.lineages(|info| listed.push(Listed::from(info)));
+    listed
+}
+
+/// What holds the target under `key`, as the visitor names it.
+fn target_holds(core: &Core, key: IoTargetKey) -> Vec<Hold<V>> {
+    let mut holds = Vec::new();
+    core.target_holds(key, |hold| holds.push(hold));
+    holds
+}
+
+/// What holds `lineage` from being retired, as the visitor names it.
+fn lineage_holds(core: &Core, lineage: Lineage) -> Vec<Hold<V>> {
+    let mut holds = Vec::new();
+    core.lineage_holds(lineage, |hold| holds.push(hold));
+    holds
+}
+
+/// What `close` gave, by kind.
+struct Closed {
+    held: Vec<HeldOperation<V, Vec<u8>, &'static str>>,
+    failures: Vec<crate::types::FailureListed<V>>,
+    lineages: Vec<Listed<V>>,
+}
+
+/// Close `core`, checking it gives the held operations, then the failures, then the lineages.
+fn closed(core: Core) -> Closed {
+    let mut closed = Closed {
+        held: Vec::new(),
+        failures: Vec::new(),
+        lineages: Vec::new(),
+    };
+    core.close(|leftover| match leftover {
+        Leftover::Held(held) => {
+            assert!(
+                closed.failures.is_empty() && closed.lineages.is_empty(),
+                "the held operations come first"
+            );
+            closed.held.push(held);
+        }
+        Leftover::Failure(failure) => {
+            assert!(
+                closed.lineages.is_empty(),
+                "the failures come before the lineages"
+            );
+            closed.failures.push(failure.into());
+        }
+        Leftover::Lineage(lineage) => closed.lineages.push(Listed::from(lineage)),
+    });
+    closed
 }
 
 /// A core and a backend, with the driver's part played here.
@@ -48,9 +132,15 @@ struct Rig {
     core: Core,
     backend: MemoryBackend,
     /// Every provider request the core has made, in order.
-    requests: Vec<ProviderRequest<V>>,
+    requests: Vec<OwnedRequest<V>>,
     /// The contract's rules, over every push, seal, heal and entry the rig sees (DI-D-24).
     oracle: ConformanceOracle<V, &'static str>,
+    /// Each failure's suspect set, as the core's observer was told it when its `Failed` was popped
+    /// (DI-D-113).
+    suspected: std::collections::HashMap<u64, Vec<crate::types::SuspectWrite<V>>>,
+    /// What the core's failure observer was told, which the oracle reads as well: the observer the
+    /// oracle hands out.
+    told: Arc<crate::oracle::ObservedFailures<V>>,
 }
 
 impl Rig {
@@ -59,7 +149,14 @@ impl Rig {
     }
 
     fn with_queues(submissions: u32, completions: u32) -> Self {
-        let mut rig = Self::over(Core::new(Ticks::default(), Arc::new(NoDiagnostics)));
+        let mut rig = Self::over(
+            Core::new(
+                Ticks::default(),
+                Arc::new(NoDiagnostics),
+                crate::test_support::CAPACITY,
+            )
+            .expect("a valid capacity"),
+        );
         rig.backend = MemoryBackend::new(nz(submissions), nz(completions));
         rig.attach(KEY, MemoryTarget::new());
         rig
@@ -67,19 +164,31 @@ impl Rig {
 
     /// A rig over a backend that does what `script` says, with the key attached.
     fn scripted(script: crate::memory::FaultScript) -> Self {
-        let mut rig = Self::over(Core::new(Ticks::default(), Arc::new(NoDiagnostics)));
+        let mut rig = Self::over(
+            Core::new(
+                Ticks::default(),
+                Arc::new(NoDiagnostics),
+                crate::test_support::CAPACITY,
+            )
+            .expect("a valid capacity"),
+        );
         rig.backend = MemoryBackend::new(nz(8), nz(16)).with_script(script);
         rig.attach(KEY, MemoryTarget::new());
         rig
     }
 
-    /// `core`, with no target, over a backend with room to spare.
+    /// `core`, with no target, over a backend with room to spare, given the failure observer the
+    /// oracle reads from.
     fn over(core: Core) -> Self {
+        let oracle = ConformanceOracle::new();
+        let told = oracle.observer();
         Self {
-            core,
+            core: core.observed_by(told.clone()),
+            told,
             backend: MemoryBackend::new(nz(8), nz(16)),
             requests: Vec::new(),
-            oracle: ConformanceOracle::new(),
+            oracle,
+            suspected: std::collections::HashMap::new(),
         }
     }
 
@@ -170,7 +279,7 @@ impl Rig {
 
     /// Seal through `through`, telling the oracle of a new seal: the answer, and what it made due,
     /// not yet acted on.
-    fn sealed(&mut self, through: Epoch<V>) -> (DurabilityRequest<V>, CoreActions<V, Vec<u8>>) {
+    fn sealed(&mut self, through: Epoch<V>) -> (DurabilityRequest<V>, Due) {
         let (answer, actions) = self
             .core
             .make_durable_through(through)
@@ -178,7 +287,19 @@ impl Rig {
         if answer == DurabilityRequest::Submitted {
             self.oracle.sealed(through);
         }
-        (answer, actions)
+        (answer, self.core.taken(actions))
+    }
+
+    /// Hand `completion` to the core: what that made due, taken out to look at.
+    fn completed(&mut self, completion: Completion<Vec<u8>>) -> Due {
+        let actions = self.core.complete(completion);
+        self.core.taken(actions)
+    }
+
+    /// The submissions refused before, taken out to look at.
+    fn retried(&mut self) -> Due {
+        let actions = self.core.retry();
+        self.core.taken(actions)
     }
 
     fn write(&mut self, epoch: u64, offset: u64, bytes: &[u8]) -> Pushed {
@@ -196,15 +317,16 @@ impl Rig {
 
     /// Push what the core asks for, handing refusals back and acting on what they make due, and
     /// keep its provider requests: the engine's `act`, played here.
-    fn act(&mut self, actions: CoreActions<V, Vec<u8>>) -> bool {
+    fn act(&mut self, actions: impl Acts) -> bool {
         let mut deliver = false;
-        let mut pending = std::collections::VecDeque::from([actions]);
+        let mut pending = std::collections::VecDeque::from([actions.taken(&mut self.core)]);
         while let Some(actions) = pending.pop_front() {
             deliver |= actions.deliver;
             self.requests.extend(actions.requests);
             for submission in actions.submit {
                 if let Err(refused) = self.backend.push(submission) {
-                    pending.push_back(self.core.refused(refused));
+                    let more = self.core.refused(refused);
+                    pending.push_back(self.core.taken(more));
                 }
             }
         }
@@ -229,14 +351,31 @@ impl Rig {
         }
     }
 
+    /// Every entry, popped one at a time and each reported to the oracle: a `Failed`'s suspect set
+    /// is read from what the observer was told as it is popped, and kept in `suspected`.
     fn entries(&mut self) -> Vec<Entry<V, Vec<u8>, &'static str>> {
-        let entries: Vec<_> = std::iter::from_fn(|| self.core.pop()).collect();
-        for entry in &entries {
-            self.oracle
-                .observe(entry)
-                .expect("the oracle accepts the entry");
+        std::iter::from_fn(|| self.pop_entry()).collect()
+    }
+
+    /// The next entry, reported to the oracle, a `Failed`'s suspect set read as `entries` reads it.
+    fn pop_entry(&mut self) -> Option<Entry<V, Vec<u8>, &'static str>> {
+        let entry = self.core.pop()?;
+        self.oracle
+            .observe(&entry)
+            .expect("the oracle accepts the entry");
+        if let Entry::Failed(failed) = &entry {
+            let suspect = self
+                .told
+                .suspects(failed.id)
+                .expect("the observer was told of the failure before its Failed was popped");
+            assert_eq!(
+                self.core.suspects_listed(failed.id).as_ref(),
+                Some(&suspect),
+                "the observer was told a suspect set other than the one the core holds"
+            );
+            self.suspected.insert(failed.id.seq, suspect);
         }
-        entries
+        Some(entry)
     }
 
     fn target(&self) -> &MemoryTarget {
@@ -244,8 +383,12 @@ impl Rig {
     }
 }
 
-/// An entry, briefly: what a test compares.
-fn show(entry: &Entry<V, Vec<u8>, &'static str>) -> String {
+/// An entry, briefly: what a test compares, a failure by the size of its suspect set as
+/// `suspected` holds it.
+fn show(
+    entry: &Entry<V, Vec<u8>, &'static str>,
+    suspected: &std::collections::HashMap<u64, Vec<crate::types::SuspectWrite<V>>>,
+) -> String {
     match entry {
         Entry::Op(op) => {
             let kind = match op.kind {
@@ -260,14 +403,18 @@ fn show(entry: &Entry<V, Vec<u8>, &'static str>) -> String {
             format!("op{} {kind} {outcome} {}", op.id.seq, op.context)
         }
         Entry::Durable { through } => format!("durable {}", through.id),
-        Entry::Failed(failed) => format!("failed {}", failed.suspect.writes().len()),
+        Entry::Failed(failed) => format!("failed {}", suspected[&failed.id.seq].len()),
         Entry::Blocked { through, .. } => format!("blocked {}", through.id),
         other => format!("{other:?}"),
     }
 }
 
 fn shown(rig: &mut Rig) -> Vec<String> {
-    rig.entries().iter().map(show).collect()
+    let entries = rig.entries();
+    entries
+        .iter()
+        .map(|entry| show(entry, &rig.suspected))
+        .collect()
 }
 
 #[test]
@@ -383,7 +530,12 @@ fn a_write_at_or_below_the_seal_point_is_refused() {
 #[test]
 fn another_cores_lineage_is_refused() {
     let mut rig = Rig::new();
-    let other = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
+    let other = Core::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     let foreign = Epoch::new(other.default_lineage(), 1);
     let refused = rig
         .core
@@ -477,7 +629,7 @@ fn a_seal_commits_each_target_its_writes_reached_once() {
     rig.backend.submit().expect("submit");
     let mut commits = Vec::new();
     while let Some(completion) = rig.backend.pop().expect("never fails") {
-        let actions = rig.core.complete(completion);
+        let actions = rig.completed(completion);
         commits.extend(actions.submit.iter().map(|s| s.target));
         rig.act(actions);
     }
@@ -501,7 +653,7 @@ fn a_failed_commit_is_reported_as_a_failure_suspecting_its_writes() {
     rig.seal(1);
     rig.backend.submit().expect("submit");
     let write = rig.backend.pop().expect("never fails").expect("the write");
-    let actions = rig.core.complete(write);
+    let actions = rig.completed(write);
     assert_eq!(actions.submit.len(), 1, "the commit is due");
     rig.act(actions);
     // The commit runs against a target the backend no longer has, and fails.
@@ -517,7 +669,7 @@ fn a_failed_commit_is_reported_as_a_failure_suspecting_its_writes() {
     };
     assert_eq!(*target, KEY);
     assert_eq!(fault.source, crate::memory::MEMORY);
-    assert_eq!(failed.suspect.writes().len(), 1);
+    assert_eq!(rig.suspected[&failed.id.seq].len(), 1);
     assert!(
         matches!(
             rig.core.epoch_state(rig.epoch(1)),
@@ -552,14 +704,14 @@ fn a_refused_commit_is_kept_and_emitted_again() {
     let write = rig.backend.pop().expect("never fails").expect("the write");
     // Fill the submission queue so the commit the write's completion makes due is refused.
     rig.read(0, 1).expect("accepted");
-    let actions = rig.core.complete(write);
+    let actions = rig.completed(write);
     assert_eq!(actions.submit.len(), 1);
     rig.act(actions);
     assert_eq!(rig.backend.queued(), 1, "only the read is queued");
     rig.backend.submit().expect("submit");
-    let retried = rig.core.retry();
+    let retried = rig.retried();
     assert_eq!(retried.submit.len(), 1, "the refused commit comes back");
-    assert!(rig.core.retry().submit.is_empty(), "and only once");
+    assert!(rig.retried().submit.is_empty(), "and only once");
     rig.act(retried);
     rig.run();
     let shown = shown(&mut rig);
@@ -579,7 +731,7 @@ fn a_refused_commit_rides_on_the_next_actions() {
     rig.act(actions);
     rig.backend.submit().expect("submit");
     let read = rig.backend.pop().expect("never fails").expect("the read");
-    let actions = rig.core.complete(read);
+    let actions = rig.completed(read);
     assert_eq!(
         actions.submit.len(),
         1,
@@ -694,6 +846,7 @@ fn domains_are_interned_once_per_distinct_bytes() {
     let core = Core::with_provider(
         Ticks::default(),
         Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
         vec![domain("C"), domain("D")],
     )
     .expect("no repeats");
@@ -710,7 +863,12 @@ fn domains_are_interned_once_per_distinct_bytes() {
     let core = &rig.core;
     assert_eq!(core.domains.len(), 4, "A, B, C and D, once each");
     let id = |name: &str| core.domains[&domain(name)];
-    let of = |key: IoTargetKey| Arc::clone(&core.targets[&key].domains);
+    let of = |key: IoTargetKey| {
+        core.durability
+            .lists()
+            .get(core.targets[&key].domains)
+            .to_vec()
+    };
 
     let mut one = vec![id("A"), id("B")];
     one.sort_unstable();
@@ -775,7 +933,10 @@ fn a_target_is_busy_until_its_writes_are_covered() {
     };
     assert_eq!(busy.in_flight, 0);
     assert_eq!(busy.uncovered, 1);
-    assert_eq!(busy.uncovered_through, [rig.epoch(3)]);
+    assert_eq!(
+        target_holds(&rig.core, KEY),
+        [Hold::Uncovered(rig.epoch(3))]
+    );
     rig.seal(3);
     rig.run();
     let description = rig.core.remove_target(KEY).expect("covered");
@@ -801,7 +962,11 @@ fn a_target_is_busy_while_a_failure_suspects_its_writes() {
     let Err(RemoveTargetError::Busy(busy)) = rig.core.remove_target(KEY) else {
         panic!("busy");
     };
-    assert_eq!(busy.failures.len(), 1);
+    assert_eq!(busy.failures, 1);
+    assert!(matches!(
+        target_holds(&rig.core, KEY)[..],
+        [Hold::Failure(_)]
+    ));
 }
 
 #[test]
@@ -856,8 +1021,18 @@ fn a_consumer_operation_handed_back_as_refused_is_panicked_on() {
 
 #[test]
 fn each_core_has_its_own_lineages() {
-    let a = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
-    let b = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
+    let a = Core::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
+    let b = Core::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     assert_ne!(a.default_lineage(), b.default_lineage());
     assert_eq!(a.durable_through(a.default_lineage()), Ok(None));
     assert_eq!(a.sealed_through(a.default_lineage()), Ok(None));
@@ -866,7 +1041,44 @@ fn each_core_has_its_own_lineages() {
 #[test]
 fn nothing_to_do_is_empty() {
     let mut rig = Rig::new();
-    assert!(rig.core.retry().is_empty());
+    assert!(rig.retried().is_empty());
     let (_, actions) = rig.sealed(rig.epoch(1));
     assert!(!actions.is_empty(), "it delivered");
+}
+
+#[test]
+fn a_core_with_no_provider_drains_nothing_into_its_buffer() {
+    let mut rig = Rig::new();
+    let mut buf = rig.core.request_buf().expect("a buffer");
+    rig.write(1, 0, b"x").expect("accepted");
+    rig.seal(1);
+    rig.backend.submit().expect("submit");
+    let write = rig.backend.pop().expect("never fails").expect("the write");
+    let _ = rig.core.complete(write);
+    rig.core.drain_requests(&mut buf);
+    assert!(buf.is_empty(), "no domain is the provider's");
+}
+
+#[test]
+fn draining_empties_the_buffer_first_and_the_core_s_queue_with_it() {
+    let core = Core::with_provider(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+        vec![domain("P")],
+    )
+    .expect("no repeats");
+    let mut rig = Rig::over(core);
+    rig.attach(KEY, MemoryTarget::new().with_domains([domain("P")]));
+    let mut buf = rig.core.request_buf().expect("a buffer");
+    rig.write(1, 0, b"x").expect("accepted");
+    rig.seal(1);
+    rig.backend.submit().expect("submit");
+    let write = rig.backend.pop().expect("never fails").expect("the write");
+    // Completed by hand, so the request stays in the core's queue for the drain below.
+    let _ = rig.core.complete(write);
+    rig.core.drain_requests(&mut buf);
+    assert_eq!(buf.len(), 1, "the seal asked the provider");
+    rig.core.drain_requests(&mut buf);
+    assert!(buf.is_empty(), "the queue was empty, and so is the buffer");
 }

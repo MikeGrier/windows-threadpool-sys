@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Mike Grier
 
+use std::cell::RefCell;
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
@@ -13,10 +14,13 @@ use wtf_string::Wtf16String;
 
 use super::{DeliveryMode, Dioring, Setup, SetupError, SetupRefusal, TargetSetup};
 use crate::windows_backend::{FileOptions, OpenedFile, Win32FileTarget};
+use durable_ioring::Capacity;
 use durable_ioring::DurableRing;
 use durable_ioring::backend::IoBackend;
-use durable_ioring::{DurabilityProvider, FlushRequest};
+use durable_ioring::oracle::ObservedFailures;
+use durable_ioring::{DomainCompletion, DurabilityProvider, FlushRequest};
 use durable_ioring::{FlushDomain, IoTargetKey};
+use durable_ioring::{HeldOperation, Hold, Identities, Leftover, LineageInfo};
 use durable_ioring::{LineageHandle, StampClock};
 
 // Pushes, completions and the readiness signal: DI-3.2.2.1.
@@ -36,6 +40,7 @@ mod gates;
 // The consumer's durability provider: DI-3.2.6.
 mod providers;
 // Removing a file, and ending the instance: DI-3.2.7.
+mod capacity;
 mod construction;
 mod ending;
 mod pumped;
@@ -57,23 +62,140 @@ mod diagnostics;
 type Ring = Dioring<Vec<u8>>;
 type V = crate::WindowsIds<u64>;
 
+/// A lineage as the enumeration lent it, owned so a test can keep it past the visit.
+#[derive(Clone, Debug)]
+pub(crate) struct Listed<V: Identities> {
+    pub(crate) lineage: V::Lineage,
+    pub(crate) description: Option<String>,
+    pub(crate) is_default: bool,
+    pub(crate) durable_through: Option<V::EpochId>,
+    pub(crate) sealed_through: Option<V::EpochId>,
+}
+
+impl<V: Identities> From<LineageInfo<'_, V>> for Listed<V> {
+    fn from(info: LineageInfo<'_, V>) -> Self {
+        Self {
+            lineage: info.lineage,
+            description: info.description.map(str::to_owned),
+            is_default: info.is_default,
+            durable_through: info.durable_through,
+            sealed_through: info.sealed_through,
+        }
+    }
+}
+
+/// How many unresolved failures `ring` reports.
+pub(crate) fn unresolved(ring: &impl DurableRing) -> usize {
+    let mut count = 0;
+    ring.failures(|_| count += 1);
+    count
+}
+
+/// Each live lineage `ring` gives its visitor.
+pub(crate) fn listed<D: DurableRing>(ring: &D) -> Vec<Listed<D::Ids>> {
+    let mut listed = Vec::new();
+    ring.lineages(|info| listed.push(Listed::from(info)));
+    listed
+}
+
+/// What holds the target under `key`, as `ring`'s visitor names it.
+pub(crate) fn holds<D: DurableRing>(ring: &D, key: IoTargetKey) -> Vec<Hold<D::Ids>> {
+    let mut holds = Vec::new();
+    ring.target_holds(key, |hold| holds.push(hold));
+    holds
+}
+
+/// What `close` gave, by kind.
+pub(crate) struct Closed<V: Identities, B, C> {
+    pub(crate) held: Vec<HeldOperation<V, B, C>>,
+    pub(crate) failures: Vec<<V as Identities>::FailureId>,
+    pub(crate) lineages: Vec<Listed<V>>,
+}
+
+impl<V: Identities, B, C> Closed<V, B, C> {
+    pub(crate) fn new() -> Self {
+        Self {
+            held: Vec::new(),
+            failures: Vec::new(),
+            lineages: Vec::new(),
+        }
+    }
+
+    /// Keep `leftover`, checking the held operations come first and the lineages last.
+    pub(crate) fn keep(&mut self, leftover: Leftover<'_, V, B, C>) {
+        match leftover {
+            Leftover::Held(held) => {
+                assert!(
+                    self.failures.is_empty() && self.lineages.is_empty(),
+                    "the held operations come first"
+                );
+                self.held.push(held);
+            }
+            Leftover::Failure(failure) => {
+                assert!(
+                    self.lineages.is_empty(),
+                    "the failures come before the lineages"
+                );
+                self.failures.push(failure.id);
+            }
+            Leftover::Lineage(lineage) => self.lineages.push(Listed::from(lineage)),
+            _ => panic!("a leftover these tests do not know"),
+        }
+    }
+}
+
+/// Close `ring`, keeping what it gives.
+pub(crate) fn closed<D: DurableRing>(ring: D) -> Closed<D::Ids, D::Buffer, D::Context> {
+    let mut closed = Closed::new();
+    ring.close(|leftover| closed.keep(leftover));
+    closed
+}
+
 /// Queue sizes for every instance these tests build. Small: nothing here pushes I/O.
 const QUEUE: u32 = 16;
+
+/// The small declaration the driver's tests build an instance with (DI-D-107): enough that a test
+/// not about capacity does not reach it.
+pub(crate) const CAPACITY: Capacity = Capacity {
+    operations: 64,
+    lineages: 16,
+    imports: 8,
+    targets: 8,
+    domains: 16,
+};
 
 fn setup(
     files: Vec<TargetSetup>,
     buffers: Vec<Vec<u8>>,
     provider: Option<Box<dyn DurabilityProvider<V>>>,
 ) -> Setup<'static, 'static, u64, Vec<u8>> {
+    let told = Arc::new(ObservedFailures::new());
+    PENDING.with(|pending| *pending.borrow_mut() = Some(told.clone()));
     Setup {
         submission_queue_size: QUEUE,
         completion_queue_size: QUEUE,
         files,
         buffers,
         provider,
+        capacity: CAPACITY,
         diagnostics: None,
+        failure_observer: Some(told),
         delivery: DeliveryMode::Pool(None),
     }
+}
+
+thread_local! {
+    /// The failure observer the latest `setup` on this thread gave its instance: the harness built
+    /// over that instance takes it, so its oracle reads what the instance told it (DI-D-113).
+    static PENDING: RefCell<Option<Arc<ObservedFailures<V>>>> = const { RefCell::new(None) };
+}
+
+/// The failure observer the latest `setup` on this thread gave its instance, taken: the one an
+/// oracle over that instance reads.
+pub(crate) fn told_by_setup() -> Arc<ObservedFailures<V>> {
+    PENDING
+        .with(|pending| pending.borrow_mut().take())
+        .expect("an instance was built from `setup`, which gives it an observer")
 }
 
 /// A mock interrupt-time clock a test moves by hand (DI-D-38). Clones share one reading, so a test
@@ -114,17 +236,38 @@ pub(crate) fn wtf(path: &Path) -> Wtf16String {
     Wtf16String::from_os_str(path.as_os_str())
 }
 
-/// A temporary file, removed when dropped.
+/// A temporary file, removed when dropped, and with it the `.fresh` sibling a test makes by
+/// creating a file of its own beside it.
 pub(crate) struct TempFile(pub(crate) PathBuf);
+
+/// Removes `path` if it exists, clearing the read-only attribute a test may have created it with.
+/// Best effort: this runs from a destructor and from setup, where a failure has nothing to report to.
+#[allow(clippy::permissions_set_readonly_false)]
+pub(crate) fn remove_leftover(path: &Path) {
+    if let Ok(metadata) = fs::metadata(path) {
+        let mut permissions = metadata.permissions();
+        permissions.set_readonly(false);
+        let _ = fs::set_permissions(path, permissions);
+        let _ = fs::remove_file(path);
+    }
+}
 
 impl TempFile {
     pub(crate) fn new(tag: &str) -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
-        let path = std::env::temp_dir().join(format!(
+        Self::at(std::env::temp_dir().join(format!(
             "durable-ioring-setup-{tag}-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        )))
+    }
+
+    /// A temporary file at `path`, which this removes when dropped.
+    pub(crate) fn at(path: PathBuf) -> Self {
+        // A process killed mid-test (a sweep kills a hung one) leaves its sibling behind, and a
+        // later process can be given the same id, so a test that creates the sibling with
+        // `create_new` would be refused.
+        remove_leftover(&path.with_extension("fresh"));
         fs::write(&path, b"x").expect("create the temporary file");
         Self(path)
     }
@@ -143,6 +286,7 @@ impl TempFile {
 impl Drop for TempFile {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
+        remove_leftover(&self.0.with_extension("fresh"));
     }
 }
 
@@ -176,7 +320,7 @@ impl DurabilityProvider<V> for Serves {
         self.0.clone()
     }
 
-    fn make_durable(&mut self, _: FlushRequest<V>) {
+    fn make_durable(&mut self, _: FlushRequest<'_, V>) {
         unreachable!("construction asks a provider for its domains and nothing else")
     }
 }
@@ -196,18 +340,62 @@ pub(crate) struct Keeper {
 }
 
 /// The requests a `Keeper` has been handed and not yet given up.
-pub(crate) type Kept = Arc<Mutex<Vec<FlushRequest<V>>>>;
+pub(crate) type Kept = Arc<Mutex<Vec<KeptRequest>>>;
+
+/// One seal's request, copied out of the one the provider was lent so that a test can keep it past
+/// the call, and answer it from anywhere (DI-D-115).
+#[derive(Debug)]
+pub(crate) struct KeptRequest {
+    /// One part per domain the request asked about.
+    pub(crate) domains: Vec<KeptDomain>,
+}
+
+/// One domain's part of a [`KeptRequest`].
+#[derive(Debug)]
+pub(crate) struct KeptDomain {
+    pub(crate) domain: FlushDomain,
+    pub(crate) files: Vec<KeptFile>,
+    pub(crate) completion: DomainCompletion,
+}
+
+/// A file in a [`KeptDomain`], and the writes named for the domain.
+#[derive(Debug)]
+pub(crate) struct KeptFile {
+    pub(crate) key: IoTargetKey,
+    pub(crate) writes: Vec<<V as Identities>::OpId>,
+}
+
+impl KeptRequest {
+    /// What `request` asks, every domain taken.
+    pub(crate) fn of(request: FlushRequest<'_, V>) -> Self {
+        let domains = request
+            .domains()
+            .map(|part| KeptDomain {
+                domain: part.domain.clone(),
+                files: part
+                    .files
+                    .map(|file| KeptFile {
+                        key: file.key,
+                        writes: file.writes.to_vec(),
+                    })
+                    .collect(),
+                completion: part.completion,
+            })
+            .collect();
+        Self { domains }
+    }
+}
 
 impl DurabilityProvider<V> for Keeper {
     fn domains(&self) -> Vec<FlushDomain> {
         self.domains.clone()
     }
 
-    fn make_durable(&mut self, request: FlushRequest<V>) {
+    fn make_durable(&mut self, request: FlushRequest<'_, V>) {
         self.kept
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(request);
+            .push(KeptRequest::of(request));
     }
 }
 
@@ -243,7 +431,7 @@ fn an_instance_given_nothing_builds_empty() {
 #[test]
 fn an_instance_has_only_its_default_lineage_to_begin_with() {
     let ring = empty();
-    let lineages = ring.lineages();
+    let lineages = listed(&ring);
     assert_eq!(lineages.len(), 1);
     let default = &lineages[0];
     assert!(default.is_default);
@@ -388,12 +576,14 @@ fn an_instance_is_built_with_any_epoch_id_and_context_type() {
         files: Vec::new(),
         buffers: Vec::new(),
         provider: None,
+        capacity: CAPACITY,
         diagnostics: None,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(None),
     })
     .expect("build")
     .0;
-    assert_eq!(ring.lineages().len(), 1);
+    assert_eq!(listed(&ring).len(), 1);
 }
 
 #[test]
@@ -411,13 +601,8 @@ fn an_instance_delivers_on_the_pool_its_environment_names() {
     env.set_pool(&threads);
     let file = temp(&[0; 16]);
     let ring = pushes::Ring::new(Setup {
-        submission_queue_size: QUEUE,
-        completion_queue_size: QUEUE,
-        files: vec![given(GIVEN, &file)],
-        buffers: Vec::new(),
-        provider: None,
-        diagnostics: None,
         delivery: DeliveryMode::Pool(Some(&mut env)),
+        ..setup(vec![given(GIVEN, &file)], Vec::new(), None)
     })
     .expect("build")
     .0;

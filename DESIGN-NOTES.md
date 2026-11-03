@@ -2958,6 +2958,23 @@ than the file an entry patches can make that entry's defect unreachable or harml
 helper shared across a crate's tests can weaken many tests at once. Neither selects the entry, and
 neither is caught until the nightly run. Nor does a module a macro declares: the module path is
 traced through `mod` items as written.
+
+<a id="sabotage-diff-scope"></a>**`-Diff` is narrower than `-Since`, on purpose, and is a local choice.** The engineer,
+2026-11-02: a scoped sweep of a branch still took hours, because `Cargo.lock` is a shared input and an
+entry with no usable record is always selected, and neither lets a local run be proportionate to an
+edit. `run-sabotage.ps1 -Diff <rev>` measures the change as `-Since` does -- from the merge base,
+against the working tree, so `-Diff HEAD` is what is uncommitted and `-Diff HEAD~1` adds the last
+commit -- and then selects only the entries whose patched file is among the changed paths, and the
+entries the diff adds to the manifest or changes. Nothing else selects one: not a shared input, not a
+crate it builds on, not an entry with no record, not a catching test that changed.
+
+What that leaves unswept is exactly what [sabotage-scope](#sabotage-scope) lists as the reasons for
+the wider rule, so it is the nightly sweep's to find. The two are kept apart because they answer
+different questions: `-Since` says what a change could have affected, `-Diff` says which entries
+patch what the change touched. A change to a catching test or a shared test helper with no entry's
+patched file in the diff sweeps nothing under `-Diff`, and a PR's gate is still `-Since`. A change
+git cannot report sweeps every entry under either flag, and the two flags cannot be combined.
+The work is [CHECKLIST.md](CHECKLIST.md) `M34.19`.
 ## <a id="compile-fail-pins-its-code"></a>A `compile_fail` doctest names the error it exists to produce
 
 **Every `compile_fail` doctest pins its expected error code -- ```` ```compile_fail,E0502 ```` -- and CI

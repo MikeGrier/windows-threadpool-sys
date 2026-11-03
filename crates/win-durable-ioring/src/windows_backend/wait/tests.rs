@@ -67,8 +67,11 @@ fn a_wait_that_fails_is_reported_and_not_taken_for_a_timeout() {
         .expect_err("the wait cannot be made, so it is not a timeout");
 
     assert_eq!(
-        error.kind(),
-        std::io::ErrorKind::PermissionDenied,
+        error
+            .error
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind),
+        Some(std::io::ErrorKind::PermissionDenied),
         "{error}"
     );
 }

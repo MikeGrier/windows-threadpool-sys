@@ -16,7 +16,7 @@ use win_sync_sys::{Event, WaitOutcome, wait_for_single_object};
 
 use super::pumped::{next, readiness_set};
 use super::pushes::{BOUND, GIVEN, Harness, Ring, given, temp};
-use super::setup;
+use super::{closed, setup};
 use crate::dioring::{DeliveryMode, Setup};
 use crate::held_pool::{Held, one_thread_pool};
 use durable_ioring::DurableRing;
@@ -277,7 +277,7 @@ fn a_signalled_instance_ends_with_work_outstanding_and_the_signal_outlives_it() 
     let mut harness = signalled(vec![given(GIVEN, &temp)]);
     let signal = harness.ring.completion_signal().expect("the signal");
     harness.write(GIVEN, 0, b"closing", 1, 1);
-    let leftovers = harness.ring.close();
+    let leftovers = closed(harness.ring);
     assert!(leftovers.held.is_empty() && leftovers.failures.is_empty());
     // A duplicate the consumer kept is a handle to an event like any other: still valid, and
     // nothing sets it any more.

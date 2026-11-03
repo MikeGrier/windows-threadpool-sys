@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Mike Grier
 
 use std::io;
-use std::sync::Arc;
 
 use super::{ManualClock, SOURCE, Ticks, fault};
 use crate::clock::StampClock;
@@ -61,7 +60,13 @@ fn a_fault_names_the_test_source_and_the_code_an_os_error_carries() {
     assert_eq!(fault.source, SOURCE);
     assert_eq!(fault.code, Some(ErrorCode::from_hresult(1117)));
     assert_eq!(fault.code.map(ErrorCode::hresult), Some(1117));
-    assert_eq!(fault.error.raw_os_error(), Some(1117));
+    assert_eq!(
+        fault
+            .error
+            .downcast_ref::<io::Error>()
+            .and_then(io::Error::raw_os_error),
+        Some(1117)
+    );
 }
 
 #[test]
@@ -79,5 +84,5 @@ fn two_faults_made_from_equal_errors_are_not_equal_but_a_clone_is() {
     assert_ne!(one, two);
     let cloned = one.clone();
     assert_eq!(one, cloned);
-    assert!(Arc::ptr_eq(&one.error, &cloned.error));
+    assert_eq!(one.error, cloned.error, "one shared report");
 }

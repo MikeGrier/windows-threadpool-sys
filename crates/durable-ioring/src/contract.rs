@@ -6,19 +6,21 @@
 //! as the implementation does: it carries only the operations dioring implements, never a
 //! method that cannot yet be called.
 
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::io;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt::Debug;
+use core::hash::Hash;
 
 use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
 
+use crate::capacity::AtCapacity;
 use crate::io_target::IoTarget;
 use crate::key::{ReadKey, TargetKey, WriteKey};
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
-    ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo, PushError, ReadOptions,
-    RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
-    UnknownLineage, WriteOptions,
+    FlushDomain, Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover,
+    LineageInfo, PushError, ReadOptions, RemoveTargetError, Resolution, ResolveError,
+    RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -96,8 +98,9 @@ pub trait DurableRing {
     ///
     /// # Errors
     ///
-    /// The error from making the value, where making it can fail.
-    fn readiness(&mut self) -> io::Result<Self::Readiness>;
+    /// The error from making the value, where making it can fail, as a fault naming the layer that
+    /// reported it (DI-D-105).
+    fn readiness(&mut self) -> Result<Self::Readiness, IoFault>;
 
     /// Give the instance a target after construction, under a key unique within the instance. What
     /// the target states -- its flush domains among it -- is read once, now (DI-2.10 point 3): to
@@ -105,9 +108,11 @@ pub trait DurableRing {
     ///
     /// # Errors
     ///
-    /// An [`AddTargetError`] handing the target back, when one is already present under `key`, or
+    /// An [`AddTargetError`] handing the target back, when one is already present under `key`,
     /// when `key` is a [`Key<A>`](crate::Key) that declares more access than the target states
-    /// (DI-13.10); the error's `cause` says which. An untyped [`IoTargetKey`] declares nothing.
+    /// (DI-13.10), or when the instance holds as many targets as it was built for or the target's
+    /// flush domains would take it past the domains it was built for (DI-D-107); the error's
+    /// `cause` says which. An untyped [`IoTargetKey`] declares nothing.
     fn add_target<K: TargetKey>(
         &mut self,
         key: K,
@@ -128,21 +133,40 @@ pub trait DurableRing {
     /// become durable.
     ///
     /// [`IoTargetBusy`]: crate::IoTargetBusy
-    fn remove_target(
-        &mut self,
-        key: IoTargetKey,
-    ) -> Result<Self::Target, RemoveTargetError<Self::Ids>>;
+    fn remove_target(&mut self, key: IoTargetKey) -> Result<Self::Target, RemoveTargetError>;
+
+    /// Give `visit` what holds the target under `key` that an [`IoTargetBusy`](crate::IoTargetBusy)
+    /// counts without naming (DI-D-103): for each lineage gated on, in lineage order, the lowest
+    /// gate its operations to the target are held for; for each lineage with an uncovered write to
+    /// it, the highest epoch among them; and each failure suspecting a write to it, until its
+    /// `Abandoned` or `Healed` entry is popped (DI-D-108), in the order observed. Nothing for a key
+    /// with no target. The visitor runs under the instance's own lock, if it has one, and must not
+    /// call back into the instance.
+    fn target_holds(&self, key: IoTargetKey, visit: impl FnMut(Hold<Self::Ids>));
 
     /// A handle to the lineage that always exists: a copy of the one construction returned. The
     /// instance holds a copy of its own, so the default lineage never ends while it lives.
     fn default_lineage(&self) -> HandleOf<Self>;
 
-    /// A new lineage, with an optional description for the consumer's own reports (DI-D-19).
+    /// A new lineage, with an optional description for the consumer's own reports (DI-D-19),
+    /// kept as it was given and lent back by [`lineages`](Self::lineages) (DI-D-108).
     /// Releasing the last copy of its handle ends it (DI-D-40).
-    fn mint_lineage(&mut self, description: Option<String>) -> HandleOf<Self>;
+    ///
+    /// # Errors
+    ///
+    /// [`AtCapacity`] when the instance holds as many lineages as it was built for, the default
+    /// and those ended and not yet retired among them (DI-D-107); nothing is minted.
+    fn mint_lineage(&mut self, description: Option<String>) -> Result<HandleOf<Self>, AtCapacity>;
 
-    /// Every live lineage, the default among them.
-    fn lineages(&self) -> Vec<LineageInfo<Self::Ids>>;
+    /// Give `visit` each live lineage, the default among them, in minting order (DI-D-103), each
+    /// lent for the visit. The visitor runs under the instance's own lock, if it has one, and must
+    /// not call back into the instance.
+    fn lineages(&self, visit: impl FnMut(LineageInfo<'_, Self::Ids>));
+
+    /// Give `visit` what holds `lineage` from being retired that a [`LineageBusy`](crate::LineageBusy) counts without
+    /// naming: each unresolved failure holding it, in the order observed. Nothing for a lineage
+    /// the instance cannot answer for. The visitor runs as [`lineages`](Self::lineages)'s does.
+    fn lineage_holds(&self, lineage: Lin<Self>, visit: impl FnMut(Hold<Self::Ids>));
 
     /// End a lineage through its last handle (DI-D-30): every epoch of it not yet durable is
     /// abandoned, reported by a `LineageEnded` entry, and the lineage is retired once its
@@ -195,7 +219,9 @@ pub trait DurableRing {
     ///
     /// A [`PushError`] handing back the buffer and the context, for a file the instance was not
     /// given, a lineage -- the write's or the gate's -- it cannot answer for, a gate already
-    /// abandoned, a gate that would close a cycle (DI-D-23), or a ring that refused the push.
+    /// abandoned, a gate that would close a cycle (DI-D-23), the instance being at the operations
+    /// it was built for ([`PushRefusal::AtCapacity`](crate::PushRefusal::AtCapacity): see
+    /// "Capacity" in the contract), or a ring that refused the push.
     fn write_with<K: WriteKey>(
         &mut self,
         file: K,
@@ -234,8 +260,9 @@ pub trait DurableRing {
     /// # Errors
     ///
     /// A [`PushError`] handing back the buffer and the context, for a file the instance was not
-    /// given, a gate's lineage it cannot answer for, a gate already abandoned, or a ring that
-    /// refused the push.
+    /// given, a gate's lineage it cannot answer for, a gate already abandoned, the instance being
+    /// at the operations it was built for ([`PushRefusal::AtCapacity`](crate::PushRefusal::AtCapacity)),
+    /// or a ring that refused the push.
     fn read_with<K: ReadKey>(
         &mut self,
         file: K,
@@ -258,7 +285,7 @@ pub trait DurableRing {
     /// again; and a ring it could not read the completions of, reported once (DI-D-58). Nothing
     /// retries unprompted, so a cause that stays is the consumer's to answer by dropping the
     /// instance.
-    fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>>;
+    fn pop(&mut self) -> Result<Option<EntryOf<Self>>, IoFault>;
 
     /// Seal every epoch of `through`'s lineage at or below its epoch, and ask for them to be made
     /// durable (DI-D-9). A new seal is answered on the queue (guarantee 4): by `Failed` if one of
@@ -299,7 +326,8 @@ pub trait DurableRing {
         lineage: Lin<Self>,
     ) -> Result<Option<EpochIdOf<Self>>, UnknownLineage<Self::Ids>>;
 
-    /// An epoch's state.
+    /// An epoch's state. One at or below its lineage's high-water mark is reported as the mark
+    /// means it, `Durable` standing for durable or abandoned (DI-D-109).
     ///
     /// # Errors
     ///
@@ -310,8 +338,9 @@ pub trait DurableRing {
     ) -> Result<EpochState<Self::Ids>, UnknownLineage<Self::Ids>>;
 
     /// Resolve one or more failures, each by its token: `Heal`, effective in each lineage the
-    /// failure holds when that lineage's first seal made after this call that reaches the highest
-    /// epoch the lineage had been pushed by then finishes successfully (DI-D-41, DI-D-46), or
+    /// failure holds when that lineage's first seal made after this call that reaches every write of
+    /// the lineage pushed before it that is still to be committed finishes successfully (DI-D-41,
+    /// DI-D-46, DI-D-114), or
     /// `Abandon`, effective at once (DI-D-12 (c)). The
     /// call is validated whole and applied at one point in observation order.
     ///
@@ -325,32 +354,42 @@ pub trait DurableRing {
 
     /// Record a failure learned of outside the instance (DI-D-12 (h)). Its suspect set is built by
     /// the same rule as any other's, within `scope`, and its token arrives with its `Failed` entry.
-    /// The answer names the failure, and any domain the scope named that the instance has never
-    /// been given (DI-D-46).
+    /// The answer names the failure. Once the import is admitted, `unmatched` is given each domain
+    /// an [`ImportScope::Domains`] named that the instance has never been given, in the order named
+    /// (DI-D-46) -- a misspelling, or a target not given yet; it is not called for a refused
+    /// import. It runs under the instance's own lock, if it has one, and must not call back into
+    /// the instance. A scope's domains are the caller's shared list, so recording the failure
+    /// copies nothing (DI-D-97).
     ///
     /// # Errors
     ///
-    /// [`UnknownLineage`] for a scope naming a lineage the instance cannot answer for; nothing is
-    /// recorded.
+    /// [`ImportError::UnknownLineage`] for a scope naming a lineage the instance cannot answer
+    /// for, and [`ImportError::AtCapacity`] when the instance holds as many unresolved imported
+    /// failures as it was built for (DI-D-107); nothing is recorded.
     fn import_failure(
         &mut self,
         scope: ImportScope<Self::Ids>,
-    ) -> Result<Imported<Self::Ids>, UnknownLineage<Self::Ids>>;
+        unmatched: impl FnMut(&FlushDomain),
+    ) -> Result<Imported<Self::Ids>, ImportError<Self::Ids>>;
 
-    /// The unresolved failures, in the order they were observed.
-    fn failures(&self) -> Vec<FailureInfo<Self::Ids>>;
+    /// Give `visit` each unresolved failure, in the order observed (DI-D-103), its cause lent for
+    /// the visit: a visitor that keeps one clones it. The visitor runs under the instance's own
+    /// lock, if it has one, and must not call back into the instance.
+    fn failures(&self, visit: impl FnMut(FailureInfo<'_, Self::Ids>));
 
     /// A token for an unresolved failure whose token is not live -- it was closed or dropped.
     /// `None` otherwise, including for a failure that is resolved, another instance's, or healed
     /// and waiting for its seal.
     fn take_token(&mut self, failure: FailureIdOf<Self>) -> Option<TokenOf<Self>>;
 
-    /// End the instance and hand back what is left (DI-D-25): the gated operations the kernel never
-    /// saw, with their buffers and contexts, in push order; the unresolved failures; and every
-    /// lineage with its final high-water mark. Seals and flushes nothing. Returns once every
-    /// kernel operation and every durability-provider call in flight has completed, as drop does;
-    /// entries not yet popped are discarded, and nothing already reported is undone.
-    fn close(self) -> Leftovers<Self::Ids, Self::Buffer, Self::Context>
+    /// End the instance and give `visit` what is left (DI-D-25, DI-D-103): the gated operations the
+    /// kernel never saw, by value with their buffers and contexts, in push order; then the
+    /// unresolved failures; then every lineage with its final high-water mark, lent for the visit
+    /// as [`lineages`](Self::lineages) lends it. Seals and flushes
+    /// nothing. Returns once every kernel operation and every durability-provider call in flight
+    /// has completed, as drop does; entries not yet popped are discarded, and nothing already
+    /// reported is undone.
+    fn close(self, visit: impl FnMut(Leftover<'_, Self::Ids, Self::Buffer, Self::Context>))
     where
         Self: Sized;
 }
@@ -372,7 +411,11 @@ pub trait RegisteredBufferRing: DurableRing {
     ///
     /// Refused while an operation is reading into it, for an index out of range, or on an
     /// instance built without registered buffers; `f` is not called.
-    fn with_registered_buffer<T>(&mut self, i: u32, f: impl FnOnce(&[u8]) -> T) -> io::Result<T>;
+    fn with_registered_buffer<T>(
+        &mut self,
+        i: u32,
+        f: impl FnOnce(&[u8]) -> T,
+    ) -> Result<T, IoFault>;
 
     /// As [`with_registered_buffer`](Self::with_registered_buffer), with the bytes lent mutably.
     ///
@@ -384,7 +427,7 @@ pub trait RegisteredBufferRing: DurableRing {
         &mut self,
         i: u32,
         f: impl FnOnce(&mut [u8]) -> T,
-    ) -> io::Result<T>;
+    ) -> Result<T, IoFault>;
 
     /// `write_registered_with` with default options.
     ///

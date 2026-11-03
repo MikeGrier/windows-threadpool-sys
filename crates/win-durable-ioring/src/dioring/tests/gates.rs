@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! Gated operations (DI-3.2.5.2), against real files: held until their gate is durable, released by
 //! the call that reports it, ended as never issued when an epoch they need is abandoned, and the
-//! cycles a push or a seal would close refused with what they took. Every entry is reported to the
+//! cycles a push or a seal would close refused. Every entry is reported to the
 //! conformance oracle, so each test also checks that nothing completes before its gate.
 
 use windows_ioring_sys::RegisteredSpan;
@@ -77,7 +77,7 @@ pub(super) fn expect_done(harness: &mut Harness, id: OpId) -> Outcome<V> {
 /// An instance with one file, and a lineage minted beside its default.
 pub(super) fn two(temp: &super::TempFile) -> (Harness, LineageHandle) {
     let mut harness = Harness::new(instance(vec![given(GIVEN, temp)], vec![vec![0; 16]]));
-    let minted = harness.ring.mint_lineage(None);
+    let minted = harness.ring.mint_lineage(None).expect("room for a lineage");
     (harness, minted)
 }
 
@@ -85,7 +85,7 @@ pub(super) fn two(temp: &super::TempFile) -> (Harness, LineageHandle) {
 fn import_and_abandon(harness: &mut Harness) {
     harness
         .ring
-        .import_failure(ImportScope::All)
+        .import_failure(ImportScope::All, |_| {})
         .expect("import");
     let token: FailureToken = match harness.next_entry() {
         Entry::Failed(failed) => failed.token,
@@ -288,7 +288,7 @@ fn ending_a_lineage_ends_its_held_writes_and_what_waits_for_it() {
 }
 
 #[test]
-fn a_push_that_would_close_a_cycle_is_refused_with_what_it_took() {
+fn a_push_that_would_close_a_cycle_is_refused() {
     let temp = temp(&[0; 64]);
     let (mut harness, minted) = two(&temp);
     let m = |id| Epoch::new(minted.lineage(), id);
@@ -306,12 +306,11 @@ fn a_push_that_would_close_a_cycle_is_refused_with_what_it_took() {
             WriteOptions::new().gate(m(4)),
         )
         .expect_err("a cycle");
-    match error.reason {
-        PushRefusal::GateCycle { cycle } => {
-            assert_eq!(cycle, [nine, m(4), m(4), nine]);
-        }
-        other => panic!("expected GateCycle, got {other:?}"),
-    }
+    assert!(
+        matches!(error.reason, PushRefusal::GateCycle),
+        "expected GateCycle, got {:?}",
+        error.reason
+    );
     assert_eq!((error.buffer, error.context), (Some(vec![2; 8]), 2));
     assert!(harness.ring.pop().expect("pop").is_none());
     // The write still held at 4 ends with its lineage, so the stream finishes.
@@ -335,9 +334,7 @@ fn a_seal_that_would_close_a_cycle_is_refused_and_a_lower_one_untangles_it() {
     let w2 = write_gated(&mut harness, &default, 8, 9, 2, m(3));
     assert_eq!(
         harness.ring.make_durable_through(minted.at(5)),
-        Err(SealError::GateCycle {
-            cycle: vec![m(4), nine, nine, m(3)]
-        })
+        Err(SealError::GateCycle)
     );
     assert_eq!(
         harness.ring.sealed_through(minted.lineage()),

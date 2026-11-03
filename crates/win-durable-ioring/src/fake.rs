@@ -5,20 +5,33 @@
 //! observable.
 
 use std::collections::VecDeque;
-use std::io;
 
 use win_sync_sys::{Event, ResetMode};
 
 use crate::memory::MemoryTarget;
 use durable_ioring::driver::InstanceId;
 use durable_ioring::{
-    AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
-    EpochState, FailureInfo, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo,
-    OpCompletion, OpKind, Outcome, ReadKey, ReadOptions, RemoveTargetError, Resolution,
-    ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag, TargetKey,
+    AddTargetError, AtCapacity, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,
+    Epoch, EpochState, FailureInfo, Hold, ImportError, ImportScope, Imported, IoTargetKey,
+    Leftover, LineageInfo, OpCompletion, OpKind, Outcome, ReadKey, ReadOptions, RemoveTargetError,
+    Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag, TargetKey,
     UnknownLineage, WriteKey, WriteOptions,
 };
-use durable_ioring::{DurableRing, EntryOf, PushResult};
+use durable_ioring::{DurableRing, EntryOf, ErrorReport, IoFault, PushResult, StaticError};
+
+/// What the fake's told failures report: they need no storage.
+static NO_SIGNAL: StaticError = StaticError::new("the fake refuses to give its signal");
+static POP_FAILS: StaticError = StaticError::new("the fake's pop was told to fail");
+
+/// A fault the fake reports, as `source` "fake".
+fn fake_fault(error: &'static StaticError) -> IoFault {
+    IoFault {
+        source: "fake",
+        code: None,
+        refusal: None,
+        error: ErrorReport::from_static(error),
+    }
+}
 use durable_ioring::{FailureId, FailureToken, Lineage, LineageHandle, OpId};
 
 type V = crate::WindowsIds<u64>;
@@ -103,9 +116,9 @@ impl DurableRing for Fake {
     type Readiness = Event;
     type Target = MemoryTarget;
 
-    fn readiness(&mut self) -> io::Result<Event> {
+    fn readiness(&mut self) -> Result<Event, IoFault> {
         if self.readiness_fails {
-            return Err(io::Error::other("the fake refuses to give its signal"));
+            return Err(fake_fault(&NO_SIGNAL));
         }
         Ok(self.signal.clone())
     }
@@ -118,21 +131,23 @@ impl DurableRing for Fake {
         Ok(())
     }
 
-    fn remove_target(&mut self, key: IoTargetKey) -> Result<MemoryTarget, RemoveTargetError<V>> {
+    fn remove_target(&mut self, key: IoTargetKey) -> Result<MemoryTarget, RemoveTargetError> {
         Err(RemoveTargetError::UnknownKey(key))
     }
+
+    fn target_holds(&self, _key: IoTargetKey, _visit: impl FnMut(Hold<V>)) {}
 
     fn default_lineage(&self) -> LineageHandle {
         self.default.clone()
     }
 
-    fn mint_lineage(&mut self, _description: Option<String>) -> LineageHandle {
+    fn mint_lineage(&mut self, _description: Option<String>) -> Result<LineageHandle, AtCapacity> {
         unimplemented!("the fake has only its default lineage")
     }
 
-    fn lineages(&self) -> Vec<LineageInfo<V>> {
-        Vec::new()
-    }
+    fn lineages(&self, _visit: impl FnMut(LineageInfo<'_, V>)) {}
+
+    fn lineage_holds(&self, _lineage: Lineage, _visit: impl FnMut(Hold<V>)) {}
 
     fn end_lineage(&mut self, handle: LineageHandle) -> Result<(), EndLineageError<V>> {
         Err(EndLineageError {
@@ -171,9 +186,9 @@ impl DurableRing for Fake {
         unimplemented!("tests complete the fake's operations with complete_one")
     }
 
-    fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>> {
+    fn pop(&mut self) -> Result<Option<EntryOf<Self>>, IoFault> {
         if self.pop_fails {
-            return Err(io::Error::other("the fake's pop was told to fail"));
+            return Err(fake_fault(&POP_FAILS));
         }
         Ok(self.queue.pop_front())
     }
@@ -201,23 +216,19 @@ impl DurableRing for Fake {
         unimplemented!("the fake observes no failures")
     }
 
-    fn import_failure(&mut self, _scope: ImportScope<V>) -> Result<Imported<V>, UnknownLineage<V>> {
+    fn import_failure(
+        &mut self,
+        _scope: ImportScope<V>,
+        _unmatched: impl FnMut(&durable_ioring::FlushDomain),
+    ) -> Result<Imported<V>, ImportError<V>> {
         unimplemented!("the fake observes no failures")
     }
 
-    fn failures(&self) -> Vec<FailureInfo<V>> {
-        Vec::new()
-    }
+    fn failures(&self, _visit: impl FnMut(FailureInfo<'_, V>)) {}
 
     fn take_token(&mut self, _failure: FailureId) -> Option<FailureToken> {
         None
     }
 
-    fn close(self) -> Leftovers<V, Vec<u8>, u32> {
-        Leftovers {
-            held: Vec::new(),
-            failures: Vec::new(),
-            lineages: Vec::new(),
-        }
-    }
+    fn close(self, _visit: impl FnMut(Leftover<'_, V, Vec<u8>, u32>)) {}
 }

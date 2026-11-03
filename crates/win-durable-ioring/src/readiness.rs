@@ -34,6 +34,13 @@ impl From<io::Error> for ReadinessFailure {
     }
 }
 
+/// A fault the instance reported, as an `io::Error` holding it (durable-ioring's DI-D-105).
+impl From<durable_ioring::IoFault> for ReadinessFailure {
+    fn from(fault: durable_ioring::IoFault) -> Self {
+        Self::Io(fault.into())
+    }
+}
+
 /// The readiness signal's harness check (DI-D-28): push into an empty queue and require the
 /// signal set; drain; push again and require it set again. The oracle sees entries, not wakes, so
 /// this runs beside it. For an implementation whose signal is an [`Event`], which

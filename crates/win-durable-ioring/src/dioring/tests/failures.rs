@@ -5,12 +5,17 @@
 //! reported to the conformance oracle, so each test also checks that `Durable` never passes an
 //! unresolved failure and that every suspect write was accepted, in push order.
 
+use std::sync::Arc;
+
 use windows_ioring_sys::IoRingErrorExt;
 
 use super::pushes::{ADDED, GIVEN, Harness, Ring, given, instance, temp};
 use super::{empty, file, setup};
 use durable_ioring::DurableRing;
-use durable_ioring::{DurabilityRequest, Entry, Failed, FailureCause, ImportScope, UnknownLineage};
+use durable_ioring::oracle::{ConformanceOracle, Violation};
+use durable_ioring::{
+    DurabilityRequest, Entry, Failed, FailureCause, ImportError, ImportScope, UnknownLineage,
+};
 
 /// `ERROR_IO_DEVICE`, the failure the seam is armed with.
 const IO_DEVICE: u32 = 1117;
@@ -25,9 +30,14 @@ fn next_failed(harness: &mut Harness) -> Failed<V> {
     }
 }
 
-/// The ops a failure suspects, by sequence number.
-fn suspects(failed: &Failed<V>) -> Vec<u64> {
-    failed.suspect.writes().iter().map(|w| w.op.seq).collect()
+/// The ops a failure suspects, by sequence number, as the instance's observer was told them
+/// (DI-D-113).
+fn suspects(harness: &Harness, failed: &Failed<V>) -> Vec<u64> {
+    harness
+        .suspects(failed.id)
+        .iter()
+        .map(|op| op.seq)
+        .collect()
 }
 
 /// Two writes tagged 1 to `GIVEN`, completed, then sealed through 1 with its flush failing.
@@ -56,7 +66,8 @@ fn a_failed_flush_is_reported_with_the_rings_cause() {
             assert_eq!(fault.source, "windows-ioring", "relayed from the ring");
             let code = fault
                 .error
-                .as_ioring_error()
+                .downcast_ref::<std::io::Error>()
+                .and_then(|error| error.as_ioring_error())
                 .expect("the ring's error, passed through")
                 .code();
             assert_eq!(code.cast_unsigned() & 0xFFFF, IO_DEVICE);
@@ -85,8 +96,10 @@ fn an_import_suspects_what_its_scope_reaches() {
     let lineage = harness.lineage();
     let foreign = empty().default_lineage().lineage();
     assert_eq!(
-        harness.ring.import_failure(ImportScope::Lineage(foreign)),
-        Err(UnknownLineage(foreign)),
+        harness
+            .ring
+            .import_failure(ImportScope::Lineage(foreign), |_| {}),
+        Err(ImportError::UnknownLineage(UnknownLineage(foreign))),
         "a lineage the instance cannot answer for is refused, and nothing is recorded"
     );
     let disk_2 = super::domain("disk-2");
@@ -94,25 +107,29 @@ fn an_import_suspects_what_its_scope_reaches() {
         (ImportScope::All, vec![0, 1], vec![]),
         (ImportScope::Lineage(lineage), vec![0, 1], vec![]),
         (
-            ImportScope::Domains(vec![disk_2.clone()]),
+            ImportScope::Domains(Arc::from([disk_2.clone()])),
             vec![1],
             vec![disk_2],
         ),
         (
-            ImportScope::Domains(vec![super::domain("disk-1")]),
+            ImportScope::Domains(Arc::from([super::domain("disk-1")])),
             vec![0, 1],
             vec![],
         ),
     ];
     for (scope, expected, unmatched) in cases {
-        let imported = harness.ring.import_failure(scope.clone()).expect("import");
-        assert_eq!(imported.unmatched, unmatched, "{scope:?}");
+        let mut reported = Vec::new();
+        let imported = harness
+            .ring
+            .import_failure(scope.clone(), |domain| reported.push(domain.clone()))
+            .expect("import");
+        assert_eq!(reported, unmatched, "{scope:?}");
         let failed = next_failed(&mut harness);
         assert_eq!(failed.id, imported.failure);
         assert!(matches!(failed.cause, FailureCause::Imported { scope: ref s } if *s == scope));
-        assert_eq!(suspects(&failed), expected, "{scope:?}");
+        assert_eq!(suspects(&harness, &failed), expected, "{scope:?}");
     }
-    assert_eq!(harness.ring.failures().len(), 4);
+    assert_eq!(super::unresolved(&harness.ring), 4);
     harness.finish();
 }
 
@@ -132,29 +149,38 @@ fn an_imported_domain_the_instance_was_never_given_is_reported_and_reaches_the_u
     harness.write(GIVEN, 0, b"log", 1, 1);
     harness.write(ADDED, 0, b"data", 1, 2);
     harness.next_n(2);
-    let named = vec![
+    let named: Arc<[durable_ioring::FlushDomain]> = Arc::from([
         super::domain("disk-l"),
         super::domain("disk-1"),
         super::domain("disk-9"),
-    ];
-    let imported = harness
+    ]);
+    let mut reported = Vec::new();
+    harness
         .ring
-        .import_failure(ImportScope::Domains(named))
+        .import_failure(ImportScope::Domains(named), |domain| {
+            reported.push(domain.clone());
+        })
         .expect("import");
     assert_eq!(
-        imported.unmatched,
+        reported,
         [super::domain("disk-l"), super::domain("disk-9")],
         "in the order named; disk-1 matched"
     );
-    assert_eq!(suspects(&next_failed(&mut harness)), [0, 1]);
+    let failed = next_failed(&mut harness);
+    assert_eq!(suspects(&harness, &failed), [0, 1]);
 
-    let only_unknown = harness
+    let mut reported = Vec::new();
+    harness
         .ring
-        .import_failure(ImportScope::Domains(vec![super::domain("disk-l")]))
+        .import_failure(
+            ImportScope::Domains(Arc::from([super::domain("disk-l")])),
+            |domain| reported.push(domain.clone()),
+        )
         .expect("import");
-    assert_eq!(only_unknown.unmatched, [super::domain("disk-l")]);
+    assert_eq!(reported, [super::domain("disk-l")]);
+    let failed = next_failed(&mut harness);
     assert_eq!(
-        suspects(&next_failed(&mut harness)),
+        suspects(&harness, &failed),
         [1],
         "only the file declared with none"
     );
@@ -183,5 +209,66 @@ fn an_armed_failure_is_used_by_its_own_file_only() {
     let failed = next_failed(&mut harness);
     assert!(matches!(failed.cause, FailureCause::Commit { target, .. } if target == ADDED));
     drop(failed);
+    harness.finish();
+}
+
+/// The oracle refuses a `Failed` whose observer it was not given: it reads a failure's suspect set
+/// from the observer it hands out, and was told nothing of the failure (DI-D-113).
+#[test]
+fn the_oracle_refuses_a_failed_its_observer_was_not_told_of() {
+    let first = temp(&[0; 16]);
+    let mut harness = Harness::new(instance(vec![given(GIVEN, &first)], Vec::new()));
+    harness.write(GIVEN, 0, b"x", 1, 1);
+    harness.next();
+    harness
+        .ring
+        .import_failure(ImportScope::All, |_| {})
+        .expect("import");
+    let entry = harness.next_entry();
+    let Entry::Failed(failed) = &entry else {
+        panic!("expected Failed, got {entry:?}");
+    };
+    let mut oracle = ConformanceOracle::<V, u32>::new();
+    assert!(
+        matches!(
+            oracle.observe(&entry),
+            Err(Violation::FailureNotTold { failure }) if failure == failed.id
+        ),
+        "the instance's observer is the harness's, not this oracle's"
+    );
+    harness.finish();
+}
+
+/// An observer given in the setup is told of a failure and the writes it suspects before its
+/// `Failed` can be popped, and of what becomes of them as it happens (DI-D-113).
+#[test]
+fn an_observer_given_in_the_setup_is_told_of_a_failure_and_what_becomes_of_it() {
+    let temp = temp(&[0; 64]);
+    let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], Vec::new()));
+    let told = harness.told.clone();
+    let write = harness.write(GIVEN, 0, b"x", 2, 1);
+    harness.next();
+    let imported = harness
+        .ring
+        .import_failure(ImportScope::All, |_| {})
+        .expect("import");
+    let suspect: Vec<_> = told
+        .suspects(imported.failure)
+        .expect("told before its Failed is popped")
+        .iter()
+        .map(|w| w.op)
+        .collect();
+    assert_eq!(suspect, [write]);
+    let failed = next_failed(&mut harness);
+    assert_eq!(failed.id, imported.failure);
+    assert_eq!(harness.seal(2), DurabilityRequest::Submitted);
+    assert!(matches!(harness.next_entry(), Entry::Blocked { .. }));
+    let markings = told.markings(failed.id).expect("told of the failure");
+    assert_eq!(markings.len(), 1, "one write, marked once");
+    assert_eq!(markings[0].write, write);
+    assert!(matches!(
+        markings[0].kind,
+        durable_ioring::MarkingKind::Covered { .. }
+    ));
     harness.finish();
 }

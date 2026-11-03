@@ -47,7 +47,9 @@ fn raw_instance(disk: OpenedDisk<Unbuffered>) -> (DiskRing, LineageHandle) {
         files: vec![TargetSetup::new(DISK, Win32FileTarget::from_disk(disk))],
         buffers: Vec::<Vec<u8>>::new(),
         provider: None,
+        capacity: crate::dioring::tests::CAPACITY,
         diagnostics: None,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(None),
     })
     .expect("build an instance over the raw disk")

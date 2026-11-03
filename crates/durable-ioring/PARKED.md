@@ -141,6 +141,15 @@ implementation before it is answerable.
   sample proves out it's a good candidate to promote". Gated on [DI-21.3](CHECKLIST.md#di-m21----a-sample-log-on-durable-ioring),
   the sample itself; what "proves out" means, and where a library would live, are for the engineer when it is done.
 
+## DI-M21+ -- Merge or delete the duplicated driver (parked behind DI-M21)
+
+- [ ] **DI-21+.2** -- **Decide whether the in-memory dioring and the Windows driver merge into one driver over any backend,
+  or stay apart.** `DI-24.1` builds the in-memory dioring by duplicating what `win-durable-ioring`'s `Dioring` does above its
+  backend, under the workspace's duplicate-then-decide rule, so that the working driver is not disturbed while the new one
+  is proven ([DI-D-116](DESIGN-NOTES.md#di-d-116)). Gated on [DI-21.8](CHECKLIST.md#di-m21----a-sample-log-on-durable-ioring),
+  when one log has run on both: that is when the two paths are proven and their differences are known. The decision is the
+  engineer's; merging reshapes a layer.
+
 ## DI-M-inf -- The horizon (parked, no gating deliverable)
 
 - [ ] **DI-15.3** -- **Opening relative to a directory handle.** **Deferred by the engineer, 2026-10-19: "let's

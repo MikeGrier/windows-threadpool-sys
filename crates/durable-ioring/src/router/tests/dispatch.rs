@@ -9,12 +9,12 @@ use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread;
 
 use super::{V, domain, domains};
+use crate::capacity::Capacity;
+use crate::domains::DomainId;
 use crate::driver::{Answer, DomainCall};
 use crate::ids::{InstanceId, Lineage, OpId};
-use crate::provider::{
-    DomainCompletion, DomainOutcome, DomainRequest, DurabilityProvider, FlushRequest,
-    IoTargetWrites,
-};
+use crate::provider::{DomainCompletion, DomainOutcome, DurabilityProvider};
+use crate::request::{FlushRequest, RequestBuf};
 use crate::router::RoutingProvider;
 use crate::types::{FlushDomain, IoTargetKey};
 
@@ -41,7 +41,13 @@ impl Answer for Home {
     fn answer(&self, call: &DomainCall, outcome: DomainOutcome) {
         let seen = match outcome {
             DomainOutcome::Succeeded => Seen::Succeeded,
-            DomainOutcome::Failed(error) => Seen::Failed(error.kind(), error.to_string()),
+            DomainOutcome::Failed(error) => Seen::Failed(
+                error
+                    .downcast_ref::<io::Error>()
+                    .expect("the tests fail with an io::Error")
+                    .kind(),
+                error.to_string(),
+            ),
             DomainOutcome::Abandoned => Seen::Abandoned,
         };
         self.answers
@@ -74,36 +80,50 @@ impl Home {
     }
 }
 
-/// A request with one part per name, in order: each part's one file is keyed by its place in the
-/// request, with one write numbered the same.
-fn request(home: &Arc<Home>, names: &[&str]) -> FlushRequest<V> {
+/// A request as the driver makes one: drained into a buffer made for it, and lent. One part per
+/// name, in order: each part's one file is keyed by its place in the request, with one write
+/// numbered the same.
+struct Built {
+    buf: RequestBuf<V>,
+    home: Weak<dyn Answer>,
+}
+
+impl Built {
+    /// The request, lent.
+    fn lend(&self) -> FlushRequest<'_, V> {
+        self.buf.requests(&self.home).next().expect("one request")
+    }
+}
+
+fn request(home: &Arc<Home>, names: &[&str]) -> Built {
     let instance = InstanceId::next();
     let lineage = Lineage { instance, seq: 0 };
-    let weak: Weak<dyn Answer> = Arc::downgrade(home) as Weak<dyn Answer>;
-    FlushRequest {
-        domains: names
-            .iter()
-            .enumerate()
-            .map(|(place, name)| {
-                let seq = u64::try_from(place).expect("small");
-                DomainRequest {
-                    domain: domain(name),
-                    files: vec![IoTargetWrites {
-                        key: IoTargetKey(seq),
-                        writes: vec![OpId { instance, seq }],
-                    }],
-                    completion: DomainCompletion::new(
-                        weak.clone(),
-                        DomainCall {
-                            lineage,
-                            seal: 7,
-                            name: domain(name),
-                        },
-                    ),
-                }
-            })
-            .collect(),
-    }
+    let home: Weak<dyn Answer> = Arc::downgrade(home) as Weak<dyn Answer>;
+    let rows: Vec<(OpId, IoTargetKey, [DomainId; 1])> = (0..names.len())
+        .map(|place| {
+            let seq = u64::try_from(place).expect("small");
+            let id = DomainId(u32::try_from(place).expect("small"));
+            (OpId { instance, seq }, IoTargetKey(seq), [id])
+        })
+        .collect();
+    let capacity = Capacity {
+        operations: 16,
+        lineages: 1,
+        imports: 0,
+        targets: 16,
+        domains: 16,
+    };
+    let mut buf = RequestBuf::<V>::new(&capacity, names.len()).expect("a buffer");
+    let asked = names
+        .iter()
+        .enumerate()
+        .map(|(place, name)| (DomainId(u32::try_from(place).expect("small")), domain(name)));
+    buf.fill(lineage, 7, asked, || {
+        rows.iter()
+            .map(|(op, key, ids)| (*op, *key, ids.as_slice()))
+    })
+    .expect("the request fits");
+    Built { buf, home }
 }
 
 /// What a provider does with the parts it is given.
@@ -134,12 +154,12 @@ impl DurabilityProvider<V> for Fake {
         self.domains.clone()
     }
 
-    fn make_durable(&mut self, request: FlushRequest<V>) {
-        let call = request
-            .domains
+    fn make_durable(&mut self, request: FlushRequest<'_, V>) {
+        let parts: Vec<_> = request.domains().collect();
+        let call = parts
             .iter()
             .map(|part| {
-                let keys = part.files.iter().map(|file| file.key.0).collect();
+                let keys = part.files.clone().map(|file| file.key.0).collect();
                 (part.domain.clone(), keys)
             })
             .collect();
@@ -147,12 +167,13 @@ impl DurabilityProvider<V> for Fake {
             .lock()
             .expect("not poisoned")
             .push((self.name, call));
-        for part in request.domains {
+        for part in parts {
             match &self.act {
                 Act::Succeed => part.completion.succeed(),
-                Act::Fail => part
-                    .completion
-                    .fail(io::Error::new(io::ErrorKind::TimedOut, self.name)),
+                Act::Fail => part.completion.fail(crate::report_io_error(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    self.name,
+                ))),
                 Act::Drop => drop(part),
                 Act::Keep => self.kept.push(part.completion),
                 Act::Hand(sender) => sender.send(part.completion).expect("the test listens"),
@@ -204,7 +225,8 @@ fn part(name: &str, key: u64) -> (FlushDomain, Vec<u64>) {
 fn one_provider_is_given_the_whole_request_as_it_came() {
     let home = Arc::new(Home::default());
     let mut rig = Rig::new(vec![("only", &["log", "data"], Act::Succeed)]);
-    rig.router.make_durable(request(&home, &["data", "log"]));
+    rig.router
+        .make_durable(request(&home, &["data", "log"]).lend());
     assert_eq!(
         rig.calls(),
         vec![("only", vec![part("data", 0), part("log", 1)])]
@@ -222,7 +244,7 @@ fn each_provider_is_given_only_its_own_domains() {
         ("disks", &["disk-a", "disk-b"], Act::Succeed),
     ]);
     rig.router
-        .make_durable(request(&home, &["disk-b", "log", "disk-a"]));
+        .make_durable(request(&home, &["disk-b", "log", "disk-a"]).lend());
     assert_eq!(
         rig.calls(),
         vec![
@@ -241,7 +263,8 @@ fn providers_are_called_in_registration_order_whatever_the_request_order() {
         ("second", &["b"], Act::Succeed),
         ("third", &["c"], Act::Succeed),
     ]);
-    rig.router.make_durable(request(&home, &["c", "b", "a"]));
+    rig.router
+        .make_durable(request(&home, &["c", "b", "a"]).lend());
     assert_eq!(rig.called(), vec!["first", "second", "third"]);
 }
 
@@ -253,7 +276,7 @@ fn a_provider_with_no_part_is_not_called() {
         ("busy", &["b"], Act::Succeed),
         ("empty", &[], Act::Panic),
     ]);
-    rig.router.make_durable(request(&home, &["b"]));
+    rig.router.make_durable(request(&home, &["b"]).lend());
     assert_eq!(rig.called(), vec!["busy"]);
     assert!(home.all_answered());
 }
@@ -262,7 +285,7 @@ fn a_provider_with_no_part_is_not_called() {
 fn an_empty_request_calls_no_provider() {
     let home = Arc::new(Home::default());
     let mut rig = Rig::new(vec![("a", &["a"], Act::Panic), ("b", &["b"], Act::Panic)]);
-    rig.router.make_durable(request(&home, &[]));
+    rig.router.make_durable(request(&home, &[]).lend());
     assert!(rig.calls().is_empty());
     assert!(home.answers().is_empty());
 }
@@ -272,7 +295,7 @@ fn several_domains_of_one_provider_are_one_call() {
     let home = Arc::new(Home::default());
     let names = ["d0", "d1", "d2", "d3", "d4", "d5"];
     let mut rig = Rig::new(vec![("many", &names, Act::Succeed)]);
-    rig.router.make_durable(request(&home, &names));
+    rig.router.make_durable(request(&home, &names).lend());
     let calls = rig.calls();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].1.len(), names.len());
@@ -286,7 +309,7 @@ fn an_answer_inside_the_call_reaches_the_instance_during_it() {
         ("ok", &["a"], Act::Succeed),
         ("bad", &["b"], Act::Fail),
     ]);
-    rig.router.make_durable(request(&home, &["a", "b"]));
+    rig.router.make_durable(request(&home, &["a", "b"]).lend());
     assert_eq!(home.answer_for("a"), Some(Seen::Succeeded));
     assert_eq!(
         home.answer_for("b"),
@@ -299,7 +322,7 @@ fn a_late_answer_from_another_thread_reaches_the_instance_as_it_arrives() {
     let home = Arc::new(Home::default());
     let (sender, handed) = mpsc::channel();
     let mut rig = Rig::new(vec![("later", &["a", "b"], Act::Hand(sender))]);
-    rig.router.make_durable(request(&home, &["a", "b"]));
+    rig.router.make_durable(request(&home, &["a", "b"]).lend());
     assert!(home.answers().is_empty(), "nothing answered yet");
     let first = handed.recv().expect("a");
     let second = handed.recv().expect("b");
@@ -307,7 +330,7 @@ fn a_late_answer_from_another_thread_reaches_the_instance_as_it_arrives() {
         .join()
         .expect("answered");
     assert_eq!(home.answers(), vec![(domain("b"), Seen::Succeeded)]);
-    thread::spawn(move || first.fail(io::Error::other("late")))
+    thread::spawn(move || first.fail(crate::report_io_error(io::Error::other("late"))))
         .join()
         .expect("answered");
     assert_eq!(
@@ -324,7 +347,7 @@ fn completions_a_provider_drops_are_abandoned_and_only_its_own() {
         ("drops", &["a"], Act::Drop),
         ("answers", &["b"], Act::Succeed),
     ]);
-    rig.router.make_durable(request(&home, &["a", "b"]));
+    rig.router.make_durable(request(&home, &["a", "b"]).lend());
     assert_eq!(home.answer_for("a"), Some(Seen::Abandoned));
     assert_eq!(home.answer_for("b"), Some(Seen::Succeeded));
 }
@@ -333,7 +356,7 @@ fn completions_a_provider_drops_are_abandoned_and_only_its_own() {
 fn completions_a_provider_keeps_stay_unanswered_until_it_is_dropped() {
     let home = Arc::new(Home::default());
     let mut rig = Rig::new(vec![("keeps", &["a"], Act::Keep)]);
-    rig.router.make_durable(request(&home, &["a"]));
+    rig.router.make_durable(request(&home, &["a"]).lend());
     assert_eq!(home.answer_for("a"), None);
     assert!(!home.all_answered());
     drop(rig);
@@ -348,8 +371,10 @@ fn a_panic_propagates_and_abandons_the_parts_not_yet_handed_on() {
         ("panics", &["b", "c"], Act::Panic),
         ("after", &["d"], Act::Succeed),
     ]);
-    let request = request(&home, &["d", "c", "b", "a"]);
-    let outcome = panic::catch_unwind(AssertUnwindSafe(|| rig.router.make_durable(request)));
+    let built = request(&home, &["d", "c", "b", "a"]);
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+        rig.router.make_durable(built.lend());
+    }));
     let payload = outcome.expect_err("the panic propagates");
     let message = payload.downcast_ref::<String>().expect("a formatted panic");
     assert_eq!(message, "panics panicked");
@@ -361,9 +386,9 @@ fn a_panic_propagates_and_abandons_the_parts_not_yet_handed_on() {
     assert!(home.all_answered());
 }
 
-/// The message of the panic `request` raises in `router`, which must panic.
-fn panic_of(router: &mut RoutingProvider<V>, request: FlushRequest<V>) -> String {
-    let outcome = panic::catch_unwind(AssertUnwindSafe(|| router.make_durable(request)));
+/// The message of the panic `built` raises in `router`, which must panic.
+fn panic_of(router: &mut RoutingProvider<V>, built: &Built) -> String {
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| router.make_durable(built.lend())));
     let payload = outcome.expect_err("an unrouted domain panics");
     payload
         .downcast_ref::<String>()
@@ -375,7 +400,7 @@ fn panic_of(router: &mut RoutingProvider<V>, request: FlushRequest<V>) -> String
 fn a_domain_no_provider_serves_is_panicked_on_naming_it() {
     let home = Arc::new(Home::default());
     let mut rig = Rig::new(vec![("known", &["a"], Act::Succeed)]);
-    let message = panic_of(&mut rig.router, request(&home, &["a", "stray"]));
+    let message = panic_of(&mut rig.router, &request(&home, &["a", "stray"]));
     assert!(
         message.contains(&format!("{:?}", domain("stray"))),
         "{message}"
@@ -390,7 +415,7 @@ fn an_unrouted_domain_is_panicked_on_before_any_provider_is_called() {
         ("first", &["a"], Act::Succeed),
         ("second", &["b"], Act::Succeed),
     ]);
-    let _ = panic_of(&mut rig.router, request(&home, &["a", "b", "stray"]));
+    let _ = panic_of(&mut rig.router, &request(&home, &["a", "b", "stray"]));
     assert!(rig.calls().is_empty(), "no provider called");
 }
 
@@ -398,7 +423,7 @@ fn an_unrouted_domain_is_panicked_on_before_any_provider_is_called() {
 fn an_unrouted_domain_abandons_every_domain_of_the_request() {
     let home = Arc::new(Home::default());
     let mut rig = Rig::new(vec![("known", &["a", "b"], Act::Succeed)]);
-    let _ = panic_of(&mut rig.router, request(&home, &["a", "stray", "b"]));
+    let _ = panic_of(&mut rig.router, &request(&home, &["a", "stray", "b"]));
     assert_eq!(home.answer_for("a"), Some(Seen::Abandoned));
     assert_eq!(home.answer_for("stray"), Some(Seen::Abandoned));
     assert_eq!(home.answer_for("b"), Some(Seen::Abandoned));
@@ -409,7 +434,7 @@ fn an_unrouted_domain_abandons_every_domain_of_the_request() {
 fn a_router_with_no_provider_panics_on_any_domain() {
     let home = Arc::new(Home::default());
     let mut router = RoutingProvider::<V>::builder().build().expect("empty");
-    let message = panic_of(&mut router, request(&home, &["a"]));
+    let message = panic_of(&mut router, &request(&home, &["a"]));
     assert!(message.contains(&format!("{:?}", domain("a"))), "{message}");
     assert_eq!(home.answer_for("a"), Some(Seen::Abandoned));
 }
@@ -418,8 +443,8 @@ fn a_router_with_no_provider_panics_on_any_domain() {
 fn the_router_is_usable_after_an_unrouted_request_panicked() {
     let home = Arc::new(Home::default());
     let mut rig = Rig::new(vec![("known", &["a"], Act::Succeed)]);
-    let _ = panic_of(&mut rig.router, request(&home, &["stray"]));
-    rig.router.make_durable(request(&home, &["a"]));
+    let _ = panic_of(&mut rig.router, &request(&home, &["stray"]));
+    rig.router.make_durable(request(&home, &["a"]).lend());
     assert_eq!(rig.called(), vec!["known"]);
     assert_eq!(home.answer_for("a"), Some(Seen::Succeeded));
 }
@@ -431,9 +456,9 @@ fn each_seal_is_dispatched_on_its_own() {
         ("x", &["a"], Act::Succeed),
         ("y", &["b"], Act::Succeed),
     ]);
-    rig.router.make_durable(request(&home, &["a"]));
-    rig.router.make_durable(request(&home, &["b"]));
-    rig.router.make_durable(request(&home, &["a", "b"]));
+    rig.router.make_durable(request(&home, &["a"]).lend());
+    rig.router.make_durable(request(&home, &["b"]).lend());
+    rig.router.make_durable(request(&home, &["a", "b"]).lend());
     assert_eq!(rig.called(), vec!["x", "y", "x", "y"]);
     assert_eq!(home.answers().len(), 4);
     assert!(home.all_answered());
@@ -461,7 +486,7 @@ fn a_router_can_be_registered_with_a_router() {
         .build()
         .expect("no domain twice");
     assert_eq!(outer.domains(), domains(&["a", "b", "c"]));
-    outer.make_durable(request(&home, &["c", "b", "a"]));
+    outer.make_durable(request(&home, &["c", "b", "a"]).lend());
     let called: Vec<_> = calls
         .lock()
         .expect("not poisoned")

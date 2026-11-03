@@ -226,8 +226,8 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "DI-D-44: the provider may answer inside its call, and the answer takes the engine's lock. Calling it with the lock held -- reached through the slot pool delivery shares, the one path the borrow checker does not refuse -- deadlocks the synchronous answer test, which a timeout counts as caught.",
-      "find": ["        for request in requests {\n            provider.make_durable(request);\n"],
-      "replace": ["        let shared = self.delivery.as_ref().expect(\"live\").shared();\n        let _held = durable_ioring::driver::lock(&shared);\n        for request in requests {\n            provider.make_durable(request);\n"]
+      "find": ["        for request in self.requests.requests(&home) {\n            provider.make_durable(request);"],
+      "replace": ["        let shared = self.delivery.as_ref().expect(\"live\").shared();\n        let _held = durable_ioring::driver::lock(&shared);\n        for request in self.requests.requests(&home) {\n            provider.make_durable(request);"]
     },
     {
       "name": "DI-3.2.7: ending does not wait for the provider",
@@ -427,7 +427,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The accessor lends the registration's own bytes, and only when the registration admits it: refused, f is not called.",
-      "find": ["        self.engine().backend.registered_buffer(i).map(f)\n"],
+      "find": ["        self.engine()\n            .backend\n            .registered_buffer(i)\n            .map(f)\n            .map_err(windows_fault)\n"],
       "replace": ["        Ok(f(&[]))\n"]
     },
     {
@@ -435,7 +435,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "As for the shared accessor: refused while in use, out of range, or with no registration, f is not called.",
-      "find": ["        self.engine().backend.registered_buffer_mut(i).map(f)\n"],
+      "find": ["        self.engine()\n            .backend\n            .registered_buffer_mut(i)\n            .map(f)\n            .map_err(windows_fault)\n"],
       "replace": ["        Ok(f(&mut []))\n"]
     },
     {
@@ -459,7 +459,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "A failed submission is reported by the pop that finds no entry to return instead, with its cause, so the consumer is not left polling for work that was never issued. Reached through the ring crate's safe submit-fault responder registered for the instance's ring (its D-85 and M37.1), which fails the submits pool threads make as well as the consumer's. Caught by the test that pops while submits fail and recovers the cause from the error.",
-      "find": ["                    (None, Err(cause)) => Err(io::Error::other(cause)),\n"],
+      "find": ["                    (None, Err(cause)) => Err(refusal_fault(cause)),\n"],
       "replace": ["                    (None, Err(_)) => Ok(None),\n"]
     },
     {
@@ -468,7 +468,7 @@
       "expect": "caught",
       "why": "An entry is progress, and a pop that has one returns it even when the submit it also made failed: the failure is reported only when there is nothing to return instead. Reporting it first drops the entry the pop had already taken, so the consumer loses a completion. Caught by the drain test, which needs the first read's entry to arrive while submits fail.",
       "find": ["                Some(entry) => Ok(Some(entry)),"],
-      "replace": ["                Some(_) if submitted.is_err() => Err(io::Error::other(submitted.expect_err(\"checked\"))),", "                Some(entry) => Ok(Some(entry)),"]
+      "replace": ["                Some(_) if submitted.is_err() => Err(refusal_fault(submitted.expect_err(\"checked\"))),", "                Some(entry) => Ok(Some(entry)),"]
     },
     {
       "name": "DI-7+.2: a push does not remember that it queued",
@@ -651,7 +651,7 @@
       "file": "src/windows_backend/wait.rs",
       "expect": "caught",
       "why": "A notification that cannot be waited on stops an instance delivering, so the failure is the wait's error and not a timeout the caller retries for ever. This was a declared blind spot (DI-7.3) until win-sync-sys' duplicate_handle_with_access made a handle without SYNCHRONIZE access without unsafe.",
-      "find": ["        match wait_for_single_object(&self.0, timeout)? {"],
+      "find": ["        match wait_for_single_object(&self.0, timeout).map_err(windows_fault)? {"],
       "replace": ["        match wait_for_single_object(&self.0, timeout).unwrap_or(WaitOutcome::TimedOut) {"]
     },
     {
@@ -747,7 +747,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "A ring that cannot be read is told to the consumer by the pop that finds nothing to return, so the consumer is not left waiting for completions that cannot be read.",
-      "find": ["                    (Some(fault), _) => Err(io::Error::other(fault)),\n"],
+      "find": ["                    (Some(fault), _) => Err(fault),\n"],
       "replace": ["                    (Some(_), _) => Ok(None),\n"]
     },
     {
@@ -785,7 +785,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The pump says why the wait could not be made. This was a declared blind spot (DI-7.3) until the test gave an instance a notification that cannot be waited on, a duplicate of an event that may only set and reset. The delivery's reporting of a failed wait is also caught over the in-memory backend, in pump/tests.rs.",
-      "find": ["        pumped.waited.map(|_| pumped.ready)"],
+      "find": ["        pumped.waited.map(|_| pumped.ready).map_err(io::Error::from)"],
       "replace": ["        Ok(pumped.ready)"]
     },
     {
@@ -793,7 +793,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The delivery chosen at construction is the one the instance has: a pool drains an instance nothing is meant to drain.",
-      "find": ["            DeliveryMode::Pumped => PumpedDelivery::new(engine)\n                .map(|pumped| pumped.with_lock_watch(watch.clone()))\n                .map(Delivery::Pumped),"],
+      "find": ["            DeliveryMode::Pumped => PumpedDelivery::new(engine)\n                .map_err(|(fault, engine)| (io::Error::from(fault), engine))\n                .map(|pumped| pumped.with_lock_watch(watch.clone()))\n                .map(Delivery::Pumped),"],
       "replace": ["            DeliveryMode::Pumped => PoolDelivery::new(engine, on_ready, None, watch.clone()).map(Delivery::Pool),"]
     },
     {
@@ -802,7 +802,7 @@
       "expect": "caught",
       "why": "The other direction: an instance given a pool that nothing drains delivers nothing, to every consumer that waits for its readiness.",
       "find": ["                PoolDelivery::new(engine, on_ready, environment, watch.clone()).map(Delivery::Pool)"],
-      "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
+      "replace": ["                PumpedDelivery::new(engine)\n                    .map_err(|(fault, engine)| (io::Error::from(fault), engine))\n                    .map(|pumped| pumped.with_lock_watch(watch.clone()))\n                    .map(Delivery::Pumped)"]
     },
     {
       "name": "DI-7.5: the pool's callback sets nothing",
@@ -834,7 +834,7 @@
       "expect": "caught",
       "why": "The delivery chosen at construction is the one the instance has: a pumped instance has no pool wake, so nothing sets a signal for the consumer.",
       "find": ["                SignalledDelivery::new(engine, environment, watch.clone()).map(Delivery::Signalled)"],
-      "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
+      "replace": ["                PumpedDelivery::new(engine)\n                    .map_err(|(fault, engine)| (io::Error::from(fault), engine))\n                    .map(|pumped| pumped.with_lock_watch(watch.clone()))\n                    .map(Delivery::Pumped)"]
     },
     {
       "name": "DI-7.5: a signalled instance has no completion signal",
@@ -2119,46 +2119,36 @@
       "replace": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::default()));\n"]
     },
     {
-      "name": "DI-12.2.4: the router sends every part to its first provider",
+      "name": "DI-12.2.4: the router gives every provider every part",
       "file": "../durable-ioring/src/router.rs",
       "expect": "caught",
       "why": "Through a real instance, each routed provider is asked only for its own domains (DI-D-81): a part sent to another is flushed by something that never said it could, and the instance's tests here see it without the router's own.",
-      "find": ["            parts[registration].push(part);"],
-      "replace": ["            parts[0].push(part);"]
+      "find": ["            let owns = |domain: &FlushDomain| owners.get(domain) == Some(&registration);"],
+      "replace": ["            let owns = |domain: &FlushDomain| owners.get(domain).is_some();"]
     },
     {
       "name": "DI-12.2.4: the router calls its providers in reverse registration order",
       "file": "../durable-ioring/src/router.rs",
       "expect": "caught",
       "why": "Through a real instance, a panicking provider stops the ones registered after it, whose domains are abandoned without being called (DI-D-83); calling in reverse hands the later ones their parts first.",
-      "find": ["        for (route, domains) in self.routes.iter_mut().zip(parts) {"],
-      "replace": ["        for (route, domains) in self.routes.iter_mut().rev().zip(parts.into_iter().rev()) {"]
+      "find": ["        for (registration, route) in self.routes.iter_mut().enumerate() {"],
+      "replace": ["        for (registration, route) in self.routes.iter_mut().enumerate().rev() {"]
     },
     {
-      "name": "DI-12.2.4 control: the router's per-provider parts are made by counting",
+      "name": "DI-12.2.4 control: the router's domain walk goes through into_iter",
       "file": "../durable-ioring/src/router.rs",
       "expect": "survives",
-      "why": "A control: the same empty parts made by counting the routes instead of walking them, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
-      "find": ["            self.routes.iter().map(|_| Vec::new()).collect();"],
-      "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect();"]
+      "why": "A control: the same walk of the request's domains through IntoIterator, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        for domain in request.domain_names() {"],
+      "replace": ["        for domain in request.domain_names().into_iter() {"]
     },
     {
       "name": "DI-19.2.4: a lock wait's end names a pair of its own, as the driver's tests see it",
       "file": "../durable-ioring/src/lock_watch.rs",
       "expect": "caught",
       "why": "The driver's lock-wait tests bind to PairingChecker (DI-D-87), the one definition of the pairing rule; an end whose id is not its begin's is visible to the checker alone, so this is caught only if the binding is real.",
-      "find": [
-        "                self.sink.report(&Diagnostic::LockWaitEnded {",
-        "                    instance: self.instance,",
-        "                    lock: name,",
-        "                    id,"
-      ],
-      "replace": [
-        "                self.sink.report(&Diagnostic::LockWaitEnded {",
-        "                    instance: self.instance,",
-        "                    lock: name,",
-        "                    id: CorrelationId::for_pair(&*self.sink, DiagnosticKind::LockWait).unwrap_or(id),"
-      ]
+      "find": ["                    self.sink.report(&Diagnostic::LockWaitEnded {", "                        instance: self.instance,", "                        lock: name,", "                        id,"],
+      "replace": ["                    self.sink.report(&Diagnostic::LockWaitEnded {", "                        instance: self.instance,", "                        lock: name,", "                        id: CorrelationId::for_pair(&*self.sink, DiagnosticKind::LockWait).unwrap_or(id),"]
     },
     {
       "name": "DI-19.2.4: a lock wait's end is not reported, as the driver's tests see it",
@@ -2223,6 +2213,94 @@
       "replace": [
         "        let mut open: Vec<CorrelationId> = self.open.keys().cloned().collect();"
       ]
+    },
+    {
+      "name": "DI-23.5.2.2: an add_target the core refuses for capacity is attached anyway",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A target the core refuses is neither decided for nor attached: attaching it leaves the backend running I/O for a target no push can name.",
+      "find": ["        if let Err(refused) = engine.core.add_target(key, target.describe()) {\n            return Err(AddTargetError {\n                key,\n                target,\n                cause: refused.cause,\n            });\n        }\n"],
+      "replace": ["        let _ = engine.core.add_target(key, target.describe());\n"]
+    },
+    {
+      "name": "DI-23.5.2.2: a target given at construction past the capacity is refused as another cause",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A construction refused for capacity says so, and hands every file back.",
+      "find": ["                    AddTargetCause::AtCapacity(at) => SetupRefusal::AtCapacity(at),"],
+      "replace": ["                    AddTargetCause::AtCapacity(_) => SetupRefusal::DuplicateKey(file.key),"]
+    },
+    {
+      "name": "DI-23.5.2.2: a construction the core refuses is reported as a repeated domain",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The core's own refusal of the capacity or of the provider's domains reaches the consumer as it was made.",
+      "find": ["                    reason: SetupRefusal::Construction(refused),"],
+      "replace": ["                    reason: SetupRefusal::DuplicateProviderDomain(FlushDomain::new(Vec::new())),"]
+    },
+    {
+      "name": "DI-23.11: the driver makes no provider request it drained",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "Every request drained from the engine is made, once the lock is released (DI-D-44, DI-D-103).",
+      "find": ["        for request in self.requests.requests(&home) {"],
+      "replace": ["        for request in self.requests.requests(&home).take(0) {"]
+    },
+    {
+      "name": "DI-23.12.3.8: the setup's failure observer is not given to the core",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The driver takes the observer in its setup and must hand it to the core; otherwise a consumer that gave one is told nothing.",
+      "find": ["            Some(observer) => core.observed_by(observer),"],
+      "replace": ["            Some(_) => core,"]
+    },
+    {
+      "name": "DI-test-hygiene: a temporary file leaves a stale sibling of a killed run in place",
+      "file": "src/dioring/tests.rs",
+      "expect": "caught",
+      "why": "A sweep kills a hung test process, which leaves its read-only .fresh sibling behind, and a later process given the same id then finds create_new refused. TempFile::at clears the sibling before it starts; without that, a test that creates it fails on a name nothing in the run chose.",
+      "find": ["        remove_leftover(&path.with_extension(\"fresh\"));\n        fs::write(&path, b\"x\")"],
+      "replace": ["        fs::write(&path, b\"x\")"]
+    },
+    {
+      "name": "DI-test-hygiene: dropping a temporary file leaves the sibling a test made",
+      "file": "src/dioring/tests.rs",
+      "expect": "caught",
+      "why": "A test that panics before removing its read-only .fresh sibling would leak it, and the file is what the next run to be given the same process id collides with. The drop removes it, clearing the attribute first.",
+      "find": ["        let _ = fs::remove_file(&self.0);\n        remove_leftover(&self.0.with_extension(\"fresh\"));"],
+      "replace": ["        let _ = fs::remove_file(&self.0);"]
+    },
+    {
+      "name": "DI-7.4: the blocking push gives up at once on a ring at its operations",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "A push refused at the declared operations is cleared by the caller popping and sealing, which make_room does; classing it as not retryable returns it as NotRetryable on the first refusal, so a demonstration that writes past its capacity panics instead of taking back-pressure. Found in the review of PR #167.",
+      "find": ["            PushRefusal::AtCapacity(at) => at.limit == Limit::Operations,"],
+      "replace": ["            PushRefusal::AtCapacity(_) => false,"]
+    },
+    {
+      "name": "DI-7.4: the demonstration never seals as it goes",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "A write keeps its place until its completion is popped and a seal has covered it, so a run that seals only at the end is refused at the declared operations however fast it pops, and its push times out. This is the defect the review found: writes past 256 panicked.",
+      "find": ["        if in_epoch == EPOCH_WRITES {"],
+      "replace": ["        if false {"]
+    },
+    {
+      "name": "DI-7.4: making room does not pop",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "Popping a completion is half of what lets go of a write's place, so a make_room that only drains leaves a ring at its operations as full as it was, and the push times out.",
+      "find": ["                while let Some(entry) = next(ring) {"],
+      "replace": ["                while let Some(entry) = None::<EntryOf<Ring>> {"]
+    },
+    {
+      "name": "DI-7.4: a pop refused for want of room is a fault",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "Popping rings for the commit a seal queued, and the backend will not take it until its completions are drained: DrainNeeded. That is nothing to pop yet and a reason to make room; treating it as a fault ends the run at the first seal under a pumped delivery.",
+      "find": ["                        | RefusalKind::DrainNeeded"],
+      "replace": ["                        | RefusalKind::Busy"]
     }
   ]
 }

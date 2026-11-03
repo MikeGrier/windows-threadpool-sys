@@ -1,13 +1,16 @@
 // Copyright (c) 2026 Mike Grier
 //! The consumer's durability provider (DI-2.12, DI-D-27).
 
-use std::fmt::{self, Debug};
-use std::io;
-use std::sync::{Arc, Weak};
+use alloc::sync::Weak;
+use alloc::vec::Vec;
+use core::fmt::{self, Debug};
+
+use rc_errors::ErrorReport;
 
 use crate::contract::Identities;
 use crate::ids::Lineage;
-use crate::types::{FailureCause, FlushDomain, IoTargetKey};
+use crate::request::FlushRequest;
+use crate::types::{FailureCause, FlushDomain};
 
 /// A consumer-supplied durability provider. It makes writes the instance has seen complete
 /// durable, by any means, and answers per flush domain. An instance holds at most one; several
@@ -21,63 +24,17 @@ pub trait DurabilityProvider<V: Identities>: Send + Debug {
     /// through each domain's completion -- inside this call included. Holds no reference to the
     /// instance.
     ///
+    /// **The request is lent for the call** (DI-D-115): the files and write identities in it are
+    /// the instance's storage, valid until this returns, so a provider that works after it returns
+    /// copies what it needs. The completions it takes are its own, and may be kept and answered
+    /// from any thread. A domain the provider does not take is abandoned when the request is dropped.
+    ///
     /// dioring calls it from the consumer's own calls on the instance -- normally the `pop` that
     /// follows the completion letting a seal start -- and never with its lock held, so an answer
-    /// given inside it is recorded at once (DI-D-44). A panic propagates to that call, and every
-    /// completion it drops unanswered is a failure of its domain.
-    fn make_durable(&mut self, request: FlushRequest<V>);
-}
-
-/// One seal's work for the consumer's provider.
-#[derive(Debug)]
-pub struct FlushRequest<V: Identities> {
-    /// One part per flush domain the provider serves that the seal touched.
-    pub domains: Vec<DomainRequest<V>>,
-}
-
-/// One flush domain's part of a request, and the handle that answers it.
-#[derive(Debug)]
-pub struct DomainRequest<V: Identities> {
-    /// The domain.
-    pub domain: FlushDomain,
-    /// Each file in the domain with writes named for it.
-    pub files: Vec<IoTargetWrites<V>>,
-    /// Answers this domain, once.
-    pub completion: DomainCompletion,
-}
-
-/// A target in one domain's part, and the writes to it named for that domain: identities, never
-/// extents. Every one has completed. The provider reaches what backs the target by its own means;
-/// the request lends it nothing (DI-D-50 P6).
-#[derive(Debug)]
-pub struct IoTargetWrites<V: Identities> {
-    /// The consumer's key for the target.
-    pub key: IoTargetKey,
-    /// The writes named.
-    pub writes: Vec<V::OpId>,
-}
-
-/// One seal's request for the consumer's provider, as [`DurableIoCore`](crate::DurableIoCore)
-/// makes it: the driver hands it to the provider and returns each domain's answer to the core
-/// with [`DurableIoCore::provided`](crate::DurableIoCore::provided), naming this lineage and seal.
-#[derive(Debug)]
-pub struct ProviderRequest<V: Identities> {
-    /// The seal's lineage.
-    pub lineage: V::Lineage,
-    /// The seal's sequence number within its lineage, which each answer names.
-    pub seal: u64,
-    /// One part per flush domain the provider serves that the seal touched, in the order the
-    /// domains were interned.
-    pub domains: Vec<ProviderPart<V>>,
-}
-
-/// One flush domain's part of a [`ProviderRequest`].
-#[derive(Debug)]
-pub struct ProviderPart<V: Identities> {
-    /// The domain.
-    pub domain: FlushDomain,
-    /// Each target in the domain with writes named for it, in the order first written.
-    pub targets: Vec<IoTargetWrites<V>>,
+    /// given inside it is recorded at once (DI-D-44). Calls are made one at a time per instance. A
+    /// panic propagates to that call, and every completion it drops unanswered, or never takes, is a
+    /// failure of its domain.
+    fn make_durable(&mut self, request: FlushRequest<'_, V>);
 }
 
 /// Answers one domain of one request, once, from any thread at any time -- inside `make_durable`
@@ -110,8 +67,10 @@ impl DomainCompletion {
         self.answer(DomainOutcome::Succeeded);
     }
 
-    /// The domain failed: `FailureCause::Provider`, with `error`.
-    pub fn fail(mut self, error: io::Error) {
+    /// The domain failed: `FailureCause::Provider`, with `error` (DI-D-105): a static report, or a
+    /// shared one the provider made, with an allocator it chose. Under `std`,
+    /// [`report_io_error`](crate::report_io_error) makes one from an `io::Error`.
+    pub fn fail(mut self, error: ErrorReport) {
         self.answer(DomainOutcome::Failed(error));
     }
 
@@ -156,7 +115,7 @@ pub enum DomainOutcome {
     /// Every write named for the domain is durable.
     Succeeded,
     /// The domain failed: `FailureCause::Provider`, with the error.
-    Failed(io::Error),
+    Failed(ErrorReport),
     /// The provider gave no answer and never will: `FailureCause::ProviderAbandoned`.
     Abandoned,
 }
@@ -168,7 +127,7 @@ impl DomainOutcome {
             DomainOutcome::Succeeded => Ok(()),
             DomainOutcome::Failed(error) => Err(FailureCause::Provider {
                 domain: domain.clone(),
-                error: Arc::new(error),
+                error,
             }),
             DomainOutcome::Abandoned => Err(FailureCause::ProviderAbandoned {
                 domain: domain.clone(),

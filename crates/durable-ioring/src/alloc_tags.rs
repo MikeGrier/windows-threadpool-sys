@@ -1,0 +1,267 @@
+// Copyright (c) 2026 Mike Grier
+//! Allocation tags ([DI-D-104]): every call in the core that can allocate runs inside the
+//! crate-private `tagged`, which names it with a [`Tag`] of its own.
+//!
+//! A global allocator is given only a `Layout`, so nothing tells it which code asked for memory.
+//! The core says so instead: `tagged(TAG, || self.map.insert(key, value))` sets the thread's
+//! current tag for exactly the call it is given, and restores the tag it replaced when the call
+//! returns or unwinds, so tags nest. An allocation made inside a container's mutation is counted
+//! under the tag of the code that called it, which is as fine as attribution can go when the
+//! container's code is not ours.
+//!
+//! The current tag exists only under the `alloc-tags` feature, which only the allocation test turns
+//! on. Without it, `tagged` calls its closure and nothing else, so the core pays nothing for it.
+//!
+//! **The rule, which the allocation test enforces:** a call that can allocate is made inside
+//! `tagged`, with a tag no other call uses. An allocation counted with no tag set fails the test,
+//! and so does one tag seen from two places in the source.
+//!
+//! **A tagged closure holds the allocating call and nothing else.** Its arguments, and any call
+//! into other code of the core, are made before it: an allocation inside the closure is counted
+//! under its tag, so a call into code that allocates without a tag of its own would be hidden
+//! there rather than reported as untagged. Calls into a closure's own tagged calls nest, and the
+//! innermost tag wins.
+//!
+//! **Calls into what is plugged into the core are tagged too:** a backend's `push`, `check`,
+//! `submit` and `pop`, a provider, a notification's wait, a diagnostic sink's `wants` and
+//! `report`, the clock, and a failure observer's `failed`, `suspected` and `marked`. What they
+//! allocate is theirs to decide ([DI-D-97]), and is counted
+//! under the call the core made to them, so a plugged-in type that allocates is seen, and seen
+//! where it was called. A diagnostic sink that fans out to others is a sink, and its sinks are
+//! counted under its caller's tag.
+//!
+//! [DI-D-97]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/durable-ioring/DESIGN-NOTES.md#di-d-97
+//!
+//! [DI-D-104]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/durable-ioring/DESIGN-NOTES.md#di-d-104
+
+#[cfg(feature = "alloc-tags")]
+use core::cell::Cell;
+#[cfg(feature = "alloc-tags")]
+use core::panic::Location;
+
+#[cfg(test)]
+mod tests;
+
+/// The name of one allocating call in the core. Two calls never share one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Tag(&'static str);
+
+impl Tag {
+    const fn new(name: &'static str) -> Self {
+        Self(name)
+    }
+
+    /// The tag's name: the module, the function and what the call allocates for.
+    #[must_use]
+    #[cfg_attr(
+        not(feature = "alloc-tags"),
+        allow(
+            dead_code,
+            reason = "read only by an allocator counting allocations, under the feature"
+        )
+    )]
+    pub const fn name(self) -> &'static str {
+        self.0
+    }
+}
+
+/// A tag and the place in the source the call carrying it was made.
+#[cfg(feature = "alloc-tags")]
+#[derive(Clone, Copy, Debug)]
+pub struct Site {
+    /// The call's tag.
+    pub tag: Tag,
+    /// Where the call was made.
+    pub location: &'static Location<'static>,
+}
+
+#[cfg(feature = "alloc-tags")]
+thread_local! {
+    /// The innermost tagged call this thread is inside, if any. Const-initialised and without a
+    /// destructor, so reading it from inside an allocator neither allocates nor fails.
+    static CURRENT: Cell<Option<Site>> = const { Cell::new(None) };
+}
+
+/// The innermost tagged call this thread is inside: what an allocator counting allocations reads.
+#[cfg(feature = "alloc-tags")]
+#[must_use]
+pub fn current() -> Option<Site> {
+    CURRENT.try_with(Cell::get).ok().flatten()
+}
+
+/// Restores the tag it replaced when dropped.
+#[cfg(feature = "alloc-tags")]
+struct Guard(Option<Site>);
+
+#[cfg(feature = "alloc-tags")]
+impl Drop for Guard {
+    fn drop(&mut self) {
+        let _ = CURRENT.try_with(|current| current.set(self.0));
+    }
+}
+
+/// Run `call` with `tag` as the thread's current allocation tag, and return what it returns.
+#[track_caller]
+#[inline]
+pub(crate) fn tagged<R>(tag: Tag, call: impl FnOnce() -> R) -> R {
+    #[cfg(feature = "alloc-tags")]
+    let _guard = {
+        let site = Site {
+            tag,
+            location: Location::caller(),
+        };
+        Guard(
+            CURRENT
+                .try_with(|current| current.replace(Some(site)))
+                .ok()
+                .flatten(),
+        )
+    };
+    #[cfg(not(feature = "alloc-tags"))]
+    let _ = tag;
+    call()
+}
+
+/// Every tag the core uses, one per allocating call, grouped by the file the call is in. A tag's
+/// name is the module, the function, and what the call allocates for.
+pub(crate) mod tag {
+    use super::Tag;
+
+    // io_core.rs
+    pub(crate) const IO_CORE_NEW_SERVED: Tag = Tag::new("io_core::new::served");
+    pub(crate) const IO_CORE_NEW_TARGETS: Tag = Tag::new("io_core::new::targets");
+    pub(crate) const IO_CORE_NEW_DOMAINS: Tag = Tag::new("io_core::new::domains");
+    pub(crate) const IO_CORE_NEW_IN_FLIGHT: Tag = Tag::new("io_core::new::in_flight");
+    pub(crate) const IO_CORE_NEW_PER_TARGET: Tag = Tag::new("io_core::new::per_target");
+    pub(crate) const IO_CORE_NEW_HELD: Tag = Tag::new("io_core::new::held");
+    pub(crate) const IO_CORE_NEW_UNPUSHED: Tag = Tag::new("io_core::new::unpushed");
+    pub(crate) const IO_CORE_NEW_OUTGOING: Tag = Tag::new("io_core::new::outgoing");
+    pub(crate) const REQUEST_BUF_NEW_REQUESTS: Tag = Tag::new("request_buf::new::requests");
+    pub(crate) const REQUEST_BUF_NEW_PARTS: Tag = Tag::new("request_buf::new::parts");
+    pub(crate) const REQUEST_BUF_NEW_TARGETS: Tag = Tag::new("request_buf::new::targets");
+    pub(crate) const REQUEST_BUF_NEW_IDS: Tag = Tag::new("request_buf::new::ids");
+    pub(crate) const IO_CORE_NEW_REQUESTS: Tag = Tag::new("io_core::new::requests");
+    pub(crate) const IO_CORE_NEW_QUEUE: Tag = Tag::new("io_core::new::queue");
+    pub(crate) const IO_CORE_ISSUE_BACKEND_CHECK: Tag = Tag::new("io_core::issue::backend_check");
+    pub(crate) const IO_CORE_ISSUE_BACKEND_PUSH: Tag = Tag::new("io_core::issue::backend_push");
+
+    // durability.rs
+    pub(crate) const DURABILITY_NEW_LINEAGES: Tag = Tag::new("durability::new::lineages");
+    pub(crate) const DURABILITY_NEW_WRITES: Tag = Tag::new("durability::new::writes");
+    pub(crate) const DURABILITY_NEW_SEALS: Tag = Tag::new("durability::new::seals");
+    pub(crate) const DURABILITY_NEW_IN_FLIGHT_BY_EPOCH: Tag =
+        Tag::new("durability::new::in_flight_by_epoch");
+    pub(crate) const DURABILITY_NEW_HELD_BY_EPOCH: Tag = Tag::new("durability::new::held_by_epoch");
+    pub(crate) const DURABILITY_NEW_GATED: Tag = Tag::new("durability::new::gated");
+    pub(crate) const DURABILITY_NEW_HELD: Tag = Tag::new("durability::new::held");
+    pub(crate) const DURABILITY_NEW_SERVED: Tag = Tag::new("durability::new::served");
+    pub(crate) const DURABILITY_NEW_SPANS: Tag = Tag::new("durability::new::spans");
+    pub(crate) const DURABILITY_NEW_SEAL_DOMAINS: Tag = Tag::new("durability::new::seal_domains");
+    pub(crate) const DURABILITY_NEW_SCRATCH_TOUCHED: Tag =
+        Tag::new("durability::new::scratch_touched");
+    pub(crate) const DURABILITY_NEW_WINDOW: Tag = Tag::new("durability::new::window");
+    pub(crate) const DURABILITY_NEW_FLUSH_PAIRS: Tag = Tag::new("durability::new::flush_pairs");
+    pub(crate) const DURABILITY_NEW_SERVED_NAMES: Tag = Tag::new("durability::new::served_names");
+    pub(crate) const DURABILITY_NEW_FAILURES: Tag = Tag::new("durability::new::failures");
+    pub(crate) const DURABILITY_NEW_TOKENS: Tag = Tag::new("durability::new::tokens");
+    pub(crate) const DURABILITY_NEW_FREE_TOKENS: Tag = Tag::new("durability::new::free_tokens");
+    pub(crate) const DURABILITY_NEW_LISTS: Tag = Tag::new("durability::new::lists");
+    pub(crate) const DURABILITY_NEW_KEPT: Tag = Tag::new("durability::new::kept");
+    pub(crate) const DURABILITY_NEW_ABANDONED: Tag = Tag::new("durability::new::abandoned");
+    pub(crate) const DURABILITY_NEW_DUE: Tag = Tag::new("durability::new::due");
+    pub(crate) const DURABILITY_FRESH_DUE: Tag = Tag::new("durability::fresh::due");
+    pub(crate) const DURABILITY_NEW_SCRATCH_LIVE: Tag = Tag::new("durability::new::scratch_live");
+    pub(crate) const DURABILITY_NEW_SCRATCH_COVERED: Tag =
+        Tag::new("durability::new::scratch_covered");
+    pub(crate) const DURABILITY_NEW_SCRATCH_WORK: Tag = Tag::new("durability::new::scratch_work");
+    pub(crate) const DURABILITY_NEW_SCRATCH_BOUNDS: Tag =
+        Tag::new("durability::new::scratch_bounds");
+    pub(crate) const DURABILITY_NEW_SCRATCH_PAIRS: Tag = Tag::new("durability::new::scratch_pairs");
+    pub(crate) const DURABILITY_OBSERVE_CAUSE: Tag = Tag::new("durability::observe::cause");
+    pub(crate) const DURABILITY_END_SEAL_REPORT: Tag = Tag::new("durability::end_seal::report");
+    pub(crate) const DURABILITY_END_FLUSH_REPORT: Tag = Tag::new("durability::end_flush::report");
+    pub(crate) const DURABILITY_INCONSISTENT_WANTS: Tag =
+        Tag::new("durability::inconsistent::wants");
+    pub(crate) const DURABILITY_INCONSISTENT_REPORT: Tag =
+        Tag::new("durability::inconsistent::report");
+    pub(crate) const DURABILITY_SEAL_REPORT: Tag = Tag::new("durability::seal::report");
+    pub(crate) const DURABILITY_OBSERVE_CLOCK: Tag = Tag::new("durability::observe::clock");
+    pub(crate) const DURABILITY_MARK_CLOCK: Tag = Tag::new("durability::mark::clock");
+    pub(crate) const DURABILITY_OBSERVER_MARKED: Tag = Tag::new("durability::observer::marked");
+    pub(crate) const DURABILITY_START_SEALS_REPORT: Tag =
+        Tag::new("durability::start_seals::report");
+
+    // durability/observer.rs
+    pub(crate) const DURABILITY_OBSERVER_FAILED: Tag = Tag::new("durability::observer::failed");
+    pub(crate) const DURABILITY_OBSERVER_SUSPECTED: Tag =
+        Tag::new("durability::observer::suspected");
+
+    // durability/lineages.rs
+
+    // io_core/provider.rs
+    pub(crate) const IO_CORE_WITH_PROVIDER_NAMED: Tag = Tag::new("io_core::with_provider::named");
+    pub(crate) const IO_CORE_WITH_PROVIDER_SERVED_NAMES: Tag =
+        Tag::new("io_core::with_provider::served_names");
+    pub(crate) const IO_CORE_WITH_PROVIDER_NAMES: Tag = Tag::new("io_core::with_provider::names");
+
+    // domains.rs
+    pub(crate) const DOMAINS_FIRST_REPEAT_COPY: Tag = Tag::new("domains::first_repeat::copy");
+    pub(crate) const DOMAINS_FIRST_REPEAT_SEEN: Tag = Tag::new("domains::first_repeat::seen");
+    pub(crate) const DOMAINS_INTERN_ALL_ID: Tag = Tag::new("domains::intern_all::id");
+    pub(crate) const DOMAINS_INTERN_ALL_SHARED: Tag = Tag::new("domains::intern_all::shared");
+
+    // router.rs
+    pub(crate) const ROUTER_REGISTER_BOX: Tag = Tag::new("router::register::box");
+    pub(crate) const ROUTER_REGISTER_PROVIDER: Tag = Tag::new("router::register::provider");
+    pub(crate) const ROUTER_BUILD_ROUTES: Tag = Tag::new("router::build::routes");
+    pub(crate) const ROUTER_BUILD_PROVIDER_DOMAINS: Tag =
+        Tag::new("router::build::provider_domains");
+    pub(crate) const ROUTER_BUILD_OWNER: Tag = Tag::new("router::build::owner");
+    pub(crate) const ROUTER_BUILD_ROUTE: Tag = Tag::new("router::build::route");
+    pub(crate) const ROUTER_DOMAINS: Tag = Tag::new("router::domains");
+    pub(crate) const ROUTER_MAKE_DURABLE_PROVIDER: Tag = Tag::new("router::make_durable::provider");
+
+    // engine.rs
+    #[cfg(feature = "std")]
+    pub(crate) const ENGINE_PUSH_BACKEND: Tag = Tag::new("engine::push::backend");
+    #[cfg(feature = "std")]
+    pub(crate) const ENGINE_PUSH_SUBMIT: Tag = Tag::new("engine::push::submit");
+    #[cfg(feature = "std")]
+    pub(crate) const ENGINE_PUSH_BACKEND_AGAIN: Tag = Tag::new("engine::push::backend_again");
+    #[cfg(feature = "std")]
+    pub(crate) const ENGINE_RING_SUBMIT: Tag = Tag::new("engine::ring::submit");
+    #[cfg(feature = "std")]
+    pub(crate) const ENGINE_DRAIN_POP: Tag = Tag::new("engine::drain::pop");
+
+    // pump.rs
+    #[cfg(feature = "std")]
+    pub(crate) const PUMP_NEW_NOTIFICATION: Tag = Tag::new("pump::new::notification");
+    #[cfg(feature = "std")]
+    pub(crate) const PUMP_NEW_HANDED_BACK: Tag = Tag::new("pump::new::handed_back");
+    #[cfg(feature = "std")]
+    pub(crate) const PUMP_WITH_NOTIFICATION_SLOT: Tag = Tag::new("pump::with_notification::slot");
+    #[cfg(feature = "std")]
+    pub(crate) const PUMP_PUMP_WAIT: Tag = Tag::new("pump::pump::wait");
+
+    // ids.rs
+
+    // backend.rs
+
+    // types.rs
+    pub(crate) const TYPES_FLUSH_DOMAIN_NEW: Tag = Tag::new("types::flush_domain::new");
+
+    // diagnostics.rs
+    pub(crate) const DIAGNOSTICS_FLUSH_PART_TEXT: Tag = Tag::new("diagnostics::flush_part::text");
+
+    // io_target.rs
+    pub(crate) const IO_TARGET_DESCRIBE_DOMAINS: Tag = Tag::new("io_target::describe::domains");
+
+    // lock_watch.rs
+    #[cfg(feature = "std")]
+    pub(crate) const LOCK_WATCH_LOCK_BEGAN: Tag = Tag::new("lock_watch::lock::began");
+    #[cfg(feature = "std")]
+    pub(crate) const LOCK_WATCH_LOCK_ENDED: Tag = Tag::new("lock_watch::lock::ended");
+
+    // correlation.rs
+    pub(crate) const CORRELATION_MINT_FOR_WANTS: Tag = Tag::new("correlation::mint_for::wants");
+}

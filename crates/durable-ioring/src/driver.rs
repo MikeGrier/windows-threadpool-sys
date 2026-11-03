@@ -7,11 +7,18 @@
 //! which a driver implements. A driver for another platform than Windows builds on these, as
 //! `win-durable-ioring` does, so they are public and are part of what a driver may rely on; the
 //! rules each keeps are in the item's own documentation.
+//!
+//! Without the `std` feature the engine, its lock and the pumped delivery are absent, a lock being
+//! `std`'s (DI-D-97); the rest is there.
 
 pub use crate::domains::first_repeat;
 pub use crate::durability::inconsistent;
+#[cfg(feature = "std")]
 pub use crate::engine::{Engine, EngineGuard, Slot, lock, present, present_watched};
-pub use crate::ids::{Home, InstanceId};
+pub use crate::ids::{Home, InstanceId, LineageSlots};
+#[cfg(feature = "std")]
 pub use crate::lock_watch::{ENGINE_LOCK, LockWatch, WatchedGuard};
 pub use crate::provider::{Answer, DomainCall};
-pub use crate::pump::{Pumped, PumpedDelivery, PumpedSetup};
+pub use crate::pump::Pumped;
+#[cfg(feature = "std")]
+pub use crate::pump::{PumpedDelivery, PumpedSetup};

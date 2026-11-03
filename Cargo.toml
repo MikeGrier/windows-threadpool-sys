@@ -3,7 +3,9 @@
 [workspace]
 members = [
 	"crates/durable-ioring",
+	"crates/fixed-hash-table",
 	"crates/io-buffers",
+	"crates/rc-errors",
 	"crates/win-error-codes",
 	"crates/win-job-launcher",
 	"crates/win-handles-sys",

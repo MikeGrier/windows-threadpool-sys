@@ -171,6 +171,46 @@
       "why": "The manifest checking itself. This changes what a reader sees and nothing a test claims, so it MUST survive -- if it comes back caught, the suite is matching on incidental wording rather than on behaviour, and its other results are worth less than they look.",
       "find": ["Write-Report 'Refreshing the working copy.' -Level note"],
       "replace": ["Write-Report 'Syncing the working copy.' -Level note"]
+    },
+    {
+      "name": "-Diff: an entry is selected whatever file it patches",
+      "file": "tools/common.ps1",
+      "expect": "caught",
+      "why": "Select-SabotageDiffEntry selects by the patched file alone. Selecting every entry turns -Diff into a full sweep, which is the cost it exists to avoid, and only a test that leaves an entry's file untouched can see it.",
+      "find": ["if ($changed.Contains($relative)) { $why = \"the file it patches changed: $($entry.file)\" }"],
+      "replace": ["if ($true) { $why = \"the file it patches changed: $($entry.file)\" }"]
+    },
+    {
+      "name": "-Diff: an entry the diff adds to the manifest is not selected",
+      "file": "tools/common.ps1",
+      "expect": "caught",
+      "why": "An entry added in the diff has never been swept, and its patched file may be untouched, so the patched-file rule cannot reach it; without the new-entry rule -Diff would never validate a new entry.",
+      "find": ["if ($null -eq $before) { $why = 'the entry is new' }"],
+      "replace": ["if ($null -eq $before) { $why = $null }"]
+    },
+    {
+      "name": "-Diff: an entry the diff edits in the manifest is not selected",
+      "file": "tools/common.ps1",
+      "expect": "caught",
+      "why": "An edited entry has a new patch nothing has swept, and its patched file may be untouched; the changed-entry rule is the only thing that reaches it.",
+      "find": ["                    $why = 'the entry changed'"],
+      "replace": ["                    $why = $null"]
+    },
+    {
+      "name": "-Diff: a change git cannot report selects nothing",
+      "file": "tools/common.ps1",
+      "expect": "caught",
+      "why": "When the change cannot be measured, nothing says an entry was unaffected, so every entry must be swept; selecting none would report a clean sweep of a change nobody looked at.",
+      "find": ["return [pscustomobject]@{ All = $true; Entries = $Entries; Reasons = $reasons; Reason = \"every entry: $why\" }"],
+      "replace": ["return [pscustomobject]@{ All = $false; Entries = @(); Reasons = $reasons; Reason = \"every entry: $why\" }"]
+    },
+    {
+      "name": "-Diff: it is accepted together with -Since",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "The two flags choose the entries by different rules, so a run given both would use one and silently ignore the other.",
+      "find": ["if (-not [string]::IsNullOrWhiteSpace($Since) -and -not [string]::IsNullOrWhiteSpace($Diff)) {"],
+      "replace": ["if ($false) {"]
     }
   ]
 }

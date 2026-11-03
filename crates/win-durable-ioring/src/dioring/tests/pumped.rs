@@ -18,7 +18,7 @@ use win_sync_sys::{
 };
 
 use super::pushes::{BOUND, GIVEN, Harness, Ring, RingEntry, given, temp};
-use super::{keeper, setup};
+use super::{closed, keeper, setup};
 use crate::dioring::delivery::Delivery;
 use crate::dioring::{DeliveryMode, Setup};
 use crate::windows_backend::CompletionEvent;
@@ -449,7 +449,7 @@ fn a_pumped_instance_ends_with_work_outstanding() {
     let temp = temp(&[0; 64]);
     let mut harness = pumped(vec![given(GIVEN, &temp)]);
     harness.write(GIVEN, 0, b"closing", 1, 1);
-    let leftovers = harness.ring.close();
+    let leftovers = closed(harness.ring);
     assert!(
         leftovers.held.is_empty() && leftovers.failures.is_empty(),
         "nothing was gated, and nothing failed"

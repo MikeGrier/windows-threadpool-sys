@@ -5,8 +5,8 @@
 //!
 //! The engine is the one place that turns the core's [`CoreActions`] into backend pushes: a
 //! submission the backend refuses goes back to the core, which keeps it to emit again or, for a
-//! cause that cannot clear, ends it (DI-D-54); and a provider request is kept for the driver to
-//! make with the lock released (DI-D-44). Draining pops
+//! cause that cannot clear, ends it (DI-D-54); and a provider request stays in the core for the
+//! driver to drain and make with the lock released (DI-D-44). Draining pops
 //! the backend to empty, as an edge-triggered notification requires
 //! (`windows-ioring-sys`' D-19), so it is the same for every delivery: woken by a thread pool, or
 //! pumped by the consumer's own thread.
@@ -15,17 +15,19 @@
 //! handle's release, on any thread, can reach it under the same lock; stopping delivery takes the
 //! engine out of the slot, so anything reaching it afterwards finds it empty.
 
-use std::collections::VecDeque;
-use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use alloc::sync::Arc;
+use core::ops::{Deref, DerefMut};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use crate::alloc_tags::{tag, tagged};
 use crate::backend::{IoBackend, Refused, Submission, SubmissionData};
+use crate::capacity::ConstructionError;
 use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::ids::{DioringIds, OpId};
 use crate::io_core::{CoreActions, DurableIoCore};
 use crate::lock_watch::WatchedGuard;
-use crate::provider::ProviderRequest;
+use crate::request::RequestBuf;
 use crate::types::{
     DurabilityRequest, Epoch, IoFault, IoTargetKey, PushError, ReadOptions, SealError, WriteOptions,
 };
@@ -49,9 +51,6 @@ pub struct Engine<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> {
     pub core: DurableIoCore<E, Bk::Buffer, C, K>,
     /// The backend, which runs the I/O the core asks for.
     pub backend: Bk,
-    /// Requests for the consumer's provider the core has made, in order, for the driver to make
-    /// with its lock released.
-    pub requests: Vec<ProviderRequest<V<E, K>>>,
     /// A fault the backend gave when its completions were read, kept for a consumer's pop to report
     /// once (DI-7+.2).
     fault: Option<IoFault>,
@@ -66,38 +65,28 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
         Self {
             core,
             backend,
-            requests: Vec::new(),
             fault: None,
             attention: false,
         }
     }
 
-    /// Act on what the core asked for: push each submission, handing a refused one back to the
-    /// core, which keeps it or ends it (DI-D-54) and says what that made due, acted on in turn;
-    /// keep each provider request, in the order made; and ring the doorbell once for everything
-    /// pushed. Whether entries became poppable, or the doorbell failed, which a consumer's pop
-    /// rings again and reports (DI-7+.2).
+    /// Act on what the core asked for: take and push each submission, handing a refused one back
+    /// to the core, which keeps it or ends it (DI-D-54) and puts what that made due with the rest,
+    /// taken in turn; leave each provider request in the core, for
+    /// [`drain_requests`](Self::drain_requests); and ring the doorbell once for everything pushed.
+    /// Whether entries became poppable, or the doorbell failed, which a consumer's pop rings again
+    /// and reports (DI-7+.2).
     ///
     /// A backend only queues what it is pushed, so the doorbell is the engine's to ring, once for a
     /// batch. A push refused because the queue is full is made once more after the doorbell has
     /// made room: the one condition that retry is for.
     ///
     /// It ends: a refusal either is kept, making nothing due, or ends one submission for good.
-    pub fn act(&mut self, actions: CoreActions<V<E, K>, Bk::Buffer>) -> bool {
-        let mut deliver = false;
-        let mut pending = VecDeque::from([actions]);
-        while let Some(CoreActions {
-            submit,
-            requests,
-            deliver: ready,
-        }) = pending.pop_front()
-        {
-            deliver |= ready;
-            self.requests.extend(requests);
-            for submission in submit {
-                if let Err(refused) = self.push(submission) {
-                    pending.push_back(self.core.refused(refused));
-                }
+    pub fn act(&mut self, actions: CoreActions) -> bool {
+        let mut deliver = actions.deliver;
+        while let Some(submission) = self.core.next_submission() {
+            if let Err(refused) = self.push(submission) {
+                deliver |= self.core.refused(refused).deliver;
             }
         }
         deliver | self.ring()
@@ -106,9 +95,14 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// Push `submission`, and, if the backend's queue was full, once more after the doorbell has
     /// made room.
     fn push(&mut self, submission: Submission<Bk::Buffer>) -> Result<(), Refused<Bk::Buffer>> {
-        match self.backend.push(submission) {
-            Err(refused) if refused.cause.needs_submit() && self.backend.submit().is_ok() => {
-                self.backend.push(refused.submission)
+        match tagged(tag::ENGINE_PUSH_BACKEND, || self.backend.push(submission)) {
+            Err(refused)
+                if refused.cause.needs_submit()
+                    && tagged(tag::ENGINE_PUSH_SUBMIT, || self.backend.submit()).is_ok() =>
+            {
+                tagged(tag::ENGINE_PUSH_BACKEND_AGAIN, || {
+                    self.backend.push(refused.submission)
+                })
             }
             pushed => pushed,
         }
@@ -117,7 +111,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// Ring the backend's doorbell, issuing what was pushed. Whether it failed: what was pushed
     /// stays queued, and nothing else will issue it if nothing is in flight.
     fn ring(&mut self) -> bool {
-        self.backend.submit().is_err()
+        tagged(tag::ENGINE_RING_SUBMIT, || self.backend.submit()).is_err()
     }
 
     /// Drain the backend to empty, feeding each completion to the core and acting on what it makes
@@ -135,7 +129,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
             deliver |= self.ring();
             let mut popped = false;
             loop {
-                match self.backend.pop() {
+                match tagged(tag::ENGINE_DRAIN_POP, || self.backend.pop()) {
                     Ok(Some(completion)) => {
                         self.fault = None;
                         popped = true;
@@ -169,7 +163,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// Whether a doorbell rung for a consumer's push failed since this was last asked, so the
     /// driver is to tell the consumer, whose pop rings it again.
     pub fn take_attention(&mut self) -> bool {
-        std::mem::take(&mut self.attention)
+        core::mem::take(&mut self.attention)
     }
     /// Write `data` to `target` at `offset`, tagged `epoch`, through the backend.
     ///
@@ -236,9 +230,22 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
         Ok((answer, self.act(actions)))
     }
 
-    /// The provider requests made so far, in order, taken for the driver to make.
-    pub fn take_requests(&mut self) -> Vec<ProviderRequest<V<E, K>>> {
-        std::mem::take(&mut self.requests)
+    /// Drain each provider request made so far into `buf`, in order, for the driver to make
+    /// (DI-D-115). This runs while the engine is borrowed, and under the driver's lock if it holds
+    /// one, so a driver whose provider may answer inside its call makes them from `buf` once the
+    /// lock is released: `buf` is the driver's, and nothing it holds refers to the engine.
+    pub fn drain_requests(&mut self, buf: &mut RequestBuf<V<E, K>>) {
+        self.core.drain_requests(buf);
+    }
+
+    /// A buffer to drain this engine's provider requests into (DI-D-115): see
+    /// [`DurableIoCore::request_buf`].
+    ///
+    /// # Errors
+    ///
+    /// [`ConstructionError::Table`] if a size is more than a `usize`, or cannot be allocated.
+    pub fn request_buf(&self) -> Result<RequestBuf<V<E, K>>, ConstructionError> {
+        self.core.request_buf()
     }
 }
 

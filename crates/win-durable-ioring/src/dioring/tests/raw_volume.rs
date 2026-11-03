@@ -49,7 +49,9 @@ fn raw_instance(volume: OpenedVolume<Unbuffered>) -> (RawRing, LineageHandle) {
         )],
         buffers: Vec::<Vec<u8>>::new(),
         provider: None,
+        capacity: crate::dioring::tests::CAPACITY,
         diagnostics: None,
+        failure_observer: None,
         delivery: DeliveryMode::Pool(None),
     })
     .expect("build an instance over the raw volume")

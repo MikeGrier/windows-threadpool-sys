@@ -17,6 +17,12 @@
 //!   `pump`: it drains, and if that delivered nothing it waits for the ring to say there is
 //!   something to drain. For a signalled instance that wait is on `completion_signal`, which a caller
 //!   with other handles to wait on would wait on itself, and then pump without waiting.
+//! - **A ring at the operations it was built for** is refused with `PushRefusal::AtCapacity`, and
+//!   what clears it is the caller's own work, so `make_room` has to do it. An instance holds a
+//!   write's place until its completion is popped **and** a seal has covered it, so `make_room`
+//!   pops completions, and something has to be sealing: a caller that writes and never seals is
+//!   refused however fast it pops, and its push comes back [`GaveUp::TimedOut`] with the buffer
+//!   and the refusal, which says why. [`run`] seals an epoch every few writes for that reason.
 //!
 //! **Never call this from inside a callback** -- a provider's `make_durable`, or a handler running
 //! on the pool: under pool delivery the drain it waits for runs on the pool, which the blocked call
@@ -30,10 +36,11 @@ use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use win_durable_ioring::backend::RefusalKind;
 use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, Win32FileTarget};
 use win_durable_ioring::{
-    DeliveryMode, Dioring, DurableRing, Entry, IoTargetKey, LineageHandle, OpIdOf, PushError,
-    PushRefusal, PushResult, Setup, TargetSetup,
+    Capacity, DeliveryMode, Dioring, DurableRing, Entry, EntryOf, Epoch, IoTargetKey, Limit,
+    LineageHandle, OpIdOf, PushError, PushRefusal, PushResult, Setup, TargetSetup,
 };
 
 #[cfg(test)]
@@ -58,7 +65,8 @@ pub enum GaveUp {
     /// The refusal is not one waiting clears: no such file, a sealed epoch, an operation the
     /// backend cannot perform. `refused.reason` says which.
     NotRetryable,
-    /// The patience passed with the ring still refusing.
+    /// The patience passed with the ring still refusing. For a ring at its operations, that is
+    /// nothing having popped and sealed enough to let go of a place in time.
     TimedOut,
     /// Making room failed, which is the caller's `make_room` reporting an error.
     MakeRoom(io::Error),
@@ -75,7 +83,9 @@ pub enum GaveUp {
 /// `attempt` that ignores them and a loop of the caller's own is the shape.
 ///
 /// `make_room` is given the longest it should wait, and should drain the instance in the way its
-/// delivery needs. It is not called when the first attempt is accepted.
+/// delivery needs, and pop what is waiting to be popped: an instance at its declared operations is
+/// refused until completions are popped and the writes they were for are covered by a seal, and the
+/// seals are the caller's own to make. It is not called when the first attempt is accepted.
 pub fn push_blocking<R, A, M>(
     ring: &mut R,
     buffer: R::Buffer,
@@ -96,7 +106,14 @@ where
             Ok(id) => return Ok(id),
             Err(refused) => refused,
         };
-        let clears = matches!(&refused.reason, PushRefusal::Backend(cause) if cause.is_retryable());
+        let clears = match &refused.reason {
+            PushRefusal::Backend(cause) => cause.is_retryable(),
+            // Waiting alone does not clear this one: a place is let go when a completion is popped
+            // and a seal has covered the write, both the caller's, and `make_room` is where it does
+            // them. If it never does, the patience runs out and the refusal comes back.
+            PushRefusal::AtCapacity(at) => at.limit == Limit::Operations,
+            _ => false,
+        };
         if !clears || refused.buffer.is_none() {
             return Err(Blocked {
                 refused,
@@ -191,6 +208,10 @@ impl Drop for Scratch {
     }
 }
 
+/// How many operations the demonstration's instance is built for, which is the limit its writes
+/// are measured against: a consumer that writes past it without sealing is refused.
+pub const OPERATIONS: usize = 256;
+
 /// An instance over `scratch`, delivered as `delivery`, with queues of `queue` entries.
 pub fn build(delivery: Delivery, scratch: &Scratch, queue: u32) -> Ring {
     Ring::new(Setup {
@@ -199,7 +220,15 @@ pub fn build(delivery: Delivery, scratch: &Scratch, queue: u32) -> Ring {
         files: vec![scratch.target()],
         buffers: Vec::new(),
         provider: None,
+        capacity: Capacity {
+            operations: OPERATIONS,
+            lineages: 4,
+            imports: 4,
+            targets: 4,
+            domains: 4,
+        },
         diagnostics: None,
+        failure_observer: None,
         delivery: delivery.mode(),
     })
     .expect("build an instance")
@@ -212,7 +241,17 @@ pub fn write_at<'a>(
     file: IoTargetKey,
     offset: u64,
 ) -> impl FnMut(&mut Ring, Vec<u8>, ()) -> PushResult<Ring> + 'a {
-    move |ring, buffer, context| ring.write(file, offset, buffer, lineage.at(1_u64), context)
+    write_in(lineage, file, offset, 1)
+}
+
+/// [`write_at`], in `epoch`.
+pub fn write_in<'a>(
+    lineage: &'a LineageHandle,
+    file: IoTargetKey,
+    offset: u64,
+    epoch: u64,
+) -> impl FnMut(&mut Ring, Vec<u8>, ()) -> PushResult<Ring> + 'a {
+    move |ring, buffer, context| ring.write(file, offset, buffer, lineage.at(epoch), context)
 }
 
 /// What a demonstration run did.
@@ -222,16 +261,77 @@ pub struct Report {
     /// How many times a push was refused and made room.
     pub made_room: usize,
     pub completed: usize,
+    /// How many epochs were sealed.
+    pub sealed: usize,
+}
+
+/// How many writes go into one epoch before it is sealed. Well under [`OPERATIONS`]: an epoch's
+/// writes hold their places until it is sealed and the seal is durable, so the instance has to be
+/// able to hold several epochs' worth while their seals complete.
+const EPOCH_WRITES: usize = 32;
+
+/// The next entry, or `None` when there is none yet. That includes a pop the backend refused for
+/// want of room: popping rings for what a seal queued, and the backend will not take it until its
+/// completions are drained, which is what making room does. The instance leaves the submission
+/// queued and rings again on the next pop, so there is nothing to undo, only room to make. A fault
+/// that waiting does not clear is not that, and ends the demonstration.
+fn next(ring: &mut Ring) -> Option<EntryOf<Ring>> {
+    match ring.pop() {
+        Ok(entry) => entry,
+        Err(fault)
+            if matches!(
+                fault.refusal,
+                Some(
+                    RefusalKind::SubmitNeeded
+                        | RefusalKind::DrainNeeded
+                        | RefusalKind::SubmitAndDrainNeeded
+                        | RefusalKind::Busy
+                )
+            ) =>
+        {
+            None
+        }
+        Err(fault) => panic!("pop: {fault:?}"),
+    }
+}
+
+/// What a pop gave back during the run, which is only ever a completion or a durable mark.
+fn settle(
+    entry: EntryOf<Ring>,
+    completed: &mut usize,
+) -> Option<Epoch<<Ring as DurableRing>::Ids>> {
+    match entry {
+        Entry::Op(_) => {
+            *completed += 1;
+            None
+        }
+        Entry::Durable { through } => Some(through),
+        other => panic!("expected a completion or a durable mark, got {other:?}"),
+    }
 }
 
 /// Push `writes` blocks through an instance delivered as `delivery`, with queues far smaller than
 /// that, blocking whenever the ring will not take one, then collect every completion.
+///
+/// The instance holds a write's place until its completion is popped and a seal has covered it, so
+/// this does both as it goes: it seals an epoch every [`EPOCH_WRITES`] writes, and its `make_room`
+/// pops what is waiting as well as draining. That is what lets it push more writes than the
+/// instance is built to hold at once ([`OPERATIONS`]).
 pub fn run(delivery: Delivery, writes: usize, queue: u32) -> Report {
     let scratch = Scratch::new(&format!("{delivery:?}"));
     let mut ring = build(delivery, &scratch, queue);
     let lineage = ring.default_lineage();
+    let seal = |ring: &mut Ring, epoch: u64| {
+        ring.make_durable_through(lineage.at(epoch))
+            .expect("a seal is never refused for capacity");
+    };
     let mut made_room = 0;
     let mut pushed = 0;
+    let mut completed = 0;
+    let mut epoch = 1_u64;
+    let mut in_epoch = 0;
+    let mut sealed = 0;
+    let mut last_sealed = None;
     for i in 0..writes {
         let offset = u64::try_from(i).expect("a small index") * 8;
         let result = push_blocking(
@@ -239,27 +339,46 @@ pub fn run(delivery: Delivery, writes: usize, queue: u32) -> Report {
             vec![u8::try_from(i % 256).expect("a byte"); 8],
             (),
             Duration::from_secs(10),
-            write_at(&lineage, FILE, offset),
+            write_in(&lineage, FILE, offset, epoch),
             |ring, slice| {
                 made_room += 1;
-                delivery.make_room(ring, slice)
+                delivery.make_room(ring, slice)?;
+                while let Some(entry) = next(ring) {
+                    settle(entry, &mut completed);
+                }
+                Ok(())
             },
         );
         match result {
             Ok(_) => pushed += 1,
             Err(blocked) => panic!("a push gave up: {:?}", blocked.why),
         }
+        in_epoch += 1;
+        if in_epoch == EPOCH_WRITES {
+            seal(&mut ring, epoch);
+            (sealed, last_sealed) = (sealed + 1, Some(epoch));
+            (epoch, in_epoch) = (epoch + 1, 0);
+        }
     }
-    let mut completed = 0;
+    if in_epoch > 0 {
+        seal(&mut ring, epoch);
+        (sealed, last_sealed) = (sealed + 1, Some(epoch));
+    }
+    // Done when every write has completed and the last seal has answered `Durable`.
+    let last = last_sealed.map(|n| Epoch::new(lineage.lineage(), n));
+    let mut durable = last.is_none();
     let started = Instant::now();
-    while completed < writes {
+    while completed < writes || !durable {
         assert!(
             started.elapsed() < Duration::from_secs(10),
             "completions never arrived"
         );
-        match ring.pop().expect("pop") {
-            Some(Entry::Op(_)) => completed += 1,
-            Some(other) => panic!("expected a completion, got {other:?}"),
+        match next(&mut ring) {
+            Some(entry) => {
+                if let (Some(through), Some(last)) = (settle(entry, &mut completed), &last) {
+                    durable |= through == *last;
+                }
+            }
             None => delivery.make_room(&mut ring, SLICE).expect("make room"),
         }
     }
@@ -267,11 +386,12 @@ pub fn run(delivery: Delivery, writes: usize, queue: u32) -> Report {
         pushed,
         made_room,
         completed,
+        sealed,
     }
 }
 
 fn main() {
     for delivery in [Delivery::Pool, Delivery::Pumped, Delivery::Signalled] {
-        println!("{delivery:?}: {:?}", run(delivery, 100, 4));
+        println!("{delivery:?}: {:?}", run(delivery, 4 * OPERATIONS, 4));
     }
 }

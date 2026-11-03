@@ -5,9 +5,12 @@
 //! each one-to-one, and a sink that prints formats them as it likes. A sink states which kinds it
 //! wants, and the core asks before it builds an event, so a sink that wants nothing costs a branch.
 
-use std::fmt;
-use std::sync::Arc;
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::fmt;
 
+use crate::alloc_tags::{tag, tagged};
 use crate::correlation::CorrelationId;
 use crate::types::{FlushDomain, IoTargetKey};
 
@@ -63,6 +66,9 @@ pub enum SealOutcome {
     Blocked,
     /// The seal was never answered: its lineage ended, or its instance was closed or dropped.
     Ended,
+    /// The seal covered no writes and was overwritten by a later one that also covers none,
+    /// which answers in its place (DI-D-99).
+    Superseded,
 }
 
 impl fmt::Display for SealOutcome {
@@ -72,6 +78,7 @@ impl fmt::Display for SealOutcome {
             Self::Failed => "failed",
             Self::Blocked => "blocked",
             Self::Ended => "ended unanswered",
+            Self::Superseded => "superseded",
         })
     }
 }
@@ -114,7 +121,10 @@ impl fmt::Display for FlushPart<'_> {
         match self {
             Self::File(key) => write!(f, "file {}", key.0),
             Self::Domain(domain) => {
-                write!(f, "domain {:?}", String::from_utf8_lossy(domain.bytes()))
+                let text = tagged(tag::DIAGNOSTICS_FLUSH_PART_TEXT, || {
+                    String::from_utf8_lossy(domain.bytes())
+                });
+                write!(f, "domain {text:?}")
             }
         }
     }
@@ -347,10 +357,13 @@ impl DiagnosticSink for NoDiagnostics {
 /// space, and the event's text.
 pub const LINE_PREFIX: &str = "dioring: ";
 
-/// A sink that writes every event as a line on standard error, prefixed [`LINE_PREFIX`].
+/// A sink that writes every event as a line on standard error, prefixed [`LINE_PREFIX`]. Under the
+/// `std` feature, which is on by default: standard error is `std`'s.
+#[cfg(feature = "std")]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StderrDiagnostics;
 
+#[cfg(feature = "std")]
 impl DiagnosticSink for StderrDiagnostics {
     fn wants(&self, _: DiagnosticKind) -> bool {
         true

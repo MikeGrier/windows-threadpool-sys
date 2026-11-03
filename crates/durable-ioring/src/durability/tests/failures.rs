@@ -2,7 +2,6 @@
 //! Failures, their reach, and their resolution (DI-D-12, DI-D-21, DI-D-34), without a ring.
 
 use std::io;
-use std::sync::Arc;
 
 use super::Stamp;
 use super::{
@@ -20,12 +19,14 @@ fn failed() -> io::Result<()> {
     Err(io::Error::from_raw_os_error(1117))
 }
 
-fn domains(ids: &[u32]) -> Reach {
-    Reach::Domains(
-        ids.iter()
-            .map(|&d| DomainId(d))
-            .collect::<Arc<[DomainId]>>(),
-    )
+/// The reach of an import naming `ids`, in a list of its own, as the I/O core makes it.
+fn domains(lineage: &mut Lineage, ids: &[u32]) -> Reach {
+    let list = lineage
+        .0
+        .lists_mut()
+        .claim(ids.iter().map(|&d| DomainId(d)))
+        .expect("a free list");
+    Reach::Named(list)
 }
 
 fn import(
@@ -97,7 +98,7 @@ fn a_failed_flush_suspects_every_held_write_in_push_order() {
     );
     assert_eq!(blocked_by(lineage.state(1)), Some(0));
     assert_eq!(lineage.durable_through(), None);
-    let inventory = lineage.failures();
+    let inventory = lineage.failures_listed();
     assert_eq!(inventory.len(), 1);
     assert!(matches!(
         inventory[0].cause,
@@ -119,12 +120,7 @@ fn a_suspect_set_is_frozen_and_a_later_seal_it_holds_is_answered_blocked() {
         "2's flush succeeded, but failure 0 holds 1"
     );
     assert_eq!(blocked_by(lineage.state(2)), Some(0));
-    let suspects: Vec<u64> = lineage.failures()[0]
-        .suspect
-        .writes()
-        .iter()
-        .map(|w| w.op.seq)
-        .collect();
+    let suspects = super::suspects_of(&lineage, 0);
     assert_eq!(
         suspects,
         [0],
@@ -137,12 +133,16 @@ fn a_suspect_set_is_frozen_and_a_later_seal_it_holds_is_answered_blocked() {
     assert_eq!(
         seen(&due),
         [
-            Seen::Abandoned(0, vec![0], vec![]),
+            Seen::Abandoned(0, vec![0]),
             Seen::Durable(1),
             Seen::Durable(2)
         ]
     );
-    assert_eq!(lineage.state(1), State::Abandoned);
+    assert_eq!(
+        lineage.state(1),
+        State::Durable,
+        "the mark passed 1, which is reported as the mark means it (DI-D-109)"
+    );
     assert_eq!(lineage.state(2), State::Durable);
 }
 
@@ -174,6 +174,32 @@ fn a_write_already_covered_is_never_suspected() {
         seen(&lineage.flushed(2, A, failed())),
         [Seen::Failed(0, vec![second.seq])],
         "finality: nothing durable is reached back to"
+    );
+}
+
+#[test]
+fn a_write_kept_for_one_failure_is_not_suspected_by_a_later_one() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let sealed = ops.push(&mut lineage, 1, A, DEFAULT);
+    lineage.completed(sealed, FULL);
+    let in_flight = ops.push(&mut lineage, 2, B, DEFAULT);
+    submitted(lineage.seal(1));
+    assert_eq!(
+        seen(&lineage.flushed(1, A, failed())),
+        [Seen::Failed(0, vec![sealed.seq, in_flight.seq])]
+    );
+    lineage.completed(in_flight, super::failed());
+
+    let (_, due) = import(&mut lineage, &Reach::All);
+    let failed: Vec<Seen> = seen(&due)
+        .into_iter()
+        .filter(|entry| matches!(entry, Seen::Failed(..)))
+        .collect();
+    assert_eq!(
+        failed,
+        [Seen::Failed(1, vec![sealed.seq])],
+        "the nullified write is kept for failure 0, but stopped being nameable before failure 1"
     );
 }
 
@@ -211,8 +237,8 @@ fn an_import_reaches_its_scope_with_the_same_rule() {
     ops.push_in(&mut lineage, 1, B, DEFAULT, &[2]);
     ops.push(&mut lineage, 1, C, DEFAULT);
     let cases = [
-        (domains(&[1]), None, vec![0, 2]),
-        (domains(&[9]), None, vec![2]),
+        (domains(&mut lineage, &[1]), None, vec![0, 2]),
+        (domains(&mut lineage, &[9]), None, vec![2]),
         (Reach::All, NO_LINEAGE, vec![]),
         (Reach::All, None, vec![0, 1, 2]),
     ];
@@ -225,7 +251,7 @@ fn an_import_reaches_its_scope_with_the_same_rule() {
             "{reach:?}"
         );
     }
-    let inventory = lineage.failures();
+    let inventory = lineage.failures_listed();
     assert_eq!(inventory.len(), 4, "in observation order");
     assert!(
         inventory
@@ -298,13 +324,13 @@ fn a_heal_waits_for_a_seal_that_reaches_the_re_issue() {
         [Seen::Blocked(5, 0)],
         "5 stops short of the re-issue at 10, so the heal still holds 3"
     );
-    assert_eq!(lineage.failures().len(), 1);
+    assert_eq!(lineage.failures_listed().len(), 1);
 
     assert_eq!(submitted(lineage.seal(10)).flushes, [flush(10, A)]);
     assert_eq!(
         seen(&lineage.flushed(10, A, Ok(()))),
         [
-            Seen::Healed(0, vec![lost.seq], vec![]),
+            Seen::Healed(0, vec![lost.seq]),
             Seen::Durable(3),
             Seen::Durable(5),
             Seen::Durable(10),
@@ -324,16 +350,17 @@ fn a_heal_takes_effect_at_the_first_seal_after_it_that_reaches_the_re_issue() {
     }
     submitted(lineage.seal(41));
     let mut token = tokens(lineage.flushed(41, A, failed()));
+    assert!(seen(&lineage.flushed(41, B, Ok(()))).is_empty());
     assert_eq!(
-        seen(&lineage.flushed(41, B, Ok(()))),
+        lineage.marked(),
         [Seen::Marked(0, 1, super::COVERED)],
         "B's write is covered by B's flush, though 41 failed on A"
     );
-    assert_eq!(
-        seen(&lineage.flushed(41, C, Ok(()))),
-        [Seen::Marked(0, 2, super::COVERED)],
+    assert!(
+        seen(&lineage.flushed(41, C, Ok(()))).is_empty(),
         "41 was answered by its Failed, so only the marking is due"
     );
+    assert_eq!(lineage.marked(), [Seen::Marked(0, 2, super::COVERED)]);
     assert_eq!(lineage.refuses(41), Some(41));
     for file in [A, B, C] {
         let write = ops.push(&mut lineage, 42, file, DEFAULT);
@@ -344,9 +371,9 @@ fn a_heal_takes_effect_at_the_first_seal_after_it_that_reaches_the_re_issue() {
         .resolve(vec![(token.remove(0), Resolution::Heal)])
         .expect("heal");
     assert!(quiet(&due), "a heal waits for a seal");
-    let id = lineage.failures()[0].id;
+    let id = lineage.failures_listed()[0].id;
     assert!(
-        lineage.failures()[0].token_live,
+        lineage.failures_listed()[0].token_live,
         "the pending heal holds the token"
     );
     assert!(lineage.take_token(id).is_none());
@@ -357,17 +384,13 @@ fn a_heal_takes_effect_at_the_first_seal_after_it_that_reaches_the_re_issue() {
     assert_eq!(
         seen(&lineage.flushed(42, C, Ok(()))),
         [
-            Seen::Healed(
-                0,
-                vec![0, 1, 2],
-                vec![(1, super::COVERED), (2, super::COVERED)]
-            ),
+            Seen::Healed(0, vec![0, 1, 2]),
             Seen::Durable(41),
             Seen::Durable(42),
         ]
     );
     assert!(
-        lineage.failures().is_empty(),
+        lineage.failures_listed().is_empty(),
         "a resolved failure leaves no memory"
     );
     assert_eq!(lineage.state(41), State::Durable);
@@ -408,13 +431,17 @@ fn a_heal_waits_for_a_seal_that_succeeds() {
         "the first failure's write is still uncovered, so the second suspects it too"
     );
     let second = tokens(due).remove(0);
-    assert_eq!(lineage.failures().len(), 2, "the heal did not take effect");
+    assert_eq!(
+        lineage.failures_listed().len(),
+        2,
+        "the heal did not take effect"
+    );
 
     lineage
         .resolve(vec![(second, Resolution::Heal)])
         .expect("heal");
     assert_eq!(durable(&submitted(lineage.seal(3))), [1, 2, 3]);
-    assert!(lineage.failures().is_empty());
+    assert!(lineage.failures_listed().is_empty());
 }
 
 #[test]
@@ -433,23 +460,34 @@ fn abandoning_takes_effect_at_once_and_abandons_every_epoch_the_failure_contains
         .expect("abandon");
     assert_eq!(
         seen(&due),
-        [Seen::Abandoned(0, vec![0, 1], vec![]), Seen::Durable(1)]
+        [Seen::Abandoned(0, vec![0, 1]), Seen::Durable(1)]
     );
-    assert_eq!(lineage.state(1), State::Abandoned);
+    assert_eq!(
+        lineage.state(1),
+        State::Durable,
+        "the mark passed 1 at once, and answers for it (DI-D-109)"
+    );
     assert_eq!(lineage.state(2), State::Open);
     assert_eq!(
         lineage.state(3),
         State::Abandoned,
-        "decided now, though 3 is open"
+        "decided now, though 3 is open, and above the mark"
     );
-    assert!(lineage.failures().is_empty());
-    assert_eq!(already(lineage.seal(1)), State::Abandoned);
-    assert!(lineage.is_abandoned(1) && lineage.is_abandoned(3));
+    assert!(lineage.failures_listed().is_empty());
+    assert_eq!(already(lineage.seal(1)), State::Durable);
+    assert!(
+        !lineage.is_abandoned(1),
+        "forgotten once the mark passed it"
+    );
+    assert!(lineage.is_abandoned(3));
     assert!(!lineage.is_abandoned(2) && !lineage.is_abandoned(4));
+    assert_eq!(lineage.abandoned_kept(), 1, "3 alone is kept");
 
     assert_eq!(submitted(lineage.seal(3)).flushes, [flush(3, A)]);
     assert_eq!(durable(&lineage.flushed(3, A, Ok(()))), [3]);
-    assert_eq!(lineage.state(3), State::Abandoned);
+    assert_eq!(lineage.state(3), State::Durable);
+    assert!(!lineage.is_abandoned(3));
+    assert_eq!(lineage.abandoned_kept(), 0, "the mark passed every one");
 }
 
 /// CONTRACT.md's "Failures and epochs are many-to-many", second ending, without I/O.
@@ -476,7 +514,7 @@ fn one_abandonment_abandons_an_epoch_that_still_waits_for_every_failure_containi
         .expect("resolve both");
     assert_eq!(
         seen(&due),
-        [Seen::Abandoned(1, vec![a.seq, p.seq, r.seq], vec![])],
+        [Seen::Abandoned(1, vec![a.seq, p.seq, r.seq])],
         "41 still sits in failure 0, whose heal waits for a seal"
     );
     assert_eq!(lineage.state(41), State::Abandoned);
@@ -484,7 +522,8 @@ fn one_abandonment_abandons_an_epoch_that_still_waits_for_every_failure_containi
 
     assert_eq!(submitted(lineage.seal(44)).flushes, [flush(44, A)]);
     assert_eq!(durable(&lineage.flushed(44, A, Ok(()))), [41, 44]);
-    assert_eq!(lineage.state(41), State::Abandoned);
+    assert_eq!(lineage.state(41), State::Durable, "the mark answers for it");
+    assert_eq!(lineage.abandoned_kept(), 0);
 }
 
 #[test]
@@ -495,7 +534,7 @@ fn a_refused_resolution_changes_nothing_and_hands_every_token_back() {
         instance: InstanceId::next(),
         seq: 0,
     };
-    let (foreign, _) = FailureToken::mint(foreign_id);
+    let foreign = FailureToken::detached(foreign_id);
     let error = lineage
         .resolve(vec![
             (token, Resolution::Abandon),
@@ -513,8 +552,14 @@ fn a_refused_resolution_changes_nothing_and_hands_every_token_back() {
         [(0, Resolution::Abandon), (0, Resolution::Heal)],
         "in the order given"
     );
-    assert_eq!(lineage.state(1), State::Blocked(lineage.failures()[0].id));
-    assert!(lineage.failures()[0].token_live, "the token came back live");
+    assert_eq!(
+        lineage.state(1),
+        State::Blocked(lineage.failures_listed()[0].id)
+    );
+    assert!(
+        lineage.failures_listed()[0].token_live,
+        "the token came back live"
+    );
 }
 
 #[test]
@@ -524,7 +569,10 @@ fn the_inventory_hands_out_a_token_only_when_none_is_live() {
     let id = token.id();
     assert!(lineage.take_token(id).is_none(), "the Failed token is live");
     drop(token);
-    assert!(!lineage.failures()[0].token_live, "dropping it is close");
+    assert!(
+        !lineage.failures_listed()[0].token_live,
+        "dropping it is close"
+    );
     let again = lineage.take_token(id).expect("a closed failure's token");
     assert!(lineage.take_token(id).is_none());
     again.close();
@@ -545,5 +593,9 @@ fn the_inventory_hands_out_a_token_only_when_none_is_live() {
         lineage.take_token(id).is_none(),
         "the pending heal holds it"
     );
-    assert_eq!(lineage.failures().len(), 1, "unresolved until its seal");
+    assert_eq!(
+        lineage.failures_listed().len(),
+        1,
+        "unresolved until its seal"
+    );
 }

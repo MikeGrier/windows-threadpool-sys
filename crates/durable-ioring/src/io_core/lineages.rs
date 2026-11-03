@@ -5,24 +5,47 @@
 //! copy, retiring only through the last -- are the driver's. A lineage this core cannot answer for,
 //! another core's or one already ended or retired, is refused as `Foreign`.
 
-use super::{Actions, DurableIoCore, V};
+use super::{CoreActions, DurableIoCore, V};
+use crate::capacity::{AtCapacity, Limit};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::durability::DEFAULT_LINEAGE;
 use crate::ids::Lineage;
-use crate::types::{EndLineageRefusal, LineageInfo, RetireLineageRefusal};
+use crate::types::{EndLineageRefusal, Hold, LineageInfo, RetireLineageRefusal};
+use alloc::string::String;
 
 impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// Mint a lineage, described by `description`.
-    pub fn mint_lineage(&mut self, description: Option<String>) -> Lineage {
+    ///
+    /// # Errors
+    ///
+    /// [`AtCapacity`] when the core holds as many lineages as it was built for, the default and
+    /// those ended and not yet retired among them -- an ended one counts until its `LineageEnded`
+    /// is popped (DI-D-107, DI-D-112); nothing is minted.
+    pub fn mint_lineage(&mut self, description: Option<String>) -> Result<Lineage, AtCapacity> {
+        if self.durability.lineage_count() >= self.capacity.lineages {
+            return Err(AtCapacity {
+                limit: Limit::Lineages,
+                declared: self.capacity.lineages,
+            });
+        }
         let seq = self.durability.mint(description);
-        self.name(seq)
+        Ok(self.name(seq))
     }
 
-    /// The live lineages, in minting order, the default first.
-    #[must_use]
-    pub fn lineages(&self) -> Vec<LineageInfo<V<E, K>>> {
-        self.durability.lineages()
+    /// Each live lineage, in minting order, the default first, given to `visit` (DI-D-103).
+    pub fn lineages(&self, visit: impl FnMut(LineageInfo<'_, V<E, K>>)) {
+        self.durability.lineages(visit);
+    }
+
+    /// What holds `lineage` from being retired that a [`LineageBusy`](crate::LineageBusy) counts
+    /// without naming, given to `visit` (DI-D-103): each unresolved failure holding it, in the
+    /// order observed. Nothing for a lineage that is not this core's live one.
+    pub fn lineage_holds(&self, lineage: Lineage, mut visit: impl FnMut(Hold<V<E, K>>)) {
+        if self.is_live(lineage) {
+            self.durability
+                .lineage_failures(lineage.seq, |failure| visit(Hold::Failure(failure)));
+        }
     }
 
     /// End `lineage` (DI-D-30): every epoch of it not yet durable is abandoned, a `LineageEnded`
@@ -36,7 +59,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     pub fn end_lineage(
         &mut self,
         lineage: Lineage,
-    ) -> Result<Actions<E, B, K>, EndLineageRefusal<V<E, K>>> {
+    ) -> Result<CoreActions, EndLineageRefusal<V<E, K>>> {
         if !self.is_live(lineage) {
             return Err(EndLineageRefusal::Foreign(lineage));
         }
@@ -48,7 +71,9 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         Ok(self.act(due, was_empty))
     }
 
-    /// Retire `lineage` if nothing holds it, so it is no longer enumerated (DI-D-40).
+    /// Retire `lineage` if nothing holds it, so it is no longer enumerated (DI-D-40), and withdraw
+    /// its un-popped `Durable`: the consumer is done with it, and a lineage an entry names counts
+    /// against the lineages declared (DI-D-112).
     ///
     /// # Errors
     ///
@@ -67,6 +92,8 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         }
         self.durability
             .retire(lineage.seq)
-            .map_err(RetireLineageRefusal::Busy)
+            .map_err(RetireLineageRefusal::Busy)?;
+        self.withdraw_lineage(lineage);
+        Ok(())
     }
 }

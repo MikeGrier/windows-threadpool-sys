@@ -21,9 +21,10 @@ use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
 
 use durable_ioring::{
-    AddTargetError, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo,
-    ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo, ReadOptions, RemoveTargetError,
-    Resolution, ResolveError, RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
+    AddTargetError, AtCapacity, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo,
+    Hold, ImportError, ImportScope, Imported, IoFault, IoTargetKey, Leftover, LineageInfo,
+    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
+    UnknownLineage, WriteOptions,
 };
 use durable_ioring::{
     DurableRing, EntryOf, EpochIdOf, FailureIdOf, HandleOf, Lin, PushResult, RegisteredBufferRing,
@@ -45,9 +46,9 @@ mod tests;
 pub enum DeliveryEvent<E> {
     /// The next entry, in queue order.
     Entry(E),
-    /// The instance's `pop` failed. The error says why, and downcasts to the cause the instance
-    /// reported, as an instance's own `pop` error does.
-    Failure(io::Error),
+    /// The instance's `pop` failed: the fault it returned, as an instance's own `pop` reports it
+    /// (durable-ioring's DI-D-105).
+    Failure(IoFault),
 }
 
 /// The handler, as the deliverer holds it.
@@ -121,8 +122,14 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`DurableRing::remove_target`].
-    pub fn remove_target(&self, key: IoTargetKey) -> Result<D::Target, RemoveTargetError<D::Ids>> {
+    pub fn remove_target(&self, key: IoTargetKey) -> Result<D::Target, RemoveTargetError> {
         self.with(|ring| ring.remove_target(key))
+    }
+
+    /// [`DurableRing::target_holds`]. The visitor runs under the delivery's lock, and must not
+    /// call back into it.
+    pub fn target_holds(&self, key: IoTargetKey, visit: impl FnMut(Hold<D::Ids>)) {
+        self.with(|ring| ring.target_holds(key, visit));
     }
 
     /// [`DurableRing::default_lineage`].
@@ -131,13 +138,23 @@ impl<D: DurableRing> DeliveryHandle<D> {
     }
 
     /// [`DurableRing::mint_lineage`].
-    pub fn mint_lineage(&self, description: Option<String>) -> HandleOf<D> {
+    ///
+    /// # Errors
+    ///
+    /// As [`DurableRing::mint_lineage`].
+    pub fn mint_lineage(&self, description: Option<String>) -> Result<HandleOf<D>, AtCapacity> {
         self.with(|ring| ring.mint_lineage(description))
     }
 
-    /// [`DurableRing::lineages`].
-    pub fn lineages(&self) -> Vec<LineageInfo<D::Ids>> {
-        self.with(|ring| ring.lineages())
+    /// [`DurableRing::lineages`]. The visitor runs under the delivery's lock, and must not call
+    /// back into it.
+    pub fn lineages(&self, visit: impl FnMut(LineageInfo<'_, D::Ids>)) {
+        self.with(|ring| ring.lineages(visit));
+    }
+
+    /// [`DurableRing::lineage_holds`]. The visitor runs as [`lineages`](Self::lineages)'s does.
+    pub fn lineage_holds(&self, lineage: Lin<D>, visit: impl FnMut(Hold<D::Ids>)) {
+        self.with(|ring| ring.lineage_holds(lineage, visit));
     }
 
     /// [`DurableRing::end_lineage`].
@@ -302,13 +319,14 @@ impl<D: DurableRing> DeliveryHandle<D> {
     pub fn import_failure(
         &self,
         scope: ImportScope<D::Ids>,
-    ) -> Result<Imported<D::Ids>, UnknownLineage<D::Ids>> {
-        self.with(|ring| ring.import_failure(scope))
+        unmatched: impl FnMut(&durable_ioring::FlushDomain),
+    ) -> Result<Imported<D::Ids>, ImportError<D::Ids>> {
+        self.with(|ring| ring.import_failure(scope, unmatched))
     }
 
     /// [`DurableRing::failures`].
-    pub fn failures(&self) -> Vec<FailureInfo<D::Ids>> {
-        self.with(|ring| ring.failures())
+    pub fn failures(&self, visit: impl FnMut(FailureInfo<'_, D::Ids>)) {
+        self.with(|ring| ring.failures(visit));
     }
 
     /// [`DurableRing::take_token`].
@@ -323,7 +341,11 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`RegisteredBufferRing::with_registered_buffer`].
-    pub fn with_registered_buffer<R>(&self, i: u32, f: impl FnOnce(&[u8]) -> R) -> io::Result<R> {
+    pub fn with_registered_buffer<R>(
+        &self,
+        i: u32,
+        f: impl FnOnce(&[u8]) -> R,
+    ) -> Result<R, IoFault> {
         self.with(|ring| ring.with_registered_buffer(i, f))
     }
 
@@ -336,7 +358,7 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
         &self,
         i: u32,
         f: impl FnOnce(&mut [u8]) -> R,
-    ) -> io::Result<R> {
+    ) -> Result<R, IoFault> {
         self.with(|ring| ring.with_registered_buffer_mut(i, f))
     }
 
@@ -475,9 +497,9 @@ impl<D: DurableRing<Readiness = Event> + Send + 'static> EntryDelivery<D> {
         let clones = ring.readiness().map(|signal| (signal.clone(), signal));
         let (signal, kick) = match clones {
             Ok(clones) => clones,
-            Err(error) => {
+            Err(fault) => {
                 return Err(DeliverySetupError {
-                    error,
+                    error: fault.into(),
                     ring,
                     on_entry,
                 });
@@ -520,10 +542,10 @@ impl<D: DurableRing<Readiness = Event> + Send + 'static> EntryDelivery<D> {
         self.inner.handle.take()
     }
 
-    /// Quiesce the delivery and end the instance with [`DurableRing::close`], handing back what is
-    /// left. Entries not yet delivered are discarded with it.
-    pub fn close(self) -> Leftovers<D::Ids, D::Buffer, D::Context> {
-        self.into_inner().close()
+    /// Quiesce the delivery and end the instance with [`DurableRing::close`], giving `visit` what
+    /// is left. Entries not yet delivered are discarded with it.
+    pub fn close(self, visit: impl FnMut(Leftover<'_, D::Ids, D::Buffer, D::Context>)) {
+        self.into_inner().close(visit);
     }
 
     /// Disarm the wait, wait for a delivery in progress to finish, and release the wait and the

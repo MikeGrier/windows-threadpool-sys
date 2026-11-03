@@ -110,6 +110,13 @@ if it needs it ([DI-D-6](DESIGN-NOTES.md#di-d-6)).
 `OpId` is ordered by push order, which answers [DI-D-6](DESIGN-NOTES.md#di-d-6)'s open question: the
 retention layer gets the order it needs for newest-wins replay at no extra cost.
 
+*(Amended by [DI-D-113](DESIGN-NOTES.md#di-d-113): there is no `SuspectSet`. `Failed`, `Abandoned`
+and `FailureInfo` carry no suspects; each suspect write, and each marking, goes to the
+`FailureObserver` given when the instance is built, as the failure is observed. A consumer that
+wants the suspects keeps them from there, so it must give an observer before it pushes anything:
+an instance built without one tells nobody, and they cannot be asked for afterwards. The
+identities in a `SuspectWrite` are as described above.)*
+
 ### 6. Resolution
 
 `FailureToken` is `#[must_use]`; `heal`, `abandon` and `close` consume it, and dropping it closes it
@@ -120,6 +127,8 @@ been given ([DI-D-46](DESIGN-NOTES.md#di-d-46)), and the token arrives with the 
 none is live.
 
 The only borrow returned is `SuspectSet::writes()`, into frozen shared data that nothing can change.
+*(Amended by [DI-D-113](DESIGN-NOTES.md#di-d-113): `SuspectSet` is gone, and `failures()` lends each
+`FailureInfo` to a visitor ([DI-D-103](DESIGN-NOTES.md#di-d-103)); see section 5's amendment.)*
 
 ### 7. Composition: dioring's sidecar carries the consumer's
 
@@ -273,6 +282,10 @@ A file declared with none is unknown and intersects every file, so declaring not
 flush domain for the whole instance. `ImportScope::Domains` scopes an imported failure the same
 way, and `Cause::Imported` reports the scope it was given.
 
+*(Amended by [DI-D-97](DESIGN-NOTES.md#di-d-97): the scope's domains are the caller's shared
+`Arc<[FlushDomain]>`, and `import_failure` takes a visitor given each domain the instance has never
+been given, in the order named, once the import is admitted, so the import allocates nothing.)*
+
 Declarations must be complete: extra domains are safe, a missing one is the one way a declaration
 can make the contract false ([CONTRACT.md](CONTRACT.md)). Deriving the bytes from Windows' storage
 topology is a locality helper's job outside this crate (root `M39`).
@@ -307,9 +320,9 @@ flush, since the router merges nothing across them -- documented, not enforced. 
 provider propagates and abandons the domains of those not yet called; a domain no provider serves
 is a caller breaking the protocol, and is panicked on.
 
-Once every write a seal covers has completed, dioring hands the provider one `FlushRequest`: per
-domain it serves, the files (`FileKey`, `SharedHandle`) and the `OpId`s named for each -- identities,
-never extents -- and one `DomainCompletion`. The provider flushes by any means, returns promptly,
+Once every write a seal covers has completed, dioring lends the provider one `FlushRequest`, for
+the length of its call: per domain it serves, the files (`IoTargetKey`) and the `OpId`s named for
+each -- identities, never extents -- and one `DomainCompletion`. The provider flushes by any means, returns promptly,
 and answers each domain once with `succeed()` or `fail(error)`, from any thread, at any time. A
 completion dropped unanswered is `Cause::ProviderAbandoned`; a failure is `Cause::Provider`. A write
 is durable when every domain of its file has succeeded. dioring sets no timeout: a call that never
@@ -368,7 +381,8 @@ it differs, the crates' rustdoc is the spelling. One difference matters here: `D
 *(DI-2.13, [DI-D-30](DESIGN-NOTES.md#di-d-30).)* `end_lineage(lineage)` is for a holder that will
 not finish a lineage. It abandons every epoch of the lineage not yet durable -- sealed ones whose
 flushes are still in flight included -- refuses the handle at once, and retires the lineage once
-its operations in flight have drained, so the consumer need not retry `retire_lineage`. It waits
+its operations in flight have drained and the commits out for its sealed writes have answered, so the
+consumer need not retry `retire_lineage`. It waits
 for nothing and cancels no I/O: operations in flight complete normally and come back through
 `pop`. Gated writes on its epochs, in any lineage, end as `NeverIssued`, and new gates on them are
 refused as `GateAbandoned`, as for any abandoned epoch. A failure shared with another lineage stays
@@ -490,7 +504,8 @@ pub trait DurableRing {
 
     /// End a lineage its holder will not finish (DI-2.13, DI-D-30): every epoch of it not yet
     /// durable is abandoned, its handle is refused at once, and it is retired once its operations
-    /// in flight have drained. Waits for nothing and cancels no I/O. The default lineage cannot be
+    /// in flight have drained and the commits out for its sealed writes have answered. Waits for
+    /// nothing and cancels no I/O. The default lineage cannot be
     /// ended.
     fn end_lineage(&mut self, lineage: Lin<Self>) -> Result<(), EndLineageError<Self::Ids>>;
 
@@ -570,7 +585,11 @@ pub trait DurableRing {
         items: Vec<(TokenOf<Self>, Resolution)>,
     ) -> Result<(), ResolveError<Self::Ids>>;
 
-    fn import_failure(&mut self, scope: ImportScope<Self::Ids>) -> FailureIdOf<Self>;
+    fn import_failure(
+        &mut self,
+        scope: ImportScope<Self::Ids>,
+        unmatched: impl FnMut(&FlushDomain),
+    ) -> Result<Imported<Self::Ids>, ImportError<Self::Ids>>;
 
     fn failures(&self) -> Vec<FailureInfo<Self::Ids>>;
 
@@ -703,6 +722,7 @@ pub struct SuspectWrite<V: Identities> {
 }
 
 /// A failure's suspect set: frozen when the failure is observed, shared rather than copied.
+/// Removed by DI-D-113: the suspects go to the `FailureObserver`, and nothing below carries one.
 #[derive(Clone, Debug)]
 pub struct SuspectSet<V: Identities>(Arc<[SuspectWrite<V>]>);
 
@@ -720,8 +740,9 @@ pub enum ImportScope<V: Identities> {
     /// The uncovered writes of one lineage.
     Lineage(V::Lineage),
     /// The uncovered writes to every file whose declared flush domains intersect these, files
-    /// declared with none included.
-    Domains(Vec<FlushDomain>),
+    /// declared with none included. The caller's shared list (DI-D-97): the failure keeps it
+    /// without copying it.
+    Domains(Arc<[FlushDomain]>),
 }
 
 /// A flush domain: a unit whose volatile cache a flush commits and whose failure everything
@@ -784,6 +805,7 @@ pub struct Failed<V: Identities> {
     pub id: V::FailureId,
     pub token: V::FailureToken,
     pub cause: Cause<V>,
+    /// Removed by DI-D-113: the suspects go to the `FailureObserver`.
     pub suspect: SuspectSet<V>,
 }
 
@@ -826,6 +848,7 @@ pub enum Entry<V: Identities, B, C> {
     Failed(Failed<V>),
     /// Fixed-size and allocation-free, so producing it is cheap.
     Blocked { through: Epoch<V>, by: V::FailureId },
+    /// `suspect` removed by DI-D-113: the suspects went to the `FailureObserver`.
     Abandoned { failure: V::FailureId, suspect: SuspectSet<V> },
     /// `end_lineage` took effect: every epoch of `lineage` not yet durable, through
     /// `abandoned_through`, is abandoned (`None` if none was pending).
@@ -867,9 +890,9 @@ pub enum PushRefusal<V: Identities> {
     /// The gate names an epoch already abandoned, so the operation could never be released.
     GateAbandoned { gate: Epoch<V> },
     /// The gate would close a cycle: releasing it already depends on this write's own epoch
-    /// becoming durable ([DI-D-23](DESIGN-NOTES.md#di-d-23)). `cycle` names the epochs involved,
-    /// starting at the write's own and ending at the gate.
-    GateCycle { cycle: Vec<Epoch<V>> },
+    /// becoming durable ([DI-D-23](DESIGN-NOTES.md#di-d-23)). The cycle is not named
+    /// ([DI-D-115](DESIGN-NOTES.md#di-d-115)): the consumer, whose pushes made it, can rebuild it.
+    GateCycle,
     /// No file was given to the instance under this key.
     UnknownFile(FileKey),
     /// A registered-span operation on an instance built without registered buffers.
@@ -993,6 +1016,7 @@ pub struct ResolveError<V: Identities> {
 pub struct FailureInfo<V: Identities> {
     pub id: V::FailureId,
     pub cause: Cause<V>,
+    /// Removed by DI-D-113: the suspects go to the `FailureObserver`.
     pub suspect: SuspectSet<V>,
     pub token_live: bool,
 }
@@ -1149,30 +1173,39 @@ pub trait DurabilityProvider<V: Identities>: Send + Debug {
     /// follows the completion letting a seal start -- and never with its lock held, so an answer
     /// given inside it is recorded at once (DI-D-44). A panic propagates to that call, and every
     /// completion it drops unanswered is a failure of its domain.
-    fn make_durable(&mut self, request: FlushRequest<V>);
+    ///
+    /// `request` is lent for the call (DI-D-115): what it names is the instance's own storage,
+    /// made at construction, so a provider that works after the call copies what it needs and
+    /// keeps the completions, which are its own. A domain it does not take is abandoned when the
+    /// request is dropped.
+    fn make_durable(&mut self, request: FlushRequest<'_, V>);
 }
 
-/// One seal's work for the consumer's provider.
-#[derive(Debug)]
-pub struct FlushRequest<V: Identities> {
-    pub domains: Vec<DomainRequest<V>>,
+/// One seal's work for the consumer's provider, lent for the length of `make_durable`.
+pub struct FlushRequest<'a, V: Identities> { /* a view of the instance's request buffer */ }
+
+impl<'a, V: Identities> FlushRequest<'a, V> {
+    /// How many domains are still to be taken, and their names without taking them.
+    pub fn domain_count(&self) -> usize;
+    pub fn domain_names(&self) -> impl Iterator<Item = &FlushDomain>;
+    /// The domains still to be taken, each with its completion, which taking it creates.
+    pub fn domains(&self) -> Domains<'_, V>;
+    /// A view of only the domains `keep` names: a router's way of handing each provider its own.
+    pub fn only<'b>(&'b self, keep: &'b dyn Fn(&FlushDomain) -> bool) -> FlushRequest<'b, V>;
 }
 
 /// One flush domain's part of a request, and the handle that answers it.
-#[derive(Debug)]
-pub struct DomainRequest<V: Identities> {
-    pub domain: FlushDomain,
-    pub files: Vec<FileWrites<V>>,
+pub struct DomainRequest<'a, V: Identities> {
+    pub domain: &'a FlushDomain,
+    pub files: Files<'a, V>,
     pub completion: DomainCompletion,
 }
 
 /// A file in one domain's part, and the writes to it named for that domain: identities, never
 /// extents. Every one has completed.
-#[derive(Debug)]
-pub struct FileWrites<V: Identities> {
-    pub key: FileKey,
-    pub file: SharedHandle,
-    pub writes: Vec<V::OpId>,
+pub struct IoTargetWrites<'a, V: Identities> {
+    pub key: IoTargetKey,
+    pub writes: &'a [V::OpId],
 }
 
 /// Answers one domain of one request, once, from any thread at any time -- inside

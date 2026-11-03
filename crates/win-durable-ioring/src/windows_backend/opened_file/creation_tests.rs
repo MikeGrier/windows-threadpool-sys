@@ -22,7 +22,7 @@ use super::{
     Cached, DataAccess, Disposition, FileAttributes, FileOptions, FileRights, OpenedFile,
     ReadWrite, SecurityDescriptor, Unbuffered,
 };
-use crate::dioring::tests::{TempFile, wtf};
+use crate::dioring::tests::{TempFile, remove_leftover, wtf};
 
 fn create_new() -> FileOptions<ReadWrite> {
     FileOptions::new()
@@ -52,6 +52,49 @@ fn remove(path: &Path) {
     permissions.set_readonly(false);
     fs::set_permissions(path, permissions).expect("clear read-only");
     fs::remove_file(path).expect("remove");
+}
+
+#[test]
+fn a_stale_read_only_sibling_left_by_a_killed_run_does_not_refuse_the_create() {
+    let name = std::env::temp_dir().join(format!(
+        "durable-ioring-setup-cr-stale-{}",
+        std::process::id()
+    ));
+    let stale = name.with_extension("fresh");
+    // This test's own name is fixed per process, so a run killed inside it leaves the file this
+    // makes, read-only, and a later process given the same id would fail here before the
+    // behaviour under test.
+    remove_leftover(&stale);
+    fs::write(&stale, b"left behind").expect("leave a stale file");
+    let mut permissions = fs::metadata(&stale).expect("metadata").permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&stale, permissions).expect("make it read-only");
+
+    let temp = TempFile::at(name);
+    assert!(!stale.exists(), "the setup cleared the stale sibling");
+    let opened = OpenedFile::<Cached>::open(wtf(&stale), create_new())
+        .expect("create over the name a killed run left behind");
+    drop(opened);
+    remove(&stale);
+    drop(temp);
+}
+
+#[test]
+fn dropping_the_temporary_file_removes_the_read_only_sibling_a_test_made() {
+    let temp = TempFile::new("cr-drop-sibling");
+    let fresh = temp.0.with_extension("fresh");
+    let opened = OpenedFile::<Cached>::open(
+        wtf(&fresh),
+        create_new().attributes(FileAttributes::READONLY),
+    )
+    .expect("create read-only");
+    drop(opened);
+    assert!(fresh.exists(), "the test made it");
+    drop(temp);
+    assert!(
+        !fresh.exists(),
+        "the drop removed it, whatever its attributes"
+    );
 }
 
 #[test]

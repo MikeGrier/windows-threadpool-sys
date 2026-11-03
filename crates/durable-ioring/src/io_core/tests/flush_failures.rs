@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use super::{Core, KEY, OTHER, Rig, V, nz};
+use super::{Core, KEY, OTHER, Rig, V, closed, nz, target_holds};
 use crate::backend::{IoBackend, RegisteredRegion, SubmissionData};
 use crate::diagnostics::NoDiagnostics;
 use crate::ids::{FailureId, FailureToken};
@@ -22,8 +22,9 @@ use crate::memory::{
 use crate::oracle::ConformanceOracle;
 use crate::test_support::{ManualClock, Ticks};
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, Failed, FailureCause, FlushDomain, MarkingKind,
-    OpKind, PushRefusal, RemoveTargetError, Resolution, ResolveRefusal, WriteOptions,
+    DurabilityRequest, Entry, Epoch, EpochState, Failed, FailureCause, FlushDomain, Hold,
+    IoTargetBusy, MarkingKind, OpKind, PushRefusal, RemoveTargetError, Resolution, ResolveRefusal,
+    WriteOptions,
 };
 
 const GIVEN: crate::types::IoTargetKey = KEY;
@@ -47,7 +48,14 @@ fn rig_with(
     registered: Vec<Vec<u8>>,
     targets: &[(crate::types::IoTargetKey, &[&str])],
 ) -> Rig {
-    let mut rig = Rig::over(Core::new(Ticks::default(), Arc::new(NoDiagnostics)));
+    let mut rig = Rig::over(
+        Core::new(
+            Ticks::default(),
+            Arc::new(NoDiagnostics),
+            crate::test_support::CAPACITY,
+        )
+        .expect("a valid capacity"),
+    );
     rig.backend = MemoryBackend::new(nz(8), nz(16))
         .with_registered(registered)
         .with_script(first_flush_fails(fails));
@@ -69,11 +77,7 @@ fn one() -> Rig {
 /// The next entry, after running the backend, once the oracle has accepted it.
 fn next_entry(rig: &mut Rig) -> RigEntry {
     rig.run();
-    let entry = rig.core.pop().expect("an entry");
-    rig.oracle
-        .observe(&entry)
-        .expect("the oracle accepts the entry");
-    entry
+    rig.pop_entry().expect("an entry")
 }
 
 /// The next entry, which must be a completion.
@@ -97,9 +101,17 @@ fn nothing_more(rig: &mut Rig) -> bool {
     rig.core.pop().is_none()
 }
 
-/// The ops a failure suspects, by sequence number.
-fn suspects(failed: &Failed<V>) -> Vec<u64> {
-    failed.suspect.writes().iter().map(|w| w.op.seq).collect()
+/// The ops a failure suspects, by sequence number, as the core lent them when it was popped.
+fn suspects(rig: &Rig, failed: &Failed<V>) -> Vec<u64> {
+    rig.suspected[&failed.id.seq]
+        .iter()
+        .map(|w| w.op.seq)
+        .collect()
+}
+
+/// Whether the core still holds failure `id`'s records.
+fn held(rig: &Rig, id: FailureId) -> bool {
+    rig.core.suspects_listed(id).is_some()
 }
 
 /// Resolve, reporting each heal to the oracle.
@@ -146,7 +158,7 @@ fn a_failed_flush_is_reported_with_its_cause_and_holds_the_mark() {
         FailureCause::Commit { target: file, .. } => assert_eq!(*file, GIVEN),
         other => panic!("expected a flush failure, got {other:?}"),
     }
-    assert_eq!(suspects(&failed), [0, 1]);
+    assert_eq!(suspects(&rig, &failed), [0, 1]);
     assert_eq!(
         rig.core.durable_through(rig.core.default_lineage()),
         Ok(None)
@@ -156,7 +168,7 @@ fn a_failed_flush_is_reported_with_its_cause_and_holds_the_mark() {
         rig.seal(1),
         DurabilityRequest::AlreadySealed(EpochState::Blocked(failed.id))
     );
-    let inventory = rig.core.failures();
+    let inventory = rig.core.failures_listed();
     assert_eq!(inventory.len(), 1);
     assert_eq!(inventory[0].id, failed.id);
     assert!(inventory[0].token_live);
@@ -183,25 +195,30 @@ fn a_healed_failure_is_passed_at_the_first_seal_after_the_heal() {
         "the heal holds it"
     );
     assert_eq!(rig.seal(2), DurabilityRequest::Submitted);
+    rig.run();
+    assert_eq!(
+        rig.core.suspects_listed(failed.id).as_ref(),
+        Some(&rig.suspected[&failed.id.seq]),
+        "the record is the one told at Failed, held until the Healed entry is popped"
+    );
+    assert_eq!(
+        rig.told.markings(failed.id),
+        Some(Vec::new()),
+        "nothing happened to 1's writes after"
+    );
     match next_entry(&mut rig) {
-        Entry::Healed {
-            failure,
-            suspect,
-            markings,
-        } => {
-            assert_eq!(failure, failed.id);
-            assert_eq!(suspect.writes(), failed.suspect.writes());
-            assert!(markings.is_empty(), "nothing happened to 1's writes after");
-        }
+        Entry::Healed { failure } => assert_eq!(failure, failed.id),
         other => panic!("expected Healed before any Durable, got {other:?}"),
     }
-    for id in [1, 2] {
-        match next_entry(&mut rig) {
-            Entry::Durable { through } => assert_eq!(through, rig.epoch(id)),
-            other => panic!("expected Durable through {id}, got {other:?}"),
-        }
+    assert!(!held(&rig, failed.id), "its records went with its entry");
+    // Seals 1 and 2 were both answered before anything was popped, so one entry says the mark has
+    // reached 2, and the one through 1 was replaced (DI-D-101).
+    match next_entry(&mut rig) {
+        Entry::Durable { through } => assert_eq!(through, rig.epoch(2)),
+        other => panic!("expected Durable through 2, got {other:?}"),
     }
-    assert!(rig.core.failures().is_empty());
+    assert!(nothing_more(&mut rig), "no Durable through 1");
+    assert!(rig.core.failures_listed().is_empty());
     assert_eq!(state(&rig, 1), EpochState::Durable);
     finish(rig);
 }
@@ -222,24 +239,30 @@ fn without_the_heal_a_later_seal_is_answered_blocked() {
     }
     assert_eq!(state(&rig, 2), EpochState::Blocked(failed.id));
     resolve(&mut rig, vec![(failed.token, Resolution::Abandon)]);
+    assert_eq!(
+        rig.core
+            .suspects_listed(failed.id)
+            .expect("the records are held")
+            .len(),
+        2,
+        "an abandoned failure's records are held until its entry is popped"
+    );
     match next_entry(&mut rig) {
-        Entry::Abandoned {
-            failure, suspect, ..
-        } => {
-            assert_eq!(failure, failed.id);
-            assert_eq!(suspect.writes().len(), 2);
-        }
+        Entry::Abandoned { failure } => assert_eq!(failure, failed.id),
         other => panic!("expected Abandoned, got {other:?}"),
     }
-    let mut durable = Vec::new();
-    for _ in 0..2 {
-        match next_entry(&mut rig) {
-            Entry::Durable { through } => durable.push(through),
-            other => panic!("expected Durable, got {other:?}"),
-        }
+    assert!(!held(&rig, failed.id), "its records went with its entry");
+    // Both seals were answered before anything was popped: one entry, through 2 (DI-D-101).
+    match next_entry(&mut rig) {
+        Entry::Durable { through } => assert_eq!(through, rig.epoch(2)),
+        other => panic!("expected Durable through 2, got {other:?}"),
     }
-    assert_eq!(durable, [rig.epoch(1), rig.epoch(2)]);
-    assert_eq!(state(&rig, 1), EpochState::Abandoned);
+    assert!(nothing_more(&mut rig), "no Durable through 1");
+    assert_eq!(
+        state(&rig, 1),
+        EpochState::Durable,
+        "abandoned, and below the mark, which answers for it (DI-D-109)"
+    );
     assert_eq!(state(&rig, 2), EpochState::Durable);
     finish(rig);
 }
@@ -258,7 +281,11 @@ fn a_failed_flush_reaches_only_files_sharing_a_declared_domain() {
     next_op(&mut rig);
     rig.seal(1);
     let failed = next_failed(&mut rig);
-    assert_eq!(suspects(&failed), [1], "the log's disk is not the data's");
+    assert_eq!(
+        suspects(&rig, &failed),
+        [1],
+        "the log's disk is not the data's"
+    );
     drop(failed);
     finish(rig);
 }
@@ -271,7 +298,7 @@ fn a_resolution_naming_another_instances_failure_is_refused_whole() {
     let mut other = Rig::new();
     let (_, actions) = other
         .core
-        .import_failure(crate::types::ImportScope::All)
+        .import_failure(crate::types::ImportScope::All, |_| {})
         .expect("import");
     other.act(actions);
     let theirs = match other.core.pop() {
@@ -288,7 +315,7 @@ fn a_resolution_naming_another_instances_failure_is_refused_whole() {
     assert!(matches!(error.reason, ResolveRefusal::Foreign(id) if id == theirs.id));
     assert_eq!(error.returned.len(), 2);
     assert!(nothing_more(&mut rig), "nothing was abandoned");
-    assert_eq!(rig.core.failures().len(), 1);
+    assert_eq!(rig.core.failures_listed().len(), 1);
     finish(rig);
 }
 
@@ -299,7 +326,7 @@ fn a_closed_failure_stays_and_its_token_can_be_taken_again() {
     let failed = failed_seal(&mut rig);
     assert!(rig.core.take_token(failed.id).is_none(), "live");
     failed.token.close();
-    assert!(!rig.core.failures()[0].token_live);
+    assert!(!rig.core.failures_listed()[0].token_live);
     let token = rig.core.take_token(failed.id).expect("closed");
     resolve(&mut rig, vec![(token, Resolution::Abandon)]);
     assert!(matches!(next_entry(&mut rig), Entry::Abandoned { .. }));
@@ -321,7 +348,7 @@ fn a_write_into_an_abandoned_epoch_is_refused_with_what_it_took() {
     next_op(&mut rig);
     rig.seal(1);
     let failed = next_failed(&mut rig);
-    assert_eq!(suspects(&failed), [0, 1], "sealed 1 and open 3");
+    assert_eq!(suspects(&rig, &failed), [0, 1], "sealed 1 and open 3");
     resolve(&mut rig, vec![(failed.token, Resolution::Abandon)]);
     assert!(matches!(next_entry(&mut rig), Entry::Abandoned { .. }));
     assert!(matches!(next_entry(&mut rig), Entry::Durable { .. }));
@@ -380,16 +407,27 @@ fn a_failure_suspecting_a_write_holds_its_file_until_it_is_resolved() {
         Err(other) => panic!("expected Busy, got {other:?}"),
         Ok(_) => panic!("expected Busy, and the file was removed"),
     };
-    assert_eq!(refused.failures, [failed.id]);
+    assert_eq!(refused.failures, 1);
+    assert_eq!(target_holds(&rig.core, GIVEN), [Hold::Failure(failed.id)]);
     assert_eq!(
         refused.uncovered, 0,
         "its suspect write is reported by the failure"
     );
-    assert!(refused.to_string().contains("heal or abandon"), "{refused}");
+    assert!(
+        refused.to_string().contains("resolve them and pop"),
+        "{refused}"
+    );
 
     resolve(&mut rig, vec![(failed.token, Resolution::Abandon)]);
+    assert!(
+        matches!(
+            rig.core.remove_target(GIVEN),
+            Err(RemoveTargetError::Busy(IoTargetBusy { failures: 1, .. }))
+        ),
+        "resolved, and held until its Abandoned is popped (DI-D-108)"
+    );
     assert!(matches!(next_entry(&mut rig), Entry::Abandoned { .. }));
-    rig.core.remove_target(GIVEN).expect("resolved");
+    rig.core.remove_target(GIVEN).expect("resolved, and popped");
     finish(rig);
 }
 
@@ -401,7 +439,7 @@ fn closing_hands_back_the_unresolved_failures() {
     next_op(&mut rig);
     rig.seal(1);
     let failed = next_failed(&mut rig);
-    let left = rig.core.close();
+    let left = closed(rig.core);
     let ids: Vec<_> = left.failures.iter().map(|f| f.id).collect();
     assert_eq!(ids, [failed.id]);
     assert_eq!(left.lineages[0].durable_through, None);
@@ -412,7 +450,10 @@ fn closing_hands_back_the_unresolved_failures() {
 #[test]
 fn a_failure_spanning_two_lineages_heals_in_each_at_its_own_seal() {
     let mut rig = rig_with(GIVEN, Vec::new(), &[(GIVEN, &[]), (ADDED, &[])]);
-    let minted = rig.core.mint_lineage(Some("log".to_owned()));
+    let minted = rig
+        .core
+        .mint_lineage(Some("log".to_owned()))
+        .expect("room for a lineage");
     let own = rig.write_to(GIVEN, 1, 0, b"own").expect("accepted");
     let theirs = rig
         .write_with(
@@ -428,45 +469,42 @@ fn a_failure_spanning_two_lineages_heals_in_each_at_its_own_seal() {
 
     rig.seal(1);
     let failed = next_failed(&mut rig);
-    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
+    let suspects: Vec<_> = rig.suspected[&failed.id.seq].iter().map(|w| w.op).collect();
     assert_eq!(suspects, [own, theirs], "a held write of each lineage");
     resolve(&mut rig, vec![(failed.token, Resolution::Heal)]);
 
     assert_eq!(rig.seal(2), DurabilityRequest::Submitted);
-    for id in [1, 2] {
-        match next_entry(&mut rig) {
-            Entry::Durable { through } => assert_eq!(through, rig.epoch(id)),
-            other => panic!("expected Durable through {id}, got {other:?}"),
-        }
+    // One entry for the default lineage: the one through 1 was replaced by the one through 2.
+    match next_entry(&mut rig) {
+        Entry::Durable { through } => assert_eq!(through, rig.epoch(2)),
+        other => panic!("expected Durable through 2, got {other:?}"),
     }
-    assert_eq!(rig.core.failures().len(), 1, "it still holds the other");
+    assert_eq!(
+        rig.core.failures_listed().len(),
+        1,
+        "it still holds the other"
+    );
     assert_eq!(
         rig.core.epoch_state(Epoch::new(minted, 1)),
         Ok(EpochState::Open)
     );
 
     assert_eq!(rig.seal_in(minted, 1), DurabilityRequest::Submitted);
-    loop {
-        match next_entry(&mut rig) {
-            Entry::Marked { .. } => continue,
-            Entry::Healed { failure, .. } => {
-                assert_eq!(failure, failed.id);
-                break;
-            }
-            other => panic!("expected Healed, got {other:?}"),
-        }
+    match next_entry(&mut rig) {
+        Entry::Healed { failure, .. } => assert_eq!(failure, failed.id),
+        other => panic!("expected Healed, got {other:?}"),
     }
     match next_entry(&mut rig) {
         Entry::Durable { through } => assert_eq!(through, Epoch::new(minted, 1)),
         other => panic!("expected Durable through the minted lineage's 1, got {other:?}"),
     }
-    assert!(rig.core.failures().is_empty());
+    assert!(rig.core.failures_listed().is_empty());
     finish(rig);
 }
 
 /// From `dioring/tests/markings.rs`.
 #[test]
-fn a_heal_reports_its_record_with_the_markings_its_failure_gained() {
+fn a_healing_failure_is_told_the_markings_it_gains() {
     let mut rig = one();
     let sealed = rig.write_to(GIVEN, 1, 0, b"first").expect("accepted");
     let later = rig.write_to(GIVEN, 2, 8, b"second").expect("accepted");
@@ -474,40 +512,32 @@ fn a_heal_reports_its_record_with_the_markings_its_failure_gained() {
     next_op(&mut rig);
     assert_eq!(rig.seal(1), DurabilityRequest::Submitted);
     let failed = next_failed(&mut rig);
-    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
+    let suspects: Vec<_> = rig.suspected[&failed.id.seq].iter().map(|w| w.op).collect();
     assert_eq!(suspects, [sealed, later]);
 
     resolve(&mut rig, vec![(failed.token, Resolution::Heal)]);
     assert_eq!(rig.seal(2), DurabilityRequest::Submitted);
-    let covered = match next_entry(&mut rig) {
-        Entry::Marked { marking, .. } => marking,
-        other => panic!("expected Marked, got {other:?}"),
-    };
+    match next_entry(&mut rig) {
+        Entry::Healed { failure } => assert_eq!(failure, failed.id),
+        other => panic!("expected Healed, got {other:?}"),
+    }
+    let told = rig.told.markings(failed.id).expect("told of the failure");
     assert_eq!(
-        (covered.write, covered.kind.clone()),
-        (
+        told.iter()
+            .map(|marking| (marking.write, marking.kind.clone()))
+            .collect::<Vec<_>>(),
+        [(
             later,
             MarkingKind::Covered {
                 flushed: true,
                 provider: false
             }
-        ),
-        "a healing failure goes on gaining markings"
+        )],
+        "a healing failure goes on being told markings"
     );
     match next_entry(&mut rig) {
-        Entry::Healed {
-            failure, markings, ..
-        } => {
-            assert_eq!(failure, failed.id);
-            assert_eq!(markings, [covered]);
-        }
-        other => panic!("expected Healed, got {other:?}"),
-    }
-    for id in [1, 2] {
-        match next_entry(&mut rig) {
-            Entry::Durable { through } => assert_eq!(through, rig.epoch(id)),
-            other => panic!("expected Durable through {id}, got {other:?}"),
-        }
+        Entry::Durable { through } => assert_eq!(through, rig.epoch(2)),
+        other => panic!("expected Durable through 2, got {other:?}"),
     }
     finish(rig);
 }
@@ -521,13 +551,10 @@ struct Clocked {
 }
 
 impl Clocked {
-    fn act(&mut self, actions: CoreActions<V, Vec<u8>>) {
-        let mut pending = std::collections::VecDeque::from([actions]);
-        while let Some(actions) = pending.pop_front() {
-            for submission in actions.submit {
-                if let Err(refused) = self.backend.push(submission) {
-                    pending.push_back(self.core.refused(refused));
-                }
+    fn act(&mut self, _: CoreActions) {
+        while let Some(submission) = self.core.next_submission() {
+            if let Err(refused) = self.backend.push(submission) {
+                let _ = self.core.refused(refused);
             }
         }
     }
@@ -558,10 +585,17 @@ impl Clocked {
 #[test]
 fn an_instance_given_a_clock_stamps_a_failed_flush_with_its_reading_when_observed() {
     let clock = ManualClock::at(7_000);
+    let oracle = ConformanceOracle::new();
     let mut rig = Clocked {
-        core: DurableIoCore::new(clock.clone(), Arc::new(NoDiagnostics)),
+        core: DurableIoCore::new(
+            clock.clone(),
+            Arc::new(NoDiagnostics),
+            crate::test_support::CAPACITY,
+        )
+        .expect("a valid capacity")
+        .observed_by(oracle.observer()),
         backend: MemoryBackend::new(nz(8), nz(16)).with_script(first_flush_fails(GIVEN)),
-        oracle: ConformanceOracle::new(),
+        oracle,
     };
     let target = MemoryTarget::new();
     rig.core
@@ -598,7 +632,7 @@ fn an_instance_given_a_clock_stamps_a_failed_flush_with_its_reading_when_observe
         other => panic!("expected Failed, got {other:?}"),
     };
     assert_eq!(failed.observed, 10_000);
-    let inventory = rig.core.failures();
+    let inventory = rig.core.failures_listed();
     assert_eq!(inventory.len(), 1);
     assert_eq!(inventory[0].observed, failed.observed);
     rig.oracle.finish().expect("every operation completed");

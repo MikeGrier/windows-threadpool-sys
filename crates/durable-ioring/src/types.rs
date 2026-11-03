@@ -2,13 +2,17 @@
 //! The contract's shared values. Those that carry an identity are generic over the
 //! implementation's [`Identities`]; the rest are plain.
 
-use std::cmp::Ordering;
-use std::fmt;
-use std::io;
-use std::sync::Arc;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::cmp::Ordering;
+use core::fmt;
+
+use rc_errors::ErrorReport;
 
 use crate::access::Access;
-use crate::backend::RefusalCause;
+use crate::alloc_tags::{tag, tagged};
+use crate::backend::{RefusalCause, RefusalKind};
+use crate::capacity::AtCapacity;
 use crate::contract::Identities;
 use crate::error_code::ErrorCode;
 
@@ -17,7 +21,7 @@ mod tests;
 
 /// The consumer's identity for a file, supplied when the file is given to dioring and used in
 /// every report, so a report stays meaningful after the file's handle is gone (DI-D-11).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IoTargetKey(pub u64);
 
 /// An epoch: an epoch id within a lineage, by the lineage's plain name. What the API reports, and
@@ -107,15 +111,43 @@ impl<V: Identities> fmt::Display for UnknownLineage<V> {
     }
 }
 
-impl<V: Identities> std::error::Error for UnknownLineage<V> {}
+impl<V: Identities> core::error::Error for UnknownLineage<V> {}
 
-/// One lineage, as the enumeration reports it. Owned, so holding it borrows nothing.
-#[derive(Clone, Debug)]
-pub struct LineageInfo<V: Identities> {
+/// Why an `import_failure` was refused; nothing was recorded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImportError<V: Identities> {
+    /// The scope names a lineage the instance cannot answer for.
+    UnknownLineage(UnknownLineage<V>),
+    /// The instance holds as many unresolved imported failures as it was built for (DI-D-107);
+    /// resolving one lets the import be made again.
+    AtCapacity(AtCapacity),
+}
+
+impl<V: Identities> From<UnknownLineage<V>> for ImportError<V> {
+    fn from(unknown: UnknownLineage<V>) -> Self {
+        Self::UnknownLineage(unknown)
+    }
+}
+
+impl<V: Identities> fmt::Display for ImportError<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownLineage(unknown) => unknown.fmt(f),
+            Self::AtCapacity(at) => at.fmt(f),
+        }
+    }
+}
+
+impl<V: Identities> core::error::Error for ImportError<V> {}
+
+/// One lineage, as the enumeration reports it, lent for the visit (DI-D-103): its description is
+/// the consumer's own string, kept as it was given and borrowed from the instance (DI-D-108).
+#[derive(Clone, Copy, Debug)]
+pub struct LineageInfo<'a, V: Identities> {
     /// The lineage.
     pub lineage: V::Lineage,
     /// The consumer's description, if one was supplied when the lineage was minted.
-    pub description: Option<Arc<str>>,
+    pub description: Option<&'a str>,
     /// The instance's default lineage, which never ends while the instance lives: the instance
     /// holds a copy of its handle.
     pub is_default: bool,
@@ -137,24 +169,6 @@ pub struct SuspectWrite<V: Identities> {
     pub epoch: Epoch<V>,
 }
 
-/// A failure's suspect set: frozen when the failure is observed, shared rather than copied. It never
-/// gains a write; what happens to its writes afterwards is recorded as [`Marking`]s (DI-D-36).
-#[derive(Clone, Debug)]
-pub struct SuspectSet<V: Identities>(Arc<[SuspectWrite<V>]>);
-
-impl<V: Identities> SuspectSet<V> {
-    /// Freeze `writes`, in push order.
-    pub(crate) fn new(writes: Vec<SuspectWrite<V>>) -> Self {
-        Self(writes.into())
-    }
-
-    /// The set's writes. The one borrow the API returns, into frozen shared data that nothing
-    /// can change.
-    pub fn writes(&self) -> &[SuspectWrite<V>] {
-        &self.0
-    }
-}
-
 /// Where an imported failure lands (DI-2.10 point 5).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImportScope<V: Identities> {
@@ -163,21 +177,18 @@ pub enum ImportScope<V: Identities> {
     /// The uncovered writes of one lineage.
     Lineage(V::Lineage),
     /// The uncovered writes to every file whose declared flush domains intersect these, files
-    /// declared with none included.
-    Domains(Vec<FlushDomain>),
+    /// declared with none included. The list is the caller's, made before the call and shared:
+    /// the failure keeps the scope, and keeping it costs a reference count, not a copy (DI-D-97).
+    Domains(Arc<[FlushDomain]>),
 }
 
-/// What `import_failure` recorded.
+/// What `import_failure` recorded. The domains an [`ImportScope::Domains`] named that the instance
+/// has never been given go to the visitor `import_failure` is called with, not here (DI-D-46,
+/// DI-D-97).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Imported<V: Identities> {
     /// The failure, whose token arrives with its `Failed` entry.
     pub failure: V::FailureId,
-    /// The domains an [`ImportScope::Domains`] named that the instance has never been given -- by
-    /// any file or by its provider -- in the order named. Each reaches only the files declared with
-    /// none, which is the right answer when declarations are complete; a name here that the
-    /// consumer expected to match is a misspelling, or a file not yet given. Empty for every other
-    /// scope.
-    pub unmatched: Vec<FlushDomain>,
 }
 
 /// A flush domain: a unit whose volatile cache a flush commits and whose failure everything
@@ -185,13 +196,13 @@ pub struct Imported<V: Identities> {
 /// Named by the consumer's exact identifier bytes, so two instances or processes name one
 /// domain alike. dioring interns each distinct domain into a word-sized value of its own, so
 /// comparisons after declaration are cheap, and reports return the bytes.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FlushDomain(Arc<[u8]>);
 
 impl FlushDomain {
     /// The domain named by `bytes`.
     pub fn new(bytes: impl Into<Arc<[u8]>>) -> Self {
-        Self(bytes.into())
+        Self(tagged(tag::TYPES_FLUSH_DOMAIN_NEW, || bytes.into()))
     }
 
     /// The bytes that name the domain.
@@ -203,9 +214,9 @@ impl FlushDomain {
 /// A fault, as the layer that observed it reported it (DI-D-50): what failed an operation or a
 /// commit, relayed with where it came from.
 ///
-/// Two faults are equal when they name the same source and code and carry the same report -- the
-/// one shared `Arc`, as a marking and the completion it records share it -- since an `io::Error`
-/// has no equality of its own.
+/// Two faults are equal when they name the same source, code and refusal and carry the same report: an
+/// [`ErrorReport`] compares by identity, the static it names or the block it shares, as a marking
+/// and the completion it records share one (DI-D-105). Cloning a fault allocates nothing.
 #[derive(Clone, Debug)]
 pub struct IoFault {
     /// The layer that reported it: `"windows-ioring"` for dioring over Windows.
@@ -213,15 +224,22 @@ pub struct IoFault {
     /// The layer's code for it, where it gives one. Its meaning is the source's: an `HRESULT` from
     /// the Windows backend, which always gives one.
     pub code: Option<ErrorCode>,
-    /// The layer's own report.
-    pub error: Arc<io::Error>,
+    /// Why the backend refused the submission this fault ends, where it did (DI-D-54): the cause
+    /// is carried here, beside the code, so a consumer reads it rather than downcasting the report
+    /// and nothing is allocated to carry it (DI-D-109). `None` for a fault no refusal caused.
+    pub refusal: Option<RefusalKind>,
+    /// The layer's own report: a static error, or a shared one (DI-D-105). The core's own reports
+    /// are static; what a backend or provider reports is theirs to allocate or not. For a refusal
+    /// of [`RefusalKind::Unusable`] or [`RefusalKind::Unknown`] it is the backend's own.
+    pub error: ErrorReport,
 }
 
 impl PartialEq for IoFault {
     fn eq(&self, other: &Self) -> bool {
         self.source == other.source
             && self.code == other.code
-            && Arc::ptr_eq(&self.error, &other.error)
+            && self.refusal == other.refusal
+            && self.error == other.error
     }
 }
 
@@ -233,10 +251,10 @@ impl fmt::Display for IoFault {
     }
 }
 
-/// So a driver can hand a fault to a consumer as the `source` of an [`io::Error`] that downcasts
-/// back to it, as a [`RefusalCause`] does.
-impl std::error::Error for IoFault {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+/// So a driver can hand a fault to a consumer as the `source` of an error of its own that downcasts
+/// back to it. Its source is the error its report holds.
+impl core::error::Error for IoFault {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&*self.error)
     }
 }
@@ -269,7 +287,7 @@ pub enum FailureCause<V: Identities> {
         domain: FlushDomain,
         /// The provider's own error, passed through as it gave it. Any code read from it is the
         /// provider's, not one dioring captured.
-        error: Arc<io::Error>,
+        error: ErrorReport,
     },
     /// The consumer's provider dropped `domain`'s completion without answering (DI-D-27): dioring
     /// observed the silence, so there is no error to report.
@@ -280,6 +298,9 @@ pub enum FailureCause<V: Identities> {
 }
 
 /// The payload of a `Failed` entry: the one place a token is dispensed besides the inventory.
+/// The writes it put at risk -- its suspect set, frozen now and never gaining a write (DI-D-12
+/// (b)) -- are not carried: a [`FailureObserver`](crate::observer::FailureObserver) given at
+/// construction is told of each, in push order, before this entry can be popped (DI-D-113).
 #[derive(Debug)]
 pub struct Failed<V: Identities> {
     /// The failure's identity.
@@ -288,8 +309,6 @@ pub struct Failed<V: Identities> {
     pub token: V::FailureToken,
     /// Why it exists.
     pub cause: FailureCause<V>,
-    /// The writes it put at risk.
-    pub suspect: SuspectSet<V>,
     /// When the instance observed it, read from the clock the instance stamps with (DI-D-37,
     /// DI-D-50): interrupt time for the Windows driver, whose resolution is the system clock tick,
     /// so failures observed within one tick carry equal stamps.
@@ -397,33 +416,18 @@ pub enum Entry<V: Identities, B, C> {
         /// The failure in the way.
         by: V::FailureId,
     },
-    /// The consumer abandoned a failure: its final record.
+    /// The consumer abandoned a failure, and its suspect writes are declared lost. The failure
+    /// holds what it held until this entry is popped (DI-D-108). A suspect write still in flight
+    /// now is reported only by its own completion (DI-D-47).
     Abandoned {
         /// The failure abandoned.
         failure: V::FailureId,
-        /// Its suspect set, now declared lost.
-        suspect: SuspectSet<V>,
-        /// Every marking it gained up to this resolution, in the order observed. A suspect write
-        /// still in flight now is reported only by its own completion (DI-D-47).
-        markings: Vec<Marking<V>>,
     },
-    /// A heal took effect (DI-D-12 (c)): the failure is resolved as healed, and this is its final
-    /// record.
+    /// A heal took effect (DI-D-12 (c)): the failure is resolved as healed. It holds what it held
+    /// until this entry is popped, as `Abandoned`'s does.
     Healed {
         /// The failure healed.
         failure: V::FailureId,
-        /// Its suspect set.
-        suspect: SuspectSet<V>,
-        /// Every marking it gained up to this resolution, in the order observed. A suspect write
-        /// still in flight now is reported only by its own completion (DI-D-47).
-        markings: Vec<Marking<V>>,
-    },
-    /// A failure not yet resolved gained a marking.
-    Marked {
-        /// The failure.
-        failure: V::FailureId,
-        /// The marking.
-        marking: Marking<V>,
     },
     /// `end_lineage` took effect: every epoch of `lineage` not yet durable, through
     /// `abandoned_through`, is abandoned (`None` if none was pending).
@@ -435,7 +439,10 @@ pub enum Entry<V: Identities, B, C> {
     },
 }
 
-/// An epoch's state as the instance sees it.
+/// An epoch's state as the instance sees it. At or below its lineage's high-water mark an epoch is
+/// reported as the mark means it -- `Durable`, standing for durable or abandoned -- since an
+/// abandoned epoch is forgotten once the mark passes it (DI-D-109); the `Abandoned` entry told the
+/// consumer which.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EpochState<V: Identities> {
     /// Not sealed; writes may still join it.
@@ -444,9 +451,9 @@ pub enum EpochState<V: Identities> {
     Pending,
     /// Sealed, its flushes done, held back by an unresolved failure.
     Blocked(V::FailureId),
-    /// Reported durable.
+    /// At or below the high-water mark: durable, or abandoned and forgotten.
     Durable,
-    /// Abandoned by the consumer.
+    /// Abandoned by the consumer, and above the high-water mark.
     Abandoned,
 }
 
@@ -478,20 +485,23 @@ pub enum PushRefusal<V: Identities> {
     /// The write's lineage, or the gate's, is not one the instance can answer for: another
     /// instance's, or one ended or retired (DI-D-40, DI-D-43).
     UnknownLineage(V::Lineage),
-    /// The gate names an epoch already abandoned, so the operation could never be released.
+    /// The gate names an epoch abandoned and above its lineage's mark, so the operation could
+    /// never be released. Once the mark passes it, a gate on it is answered as reached (DI-D-109).
     GateAbandoned {
         /// The gate.
         gate: Epoch<V>,
     },
     /// The gate would close a cycle: its lineage reaching it already needs, transitively, this
-    /// write to complete (DI-D-23).
-    GateCycle {
-        /// The cycle, as [`SealError::GateCycle`] lists one, starting at this write's epoch and
-        /// its gate.
-        cycle: Vec<Epoch<V>>,
-    },
+    /// write to complete (DI-D-23). The cycle is not named: every edge of it is the consumer's own
+    /// -- each held write's epoch and gate were given at its push -- so a consumer that wants it
+    /// rebuilds it from the pushes it kept (DI-D-115).
+    GateCycle,
     /// No target was given to the instance under this key.
     UnknownFile(IoTargetKey),
+    /// The instance holds as many operations as it was built for (DI-D-107). Nothing was
+    /// reserved: a completion popped, a write covered, or a failure resolved lets go of a place,
+    /// and the push can be made again.
+    AtCapacity(AtCapacity),
     /// The backend refused the push, naming why, so the caller can act on it (DI-D-52): among
     /// others, a registered-span operation on an instance built without registered buffers
     /// ([`RefusalCause::Unsupported`]), or a span the registration does not contain
@@ -609,13 +619,9 @@ pub enum SealError<V: Identities> {
     UnknownLineage(V::Lineage),
     /// The seal would close a gate cycle (DI-D-43): the writes it must wait for include a held
     /// write whose gate's lineage reaching it needs, transitively, the seal to finish. Seal lower
-    /// first, so the gates can be released.
-    GateCycle {
-        /// The cycle: each held write's epoch followed by the gate it waits for. Each gate's
-        /// lineage reaching it needs the next write to complete, and the last gate's needs the
-        /// first's.
-        cycle: Vec<Epoch<V>>,
-    },
+    /// first, so the gates can be released. The cycle is not named, as for
+    /// [`PushRefusal::GateCycle`] (DI-D-115).
+    GateCycle,
 }
 
 impl<V: Identities> fmt::Display for SealError<V> {
@@ -627,14 +633,12 @@ impl<V: Identities> fmt::Display for SealError<V> {
                     "{lineage:?} is not a lineage this instance can answer for"
                 )
             }
-            Self::GateCycle { cycle } => {
-                write!(f, "sealing would close a gate cycle: {cycle:?}")
-            }
+            Self::GateCycle => f.write_str("sealing would close a gate cycle"),
         }
     }
 }
 
-impl<V: Identities> std::error::Error for SealError<V> {}
+impl<V: Identities> core::error::Error for SealError<V> {}
 
 /// How a failure is resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -662,21 +666,42 @@ pub struct ResolveError<V: Identities> {
     pub returned: Vec<(V::FailureToken, Resolution)>,
 }
 
-/// One unresolved failure, as the inventory reports it. Owned, so holding it borrows nothing.
-#[derive(Clone, Debug)]
-pub struct FailureInfo<V: Identities> {
+/// One unresolved failure, as the inventory lends it to a visitor (DI-D-103): its cause is the
+/// instance's own, lent for the visit, so a visitor that keeps it clones it. Its suspect writes and
+/// markings are not reported here: a [`FailureObserver`](crate::observer::FailureObserver) is told
+/// of them as they happen (DI-D-113).
+#[derive(Clone, Copy, Debug)]
+pub struct FailureInfo<'a, V: Identities> {
     /// The failure's identity.
     pub id: V::FailureId,
-    /// Why it exists.
-    pub cause: FailureCause<V>,
-    /// The writes it put at risk.
-    pub suspect: SuspectSet<V>,
+    /// Why it exists, lent for the visit.
+    pub cause: &'a FailureCause<V>,
     /// When the instance observed it: the same stamp its `Failed` entry carried.
     pub observed: V::Instant,
-    /// Every marking it has gained, in the order observed.
-    pub markings: Vec<Marking<V>>,
     /// Whether its token is held somewhere; if not, the inventory can hand one out.
     pub token_live: bool,
+}
+
+/// A [`FailureInfo`] with its cause copied out, for a test to keep past the visit.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct FailureListed<V: Identities> {
+    pub(crate) id: V::FailureId,
+    pub(crate) cause: FailureCause<V>,
+    pub(crate) observed: V::Instant,
+    pub(crate) token_live: bool,
+}
+
+#[cfg(test)]
+impl<V: Identities> From<FailureInfo<'_, V>> for FailureListed<V> {
+    fn from(info: FailureInfo<'_, V>) -> Self {
+        Self {
+            id: info.id,
+            cause: info.cause.clone(),
+            observed: info.observed,
+            token_live: info.token_live,
+        }
+    }
 }
 
 /// An operation held for its gate and never issued, handed back by `close()` (DI-2.7).
@@ -694,16 +719,19 @@ pub struct HeldOperation<V: Identities, B, C> {
     pub context: C,
 }
 
-/// What `close()` hands back once the instance has ended (DI-2.7). Dropping the instance discards
-/// the same things.
+/// One thing `close()` gives once the instance has ended (DI-2.7), each to the caller's visitor
+/// (DI-D-103): first the gated operations the kernel never saw, in push order and by value; then
+/// the failures still unresolved, in the order observed; then every lineage, carrying its final
+/// high-water mark, lent for the visit. Dropping the instance discards the same things.
 #[derive(Debug)]
-pub struct Leftovers<V: Identities, B, C> {
-    /// Gated operations the kernel never saw, in push order.
-    pub held: Vec<HeldOperation<V, B, C>>,
-    /// Failures still unresolved.
-    pub failures: Vec<FailureInfo<V>>,
-    /// Every lineage, carrying its final high-water mark.
-    pub lineages: Vec<LineageInfo<V>>,
+#[non_exhaustive]
+pub enum Leftover<'a, V: Identities, B, C> {
+    /// A gated operation the kernel never saw.
+    Held(HeldOperation<V, B, C>),
+    /// A failure still unresolved, its cause lent for the visit.
+    Failure(FailureInfo<'a, V>),
+    /// A lineage, carrying its final high-water mark.
+    Lineage(LineageInfo<'a, V>),
 }
 
 /// Why an `add_target` was refused (DI-13.10).
@@ -720,6 +748,9 @@ pub enum AddTargetCause {
         /// What the target states.
         actual: Access,
     },
+    /// The instance holds as many targets as it was built for, or the target's flush domains
+    /// would take it past the domains it was built for (DI-D-107).
+    AtCapacity(AtCapacity),
 }
 
 impl fmt::Display for AddTargetCause {
@@ -730,6 +761,7 @@ impl fmt::Display for AddTargetCause {
                 f,
                 "the key declares {declared} access and the target states {actual}"
             ),
+            Self::AtCapacity(at) => at.fmt(f),
         }
     }
 }
@@ -746,11 +778,12 @@ pub struct AddTargetError<T> {
     pub cause: AddTargetCause,
 }
 
-/// Everything still holding a file that `remove_target` refused, and what clears each hold. Every
-/// field is reported, not only the first that applies, so one refusal says all a consumer has
-/// to do.
-#[derive(Debug)]
-pub struct IoTargetBusy<V: Identities> {
+/// Everything still holding a file that `remove_target` refused, counted. Every count is reported,
+/// not only the first that applies, so one refusal says all a consumer has to do; which gates,
+/// epochs and failures they are is read through `target_holds`, whose [`Hold`]s say what clears
+/// each (DI-D-103: a refusal is a value and carries no list).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IoTargetBusy {
     /// The target.
     pub target: IoTargetKey,
     /// Operations the kernel has not completed. Cleared as their completions arrive, which may be
@@ -759,21 +792,18 @@ pub struct IoTargetBusy<V: Identities> {
     /// Operations held until their gate epoch is durable. Cleared when the gates are released,
     /// or fail as `NeverIssued`.
     pub held_for_gate: usize,
-    /// The lowest gate in each lineage gated on.
-    pub lowest_gates: Vec<Epoch<V>>,
     /// Writes to the file not yet covered successfully -- named to a provider that answered
     /// success for every domain of the file -- outside any failure's suspect set. A file stays
     /// busy while any lineage has such a write. Cleared by `make_durable_through` at or above
     /// each.
     pub uncovered: usize,
-    /// The highest epoch among the uncovered writes, in each lineage that wrote the file.
-    pub uncovered_through: Vec<Epoch<V>>,
-    /// Unresolved failures whose suspect sets include writes to the file. Cleared by resolving
-    /// them: heal and seal again, or abandon.
-    pub failures: Vec<V::FailureId>,
+    /// Failures whose suspect sets include writes to the file. Cleared by resolving them -- heal
+    /// and seal again, or abandon -- and popping the `Healed` or `Abandoned` entry each reports
+    /// (DI-D-108).
+    pub failures: usize,
 }
 
-impl<V: Identities> fmt::Display for IoTargetBusy<V> {
+impl fmt::Display for IoTargetBusy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "target {:?} is still in use:", self.target)?;
         if self.in_flight > 0 {
@@ -783,38 +813,76 @@ impl<V: Identities> fmt::Display for IoTargetBusy<V> {
                 self.in_flight
             )?;
         }
-        if !self.lowest_gates.is_empty() {
+        if self.held_for_gate > 0 {
             write!(
                 f,
-                " {} held until each of {:?} is durable or abandoned;",
-                self.held_for_gate, self.lowest_gates
+                " {} held until their gates are durable or abandoned;",
+                self.held_for_gate
             )?;
         }
-        if !self.uncovered_through.is_empty() {
+        if self.uncovered > 0 {
             write!(
                 f,
-                " {} write(s) not yet covered, seal through each of {:?};",
-                self.uncovered, self.uncovered_through
+                " {} write(s) not yet covered, seal them;",
+                self.uncovered
             )?;
         }
-        if !self.failures.is_empty() {
+        if self.failures > 0 {
             write!(
                 f,
-                " writes suspect in unresolved failure(s) {:?}, heal or abandon them",
+                " writes suspect in {} failure(s), resolve them and pop what that reports;",
                 self.failures
             )?;
+        }
+        if self.held_for_gate > 0 || self.uncovered > 0 || self.failures > 0 {
+            f.write_str(" `target_holds` names each")?;
         }
         Ok(())
     }
 }
 
+/// One thing holding a target or a lineage, as `target_holds` and `lineage_holds` name it, with
+/// what clears it.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Hold<V: Identities> {
+    /// Operations held for gates in one lineage, the lowest of those gates named: cleared when the
+    /// gates are durable or abandoned.
+    Gate(Epoch<V>),
+    /// Uncovered writes in one lineage, the highest of their epochs named: cleared by sealing
+    /// through it.
+    Uncovered(Epoch<V>),
+    /// An unresolved failure: cleared by healing it and sealing again, or abandoning it.
+    Failure(V::FailureId),
+}
+
+impl<V: Identities> Clone for Hold<V> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<V: Identities> Copy for Hold<V> {}
+
+impl<V: Identities> PartialEq for Hold<V> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Gate(a), Self::Gate(b)) | (Self::Uncovered(a), Self::Uncovered(b)) => a == b,
+            (Self::Failure(a), Self::Failure(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl<V: Identities> Eq for Hold<V> {}
+
 /// Why `remove_target` was refused.
 #[derive(Debug)]
-pub enum RemoveTargetError<V: Identities> {
+pub enum RemoveTargetError {
     /// No file is present under this key.
     UnknownKey(IoTargetKey),
     /// The file is still held; see [`IoTargetBusy`].
-    Busy(IoTargetBusy<V>),
+    Busy(IoTargetBusy),
 }
 
 /// Everything still holding a lineage that `retire_lineage` refused, and what clears each hold.
@@ -830,8 +898,9 @@ pub struct LineageBusy<V: Identities> {
     pub held_for_gate: usize,
     /// Writes in the lineage not yet covered successfully. Cleared by sealing them.
     pub uncovered: usize,
-    /// Unresolved failures in the lineage. Cleared by healing or abandoning them.
-    pub failures: Vec<V::FailureId>,
+    /// Unresolved failures in the lineage, which `lineage_holds` names. Cleared by healing or
+    /// abandoning them.
+    pub failures: usize,
 }
 
 /// Why `end_lineage` was refused.

@@ -12,16 +12,24 @@
 //! backend, whose notification is the ring's completion event, and the in-memory one, whose
 //! notification is a count, alike.
 
-use std::io;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use core::time::Duration;
 
-use crate::backend::IoBackend;
-use crate::clock::StampClock;
-use crate::contract::EpochId;
-use crate::engine::{Engine, EngineGuard, Slot, lock, present_watched};
-use crate::lock_watch::{ENGINE_LOCK, LockWatch, WatchedGuard};
 use crate::types::IoFault;
+// The delivery drains the engine, which is joined to its backend under a lock, and a lock is
+// `std`'s (DI-D-97); without the feature there is no engine to deliver, and what is left is the
+// notification a delivery waits on.
+#[cfg(feature = "std")]
+use {
+    crate::alloc_tags::{tag, tagged},
+    crate::backend::IoBackend,
+    crate::clock::StampClock,
+    crate::contract::EpochId,
+    crate::engine::{Engine, EngineGuard, Slot, lock, present_watched},
+    crate::lock_watch::{ENGINE_LOCK, LockWatch, WatchedGuard},
+    alloc::boxed::Box,
+    alloc::sync::Arc,
+    std::sync::Mutex,
+};
 
 #[cfg(test)]
 mod tests;
@@ -38,8 +46,9 @@ pub trait Waitable {
     ///
     /// # Errors
     ///
-    /// The notification's own report, when it cannot be waited on.
-    fn wait(&mut self, timeout: Option<Duration>) -> io::Result<bool>;
+    /// The notification's own report, when it cannot be waited on, as a fault naming the layer
+    /// that made it (DI-D-105).
+    fn wait(&mut self, timeout: Option<Duration>) -> Result<bool, IoFault>;
 }
 
 /// What a pump did.
@@ -50,14 +59,16 @@ pub struct Pumped {
     /// How the wait went: whether it saw the notification raised, which is `false` when no wait
     /// was made because the first drain delivered. The drain after a wait happens whatever the
     /// wait's outcome: a delivery that cannot wait still delivers what has completed.
-    pub waited: io::Result<bool>,
+    pub waited: Result<bool, IoFault>,
 }
 
 /// A failed construction: why, and the engine it was given.
+#[cfg(feature = "std")]
 pub type PumpedSetup<E, Bk, C, K> =
-    Result<PumpedDelivery<E, Bk, C, K>, (io::Error, Box<Engine<E, Bk, C, K>>)>;
+    Result<PumpedDelivery<E, Bk, C, K>, (IoFault, Box<Engine<E, Bk, C, K>>)>;
 
 /// The engine, drained by the consumer's own thread when it calls [`pump`](Self::pump).
+#[cfg(feature = "std")]
 pub struct PumpedDelivery<E, Bk, C, K>
 where
     E: EpochId + 'static,
@@ -71,6 +82,7 @@ where
     watch: Option<LockWatch>,
 }
 
+#[cfg(feature = "std")]
 impl<E, Bk, C, K> PumpedDelivery<E, Bk, C, K>
 where
     E: EpochId + 'static,
@@ -84,9 +96,12 @@ where
     ///
     /// The backend's, with the engine handed back: it could not make its notification.
     pub fn new(engine: Engine<E, Bk, C, K>) -> PumpedSetup<E, Bk, C, K> {
-        match engine.backend.notification() {
+        match tagged(tag::PUMP_NEW_NOTIFICATION, || engine.backend.notification()) {
             Ok(notification) => Ok(Self::with_notification(engine, notification)),
-            Err(fault) => Err((fault_error(fault), Box::new(engine))),
+            Err(fault) => Err((
+                fault,
+                tagged(tag::PUMP_NEW_HANDED_BACK, || Box::new(engine)),
+            )),
         }
     }
 
@@ -95,7 +110,9 @@ where
     pub fn with_notification(engine: Engine<E, Bk, C, K>, notification: Bk::Notification) -> Self {
         Self {
             notification,
-            engine: Arc::new(Mutex::new(Some(engine))),
+            engine: tagged(tag::PUMP_WITH_NOTIFICATION_SLOT, || {
+                Arc::new(Mutex::new(Some(engine)))
+            }),
             watch: None,
         }
     }
@@ -128,12 +145,13 @@ where
                 waited: Ok(false),
             };
         }
-        let waited = self.notification.wait(timeout);
+        let waited = tagged(tag::PUMP_PUMP_WAIT, || self.notification.wait(timeout));
         let ready = self.locked().as_mut().is_some_and(Engine::drain);
         Pumped { ready, waited }
     }
 }
 
+#[cfg(feature = "std")]
 impl<E, Bk, C, K> PumpedDelivery<E, Bk, C, K>
 where
     E: EpochId + 'static,
@@ -165,11 +183,4 @@ where
             .take()
             .expect("only stopping delivery takes the engine")
     }
-}
-
-/// A backend's fault as the `io::Error` a construction reports: the backend's own report when
-/// nothing else holds it, and otherwise one of its kind and text.
-fn fault_error(fault: IoFault) -> io::Error {
-    Arc::try_unwrap(fault.error)
-        .unwrap_or_else(|shared| io::Error::new(shared.kind(), shared.to_string()))
 }

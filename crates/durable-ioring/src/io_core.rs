@@ -4,10 +4,13 @@
 //! The core holds no backend and does no I/O. It decides, and says what to do: a consumer
 //! operation is checked, then either held for its gate or pushed, as a [`Submission`], to the
 //! backend the caller lends it, and recorded only once the push accepts it; everything else returns
-//! [`CoreActions`] -- submissions the core originated, requests for the consumer's provider, and
-//! whether entries became poppable. The caller -- the driver -- pushes those submissions to its
-//! backend, submits, hands the requests to its provider, and feeds every completion and every
-//! provider answer back. Entries are popped from the core's own queue, in the order they happened.
+//! [`CoreActions`], saying whether entries became poppable, and leaves what the driver is to do in
+//! the core's own queues, made at construction (DI-23.12.2): submissions the core originated, taken
+//! one at a time by [`DurableIoCore::next_submission`], and requests for the consumer's provider,
+//! drained by [`DurableIoCore::drain_requests`]. The caller -- the driver -- pushes those
+//! submissions to its backend, submits, hands the requests to its provider, and feeds every
+//! completion and every provider answer back. Entries are popped from the core's own queue, in the
+//! order they happened.
 //!
 //! **Refusals** (DI-D-52, DI-D-54). A consumer operation the backend refuses is undone: the push
 //! hands the submission back, nothing was recorded, no operation id was spent, and the buffer and
@@ -27,42 +30,55 @@
 //! whose gate, or own epoch, is abandoned first completes as `NeverIssued` instead.
 //!
 //! **The provider** (DI-D-27, DI-D-50 P6). A core built with [`DurableIoCore::with_provider`]
-//! routes the domains it names to the consumer's provider: a seal's request comes out in
-//! [`CoreActions::requests`], and each domain's answer goes back through
+//! routes the domains it names to the consumer's provider: a seal's request comes out through
+//! [`DurableIoCore::drain_requests`], and each domain's answer goes back through
 //! [`DurableIoCore::provided`]. Making the request, and with what lock released, is the driver's
 //! (DI-D-44).
 //!
 //! The durability rules themselves -- seals, coverage, failures and their suspect sets -- are the
 //! durability core's, shared with the Windows driver while both paths exist.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::Arc;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
+use fixed_hash_table::HeapMap;
+
+use crate::alloc_tags::{tag, tagged};
 use crate::backend::{
-    Completion, DuplicateTarget, IoBackend, Refused, Submission, SubmissionData, SubmissionOp,
-    SubmissionToken, refusal_fault,
+    Completion, IoBackend, Refused, Submission, SubmissionData, SubmissionOp, SubmissionToken,
+    refusal_fault,
+};
+use crate::capacity::{
+    AtCapacity, Capacity, ConstructionError, Limit, list, ordered, queue, table, within,
+    within_queue,
 };
 use crate::clock::StampClock;
 use crate::contract::{EpochId, Identities};
 use crate::diagnostics::DiagnosticSink;
-use crate::domains::{DomainId, epoch_state, intern_all, routing};
+use crate::domain_lists::DomainList;
+use crate::domains::{DomainId, epoch_state, intern, routing};
 use crate::durability::{
-    Accepted, DEFAULT_LINEAGE, Due, Durability, Gate, GateState, Key, Routing, Sealing, WriteEnd,
+    Accepted, Arrival, DEFAULT_LINEAGE, Due, Durability, Event, Gate, GateState, Key, ProviderCall,
+    Routing, Sealing, WriteEnd,
 };
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::io_target::IoTargetDescription;
-use crate::provider::ProviderRequest;
+use crate::observer::FailureObserver;
+use crate::ordered::Ordered;
+#[cfg(test)]
+use crate::request::OwnedRequest;
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, FlushDomain, HeldOperation, IoTargetBusy,
-    IoTargetKey, Leftovers, OpCompletion, OpKind, Outcome, PushError, PushRefusal, ReadOptions,
-    RemoveTargetError, SealError, UnknownLineage, WriteOptions,
+    AddTargetCause, AddTargetError, DurabilityRequest, Entry, Epoch, EpochState, FlushDomain,
+    HeldOperation, Hold, IoTargetBusy, IoTargetKey, Leftover, OpCompletion, OpKind, Outcome,
+    PushError, PushRefusal, ReadOptions, RemoveTargetError, SealError, UnknownLineage,
+    WriteOptions,
 };
 
 mod failures;
 mod lineages;
 mod provider;
-
-pub use provider::DuplicateDomain;
+mod queue;
 
 #[cfg(test)]
 mod tests;
@@ -70,45 +86,66 @@ mod tests;
 /// The identities a core over clock `K` uses.
 type V<E, K> = DioringIds<E, <K as StampClock>::Instant>;
 
-/// What a core over clock `K` asks of its driver.
-type Actions<E, B, K> = CoreActions<V<E, K>, B>;
-
 /// What a seal answers: the request's answer and what it made due, or why it was refused.
-type SealAnswer<E, B, K> =
-    Result<(DurabilityRequest<V<E, K>>, Actions<E, B, K>), SealError<V<E, K>>>;
+type SealAnswer<E, K> = Result<(DurabilityRequest<V<E, K>>, CoreActions), SealError<V<E, K>>>;
 
 /// An epoch's state, or that its lineage is not this core's live one.
 type StateAnswer<E, K> = Result<EpochState<V<E, K>>, UnknownLineage<V<E, K>>>;
 
-/// What the driver does after a call into the core.
-#[derive(Debug)]
-#[must_use = "the submissions must be pushed and submitted, the requests made, and a delivery made when asked"]
-pub struct CoreActions<V: Identities, B> {
-    /// Submissions the core originated -- commits, operations their gates released, and any
-    /// refused before -- to push to the backend in order, then submit. One the backend refuses
-    /// goes back through [`DurableIoCore::refused`], whose own actions are acted on in turn; the
-    /// rest may still be pushed.
-    pub submit: Vec<Submission<B>>,
-    /// Requests for the consumer's provider, in the order made; each domain's answer goes back
-    /// through [`DurableIoCore::provided`].
-    pub requests: Vec<ProviderRequest<V>>,
+/// What the driver does after a call into the core: take every submission the core originated
+/// with [`DurableIoCore::next_submission`], pushing each to the backend in the order taken, then
+/// submit; drain the provider's requests with [`DurableIoCore::drain_requests`]; and make a
+/// delivery if `deliver` says. A submission the backend refuses goes back through
+/// [`DurableIoCore::refused`], whose own submissions join the ones still to take.
+///
+/// The submissions and requests stay in the core, in queues made when it was built, so a call
+/// allocates nothing to say what is to be done (DI-23.12.2). The submissions are at most those in
+/// flight, which are at most the operations declared; the requests are one for each seal started,
+/// and are at most the operations declared while the driver drains them after every call. A
+/// request is kept only as which seal asked: [`DurableIoCore::drain_requests`] reads what it asks
+/// into a [`RequestBuf`](crate::RequestBuf) the driver made when it built the instance (DI-D-115).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "the submissions must be taken and pushed, the requests drained, and a delivery made when asked"]
+pub struct CoreActions {
     /// Entries became poppable where there were none: the driver's readiness should be raised.
     pub deliver: bool,
 }
 
-impl<V: Identities, B> CoreActions<V, B> {
+impl CoreActions {
+    /// Actions with no delivery to make.
+    const NONE: Self = Self { deliver: false };
+}
+
+/// What a call left the driver to do, taken out of the core's queues into lists of its own: the
+/// shape [`CoreActions`] had before DI-23.12.2, for the tests that look at what a call made due.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct Taken<V: Identities, B> {
+    pub(crate) submit: Vec<Submission<B>>,
+    pub(crate) requests: Vec<OwnedRequest<V>>,
+    pub(crate) deliver: bool,
+}
+
+#[cfg(test)]
+impl<V: Identities, B> Taken<V, B> {
     /// Nothing to do.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.submit.is_empty() && self.requests.is_empty() && !self.deliver
     }
+}
 
-    /// Actions with nothing to do.
-    fn none() -> Self {
-        Self {
-            submit: Vec::new(),
-            requests: Vec::new(),
-            deliver: false,
+#[cfg(test)]
+impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
+    /// Take what `actions` left in the core: every submission to push, and every request.
+    pub(crate) fn taken(&mut self, actions: CoreActions) -> Taken<V<E, K>, B> {
+        let mut requests = Vec::new();
+        let mut buf = self.request_buf().expect("a buffer for the requests");
+        self.drain_requests(&mut buf);
+        requests.extend(buf.owned());
+        Taken {
+            submit: core::iter::from_fn(|| self.next_submission()).collect(),
+            requests,
+            deliver: actions.deliver,
         }
     }
 }
@@ -146,8 +183,9 @@ struct HeldOp<E: EpochId + 'static, I: crate::clock::Instant, B, C> {
 /// A target as the core decides with it.
 struct TargetRecord {
     description: IoTargetDescription,
-    /// Its flush domains, interned, sorted, without repeats; shared with each write's record.
-    domains: Arc<[DomainId]>,
+    /// Its flush domains, interned, sorted, without repeats, in a list of the durability core's
+    /// (DI-D-108), named by each write's record and let go when the target is removed.
+    domains: DomainList,
     /// Who answers for its writes (DI-D-27): the built-in default, the provider, or both.
     routing: Routing,
 }
@@ -158,49 +196,145 @@ struct TargetRecord {
 /// the clock failures are stamped with.
 pub struct DurableIoCore<E: EpochId + 'static, B, C, K: StampClock> {
     instance: InstanceId,
+    /// What the consumer declared when the core was built, and what is refused past (DI-D-107).
+    capacity: Capacity,
     durability: Durability<E, IoTargetKey, K::Instant, K>,
-    targets: HashMap<IoTargetKey, TargetRecord>,
+    targets: HeapMap<IoTargetKey, TargetRecord>,
     /// Every flush domain any target or the provider was declared with, interned.
-    domains: HashMap<FlushDomain, DomainId>,
+    domains: HeapMap<FlushDomain, DomainId>,
     /// The domains the consumer's provider serves, sorted; empty without one.
     served: Arc<[DomainId]>,
     /// Each served domain's name, at its id's position in `served`.
     served_names: Vec<FlushDomain>,
     /// Every submission handed out and not yet completed.
-    in_flight: HashMap<SubmissionToken, InFlight<E, K::Instant, C>>,
+    in_flight: HeapMap<SubmissionToken, InFlight<E, K::Instant, C>>,
     /// The operations held for their gates, by push order.
-    held: BTreeMap<u64, HeldOp<E, K::Instant, B, C>>,
+    held: Ordered<u64, HeldOp<E, K::Instant, B, C>>,
     /// Consumer operations in flight, by target, as `remove_target` reports them; a target with
     /// none has no entry.
-    per_target: HashMap<IoTargetKey, usize>,
+    per_target: HeapMap<IoTargetKey, usize>,
+    /// The completion queue, made for [`Capacity::entries`] (DI-D-112).
     queue: VecDeque<Entry<V<E, K>, B, C>>,
     /// Submissions the core originated that the backend refused for a retryable cause, emitted
     /// again with the next actions.
     unpushed: Vec<Submission<B>>,
+    /// Submissions the core originated, for the driver to take and push, in order.
+    outgoing: VecDeque<Submission<B>>,
+    /// Requests for the consumer's provider, in the order made, for the driver to drain.
+    requests: VecDeque<ProviderCall>,
     next_op: u64,
     next_token: u64,
 }
 
 impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// A core with no targets, no provider, and only its default lineage, stamping failures with
-    /// `clock` and reporting to `diagnostics`.
-    pub fn new(clock: K, diagnostics: Arc<dyn DiagnosticSink>) -> Self {
+    /// `clock` and reporting to `diagnostics`, and refusing past `capacity` (DI-D-107).
+    ///
+    /// Every table the core keys is made now, at the size `capacity` gives it, and never grows.
+    ///
+    /// # Errors
+    ///
+    /// [`ConstructionError::NoLineages`] if `capacity` declares no lineage, the default being one,
+    /// and [`ConstructionError::Table`] if a table's size is more than a table can be, or cannot be
+    /// allocated.
+    pub fn new(
+        clock: K,
+        diagnostics: Arc<dyn DiagnosticSink>,
+        capacity: Capacity,
+    ) -> Result<Self, ConstructionError> {
+        Self::build(clock, diagnostics, capacity, 0)
+    }
+
+    /// A core for a provider serving `served` domains, with the tables made at the sizes `capacity`
+    /// and `served` give them.
+    pub(super) fn build(
+        clock: K,
+        diagnostics: Arc<dyn DiagnosticSink>,
+        capacity: Capacity,
+        served: usize,
+    ) -> Result<Self, ConstructionError> {
+        // `Durability::new` refuses the same, since the default lineage cannot be put in a table
+        // made for none; this answers before any table is made.
+        if capacity.lineages == 0 {
+            return Err(ConstructionError::NoLineages);
+        }
         let instance = InstanceId::next();
-        Self {
+        let durability = Durability::new(instance, clock, diagnostics, &capacity, served)?;
+        let targets = tagged(tag::IO_CORE_NEW_TARGETS, || {
+            table("the targets", Some(capacity.targets))
+        })?;
+        let domains = tagged(tag::IO_CORE_NEW_DOMAINS, || {
+            table("the flush domains", Some(capacity.domains))
+        })?;
+        // An operation in flight holds a place, and a commit in flight belongs to an entry with a
+        // completed write in it, which holds another: so the two together never exceed the places,
+        // which never exceed the operations declared (DI-D-107).
+        let in_flight = tagged(tag::IO_CORE_NEW_IN_FLIGHT, || {
+            table("the submissions in flight", Some(capacity.operations))
+        })?;
+        let per_target = tagged(tag::IO_CORE_NEW_PER_TARGET, || {
+            table("the operations in flight by target", Some(capacity.targets))
+        })?;
+        let held = tagged(tag::IO_CORE_NEW_HELD, || {
+            ordered(
+                "the operations held for their gates",
+                Some(capacity.operations),
+            )
+        })?;
+        // Every submission the core originated is in flight from when it is emitted, and those are
+        // at most the operations declared, whether waiting to be taken or refused and kept.
+        let operations = Some(capacity.operations);
+        let unpushed = tagged(tag::IO_CORE_NEW_UNPUSHED, || {
+            list("the submissions refused and kept", operations)
+        })?;
+        let outgoing = tagged(tag::IO_CORE_NEW_OUTGOING, || {
+            queue("the submissions to push", operations)
+        })?;
+        // One for each seal started, and recorded seals are at most the operations (DI-D-110).
+        let requests = tagged(tag::IO_CORE_NEW_REQUESTS, || {
+            queue("the provider's requests", operations)
+        })?;
+        let completions = tagged(tag::IO_CORE_NEW_QUEUE, || {
+            queue("the completion queue", capacity.entries(served))
+        })?;
+        Ok(Self {
             instance,
-            durability: Durability::new(instance, clock, diagnostics),
-            targets: HashMap::new(),
-            domains: HashMap::new(),
-            served: Arc::from([]),
+            capacity,
+            durability,
+            targets,
+            domains,
+            served: tagged(tag::IO_CORE_NEW_SERVED, || Arc::from([])),
             served_names: Vec::new(),
-            in_flight: HashMap::new(),
-            held: BTreeMap::new(),
-            per_target: HashMap::new(),
-            queue: VecDeque::new(),
-            unpushed: Vec::new(),
+            in_flight,
+            held,
+            per_target,
+            queue: completions,
+            unpushed,
+            outgoing,
+            requests,
             next_op: 0,
             next_token: 0,
+        })
+    }
+
+    /// Give the core the consumer's failure observer (DI-D-113), as it is built: chained onto
+    /// the constructor, before any operation is pushed. A core given one after it has pushed an
+    /// operation or observed a failure, or given a second, is an inconsistency (DI-D-46): the
+    /// observer would have missed what came before.
+    #[must_use]
+    pub fn observed_by(mut self, observer: Arc<dyn FailureObserver<V<E, K>>>) -> Self {
+        if self.next_op > 0 || self.durability.has_observed() {
+            self.durability.inconsistent(
+                "a failure observer was given to a core already in use",
+                format_args!("instance {:?}", self.instance),
+            );
+        } else if !self.durability.observed_by(observer) {
+            self.durability.inconsistent(
+                "a failure observer was given twice",
+                format_args!("instance {:?}", self.instance),
+            );
         }
+        self
     }
 
     /// The default lineage, which every core has and which never ends.
@@ -214,28 +348,100 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     ///
     /// # Errors
     ///
-    /// [`DuplicateTarget`], handing the description back, if `key` is in use.
+    /// [`AddTargetError`], handing the description back, with [`AddTargetCause::KeyInUse`] if `key`
+    /// is in use, and with [`AddTargetCause::AtCapacity`] if the core holds as many targets as it
+    /// was built for, or the description's domains, those it has not been given before, would take
+    /// it past the domains it was built for (DI-D-107). A refusal changes nothing.
     pub fn add_target(
         &mut self,
         key: IoTargetKey,
         description: IoTargetDescription,
-    ) -> Result<(), DuplicateTarget<IoTargetDescription>> {
-        if self.targets.contains_key(&key) {
-            return Err(DuplicateTarget {
+    ) -> Result<(), AddTargetError<IoTargetDescription>> {
+        let refuse = |description, cause| {
+            Err(AddTargetError {
                 key,
                 target: description,
-            });
+                cause,
+            })
+        };
+        if self.targets.contains_key(&key) {
+            return refuse(description, AddTargetCause::KeyInUse);
         }
-        let domains = intern_all(&mut self.domains, description.flush_domains.iter().cloned());
-        let routing = routing(&domains, &self.served);
-        self.targets.insert(
-            key,
-            TargetRecord {
+        let declared = &description.flush_domains;
+        let fresh = declared
+            .iter()
+            .enumerate()
+            .filter(|(at, domain)| {
+                !self.domains.contains_key(*domain) && !declared[..*at].contains(domain)
+            })
+            .count();
+        let limit = if self.targets.len() >= self.capacity.targets {
+            Some((Limit::Targets, self.capacity.targets))
+        } else if self.domains.len() + fresh > self.capacity.domains {
+            Some((Limit::Domains, self.capacity.domains))
+        } else {
+            None
+        };
+        if let Some((limit, declared)) = limit {
+            return refuse(
                 description,
-                domains,
-                routing,
-            },
-        );
+                AddTargetCause::AtCapacity(AtCapacity { limit, declared }),
+            );
+        }
+        let table = &mut self.domains;
+        let mut lost = false;
+        let claimed =
+            self.durability
+                .lists_mut()
+                .claim(description.flush_domains.iter().filter_map(|name| {
+                    let id = intern(table, name);
+                    lost |= id.is_none();
+                    id
+                }));
+        let domains = match claimed {
+            Ok(list) if !lost => Ok(list),
+            Ok(list) => {
+                self.durability.lists_mut().release(list);
+                Err("the flush domains outnumbered the table made for them")
+            }
+            Err(what) => Err(what),
+        };
+        let domains = match domains {
+            Ok(domains) => domains,
+            Err(what) => {
+                // The domains were checked to fit above, and a target holds one list, so this
+                // does not happen.
+                self.durability
+                    .inconsistent(what, format_args!("target {key:?}"));
+                return refuse(
+                    description,
+                    AddTargetCause::AtCapacity(AtCapacity {
+                        limit: Limit::Domains,
+                        declared: self.capacity.domains,
+                    }),
+                );
+            }
+        };
+        let routing = routing(self.durability.lists().get(domains), &self.served);
+        let record = TargetRecord {
+            description,
+            domains,
+            routing,
+        };
+        if let Err(full) = self.targets.insert(key, record) {
+            // The count was checked above, so this does not happen.
+            self.durability.inconsistent(
+                "the targets outnumbered the table made for them",
+                format_args!("target {key:?}"),
+            );
+            return refuse(
+                full.value.description,
+                AddTargetCause::AtCapacity(AtCapacity {
+                    limit: Limit::Targets,
+                    declared: self.capacity.targets,
+                }),
+            );
+        }
         Ok(())
     }
 
@@ -257,38 +463,51 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     pub fn remove_target(
         &mut self,
         key: IoTargetKey,
-    ) -> Result<IoTargetDescription, RemoveTargetError<V<E, K>>> {
+    ) -> Result<IoTargetDescription, RemoveTargetError> {
         if !self.targets.contains_key(&key) {
             return Err(RemoveTargetError::UnknownKey(key));
         }
         let in_flight = self.per_target.get(&key).copied().unwrap_or(0);
-        let mut held_for_gate = 0;
-        let mut lowest: BTreeMap<u64, Epoch<V<E, K>>> = BTreeMap::new();
-        for held in self.held.values().filter(|held| held.target == key) {
-            held_for_gate += 1;
-            lowest
-                .entry(held.gate.lineage.seq)
-                .and_modify(|low| {
-                    if held.gate.id < low.id {
-                        *low = held.gate;
-                    }
-                })
-                .or_insert(held.gate);
-        }
+        let held_for_gate = self.held.values().filter(|held| held.target == key).count();
         let holds = self.durability.file_holds(key);
         if in_flight == 0 && held_for_gate == 0 && holds.is_empty() {
             let record = self.targets.remove(&key).expect("present, checked above");
+            self.durability.lists_mut().release(record.domains);
             return Ok(record.description);
         }
         Err(RemoveTargetError::Busy(IoTargetBusy {
             target: key,
             in_flight,
             held_for_gate,
-            lowest_gates: lowest.into_values().collect(),
             uncovered: holds.uncovered,
-            uncovered_through: holds.uncovered_through,
             failures: holds.failures,
         }))
+    }
+
+    /// What holds the target under `key` that an [`IoTargetBusy`] counts without naming, given to
+    /// `visit` (DI-D-103): for each lineage gated on, in lineage order, the lowest gate its
+    /// operations to the target are held for; for each lineage with an uncovered write to it, the
+    /// highest epoch among them; and each failure suspecting a write to it, until its `Abandoned`
+    /// or `Healed` entry is popped (DI-D-108), in the order observed. Nothing for a key with no target, or a target nothing holds.
+    pub fn target_holds(&self, key: IoTargetKey, mut visit: impl FnMut(Hold<V<E, K>>)) {
+        if !self.targets.contains_key(&key) {
+            return;
+        }
+        self.durability.each_lineage(|lineage| {
+            let lowest = self
+                .held
+                .values()
+                .filter(|held| held.target == key && held.gate.lineage.seq == lineage)
+                .map(|held| held.gate)
+                .min_by_key(|gate| gate.id);
+            if let Some(gate) = lowest {
+                visit(Hold::Gate(gate));
+            }
+        });
+        self.durability
+            .file_uncovered(key, |through| visit(Hold::Uncovered(through)));
+        self.durability
+            .file_failures(key, |failure| visit(Hold::Failure(failure)));
     }
 
     /// Write `data` to `target` at `offset`, tagged `epoch`: checked, then held for its gate, or
@@ -354,7 +573,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     ///
     /// [`SealError::UnknownLineage`] for a lineage that is not this core's live one, and
     /// [`SealError::GateCycle`] for a seal that would close a gate cycle (DI-D-43).
-    pub fn make_durable_through(&mut self, through: Epoch<V<E, K>>) -> SealAnswer<E, B, K> {
+    pub fn make_durable_through(&mut self, through: Epoch<V<E, K>>) -> SealAnswer<E, K> {
         if !self.is_live(through.lineage) {
             return Err(SealError::UnknownLineage(through.lineage));
         }
@@ -365,9 +584,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 self.act(Due::default(), was_empty),
             )),
             Sealing::Submitted(due) => Ok((DurabilityRequest::Submitted, self.act(due, was_empty))),
-            Sealing::Cycle(cycle) => Err(SealError::GateCycle {
-                cycle: self.epochs(cycle),
-            }),
+            Sealing::Cycle => Err(SealError::GateCycle),
         }
     }
 
@@ -376,7 +593,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     ///
     /// A completion for no submission in flight -- one never handed out, or completed twice -- is
     /// the backend breaking its contract, and is panicked on (DI-D-46, DI-D-50 P9).
-    pub fn complete(&mut self, completion: Completion<B>) -> Actions<E, B, K> {
+    pub fn complete(&mut self, completion: Completion<B>) -> CoreActions {
         let was_empty = self.queue.is_empty();
         let Completion {
             token,
@@ -408,7 +625,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                     Ok(transferred) => Outcome::Transferred(transferred),
                     Err(fault) => Outcome::Failed(fault),
                 };
-                self.queue.push_back(Entry::Op(OpCompletion {
+                self.push_queued(Entry::Op(OpCompletion {
                     id,
                     kind,
                     outcome,
@@ -443,7 +660,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// A consumer operation the consumer's push issued never comes back this way -- its push is
     /// refused to the consumer -- so one that does, or a submission never handed out, is panicked
     /// on (DI-D-46).
-    pub fn refused(&mut self, refused: Refused<B>) -> Actions<E, B, K> {
+    pub fn refused(&mut self, refused: Refused<B>) -> CoreActions {
         let Refused { cause, submission } = refused;
         let token = submission.token;
         let ours = matches!(
@@ -455,11 +672,16 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 "a refusal handed back that is not one of the core's own submissions",
                 format_args!("token {token:?}, cause {cause}"),
             );
-            return CoreActions::none();
+            return CoreActions::NONE;
         }
         if cause.is_retryable() {
-            self.unpushed.push(submission);
-            return CoreActions::none();
+            if within(&mut self.unpushed, submission).is_err() {
+                self.durability.inconsistent(
+                    "more submissions were kept than are in flight",
+                    format_args!("token {token:?}, cause {cause}"),
+                );
+            }
+            return CoreActions::NONE;
         }
         self.complete(Completion {
             token,
@@ -469,18 +691,68 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     }
 
     /// The submissions refused before, to push again -- once the driver has submitted or drained,
-    /// as their causes said.
-    pub fn retry(&mut self) -> Actions<E, B, K> {
-        CoreActions {
-            submit: std::mem::take(&mut self.unpushed),
-            requests: Vec::new(),
-            deliver: false,
+    /// as their causes said -- put with the ones to take.
+    pub fn retry(&mut self) -> CoreActions {
+        self.emit_unpushed();
+        CoreActions::NONE
+    }
+
+    /// The next submission the core originated, for the driver to push, in the order emitted.
+    pub fn next_submission(&mut self) -> Option<Submission<B>> {
+        self.outgoing.pop_front()
+    }
+
+    /// Put the submissions refused before with the ones to take, ahead of anything emitted after.
+    fn emit_unpushed(&mut self) {
+        for submission in self.unpushed.drain(..) {
+            if let Err(submission) = within_queue(&mut self.outgoing, submission) {
+                self.durability.inconsistent(
+                    "more submissions were to push than are in flight",
+                    format_args!("token {:?}", submission.token),
+                );
+            }
         }
     }
 
-    /// The next entry, if there is one.
-    pub fn pop(&mut self) -> Option<Entry<V<E, K>, B, C>> {
-        self.queue.pop_front()
+    /// Put `submission`, which the core originated, with the ones for the driver to take.
+    fn emit(&mut self, submission: Submission<B>) {
+        if let Err(submission) = within_queue(&mut self.outgoing, submission) {
+            self.durability.inconsistent(
+                "more submissions were to push than are in flight",
+                format_args!("token {:?}", submission.token),
+            );
+        }
+    }
+
+    /// How many places of the submit window are held: each operation accepted and not yet popped,
+    /// each write still uncovered, each write an unresolved failure suspects, and the write each
+    /// seal the mark has not passed holds, counted once however many of those hold it (DI-D-100,
+    /// DI-D-110).
+    #[must_use]
+    pub fn window_places(&self) -> usize {
+        self.durability.window_places()
+    }
+
+    /// Whether the places the core's tables account for are exactly those the window holds.
+    #[cfg(test)]
+    fn check_window(&self) {
+        let mut operations: alloc::collections::BTreeSet<u64> = alloc::collections::BTreeSet::new();
+        for flight in self.in_flight.values() {
+            if let InFlight::Op { id, .. } = flight {
+                operations.insert(id.seq);
+            }
+        }
+        operations.extend(self.held.keys().copied());
+        for queued in &self.queue {
+            if let Entry::Op(done) = queued {
+                operations.insert(done.id.seq);
+            }
+        }
+        assert_eq!(
+            operations,
+            self.durability.operation_holders(),
+            "the window's places disagree with the operations in flight, held and queued"
+        );
     }
 
     /// The lineage's high-water mark: the highest epoch reported durable, or `None` if none is.
@@ -520,28 +792,25 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             .ok_or(UnknownLineage(epoch.lineage))
     }
 
-    /// End the core, handing back what it still holds: the operations held for their gates, which
-    /// were never issued, in push order; the unresolved failures; and every lineage with its final
-    /// high-water mark. What is in flight is the backend's to run down.
-    pub fn close(self) -> Leftovers<V<E, K>, B, C> {
-        let failures = self.durability.failures();
-        let lineages = self.durability.lineages();
-        let held = self
-            .held
-            .into_values()
-            .map(|held| HeldOperation {
+    /// End the core, giving `visit` what it still holds (DI-D-103): the operations held for their
+    /// gates, which were never issued, by value in push order; then the unresolved failures, in the
+    /// order observed; then every live lineage with its final high-water mark, lent for the visit.
+    /// What is in flight is the backend's to run down.
+    pub fn close(self, mut visit: impl FnMut(Leftover<'_, V<E, K>, B, C>)) {
+        let Self {
+            held, durability, ..
+        } = self;
+        for held in held.into_values() {
+            visit(Leftover::Held(HeldOperation {
                 id: held.id,
                 kind: held.kind,
                 gate: held.gate,
                 buffer: owned_op(held.op),
                 context: held.context,
-            })
-            .collect();
-        Leftovers {
-            held,
-            failures,
-            lineages,
+            }));
         }
+        durability.failure_infos(|failure| visit(Leftover::Failure(failure)));
+        durability.lineages(|lineage| visit(Leftover::Lineage(lineage)));
     }
 
     /// A lineage key's `Lineage` name.
@@ -550,14 +819,6 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             instance: self.instance,
             seq,
         }
-    }
-
-    /// A cycle in the core's terms, as the contract reports it.
-    fn epochs(&self, cycle: Vec<Gate<E>>) -> Vec<Epoch<V<E, K>>> {
-        cycle
-            .into_iter()
-            .map(|gate| Epoch::new(self.name(gate.lineage), gate.epoch))
-            .collect()
     }
 
     /// Refuse another core's lineage, which this one has no answer for.
@@ -600,8 +861,20 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 });
             }
         };
+        if self.durability.window_places() >= self.capacity.operations {
+            return Err(PushError {
+                reason: PushRefusal::AtCapacity(AtCapacity {
+                    limit: Limit::Operations,
+                    declared: self.capacity.operations,
+                }),
+                buffer: owned_op(op),
+                context,
+            });
+        }
         if let (Some(at), Some(named)) = (waiting, gate) {
-            if let Err(cause) = backend.check(target, &op) {
+            if let Err(cause) = tagged(tag::IO_CORE_ISSUE_BACKEND_CHECK, || {
+                backend.check(target, &op)
+            }) {
                 return Err(PushError {
                     reason: PushRefusal::Backend(cause),
                     buffer: owned_op(op),
@@ -609,40 +882,54 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 });
             }
             let id = self.op_id();
+            self.durability.admit(id);
             let accepted = epoch.map(|epoch| self.accepted(id, target, epoch));
             self.durability.hold(id, accepted, at);
-            self.held.insert(
-                id.seq,
-                HeldOp {
-                    id,
-                    kind,
-                    target,
-                    op,
-                    context,
-                    gate: named,
-                },
-            );
+            let held = HeldOp {
+                id,
+                kind,
+                target,
+                op,
+                context,
+                gate: named,
+            };
+            if self.held.insert(id.seq, held).is_err() {
+                // The window refused the push before it got here if there was no room for it.
+                self.durability.inconsistent(
+                    "an operation was held past the operations declared",
+                    format_args!("operation {id:?}, gated on {named:?}"),
+                );
+            }
+            #[cfg(test)]
+            self.check_window();
             return Ok(id);
         }
         let token = self.token();
-        if let Err(refused) = backend.push(Submission { token, target, op }) {
+        let pushed = tagged(tag::IO_CORE_ISSUE_BACKEND_PUSH, || {
+            backend.push(Submission { token, target, op })
+        });
+        if let Err(refused) = pushed {
             return Err(handed_back(refused, context));
         }
         let id = self.op_id();
+        self.durability.admit(id);
         if let Some(epoch) = epoch {
             let accepted = self.accepted(id, target, epoch);
             self.durability.pushed(accepted);
         }
         self.issued(token, id, kind, target, context, false);
+        #[cfg(test)]
+        self.check_window();
         Ok(id)
     }
 
     /// Why an operation on `target` -- tagged `epoch` if it is a write, gated on `gate` if it has
     /// one -- must be refused, if it must: the target, then the epoch's lineage, then its seal
     /// (guarantee 6), then whether it was abandoned (DI-D-35), then the gate. Otherwise whether it
-    /// waits: the gate's epoch in the core's terms, or `None` to push it now.
+    /// waits: the gate's epoch in the core's terms, or `None` to push it now. Mutable for the cycle
+    /// search's scratch, which is the durability core's; nothing the core decides with changes.
     fn decide(
-        &self,
+        &mut self,
         target: IoTargetKey,
         epoch: Option<Epoch<V<E, K>>>,
         gate: Option<Epoch<V<E, K>>>,
@@ -681,11 +968,10 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                     lineage: epoch.lineage.seq,
                     epoch: epoch.id,
                 });
-                match write.and_then(|write| self.durability.write_cycle(write, at)) {
-                    None => Ok(Some(at)),
-                    Some(cycle) => Err(PushRefusal::GateCycle {
-                        cycle: self.epochs(cycle),
-                    }),
+                if write.is_some_and(|write| self.durability.write_cycle(write, at)) {
+                    Err(PushRefusal::GateCycle)
+                } else {
+                    Ok(Some(at))
                 }
             }
             GateState::Abandoned => Err(PushRefusal::GateAbandoned { gate }),
@@ -708,7 +994,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             file: target,
             target,
             routing: record.routing,
-            domains: Arc::clone(&record.domains),
+            domains: record.domains,
         }
     }
 
@@ -740,7 +1026,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         context: C,
         released: bool,
     ) {
-        self.in_flight.insert(
+        let recorded = self.in_flight.insert(
             token,
             InFlight::Op {
                 id,
@@ -750,7 +1036,19 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                 released,
             },
         );
-        *self.per_target.entry(target).or_insert(0) += 1;
+        if recorded.is_err() {
+            self.durability.inconsistent(
+                "an operation was put in flight past the submissions the operations declared allow",
+                format_args!("operation {id:?} on {target:?}"),
+            );
+        }
+        match self.per_target.entry(target).or_insert(0) {
+            Ok(count) => *count += 1,
+            Err(_) => self.durability.inconsistent(
+                "an operation was put in flight for more targets than were declared",
+                format_args!("operation {id:?} on {target:?}"),
+            ),
+        }
     }
 
     /// A consumer operation on `target` completed.
@@ -771,29 +1069,29 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// every operation its gate released and a commit for every flush now due; and make a request
     /// of the provider for every seal that needs one. `was_empty` is whether the queue was empty
     /// when the change began.
-    fn act(&mut self, due: Due<E, IoTargetKey, K::Instant>, was_empty: bool) -> Actions<E, B, K> {
-        let Due {
-            flushes,
-            events,
-            released,
-            calls,
-        } = due;
-        for event in events {
+    fn act(&mut self, mut due: Due<E, IoTargetKey, K::Instant>, was_empty: bool) -> CoreActions {
+        for event in due.events.drain(..) {
             match event.into_entry(self.instance) {
-                Ok(entry) => self.queue.push_back(entry),
-                Err((op, abandoned)) => {
+                Arrival::Entry(entry) => self.enqueue(entry),
+                Arrival::Other(Event::NeverIssued { op, abandoned }) => {
                     let abandoned = Epoch::new(self.name(abandoned.lineage), abandoned.epoch);
                     self.never_issued(op, abandoned);
                 }
+                Arrival::Other(Event::Superseded { lineage, through }) => {
+                    self.withdraw_blocked(Epoch::new(self.name(lineage), through));
+                }
+                Arrival::Other(other) => self
+                    .durability
+                    .inconsistent("an entry the queue cannot take", format_args!("{other:?}")),
             }
         }
-        let mut submit = std::mem::take(&mut self.unpushed);
-        for id in released {
-            self.release(id, &mut submit);
+        self.emit_unpushed();
+        for id in due.released.drain(..) {
+            self.release(id);
         }
-        for flush in flushes {
+        for flush in due.flushes.drain(..) {
             let token = self.token();
-            self.in_flight.insert(
+            let recorded = self.in_flight.insert(
                 token,
                 InFlight::Commit {
                     lineage: flush.lineage,
@@ -801,16 +1099,37 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
                     target: flush.file,
                 },
             );
-            submit.push(Submission {
+            if recorded.is_err() {
+                self.durability.inconsistent(
+                    "a commit was put in flight past the submissions the operations declared allow",
+                    format_args!("commit of {:?}", flush.file),
+                );
+            }
+            self.emit(Submission {
                 token,
                 target: flush.file,
                 op: SubmissionOp::Commit,
             });
         }
-        let requests = calls.into_iter().map(|call| self.request(call)).collect();
+        for call in due.calls.drain(..) {
+            if within_queue(&mut self.requests, call).is_err() {
+                self.durability.inconsistent(
+                    "more provider requests were made than seals can be recorded",
+                    format_args!("instance {:?}", self.instance),
+                );
+            }
+        }
+        self.durability.recycle(due);
+        #[cfg(test)]
+        {
+            self.check_window();
+            self.check_queue();
+            assert!(
+                self.durability.due_home(),
+                "a change's lists were not given back"
+            );
+        }
         CoreActions {
-            submit,
-            requests,
             deliver: was_empty && !self.queue.is_empty(),
         }
     }
@@ -825,7 +1144,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             );
             return;
         };
-        self.queue.push_back(Entry::Op(OpCompletion {
+        self.push_queued(Entry::Op(OpCompletion {
             id: held.id,
             kind: held.kind,
             outcome: Outcome::NeverIssued { abandoned },
@@ -835,7 +1154,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     }
 
     /// A held operation's gate is durable: emit it, recorded as in flight from now.
-    fn release(&mut self, id: OpId, submit: &mut Vec<Submission<B>>) {
+    fn release(&mut self, id: OpId) {
         let Some(held) = self.held.remove(&id.seq) else {
             self.durability.inconsistent(
                 "a release of an operation the core does not hold",
@@ -846,7 +1165,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         let token = self.token();
         self.durability.issued(id);
         self.issued(token, id, held.kind, held.target, held.context, true);
-        submit.push(Submission {
+        self.emit(Submission {
             token,
             target: held.target,
             op: held.op,

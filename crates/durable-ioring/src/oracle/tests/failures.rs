@@ -1,60 +1,50 @@
 // Copyright (c) 2026 Mike Grier
 //! The oracle's failure rules (DI-3.2.4), each refused when broken and accepted when kept.
 
-use super::{LEN, Oracle, TestEntry, V, done, epoch, op, write_kind};
+use super::{FailedEntry, LEN, Oracle, Report, TestEntry, V, done, epoch, op, write_kind};
 use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, OpId};
 use crate::oracle::Violation;
-use crate::types::{Entry, Epoch, Failed, FailureCause, ImportScope, SuspectSet, SuspectWrite};
+use crate::types::{Entry, Epoch, Failed, FailureCause, ImportScope, SuspectWrite};
 
 fn failure(instance: InstanceId, seq: u64) -> FailureId {
     FailureId { instance, seq }
 }
 
-fn suspect(writes: &[(OpId, Epoch<V>)]) -> SuspectSet<V> {
-    SuspectSet::new(
-        writes
-            .iter()
-            .map(|&(op, epoch)| SuspectWrite {
-                op,
-                target: IoTargetKey(1),
-                epoch,
-            })
-            .collect(),
-    )
+fn suspect(writes: &[(OpId, Epoch<V>)]) -> Vec<SuspectWrite<V>> {
+    writes
+        .iter()
+        .map(|&(op, epoch)| SuspectWrite {
+            op,
+            target: IoTargetKey(1),
+            epoch,
+        })
+        .collect()
 }
 
 /// A `Failed` stamped at zero, so a test that is not about stamps never trips the stamp rule.
-fn failed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
+fn failed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> FailedEntry {
     failed_at(id, writes, 0)
 }
 
-fn failed_at(id: FailureId, writes: &[(OpId, Epoch<V>)], ticks: u64) -> TestEntry {
-    Entry::Failed(Failed {
+fn failed_at(id: FailureId, writes: &[(OpId, Epoch<V>)], ticks: u64) -> FailedEntry {
+    let entry = Entry::Failed(Failed {
         id,
-        token: FailureToken::mint(id).0,
+        token: FailureToken::detached(id),
         cause: FailureCause::Imported {
             scope: ImportScope::All,
         },
-        suspect: suspect(writes),
         observed: ticks,
-    })
+    });
+    FailedEntry(entry, suspect(writes))
 }
 
-fn abandoned(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
-    Entry::Abandoned {
-        failure: id,
-        suspect: suspect(writes),
-        markings: Vec::new(),
-    }
+fn abandoned(id: FailureId) -> TestEntry {
+    Entry::Abandoned { failure: id }
 }
 
-fn healed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
-    Entry::Healed {
-        failure: id,
-        suspect: suspect(writes),
-        markings: Vec::new(),
-    }
+fn healed(id: FailureId) -> TestEntry {
+    Entry::Healed { failure: id }
 }
 
 /// An oracle that has seen write 0 tagged 1 and write 1 tagged 3 accepted, the first completed.
@@ -80,13 +70,13 @@ fn a_failure_suspecting_accepted_writes_in_push_order_is_accepted_and_others_are
 
     let mut oracle = two_writes(instance);
     oracle
-        .observe(&failed(failure(instance, 0), &[w0, w1]))
+        .report(failed(failure(instance, 0), &[w0, w1]))
         .expect("a completed write and one in flight");
     oracle
-        .observe(&failed(failure(instance, 1), &[]))
+        .report(failed(failure(instance, 1), &[]))
         .expect("an empty suspect set");
     assert!(matches!(
-        oracle.observe(&failed(failure(instance, 0), &[])),
+        oracle.report(failed(failure(instance, 0), &[])),
         Err(Violation::DuplicateFailure { .. })
     ));
 
@@ -95,14 +85,14 @@ fn a_failure_suspecting_accepted_writes_in_push_order_is_accepted_and_others_are
     for (seq, writes) in [(2, vec![unknown]), (3, vec![retagged])] {
         assert!(
             matches!(
-                oracle.observe(&failed(failure(instance, seq), &writes)),
+                oracle.report(failed(failure(instance, seq), &writes)),
                 Err(Violation::SuspectNotPushed { .. })
             ),
             "{writes:?}"
         );
     }
     assert!(matches!(
-        oracle.observe(&failed(failure(instance, 4), &[w1, w0])),
+        oracle.report(failed(failure(instance, 4), &[w1, w0])),
         Err(Violation::SuspectsOutOfOrder { .. })
     ));
 }
@@ -112,15 +102,15 @@ fn failure_stamps_may_repeat_or_rise_but_never_fall() {
     let instance = InstanceId::next();
     let mut oracle = Oracle::new();
     oracle
-        .observe(&failed_at(failure(instance, 0), &[], 500))
+        .report(failed_at(failure(instance, 0), &[], 500))
         .expect("the first stamp, whatever it is");
     oracle
-        .observe(&failed_at(failure(instance, 1), &[], 500))
+        .report(failed_at(failure(instance, 1), &[], 500))
         .expect("within one tick: equal");
     oracle
-        .observe(&failed_at(failure(instance, 2), &[], 9_000))
+        .report(failed_at(failure(instance, 2), &[], 9_000))
         .expect("any gap");
-    match oracle.observe(&failed_at(failure(instance, 3), &[], 8_999)) {
+    match oracle.report(failed_at(failure(instance, 3), &[], 8_999)) {
         Err(Violation::StampWentBackwards {
             failure: named,
             observed,
@@ -145,11 +135,11 @@ fn a_failure_reaching_back_past_a_reported_durable_is_a_violation() {
     let w0 = (op(instance, 0), epoch(instance, 1));
     let w1 = (op(instance, 1), epoch(instance, 3));
     assert!(matches!(
-        oracle.observe(&failed(failure(instance, 0), &[w0])),
+        oracle.report(failed(failure(instance, 0), &[w0])),
         Err(Violation::SuspectAlreadyDurable { .. })
     ));
     oracle
-        .observe(&failed(failure(instance, 1), &[w1]))
+        .report(failed(failure(instance, 1), &[w1]))
         .expect("3 is above the mark");
 }
 
@@ -166,7 +156,7 @@ fn durable_past_a_failure_is_a_violation_until_it_is_healed_or_abandoned() {
         let mut oracle = two_writes(instance);
         oracle.sealed(epoch(instance, 2));
         oracle
-            .observe(&failed(failure(instance, 0), &[w0]))
+            .report(failed(failure(instance, 0), &[w0]))
             .expect("a failure holding 1");
         oracle
     };
@@ -183,17 +173,17 @@ fn durable_past_a_failure_is_a_violation_until_it_is_healed_or_abandoned() {
         .observe(&durable)
         .expect("healed by the consumer, its Healed entry not yet come");
     oracle
-        .observe(&healed(failure(instance, 0), &[w0]))
+        .observe(&healed(failure(instance, 0)))
         .expect("the heal took effect in every lineage");
 
     let mut oracle = setup();
     oracle
-        .observe(&healed(failure(instance, 0), &[w0]))
+        .observe(&healed(failure(instance, 0)))
         .expect_err("Healed for a failure the consumer did not heal");
 
     let mut oracle = setup();
     oracle
-        .observe(&abandoned(failure(instance, 0), &[w0]))
+        .observe(&abandoned(failure(instance, 0)))
         .expect("abandoned");
     oracle.observe(&durable).expect("abandoned");
 
@@ -201,36 +191,29 @@ fn durable_past_a_failure_is_a_violation_until_it_is_healed_or_abandoned() {
     oracle.sealed(epoch(instance, 2));
     let w1 = (op(instance, 1), epoch(instance, 3));
     oracle
-        .observe(&failed(failure(instance, 0), &[w1]))
+        .report(failed(failure(instance, 0), &[w1]))
         .expect("a failure holding 3 alone");
     oracle.observe(&durable).expect("3 is above 2");
 }
 
 #[test]
-fn abandoned_must_name_a_live_failure_with_its_reported_suspect_set() {
+fn abandoned_must_name_a_live_failure() {
     let instance = InstanceId::next();
     let w0 = (op(instance, 0), epoch(instance, 1));
     let w1 = (op(instance, 1), epoch(instance, 3));
     let mut oracle = two_writes(instance);
     assert!(matches!(
-        oracle.observe(&abandoned(failure(instance, 0), &[w0])),
+        oracle.observe(&abandoned(failure(instance, 0))),
         Err(Violation::AbandonedUnknown { .. })
     ));
     oracle
-        .observe(&failed(failure(instance, 0), &[w0, w1]))
+        .report(failed(failure(instance, 1), &[w0, w1]))
         .expect("a failure");
     oracle
-        .observe(&failed(failure(instance, 1), &[w0, w1]))
-        .expect("another");
+        .observe(&abandoned(failure(instance, 1)))
+        .expect("live");
     assert!(matches!(
-        oracle.observe(&abandoned(failure(instance, 0), &[w0])),
-        Err(Violation::AbandonedSuspectChanged { .. })
-    ));
-    oracle
-        .observe(&abandoned(failure(instance, 1), &[w0, w1]))
-        .expect("as reported");
-    assert!(matches!(
-        oracle.observe(&abandoned(failure(instance, 1), &[w0, w1])),
+        oracle.observe(&abandoned(failure(instance, 1))),
         Err(Violation::AbandonedUnknown { .. })
     ));
 }
@@ -242,13 +225,13 @@ fn a_write_into_an_abandoned_epoch_is_a_violation_and_one_into_another_epoch_is_
     let w1 = (op(instance, 1), epoch(instance, 3));
     let mut oracle = two_writes(instance);
     oracle
-        .observe(&failed(failure(instance, 0), &[w0, w1]))
+        .report(failed(failure(instance, 0), &[w0, w1]))
         .expect("a failure");
     oracle
         .pushed(op(instance, 2), write_kind(instance, 3), LEN, 2)
         .expect("3 is not abandoned until the entry says so");
     oracle
-        .observe(&abandoned(failure(instance, 0), &[w0, w1]))
+        .observe(&abandoned(failure(instance, 0)))
         .expect("abandoned");
     assert!(matches!(
         oracle.pushed(op(instance, 3), write_kind(instance, 3), LEN, 3),
@@ -280,10 +263,10 @@ fn blocked_must_name_a_live_failure_at_or_below_the_request() {
         Err(Violation::BlockedByUnrelated { .. })
     ));
     oracle
-        .observe(&failed(failure(instance, 0), &[w0]))
+        .report(failed(failure(instance, 0), &[w0]))
         .expect("holds 1");
     oracle
-        .observe(&failed(failure(instance, 1), &[w1]))
+        .report(failed(failure(instance, 1), &[w1]))
         .expect("holds 3");
     oracle.observe(&blocked(2, 0)).expect("1 is at or below 2");
     assert!(matches!(
@@ -295,7 +278,7 @@ fn blocked_must_name_a_live_failure_at_or_below_the_request() {
         .observe(&blocked(2, 0))
         .expect("a heal not yet in effect still holds");
     oracle
-        .observe(&abandoned(failure(instance, 0), &[w0]))
+        .observe(&abandoned(failure(instance, 0)))
         .expect("abandoned");
     assert!(matches!(
         oracle.observe(&blocked(2, 0)),

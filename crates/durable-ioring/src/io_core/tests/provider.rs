@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use super::{Core, KEY, OTHER, Rig, Ticks, shown};
 use crate::backend::SubmissionOp;
+use crate::capacity::ConstructionError;
 use crate::diagnostics::NoDiagnostics;
-use crate::io_core::DuplicateDomain;
 use crate::memory::MemoryTarget;
 use crate::provider::DomainOutcome;
 use crate::types::{Entry, FailureCause, FlushDomain, IoTargetKey};
@@ -21,6 +21,7 @@ fn served(served: &[&str], declared: &[&str]) -> Rig {
     let core = Core::with_provider(
         Ticks::default(),
         Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
         served.iter().map(|name| domain(name)).collect(),
     )
     .expect("no repeats");
@@ -44,11 +45,12 @@ fn a_domain_named_twice_is_refused() {
     let refused = Core::with_provider(
         Ticks::default(),
         Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
         vec![domain("log"), domain("disk"), domain("log")],
     )
     .err()
     .expect("a repeat");
-    assert_eq!(refused, DuplicateDomain(domain("log")));
+    assert_eq!(refused, ConstructionError::DuplicateDomain(domain("log")));
     assert!(refused.to_string().contains("twice"));
 }
 
@@ -142,7 +144,7 @@ fn a_provider_failure_is_a_failure_of_its_domain() {
         request.lineage,
         request.seal,
         &domain("log"),
-        DomainOutcome::Failed(io::Error::other("lost")),
+        DomainOutcome::Failed(crate::report_io_error(io::Error::other("lost"))),
     );
     rig.act(actions);
     let entries = rig.entries();
@@ -184,9 +186,42 @@ fn an_abandoned_answer_is_the_providers_abandonment() {
 }
 
 #[test]
+fn a_failed_or_abandoned_answer_for_an_ended_lineage_observes_no_failure() {
+    // Part of the bound on unresolved failures (DI-D-109): only a part of a live lineage's seal
+    // observes one, so a failure is always held by its part's named write.
+    for outcome in [
+        DomainOutcome::Failed(crate::report_io_error(io::Error::other("lost"))),
+        DomainOutcome::Abandoned,
+    ] {
+        let mut rig = served(&["log"], &["log"]);
+        let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
+        rig.write_with(
+            KEY,
+            crate::types::Epoch::new(lineage, 1),
+            0,
+            b"x",
+            Default::default(),
+        )
+        .expect("accepted");
+        rig.seal_in(lineage, 1);
+        rig.run();
+        let request = rig.requests.pop().expect("a request");
+        let actions = rig.core.end_lineage(lineage).expect("live");
+        rig.act(actions);
+        rig.entries();
+        let actions = rig
+            .core
+            .provided(request.lineage, request.seal, &domain("log"), outcome);
+        assert!(rig.core.taken(actions).is_empty());
+        assert!(rig.entries().is_empty());
+        assert!(rig.core.failures_listed().is_empty(), "nothing observed");
+    }
+}
+
+#[test]
 fn an_answer_for_an_ended_lineage_reports_nothing() {
     let mut rig = served(&["log"], &["log"]);
-    let lineage = rig.core.mint_lineage(None);
+    let lineage = rig.core.mint_lineage(None).expect("room for a lineage");
     rig.write_with(
         KEY,
         crate::types::Epoch::new(lineage, 1),
@@ -207,7 +242,7 @@ fn an_answer_for_an_ended_lineage_reports_nothing() {
         &domain("log"),
         DomainOutcome::Succeeded,
     );
-    assert!(actions.is_empty());
+    assert!(rig.core.taken(actions).is_empty());
     assert!(rig.entries().is_empty());
 }
 
@@ -248,7 +283,12 @@ fn an_answer_for_an_unserved_domain_is_panicked_on() {
 #[should_panic(expected = "a provider answered for a request this core never made")]
 fn an_answer_for_another_cores_lineage_is_panicked_on() {
     let mut rig = served(&["log"], &["log"]);
-    let other = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
+    let other = Core::new(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        crate::test_support::CAPACITY,
+    )
+    .expect("a valid capacity");
     let _ = rig.core.provided(
         other.default_lineage(),
         0,

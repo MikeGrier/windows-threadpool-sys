@@ -6,14 +6,34 @@ use std::time::{Duration, Instant};
 
 use win_durable_ioring::{DurableRing, IoTargetKey, PushRefusal};
 
-use super::{Blocked, Delivery, FILE, GaveUp, Scratch, build, push_blocking, run, write_at};
+use super::{
+    Blocked, Delivery, FILE, GaveUp, OPERATIONS, Scratch, build, push_blocking, run, write_at,
+};
 
 /// Far more writes than the queues hold, so a push the ring will not take is certain.
 const WRITES: usize = 200;
 const QUEUE: u32 = 4;
+/// More writes than the instance is built for, so the declared capacity is certain to be reached.
+const PAST_CAPACITY: usize = 3 * OPERATIONS;
 
 fn block() -> Vec<u8> {
     vec![7; 8]
+}
+
+#[test]
+fn writes_past_the_declared_capacity_are_taken_by_sealing_and_popping() {
+    // The instance holds a write's place until its completion is popped and a seal has covered it,
+    // so a consumer that never seals is refused at its declared operations however fast it pops.
+    // Every delivery has to get through, and has to have sealed to do it.
+    for delivery in [Delivery::Pool, Delivery::Pumped, Delivery::Signalled] {
+        let report = run(delivery, PAST_CAPACITY, QUEUE);
+        assert_eq!(report.pushed, PAST_CAPACITY, "{delivery:?}: {report:?}");
+        assert_eq!(report.completed, PAST_CAPACITY, "{delivery:?}: {report:?}");
+        assert!(
+            report.sealed > 1,
+            "{delivery:?} sealed as it went: {report:?}"
+        );
+    }
 }
 
 #[test]
