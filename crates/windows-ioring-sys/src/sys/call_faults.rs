@@ -378,9 +378,10 @@ impl Responses for CallFaults {
         let answer = unsafe { Forward.pop(ring, cqe) };
         // `S_OK` is a completion popped; an empty queue answers `S_FALSE`, with nothing to fail.
         if answer == S_OK
+            && !cqe.is_null()
             && let Some(code) = Fail::spend(&mut lock(&self.shared).completions)
         {
-            // SAFETY: `cqe` is the caller's valid out-pointer, and the real pop just wrote it.
+            // SAFETY: guarded above against null; on `S_OK` the out-pointer is expected writable.
             unsafe { (*cqe).ResultCode = code };
         }
         answer
