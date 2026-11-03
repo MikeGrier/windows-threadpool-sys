@@ -126,15 +126,21 @@ function Get-CommitCount {
     return [int]((@(Invoke-NativeStdout { git --git-dir $Remote rev-list --count 'refs/heads/sabotage-records' }) | Select-Object -First 1))
 }
 
+# The scripts' messages are captured as strings and matched, so they must not be wrapped: on
+# Windows PowerShell 5.1 `Out-String` wraps captured host output at the host's width, which on
+# a CI runner is narrow, and a phrase split across the wrap (`dropped 1` / `local entries`) is not
+# found. The width is wide enough that nothing here wraps. PowerShell 7 does not wrap it.
+$captureWidth = 4096
+
 function Invoke-Publisher {
     param([string] $Clone, [string] $Record, [hashtable] $Extra = @{}, [string] $Remote = 'origin')
-    $output = & $publisher -Record $Record -RepositoryRoot $Clone -Remote $Remote -RetryDelaySeconds 0 @Extra 6>&1 | Out-String
+    $output = & $publisher -Record $Record -RepositoryRoot $Clone -Remote $Remote -RetryDelaySeconds 0 @Extra 6>&1 | Out-String -Width $captureWidth
     return [pscustomobject]@{ Exit = $LASTEXITCODE; Output = $output }
 }
 
 function Invoke-Fetcher {
     param([string] $Clone, [string] $Output, [string] $Remote = 'origin')
-    $text = & $fetcher -RepositoryRoot $Clone -Output $Output -Remote $Remote 6>&1 | Out-String
+    $text = & $fetcher -RepositoryRoot $Clone -Output $Output -Remote $Remote 6>&1 | Out-String -Width $captureWidth
     return [pscustomobject]@{ Exit = $LASTEXITCODE; Output = $text }
 }
 
