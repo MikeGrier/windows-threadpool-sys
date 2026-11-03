@@ -564,3 +564,20 @@ Ungated work with no identified predecessor deliverable.
 
   Decide the shape first -- all at once, unpublished-only, or never for the published ones -- rather
   than starting with the easy three and discovering the policy afterwards.
+
+## M43 -- Correct the `durable-ioring-events` 0.1.1 release
+
+`durable-ioring-events` 0.1.1 was published as a patch release that requires durable-ioring 0.4, though the crate
+implements durable-ioring's `DiagnosticSink`; it should have been 0.2.0. The decision, with what happened and why both
+yanks are needed, is [DE-D-8](crates/durable-ioring-events/DESIGN-NOTES.md#de-d-8); the rule for every crate like it is in
+[DEVELOPMENT.md](DEVELOPMENT.md).
+
+- [ ] **M43.1** -- Merge the release pull request that releases `durable-ioring-events` 0.2.0 and `win-durable-ioring` 0.5.1.
+  Done when both are on crates.io, `durable-ioring-events` at 0.2.0 requiring durable-ioring 0.4 and `win-durable-ioring`
+  requiring it at 0.2.0. Read the release pull request first: it must carry 0.2.0 and not another version for the events
+  crate.
+
+- [ ] **M43.2** -- Yank `durable-ioring-events` 0.1.1 and `win-durable-ioring` 0.5.0, once `M43.1` is done.
+  The engineer's own step, with their crates.io login: `cargo yank --version 0.1.1 durable-ioring-events`, then
+  `cargo yank --version 0.5.0 win-durable-ioring`. `win-durable-ioring` 0.5.0 requires the events crate at 0.1.1 or later
+  within 0.1, so both go, and the replacements must exist first.
