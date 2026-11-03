@@ -572,10 +572,10 @@ implements durable-ioring's `DiagnosticSink`; it should have been 0.2.0. The dec
 yanks are needed, is [DE-D-8](crates/durable-ioring-events/DESIGN-NOTES.md#de-d-8); the rule for every crate like it is in
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
-- [ ] **M43.1** -- Merge the release pull request that releases `durable-ioring-events` 0.2.0 and `win-durable-ioring` 0.5.1.
+- [ ] **M43.1** -- Merge the release pull request that releases `durable-ioring-events` 0.2.0 and `win-durable-ioring` 0.6.0.
   Done when both are on crates.io, `durable-ioring-events` at 0.2.0 requiring durable-ioring 0.4 and `win-durable-ioring`
-  requiring it at 0.2.0. Read the release pull request first: it must carry 0.2.0 and not another version for the events
-  crate.
+  requiring it at 0.2.0. Read the release pull request first: it must carry 0.2.0 for the events crate and its own
+  `fix(win-durable-ioring)!` breaking release trigger with `Release-As: 0.6.0`, not a dependent patch bump.
 
 - [ ] **M43.2** -- Yank `durable-ioring-events` 0.1.1 and `win-durable-ioring` 0.5.0, once `M43.1` is done.
   The engineer's own step, with their crates.io login: `cargo yank --version 0.1.1 durable-ioring-events`, then
