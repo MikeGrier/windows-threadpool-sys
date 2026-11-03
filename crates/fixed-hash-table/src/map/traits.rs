@@ -96,9 +96,10 @@ where
     }
 }
 
-/// Cloning an inline map copies its slots and allocates nothing. A heap map has `try_clone`
-/// instead, with the `alloc` feature: `Clone` cannot report an allocation that
-/// fails.
+/// Cloning an inline map copies its slots, and the table allocates nothing to do it. The keys,
+/// the values and the hasher are cloned by their own `Clone`, which is outside that guarantee: a
+/// `String` key still allocates. A heap map has `try_clone` instead, with the `alloc` feature:
+/// `Clone` cannot report an allocation that fails.
 impl<K: Clone, V: Clone, const N: usize, H: Clone> Clone
     for FixedHashMap<K, V, [Slot<K, V>; N], H>
 {

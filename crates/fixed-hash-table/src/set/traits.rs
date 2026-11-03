@@ -57,8 +57,10 @@ where
 {
 }
 
-/// Cloning an inline set copies its slots and allocates nothing. A heap set has `try_clone`
-/// instead, with the `alloc` feature: `Clone` cannot report an allocation that fails.
+/// Cloning an inline set copies its slots, and the table allocates nothing to do it. The elements
+/// and the hasher are cloned by their own `Clone`, which is outside that guarantee: a `String`
+/// element still allocates. A heap set has `try_clone` instead, with the `alloc` feature: `Clone`
+/// cannot report an allocation that fails.
 impl<T: Clone, const N: usize, H: Clone> Clone for FixedHashSet<T, [Slot<T, ()>; N], H> {
     fn clone(&self) -> Self {
         Self {
