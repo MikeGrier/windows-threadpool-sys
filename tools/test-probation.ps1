@@ -201,9 +201,9 @@ function New-Fixture {
 }
 
 function Invoke-Tier {
-    param([string] $Root, [string] $Module)
+    param([string] $Root, [string] $Module, [hashtable] $Extra = @{})
     $out = Join-Path (New-Root) 'out'
-    $text = & $runner -Module $Module -OutputDirectory $out -RepositoryRoot $Root -CargoArgs @('--lib', '--tests', '--no-fail-fast') 6>&1 | Out-String -Width $captureWidth
+    $text = & $runner -Module $Module -OutputDirectory $out -RepositoryRoot $Root -CargoArgs @('--lib', '--tests', '--no-fail-fast') @Extra 6>&1 | Out-String -Width $captureWidth
     $outcomes = $null
     $file = Join-Path $out 'outcomes.json'
     if (Test-Path -LiteralPath $file) { $outcomes = [System.IO.File]::ReadAllText($file) | ConvertFrom-Json }
@@ -617,6 +617,32 @@ mod long_haul { #[test] #[ignore = "long-haul: 1s"] fn heavy() {} }
             Assert-Equal 0 $long.Exit "the long-haul tier has nothing failing -- $($long.Output)"
             Assert-Equal 1 @($long.Outcomes.outcomes).Count 'one test'
             Assert-Equal 'pass' (Get-Verdict $long 'src/lib.rs::long_haul::heavy') 'the long-haul one'
+        }
+    },
+    @{
+        Name = 'a-tier-runs-one-test-at-a-time-unless-asked-for-more'
+        Run  = {
+            # Each test holds a shared counter for a while and fails if it finds another test holding it.
+            $source = @(
+                'use std::sync::atomic::{AtomicUsize, Ordering};',
+                'use std::time::Duration;',
+                'static ACTIVE: AtomicUsize = AtomicUsize::new(0);',
+                'fn hold() {',
+                '    let others = ACTIVE.fetch_add(1, Ordering::SeqCst);',
+                '    std::thread::sleep(Duration::from_millis(600));',
+                '    ACTIVE.fetch_sub(1, Ordering::SeqCst);',
+                '    assert_eq!(others, 0, "another test was running at the same time");',
+                '}',
+                'mod probation {',
+                '    #[test] #[ignore = "probation: new"] fn first() { super::hold(); }',
+                '    #[test] #[ignore = "probation: new"] fn second() { super::hold(); }',
+                '}') -join "`n"
+            $root = New-Fixture @{ 'src\lib.rs' = $source }
+            $alone = Invoke-Tier $root 'probation'
+            Assert-Equal 0 $alone.Exit "by default they run one at a time -- $($alone.Output)"
+            Assert-Equal 2 @($alone.Outcomes.outcomes | Where-Object { $_.outcome -eq 'pass' }).Count 'both passed'
+            $together = Invoke-Tier $root 'probation' @{ TestThreads = 2 }
+            Assert-True ($together.Exit -ne 0) "asked for two at once, they overlap and one fails, which is the choice being made -- $($together.Output)"
         }
     },
     @{

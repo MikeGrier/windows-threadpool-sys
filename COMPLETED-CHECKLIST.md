@@ -4286,3 +4286,29 @@ The workflow has not run on a runner, so the first dispatch after it reaches `ma
 artifact hand-off and the push to the new branch run for real. Nothing is on probation yet (`M45.4` puts the first tests
 there), so that run will publish nothing and report an empty record. The `record` job's publisher is a copy of the sabotage
 record's, on purpose; the merge-or-delete decision is parked as `M45+.2`.
+
+## Moved 2026-11-03 21:52:41 -05:00 -- M45.4: the never-run tests on probation
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m454"></a>M45.4 -- The six never-run tests (five flush-barrier stress instruments and the 4 GiB buffer test) are on probation, and a tier runs one test at a time. *(completed 2026-11-03 21:52:41 -05:00)*
+
+- [x] **M45.4** -- Put the never-run tests on probation: `windows-ioring-sys`' five flush-barrier stress
+  tests ("saturates a disk with background writers"; "writes tens of MiB per trial") and
+  `win-durable-ioring`'s test that allocates a buffer of more than 4 GiB.
+
+**Done.** The five instruments in [flush_barrier_stress.rs](crates/windows-ioring-sys/tests/flush_barrier_stress.rs) sit in
+a `mod probation` with reasons that start `probation:`, and the 4 GiB test in `win-durable-ioring`'s
+`windows_backend::tests` does the same; the census reports six probation tests and no disagreement. Their names are
+unchanged, so a filter by name still finds them, but their libtest path gained `probation::`, so
+[soak-flush-barrier.ps1](tools/soak-flush-barrier.ps1), which runs them with `--exact`, now passes the module path.
+
+Putting them on probation found something the tier had to do: [run-tier.ps1](tools/run-tier.ps1) ran a tier's tests in
+parallel, and the stress instruments' own docs say `--test-threads 1` "is not optional decoration" (three of them start
+contention writers, and two once collided on a temp file under a parallel harness). It now passes `--test-threads`, one by
+default, with `-TestThreads` to raise it; a test with an overlap-detecting fixture covers both directions, and a sabotage
+entry removes the argument. That is a choice made here, recorded as one in the decision, and not one the engineer was asked.
+
+All six were run for the first time here, through `run-tier.ps1` for the two crates with `IORING_STRESS_TRIALS=5`, and
+all passed; the 4 GiB test allocated and passed on this machine. The default trial budget was not run, so what the tier costs
+at that size on a runner is not known; the workflow's timeout bounds it, and the first results will say.

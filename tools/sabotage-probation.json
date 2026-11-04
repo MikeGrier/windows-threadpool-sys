@@ -379,6 +379,18 @@
       ]
     },
     {
+      "name": "a tier runs its tests in parallel",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "A tier's tests are the ones whose scale or timing is the point, so each runs alone. Run in parallel they load one another, and the flush-barrier stress instruments once collided on a temp file that way; a result taken under that load would be recorded against the test.",
+      "find": [
+        "--test-threads $TestThreads"
+      ],
+      "replace": [
+        "--test-threads 64"
+      ]
+    },
+    {
       "name": "CONTROL: the explanation on the branch is reworded",
       "file": "tools/publish-probation-results.ps1",
       "expect": "survives",

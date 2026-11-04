@@ -91,9 +91,11 @@ probation tier, each through [tools/run-tier.ps1](tools/run-tier.ps1), which own
 It runs daily when `main` has moved since the last run that completed, and on a manual dispatch (from any branch,
 always). A failure in the long-haul tier fails the run. A failure in the probation tier does not: that step is
 `continue-on-error`. The decision whether `main` has moved is [tools/plan-long-haul.ps1](tools/plan-long-haul.ps1),
-tested by [tools/test-plan-long-haul.ps1](tools/test-plan-long-haul.ps1). To run a tier locally:
+tested by [tools/test-plan-long-haul.ps1](tools/test-plan-long-haul.ps1). A tier runs one test at a time (`-TestThreads`, 1 by
+default), since its tests are the ones whose scale or timing is the point and each should not be measured
+under the others' load. To run a tier locally:
 `./tools/run-tier.ps1 -Module long_haul -OutputDirectory .scratch/tiers/long_haul`, or for one crate,
-`cargo test -p <crate> --all-features -- --ignored long_haul::`.
+`cargo test -p <crate> --all-features -- --ignored long_haul:: --test-threads 1`.
 
 What each probation test did is kept across runs on the `probation-results` branch, which holds one generated file and
 shares no history with `main`. To read it, run `./tools/report-probation.ps1`: each test's runs, passes, current run of

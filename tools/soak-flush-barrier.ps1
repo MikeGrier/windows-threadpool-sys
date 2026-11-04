@@ -151,7 +151,8 @@ function Write-Report {
 # how two copies of one rule drift apart.
 . (Join-Path $PSScriptRoot 'common.ps1')
 
-# The rotation, in the order described above.
+# The rotation, in the order described above. The names are the tests' own; they sit in the
+# `probation` module (DEVELOPMENT.md, "Test tiers"), so a run by exact name gives that path.
 $instruments = @(
     'the_drain_holds_across_many_quiet_trials'
     'the_drain_holds_under_deliberate_disk_contention'
@@ -222,7 +223,7 @@ try {
             $output = Invoke-Native {
                 cargo test --manifest-path $manifest `
                     -p windows-ioring-sys --test flush_barrier_stress `
-                    -- --ignored --nocapture --exact $name
+                    -- --ignored --nocapture --exact "probation::$name"
             }
             $code = $LASTEXITCODE
             Remove-Item Env:\IORING_STRESS_TRIALS -ErrorAction SilentlyContinue

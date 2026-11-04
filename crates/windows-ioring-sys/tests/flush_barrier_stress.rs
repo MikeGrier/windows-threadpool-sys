@@ -45,7 +45,9 @@
 //!
 //! # Why these are `#[ignore]`
 //!
-//! Each trial writes tens of MiB of unbuffered device I/O, and the contended
+//! They are on the probation tier (`probation::`): they have never run in CI, and
+//! their results are kept across runs until they have passed enough of them to be
+//! promoted. Each trial writes tens of MiB of unbuffered device I/O, and the contended
 //! tests deliberately saturate a disk. That belongs nowhere near an ordinary
 //! `cargo test`. Run them explicitly:
 //!
@@ -939,203 +941,210 @@ fn campaign(tag: &str, coverage: FlushCoverage, count: usize) -> Campaign {
     result
 }
 
-// ---------------------------------------------------------------------------
-// The instruments.
-// ---------------------------------------------------------------------------
+// The instruments are on probation: each has never run in CI (see `Why these are #[ignore]`),
+// so they sit in a module of that name, which is what the probation tier selects by. Their
+// results are kept across runs, and promoting one to `long_haul` is a change to the test.
+mod probation {
+    use super::*;
+    // ---------------------------------------------------------------------------
+    // The instruments.
+    // ---------------------------------------------------------------------------
 
-/// Does the drain hold, and how often is the one-sidedness visible, on an idle disk?
-///
-/// This is the baseline the contended run is compared against. A violation here
-/// would mean contention is not the trigger at all, which would point at the
-/// barrier's guarantee rather than at load.
-#[test]
-#[ignore = "writes tens of MiB per trial; run explicitly"]
-fn the_drain_holds_across_many_quiet_trials() {
-    let count = trials();
-    let result = campaign("quiet", FlushCoverage::CoversPrecedingOperations, count);
+    /// Does the drain hold, and how often is the one-sidedness visible, on an idle disk?
+    ///
+    /// This is the baseline the contended run is compared against. A violation here
+    /// would mean contention is not the trigger at all, which would point at the
+    /// barrier's guarantee rather than at load.
+    #[test]
+    #[ignore = "probation: writes tens of MiB per trial; run explicitly"]
+    fn the_drain_holds_across_many_quiet_trials() {
+        let count = trials();
+        let result = campaign("quiet", FlushCoverage::CoversPrecedingOperations, count);
 
-    eprintln!("{}", result.report("quiet"));
-    if let Some(clean) = &result.first_clean {
-        eprintln!("A CLEAN TRIAL, for comparison:\n{clean}");
-    }
-    if let Some(reordered) = &result.first_reordered {
-        eprintln!("THE FIRST TRIAL WHERE A COMPLETION CROSSED THE FLUSH:\n{reordered}");
-    }
+        eprintln!("{}", result.report("quiet"));
+        if let Some(clean) = &result.first_clean {
+            eprintln!("A CLEAN TRIAL, for comparison:\n{clean}");
+        }
+        if let Some(reordered) = &result.first_reordered {
+            eprintln!("THE FIRST TRIAL WHERE A COMPLETION CROSSED THE FLUSH:\n{reordered}");
+        }
 
-    // Only D-23 is asserted. A phase-B write completing early is the documented
-    // one-sided behaviour (D-47), not a failure -- this very instrument is what
-    // established it, at about 0.03% on an idle ring, so asserting it to be zero
-    // would make the test fail on the platform behaving as documented.
-    assert_eq!(
-        result.d23_failures,
-        0,
-        "{}",
-        result.report("a write queued BEFORE the flush completed after it, with no competing load")
-    );
-}
-
-/// Does the drain hold while the disk is deliberately saturated?
-///
-/// This is the one built to reproduce the observed failure. It is expected to
-/// be the test that fails; when it does, the log it prints is the evidence the
-/// two readings in the module docs have to be decided on.
-#[test]
-#[ignore = "saturates a disk with background writers; run explicitly"]
-fn the_drain_holds_under_deliberate_disk_contention() {
-    let count = trials();
-    let _load = Contention::start(4);
-    let result = campaign("contended", FlushCoverage::CoversPrecedingOperations, count);
-
-    eprintln!("{}", result.report("contended"));
-    if let Some(clean) = &result.first_clean {
-        eprintln!("A CLEAN TRIAL, for comparison:\n{clean}");
-    }
-    if let Some(reordered) = &result.first_reordered {
-        eprintln!("THE FIRST TRIAL WHERE A COMPLETION CROSSED THE FLUSH:\n{reordered}");
+        // Only D-23 is asserted. A phase-B write completing early is the documented
+        // one-sided behaviour (D-47), not a failure -- this very instrument is what
+        // established it, at about 0.03% on an idle ring, so asserting it to be zero
+        // would make the test fail on the platform behaving as documented.
+        assert_eq!(
+            result.d23_failures,
+            0,
+            "{}",
+            result.report(
+                "a write queued BEFORE the flush completed after it, with no competing load"
+            )
+        );
     }
 
-    // D-23 only; see the quiet instrument for why D-24 is reported, not asserted.
-    assert_eq!(
-        result.d23_failures,
-        0,
-        "{}",
-        result.report("a write queued BEFORE the flush completed after it, under contention")
-    );
-}
+    /// Does the drain hold while the disk is deliberately saturated?
+    ///
+    /// This is the one built to reproduce the observed failure. It is expected to
+    /// be the test that fails; when it does, the log it prints is the evidence the
+    /// two readings in the module docs have to be decided on.
+    #[test]
+    #[ignore = "probation: saturates a disk with background writers; run explicitly"]
+    fn the_drain_holds_under_deliberate_disk_contention() {
+        let count = trials();
+        let _load = Contention::start(4);
+        let result = campaign("contended", FlushCoverage::CoversPrecedingOperations, count);
 
-/// Under the same contention, can the control still tell a barrier from none?
-///
-/// This guards the whole comparison rather than the contract. If load makes an
-/// *unordered* flush stop reordering -- or makes everything reorder -- then the
-/// contended covering result means nothing either way, and that is a finding
-/// about the instrument rather than about the kernel.
-///
-/// It asserts nothing about the barrier on purpose. It reports, and fails only
-/// if the control has lost its ability to discriminate.
-#[test]
-#[ignore = "saturates a disk with background writers; run explicitly"]
-fn the_unordered_control_still_discriminates_under_contention() {
-    let count = trials();
-    let _load = Contention::start(4);
-    let result = campaign("control", FlushCoverage::Unordered, count);
+        eprintln!("{}", result.report("contended"));
+        if let Some(clean) = &result.first_clean {
+            eprintln!("A CLEAN TRIAL, for comparison:\n{clean}");
+        }
+        if let Some(reordered) = &result.first_reordered {
+            eprintln!("THE FIRST TRIAL WHERE A COMPLETION CROSSED THE FLUSH:\n{reordered}");
+        }
 
-    eprintln!("{}", result.report("unordered control under contention"));
-    if let Some(sample) = &result.first_reordered {
-        eprintln!("A REORDERED CONTROL TRIAL:\n{sample}");
+        // D-23 only; see the quiet instrument for why D-24 is reported, not asserted.
+        assert_eq!(
+            result.d23_failures,
+            0,
+            "{}",
+            result.report("a write queued BEFORE the flush completed after it, under contention")
+        );
     }
 
-    assert!(
-        result.reordered_trials > 0,
-        "an unordered flush produced completions in strict submission order in all {count} \
+    /// Under the same contention, can the control still tell a barrier from none?
+    ///
+    /// This guards the whole comparison rather than the contract. If load makes an
+    /// *unordered* flush stop reordering -- or makes everything reorder -- then the
+    /// contended covering result means nothing either way, and that is a finding
+    /// about the instrument rather than about the kernel.
+    ///
+    /// It asserts nothing about the barrier on purpose. It reports, and fails only
+    /// if the control has lost its ability to discriminate.
+    #[test]
+    #[ignore = "probation: saturates a disk with background writers; run explicitly"]
+    fn the_unordered_control_still_discriminates_under_contention() {
+        let count = trials();
+        let _load = Contention::start(4);
+        let result = campaign("control", FlushCoverage::Unordered, count);
+
+        eprintln!("{}", result.report("unordered control under contention"));
+        if let Some(sample) = &result.first_reordered {
+            eprintln!("A REORDERED CONTROL TRIAL:\n{sample}");
+        }
+
+        assert!(
+            result.reordered_trials > 0,
+            "an unordered flush produced completions in strict submission order in all {count} \
          contended trials. The covering assertion would then pass for the wrong reason under \
          contention, so a contended covering result proves nothing until this is understood.",
-    );
-}
+        );
+    }
 
-/// Does the drain hold when several rings are working the device at once?
-///
-/// This is a **different and probably better** pressure than
-/// [`the_drain_holds_under_deliberate_disk_contention`], and worth
-/// having as well rather than instead.
-///
-/// That test loads the *device*, with background threads doing ordinary
-/// buffered writes. This one loads the **IoRing subsystem itself**: every
-/// competing thread is submitting to its own ring, waiting, and draining, so
-/// whatever kernel machinery implements `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` is
-/// under contention rather than merely the disk beneath it. If the drain has a
-/// defect that contention exposes, this is the shape most likely to find it,
-/// because it competes with the drain rather than around it.
-///
-/// **Each thread gets its own ring and its own file, deliberately.** The drain's
-/// *reach* is ring-wide -- that half of D-24 survived D-47, which withdrew only
-/// the hold-back claim -- so a per-thread ring keeps each assertion a
-/// statement about its own ring and nothing else; and separate files keep the
-/// filesystem's own write serialisation -- one of the three failure modes the
-/// contract test had to design around -- out of the result. Sharing either
-/// would produce a livelier test whose failures could not be attributed.
-///
-/// No background load is added on top: here the other rings *are* the load, and
-/// stacking both would confound the two variables this pair exists to separate.
-#[test]
-#[ignore = "saturates a disk from several rings at once; run explicitly"]
-fn the_drain_holds_with_concurrent_rings() {
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get().clamp(2, 8))
-        .unwrap_or(4);
-    let count = (trials() / threads).max(5);
+    /// Does the drain hold when several rings are working the device at once?
+    ///
+    /// This is a **different and probably better** pressure than
+    /// [`the_drain_holds_under_deliberate_disk_contention`], and worth
+    /// having as well rather than instead.
+    ///
+    /// That test loads the *device*, with background threads doing ordinary
+    /// buffered writes. This one loads the **IoRing subsystem itself**: every
+    /// competing thread is submitting to its own ring, waiting, and draining, so
+    /// whatever kernel machinery implements `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` is
+    /// under contention rather than merely the disk beneath it. If the drain has a
+    /// defect that contention exposes, this is the shape most likely to find it,
+    /// because it competes with the drain rather than around it.
+    ///
+    /// **Each thread gets its own ring and its own file, deliberately.** The drain's
+    /// *reach* is ring-wide -- that half of D-24 survived D-47, which withdrew only
+    /// the hold-back claim -- so a per-thread ring keeps each assertion a
+    /// statement about its own ring and nothing else; and separate files keep the
+    /// filesystem's own write serialisation -- one of the three failure modes the
+    /// contract test had to design around -- out of the result. Sharing either
+    /// would produce a livelier test whose failures could not be attributed.
+    ///
+    /// No background load is added on top: here the other rings *are* the load, and
+    /// stacking both would confound the two variables this pair exists to separate.
+    #[test]
+    #[ignore = "probation: saturates a disk from several rings at once; run explicitly"]
+    fn the_drain_holds_with_concurrent_rings() {
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get().clamp(2, 8))
+            .unwrap_or(4);
+        let count = (trials() / threads).max(5);
 
-    eprintln!("Concurrent rings: {threads} thread(s), {count} trial(s) each.");
+        eprintln!("Concurrent rings: {threads} thread(s), {count} trial(s) each.");
 
-    let workers: Vec<_> = (0..threads)
-        .map(|worker| {
-            std::thread::spawn(move || {
-                // Built inside the thread so each ring and handle belongs to
-                // the thread that uses it.
-                campaign(
-                    &format!("concurrent-{worker}"),
-                    FlushCoverage::CoversPrecedingOperations,
-                    count,
-                )
+        let workers: Vec<_> = (0..threads)
+            .map(|worker| {
+                std::thread::spawn(move || {
+                    // Built inside the thread so each ring and handle belongs to
+                    // the thread that uses it.
+                    campaign(
+                        &format!("concurrent-{worker}"),
+                        FlushCoverage::CoversPrecedingOperations,
+                        count,
+                    )
+                })
             })
-        })
-        .collect();
+            .collect();
 
-    let mut total = Campaign::new(0);
-    let mut first_reordered = None;
-    let mut first_clean = None;
+        let mut total = Campaign::new(0);
+        let mut first_reordered = None;
+        let mut first_clean = None;
 
-    // Collected rather than printed here, so the TOTAL can be emitted first; see
-    // the note below the loop.
-    let mut per_worker = Vec::with_capacity(threads);
+        // Collected rather than printed here, so the TOTAL can be emitted first; see
+        // the note below the loop.
+        let mut per_worker = Vec::with_capacity(threads);
 
-    for (worker, handle) in workers.into_iter().enumerate() {
-        let result = handle.join().expect("a worker thread panicked");
-        per_worker.push(result.report(&format!("worker {worker}")));
-        total.trials += result.trials;
-        total.reordered_trials += result.reordered_trials;
-        total.d23_failures += result.d23_failures;
-        total.d24_overtakes += result.d24_overtakes;
-        total.d24_total_overtakers += result.d24_total_overtakers;
-        total.d24_worst = total.d24_worst.max(result.d24_worst);
-        total.same_round += result.same_round;
-        if first_reordered.is_none() {
-            first_reordered = result.first_reordered;
+        for (worker, handle) in workers.into_iter().enumerate() {
+            let result = handle.join().expect("a worker thread panicked");
+            per_worker.push(result.report(&format!("worker {worker}")));
+            total.trials += result.trials;
+            total.reordered_trials += result.reordered_trials;
+            total.d23_failures += result.d23_failures;
+            total.d24_overtakes += result.d24_overtakes;
+            total.d24_total_overtakers += result.d24_total_overtakers;
+            total.d24_worst = total.d24_worst.max(result.d24_worst);
+            total.same_round += result.same_round;
+            if first_reordered.is_none() {
+                first_reordered = result.first_reordered;
+            }
+            if first_clean.is_none() {
+                first_clean = result.first_clean;
+            }
         }
-        if first_clean.is_none() {
-            first_clean = result.first_clean;
+
+        // The TOTAL first, then the per-worker breakdown.
+        //
+        // Ordering matters because it is scraped, not just read:
+        // `tools/soak-flush-barrier.ps1` takes the *first* line matching `D-23` as
+        // the CSV's detail column. With the per-worker lines printed as each thread
+        // was joined, the CSV recorded worker 0 -- one thread of `threads` -- while
+        // being labelled with the instrument's name, which is a quietly wrong number
+        // rather than a missing one.
+        //
+        // The total was also not printed at all on a passing run: it existed only
+        // inside the assertion message below, which renders on failure. So the
+        // figure a reader most wants was the one they could never get.
+        eprintln!(
+            "{}",
+            total.report(&format!("{threads} concurrent rings TOTAL"))
+        );
+        for line in &per_worker {
+            eprintln!("  {line}");
         }
-    }
 
-    // The TOTAL first, then the per-worker breakdown.
-    //
-    // Ordering matters because it is scraped, not just read:
-    // `tools/soak-flush-barrier.ps1` takes the *first* line matching `D-23` as
-    // the CSV's detail column. With the per-worker lines printed as each thread
-    // was joined, the CSV recorded worker 0 -- one thread of `threads` -- while
-    // being labelled with the instrument's name, which is a quietly wrong number
-    // rather than a missing one.
-    //
-    // The total was also not printed at all on a passing run: it existed only
-    // inside the assertion message below, which renders on failure. So the
-    // figure a reader most wants was the one they could never get.
-    eprintln!(
-        "{}",
-        total.report(&format!("{threads} concurrent rings TOTAL"))
-    );
-    for line in &per_worker {
-        eprintln!("  {line}");
-    }
+        if let Some(clean) = &first_clean {
+            eprintln!("A CLEAN TRIAL, for comparison:\n{clean}");
+        }
+        if let Some(reordered) = &first_reordered {
+            eprintln!("THE FIRST TRIAL WHERE A COMPLETION CROSSED THE FLUSH:\n{reordered}");
+        }
 
-    if let Some(clean) = &first_clean {
-        eprintln!("A CLEAN TRIAL, for comparison:\n{clean}");
-    }
-    if let Some(reordered) = &first_reordered {
-        eprintln!("THE FIRST TRIAL WHERE A COMPLETION CROSSED THE FLUSH:\n{reordered}");
-    }
-
-    // D-23 only, as in the single-ring instruments. D-24 failures are expected
-    // here -- this is the condition that produced the highest rate of them.
-    assert_eq!(
+        // D-23 only, as in the single-ring instruments. D-24 failures are expected
+        // here -- this is the condition that produced the highest rate of them.
+        assert_eq!(
         total.d23_failures,
         0,
         "{}",
@@ -1143,76 +1152,77 @@ fn the_drain_holds_with_concurrent_rings() {
             "a write queued BEFORE the flush completed after it, across {threads} concurrent rings"
         ))
     );
-}
-
-/// Does the overtake rate track queue depth?
-///
-/// Reports rather than asserts. If reordered_trials appear only at depth, that is a
-/// different shape of answer from a fixed per-trial probability, and it is
-/// cheap to find out while the instrument is already built.
-#[test]
-#[ignore = "writes tens of MiB per trial; run explicitly"]
-fn reordering_rate_by_ring_depth_is_reported() {
-    let count = (trials() / 4).max(5);
-    let _load = Contention::start(4);
-
-    // A trial submits PHASE_OPS writes, one flush, and PHASE_OPS more as a
-    // single batch, so the submission queue must hold all 65 at once -- the
-    // contract test says so, and a depth of 64 does not: it fails with
-    // IORING_E_SUBMISSION_QUEUE_FULL (0x80460002) rather than measuring
-    // anything. Found by running this sweep, which originally started at 64.
-    //
-    // So what varies here is the ring's *headroom* over a fixed shape, not the
-    // shape itself. That is still the interesting axis: if reordered_trials need
-    // slack in the queue, the rate should move across these.
-    const PER_TRIAL_OPS: u32 = (PHASE_OPS * 2 + 1) as u32;
-
-    // Collected before anything is printed, for the same scraping reason as the
-    // concurrent-rings instrument: the soak runner takes the *first* `D-23` line
-    // as the CSV's detail, so the first line an instrument prints must be the one
-    // that represents it. Printing per-depth lines as they were produced put
-    // `depth 128` in a column labelled with the whole sweep's name.
-    let mut per_depth = Vec::new();
-    let mut combined = Campaign::new(0);
-
-    for depth in [128_u32, 256, 512] {
-        assert!(
-            depth >= PER_TRIAL_OPS,
-            "a depth of {depth} cannot hold one trial's {PER_TRIAL_OPS} entries"
-        );
-        let mut fixture = Fixture::new(&format!("depth-{depth}"));
-        fixture.ring = TrialRing::with_inventory(depth, depth).expect("create ring");
-        let mut result = Campaign::new(count);
-        for _ in 0..count {
-            let (observed, _log) = run_trial(
-                &mut fixture.ring,
-                fixture.handle,
-                FlushCoverage::CoversPrecedingOperations,
-            );
-            result.absorb(&observed);
-        }
-
-        combined.trials += result.trials;
-        combined.reordered_trials += result.reordered_trials;
-        combined.d23_failures += result.d23_failures;
-        combined.d24_overtakes += result.d24_overtakes;
-        combined.d24_total_overtakers += result.d24_total_overtakers;
-        combined.d24_worst = combined.d24_worst.max(result.d24_worst);
-        combined.same_round += result.same_round;
-
-        per_depth.push(result.report(&format!("depth {depth}")));
     }
 
-    // The combined figure is the headline because it is the one that is
-    // comparable **across soak rounds** -- which is what the CSV is for. It is
-    // explicitly not the instrument's finding: pooling the depths averages away
-    // the very axis this measures, so the per-depth breakdown follows
-    // immediately and is what a reader should actually compare.
-    eprintln!(
-        "Ring depth sweep, {count} trial(s) each, under contention -- {}",
-        combined.report("ALL DEPTHS COMBINED")
-    );
-    for line in &per_depth {
-        eprintln!("  {line}");
+    /// Does the overtake rate track queue depth?
+    ///
+    /// Reports rather than asserts. If reordered_trials appear only at depth, that is a
+    /// different shape of answer from a fixed per-trial probability, and it is
+    /// cheap to find out while the instrument is already built.
+    #[test]
+    #[ignore = "probation: writes tens of MiB per trial; run explicitly"]
+    fn reordering_rate_by_ring_depth_is_reported() {
+        let count = (trials() / 4).max(5);
+        let _load = Contention::start(4);
+
+        // A trial submits PHASE_OPS writes, one flush, and PHASE_OPS more as a
+        // single batch, so the submission queue must hold all 65 at once -- the
+        // contract test says so, and a depth of 64 does not: it fails with
+        // IORING_E_SUBMISSION_QUEUE_FULL (0x80460002) rather than measuring
+        // anything. Found by running this sweep, which originally started at 64.
+        //
+        // So what varies here is the ring's *headroom* over a fixed shape, not the
+        // shape itself. That is still the interesting axis: if reordered_trials need
+        // slack in the queue, the rate should move across these.
+        const PER_TRIAL_OPS: u32 = (PHASE_OPS * 2 + 1) as u32;
+
+        // Collected before anything is printed, for the same scraping reason as the
+        // concurrent-rings instrument: the soak runner takes the *first* `D-23` line
+        // as the CSV's detail, so the first line an instrument prints must be the one
+        // that represents it. Printing per-depth lines as they were produced put
+        // `depth 128` in a column labelled with the whole sweep's name.
+        let mut per_depth = Vec::new();
+        let mut combined = Campaign::new(0);
+
+        for depth in [128_u32, 256, 512] {
+            assert!(
+                depth >= PER_TRIAL_OPS,
+                "a depth of {depth} cannot hold one trial's {PER_TRIAL_OPS} entries"
+            );
+            let mut fixture = Fixture::new(&format!("depth-{depth}"));
+            fixture.ring = TrialRing::with_inventory(depth, depth).expect("create ring");
+            let mut result = Campaign::new(count);
+            for _ in 0..count {
+                let (observed, _log) = run_trial(
+                    &mut fixture.ring,
+                    fixture.handle,
+                    FlushCoverage::CoversPrecedingOperations,
+                );
+                result.absorb(&observed);
+            }
+
+            combined.trials += result.trials;
+            combined.reordered_trials += result.reordered_trials;
+            combined.d23_failures += result.d23_failures;
+            combined.d24_overtakes += result.d24_overtakes;
+            combined.d24_total_overtakers += result.d24_total_overtakers;
+            combined.d24_worst = combined.d24_worst.max(result.d24_worst);
+            combined.same_round += result.same_round;
+
+            per_depth.push(result.report(&format!("depth {depth}")));
+        }
+
+        // The combined figure is the headline because it is the one that is
+        // comparable **across soak rounds** -- which is what the CSV is for. It is
+        // explicitly not the instrument's finding: pooling the depths averages away
+        // the very axis this measures, so the per-depth breakdown follows
+        // immediately and is what a reader should actually compare.
+        eprintln!(
+            "Ring depth sweep, {count} trial(s) each, under contention -- {}",
+            combined.report("ALL DEPTHS COMBINED")
+        );
+        for line in &per_depth {
+            eprintln!("  {line}");
+        }
     }
 }

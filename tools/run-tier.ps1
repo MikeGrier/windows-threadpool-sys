@@ -31,6 +31,14 @@
 .PARAMETER RepositoryRoot
     The workspace to run in. Defaults to this script's repository.
 
+.PARAMETER TestThreads
+    How many tests each executable runs at once, `--test-threads`. One by default: a tier's tests are the
+    ones whose scale or timing is the point, so each is run alone and not alongside the others, whose load
+    would otherwise be part of what it measures. The flush-barrier stress instruments say so themselves
+    (their module docs: `--test-threads 1` "is not optional decoration"), and one of their early defects
+    was two of them colliding on a temp file under a parallel harness. Raising it is a choice for a tier
+    whose tests are known to be independent.
+
 .PARAMETER CargoArgs
     The arguments selecting what cargo builds and runs, before `--`.
 
@@ -42,6 +50,7 @@ param(
     [Parameter(Mandatory = $true)][ValidateSet('long_haul', 'probation')][string] $Module,
     [Parameter(Mandatory = $true)][string] $OutputDirectory,
     [string] $RepositoryRoot,
+    [ValidateRange(1, 1024)][int] $TestThreads = 1,
     [string[]] $CargoArgs = @('--workspace', '--all-features', '--locked', '--no-fail-fast', '--lib', '--bins', '--tests', '--examples')
 )
 
@@ -73,7 +82,7 @@ try {
     # A batch file, so that the redirect is cmd's and both streams are written to one
     # handle, in the order they happen. A PowerShell `2>&1` reads them on separate threads.
     $runner = Join-Path $OutputDirectory 'run.cmd'
-    $arguments = ($CargoArgs -join ' ') + " -- --ignored $Module`:: -Z unstable-options --format json"
+    $arguments = ($CargoArgs -join ' ') + " -- --ignored $Module`:: --test-threads $TestThreads -Z unstable-options --format json"
     [System.IO.File]::WriteAllText($runner, "@echo off`r`ncargo test $arguments > `"$capturePath`" 2>&1`r`nexit /b %ERRORLEVEL%`r`n")
     $previous = $env:RUSTC_BOOTSTRAP
     $env:RUSTC_BOOTSTRAP = '1'

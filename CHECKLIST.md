@@ -620,9 +620,7 @@ is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it
 
 - [x] **M45.3** -- Probation results are kept on the `probation-results` branch and reported; the promotion threshold stays a working position. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m453)
 
-- [ ] **M45.4** -- Put the never-run tests on probation: `windows-ioring-sys`' five flush-barrier stress
-  tests ("saturates a disk with background writers"; "writes tens of MiB per trial") and
-  `win-durable-ioring`'s test that allocates a buffer of more than 4 GiB.
+- [x] **M45.4** -- The six never-run tests (five flush-barrier stress instruments and the 4 GiB buffer test) are on probation, and a tier runs one test at a time. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m454)
 
 - [ ] **M45.5** -- `win-durable-ioring`'s `blocking_push` example: write past a small declared capacity, not
   three times 256 writes, and keep the full scale as a long-haul test.

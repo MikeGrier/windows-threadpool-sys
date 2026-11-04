@@ -3045,6 +3045,13 @@ test's cost is paid on each; a test whose claim holds at a small size is written
 - **The scale is moved, not dropped.** A test reduced to the size its claim needs keeps its full-scale
   form as a long-haul test, so nothing that ran before stops running; it runs daily instead of on every
   push.
+- **A tier runs one test at a time.** [run-tier.ps1](tools/run-tier.ps1) passes `--test-threads 1` by default.
+  These are the tests whose scale or timing is the point, so under a parallel harness each is measured under
+  the others' load, and for the flush-barrier stress instruments that is not a quibble: their own module docs
+  call the flag "not optional decoration", and two of them once collided on a temp file under the parallel
+  harness. `-TestThreads` raises it for a tier whose tests are known to be independent. This was found by
+  putting those instruments on probation, which is what the tier is for. It was chosen while implementing
+  `M45.4` and the engineer was not asked; it costs wall time, which the workflow's timeout bounds.
 - **Cadence: daily, and only when `main` has moved** (the engineer), plus manual dispatch, in a workflow
   of its own. Not part of the sabotage sweep, which never passes `--ignored` and so never pays for either
   tier.
