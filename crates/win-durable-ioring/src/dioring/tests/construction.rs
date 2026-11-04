@@ -166,6 +166,10 @@ fn a_buffer_registration_whose_completion_fails_keeps_the_buffers_with_the_ring(
     refused.assert_everything_but_the_buffers_came_back(&[]);
 }
 
+/// The stall, twelve times the 50 ms bound it is held against and far short of the 30 s default; see `STALL` in
+/// the backend's construction tests for why it is not shortened.
+const STALL: Duration = Duration::from_millis(600);
+
 #[test]
 fn a_registration_that_does_not_complete_within_the_bound_fails_construction() {
     let temp = TempFile::new("dc-stall");
@@ -173,7 +177,7 @@ fn a_registration_that_does_not_complete_within_the_bound_fails_construction() {
         &[&temp],
         vec![vec![7; 4]],
         Duration::from_millis(50),
-        |control| control.stall_submits(Duration::from_millis(600)),
+        |control| control.stall_submits(STALL),
     );
     let error = refused.ring_error();
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);

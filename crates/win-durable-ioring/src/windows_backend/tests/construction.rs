@@ -169,12 +169,21 @@ fn a_failed_buffer_registration_completion_does_not_hand_the_buffers_back() {
     );
 }
 
+/// How long the registration tests stall a submit for, against a bound of 50 ms: twelve times it, so the
+/// bound is certain to be what ends the wait, and far short of the default of 30 s, so a construction that
+/// ignored the bound would wait for the stall to end and succeed instead. The stall is also what the test
+/// waits for after it, while the ring runs down, so it is most of what each of these costs, about 0.6 s.
+/// It is not shortened: the bound has to be reached before the stall ends however slowly the thread that
+/// waits on it is scheduled, and a stall of a few times the bound would leave that margin to chance on a
+/// busy machine. The crate's longest test is about as long, so shortening these saves no wall time.
+const STALL: Duration = Duration::from_millis(600);
+
 #[test]
 fn a_registration_that_does_not_complete_within_the_bound_fails_construction_on_that_bound() {
     let file = TempFile::new("wbc-stall");
     let bound = Duration::from_millis(50);
     let (refused, _control) = refused_with(&[&file], vec![vec![7; 4]], bound, |control| {
-        control.stall_submits(Duration::from_millis(600));
+        control.stall_submits(STALL);
     });
     let error = ring_error(&refused);
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
@@ -199,7 +208,7 @@ fn a_buffer_registration_that_does_not_complete_within_the_bound_fails_on_that_b
         &[],
         vec![vec![7; 4]],
         Duration::from_millis(50),
-        |control| control.stall_submits(Duration::from_millis(600)),
+        |control| control.stall_submits(STALL),
     );
     let error = ring_error(&refused);
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);

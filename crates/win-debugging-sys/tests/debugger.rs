@@ -95,6 +95,16 @@ fn a_program_that_is_not_there_is_an_error_and_not_a_capture() {
     assert!(run_debugged(missing, &[], Duration::from_secs(1)).is_err());
 }
 
+/// How long the process that waits is given, which is most of what this file costs and is not shortened.
+///
+/// The claim is about a process that is still running when the bound arrives, so the bound has to be longer
+/// than it takes the process to start and be debugged: the whole exchange of the tests above, start to
+/// exit, takes well under half a second on an idle machine, and several times that on a busy one. A bound
+/// near that would still pass, since a process ended before it started has no exit code either, but it would
+/// pass without having shown anything, which is the weaker evidence of the two to be sparing with. The
+/// margin costs a second and a half of wall time beside the other tests.
+const OUTLIVED_BOUND: Duration = Duration::from_millis(1_500);
+
 #[test]
 fn a_process_that_outlives_the_bound_is_ended_and_has_no_exit_code() {
     let exe = std::env::current_exe().expect("the test binary's path");
@@ -106,7 +116,7 @@ fn a_process_that_outlives_the_bound_is_ended_and_has_no_exit_code() {
             "--ignored",
             "--test-threads=1",
         ],
-        Duration::from_millis(1_500),
+        OUTLIVED_BOUND,
     )
     .expect("the process was debugged");
     assert_eq!(observed.exit_code, None);

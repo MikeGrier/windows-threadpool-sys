@@ -4441,3 +4441,32 @@ The engineer, 2026-11-04, after the cost was set out (those two probes are most 
 meant a `measure_with(items)` in two modules of `windows-placement-probe`, a count carried in each observation, and the figures
 that divide by the `ITEMS` constant dividing by it, which is a change of public API in a second published crate. The census
 keeps running both probes at their normal length. Nothing is scheduled.
+
+## Moved 2026-11-04 13:07:34 -05:00 -- M45.9: the tests whose wait is their claim
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m459"></a>M45.9 -- The four waits that are their claim were measured, none was shortened, and each says why beside its constant. *(completed 2026-11-04 13:07:34 -05:00)*
+
+- [x] **M45.9** -- The tests whose wait is their claim: `win-job-launcher`'s bound killing a descendant or a
+  grandchild, `win-debugging-sys`' process that outlives its bound, and the registration bounds in
+  `win-durable-ioring`. Shorten a bound only where the claim holds at the shorter one; otherwise leave it
+  and say why.
+
+**Done, by leaving them.** The item asks for a bound to be shortened only where the claim holds at the shorter one, and for these it
+does not hold with the margin that keeps it from flaking on the stalled runners that prompted M45. Each is now a named constant with
+the reasoning and the measurement beside it, so the next reader who asks why a test waits three seconds finds out in the file.
+
+- **`win-job-launcher`, the grandchild and the orphan** (3 s each, side by side, so one bound of wall time). The bound may fire
+  only after the descendant holds the marker. Measured: about 60 ms for the grandchild and 160 ms for the orphan, behind a middle
+  script that exits, on an idle machine; about 0.35 s and 1.0 s with every processor busy. Three seconds is three times the loaded
+  figure, and one and a half would be one and a half times it, to save a second and a half.
+- **`win-debugging-sys`, a process that outlives its bound** (1.5 s). The assertion, no exit code, also holds for a process ended before it
+  started, so a shorter bound would still pass, but without showing that the process was running when the bound arrived. The margin is
+  what keeps the evidence real. The weaker evidence was left alone, since the stronger form would turn a slow start into a failure.
+- **`win-durable-ioring`, the three registration bounds** (a 600 ms stall against a 50 ms bound, 0.6 s each). The stall is twelve times
+  the bound and far below the 30 s default, which is what lets the test tell a bound that is honoured from one that is ignored. It is also
+  what each test waits for while the ring runs down. The crate's longest test is about as long, so shortening these would not shorten
+  the suite.
+
+Nothing about the tests changed but names and comments, so no sabotage sweep was run: the values are identical.

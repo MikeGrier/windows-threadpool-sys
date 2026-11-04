@@ -630,10 +630,7 @@ is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it
 
 - [x] **M45.8** -- The census and the cost-probe tests run the cost probes at a twentieth of their workload through a new `--iteration-divisor`, with full-length forms long-haul. -> [completed 2026-11-04](COMPLETED-CHECKLIST.md#m458)
 
-- [ ] **M45.9** -- The tests whose wait is their claim: `win-job-launcher`'s bound killing a descendant or a
-  grandchild, `win-debugging-sys`' process that outlives its bound, and the registration bounds in
-  `win-durable-ioring`. Shorten a bound only where the claim holds at the shorter one; otherwise leave it
-  and say why.
+- [x] **M45.9** -- The four waits that are their claim were measured, none was shortened, and each says why beside its constant. -> [completed 2026-11-04](COMPLETED-CHECKLIST.md#m459)
 
 - [ ] **M45.10** -- Review the remaining tests of a second or more against the same rule, starting with
   `windows-file-watcher`'s scenario stress and `windows-ioring-sys`' properties under every resolution, by
