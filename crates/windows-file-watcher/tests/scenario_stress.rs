@@ -17,13 +17,6 @@ use windows_file_watcher::scenario::{
     run_scenario_keep_dir, seed,
 };
 
-/// Whether the stress tests below should actually run: they exercise a live
-/// `Monitor`, so they are gated the same way as [`stress.rs`](stress.rs)
-/// rather than running on every plain `cargo test`.
-fn stress_enabled() -> bool {
-    std::env::var_os("WINDOWS_FILE_WATCHER_STRESS").is_some()
-}
-
 #[test]
 fn a_barrier_pair_that_can_never_run_concurrently_fails_fast_instead_of_hanging() {
     // PR #20 review response: passing `validate_barriers`'s exactly-two-uses
@@ -155,34 +148,6 @@ fn repeat_counts_hundreds_of_thousands_of_operations_without_materializing_them(
     assert_eq!(scenario.operation_count(), 250_000);
 }
 
-#[test]
-fn a_small_scenario_runs_through_the_harness_and_is_fully_accounted_for() {
-    if !stress_enabled() {
-        return;
-    }
-    let scenario = Scenario::new("harness-smoke")
-        .then(Operation::CreateFile {
-            path: PathBuf::from("a.txt"),
-        })
-        .then(Operation::CreateFile {
-            path: PathBuf::from("b.txt"),
-        })
-        .then(Operation::Rename {
-            from: PathBuf::from("a.txt"),
-            to: PathBuf::from("c.txt"),
-        })
-        .then(Operation::RemoveFile {
-            path: PathBuf::from("b.txt"),
-        });
-
-    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
-    assert!(
-        outcome.batches > 0,
-        "expected at least one batch from {} operations",
-        scenario.operation_count()
-    );
-}
-
 // ---------------------------------------------------------------------------
 // M9.3: the basic scenario library. Each function below returns a `Scenario`
 // -- a value -- built from the M9.1 model; none of them contains
@@ -282,94 +247,6 @@ fn fast_two_entity_swap_scenario() -> Scenario {
         })
 }
 
-#[test]
-fn a_burst_of_churn_across_a_few_files_is_observed() {
-    if !stress_enabled() {
-        return;
-    }
-    let files = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_CHURN_FILES", 5);
-    let touches = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_CHURN_TOUCHES", 50_000);
-    let scenario = churn_scenario(files, touches);
-    let params = HarnessParams::for_operation_count(scenario.operation_count());
-    let outcome = run_scenario(&scenario, seed(), &params);
-    assert!(
-        outcome.batches > 0,
-        "expected at least one batch from {} operations",
-        scenario.operation_count()
-    );
-}
-
-#[test]
-fn delete_wait_reintroduce_survives_irregular_timing() {
-    if !stress_enabled() {
-        return;
-    }
-    let rounds = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_REINTRODUCE_ROUNDS", 25);
-    // Bounds above Windows's ~23ms scheduling floor (D-73): a (1, 40) range
-    // would round every draw up to the same one tick, silently degrading
-    // "irregular" timing into a fixed delay.
-    let scenario = delete_wait_reintroduce_scenario(
-        rounds,
-        Duration::from_millis(25),
-        Duration::from_millis(250),
-    );
-    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
-    assert!(
-        outcome.batches > 0,
-        "expected at least one batch from {rounds} delete/reintroduce rounds"
-    );
-}
-
-#[test]
-fn plain_renames_are_observed() {
-    if !stress_enabled() {
-        return;
-    }
-    let count = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_RENAME_COUNT", 500);
-    let scenario = rename_scenario(count);
-    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
-    assert!(
-        outcome.batches > 0,
-        "expected at least one batch from {count} renames"
-    );
-}
-
-#[test]
-fn a_directory_can_reuse_a_removed_files_name_and_back() {
-    if !stress_enabled() {
-        return;
-    }
-    let scenario = cross_type_name_reuse_scenario();
-    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
-    assert!(
-        outcome.batches > 0,
-        "expected at least one batch from the cross-type name-reuse sequence"
-    );
-}
-
-#[test]
-fn a_fast_two_entity_swap_leaves_the_filesystem_in_the_expected_end_state() {
-    if !stress_enabled() {
-        return;
-    }
-    let scenario = fast_two_entity_swap_scenario();
-    let (outcome, dir) = run_scenario_keep_dir(&scenario, seed(), &HarnessParams::default());
-
-    // Whatever the watcher reported, the OS itself must have applied both
-    // renames without the second clobbering the first: the real end state is
-    // what actually answers "did the swap confuse anything" independent of
-    // the notification stream.
-    assert!(dir.path().join("y").is_file(), "x -> y did not land");
-    assert!(dir.path().join("x").is_dir(), "z -> x did not land");
-    assert!(!dir.path().join("z").exists(), "z should no longer exist");
-    assert!(
-        outcome.batches > 0,
-        "expected at least one batch from the swap"
-    );
-
-    dir.cleanup();
-}
-
 // ---------------------------------------------------------------------------
 // M9.4: session/watch lifecycle operations. A scenario can now open/close
 // named sessions and subscribe/cancel named watches mid-run, not just churn
@@ -446,76 +323,6 @@ fn session_watch_churn_with_delays_scenario(
     )
 }
 
-#[test]
-fn sessions_and_watches_enter_and_exit_with_delays_between_transitions() {
-    if !stress_enabled() {
-        return;
-    }
-    let rounds = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_LIFECYCLE_ROUNDS", 25);
-    // Bounds above Windows's ~23ms scheduling floor (D-73); see the
-    // back-to-back variant below for the intentionally near-zero posture.
-    let scenario = session_watch_churn_with_delays_scenario(
-        rounds,
-        Duration::from_millis(25),
-        Duration::from_millis(250),
-    );
-    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
-    assert!(
-        outcome.batches > 0,
-        "expected at least one batch from {rounds} session/watch churn rounds"
-    );
-}
-
-/// The same churn, but with no delay between transitions at all -- the
-/// "hit it hard, continuously" posture, kept alongside the delayed one above
-/// so both timing postures are exercised, not just the spaced-out one.
-#[test]
-fn sessions_and_watches_enter_and_exit_back_to_back() {
-    if !stress_enabled() {
-        return;
-    }
-    let rounds = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_LIFECYCLE_ROUNDS", 25);
-    let scenario =
-        session_watch_churn_with_delays_scenario(rounds, Duration::ZERO, Duration::from_micros(1));
-    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
-    assert!(
-        outcome.batches > 0,
-        "expected at least one batch from {rounds} back-to-back session/watch churn rounds"
-    );
-}
-
-#[test]
-fn multiple_sessions_can_be_open_at_once_and_each_is_drained() {
-    if !stress_enabled() {
-        return;
-    }
-    let scenario = Scenario::new("two-sessions")
-        .then(Operation::OpenSession {
-            name: "second".to_string(),
-        })
-        .then(Operation::Subscribe {
-            session: "second".to_string(),
-            watch: "second-watch".to_string(),
-            path: PathBuf::new(),
-            subtree: true,
-        })
-        .then(Operation::CreateFile {
-            path: PathBuf::from("seen-by-both.txt"),
-        })
-        .then(Operation::CancelWatch {
-            watch: "second-watch".to_string(),
-        })
-        .then(Operation::CloseSession {
-            name: "second".to_string(),
-        });
-    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
-    assert!(
-        outcome.batches >= 2,
-        "expected the initial watch and the second session's watch to each report the same file create, got {} batches",
-        outcome.batches
-    );
-}
-
 // ---------------------------------------------------------------------------
 // M9+: concurrent modifiers, spoilers, nesting, and queue overwhelm. All four
 // share one prerequisite -- `Fleet` moving behind a `Mutex` so
@@ -523,153 +330,323 @@ fn multiple_sessions_can_be_open_at_once_and_each_is_drained() {
 // together rather than as four artificially separated commits.
 // ---------------------------------------------------------------------------
 
-#[test]
-fn concurrent_branches_run_at_the_same_time_and_are_all_accounted_for() {
-    if !stress_enabled() {
-        return;
-    }
-    let scenario = Scenario::new("concurrent-branches").then(Operation::Concurrent {
-        branches: vec![
-            vec![
-                Operation::CreateFile {
-                    path: PathBuf::from("a.txt"),
-                },
-                Operation::CreateFile {
-                    path: PathBuf::from("b.txt"),
-                },
-            ],
-            vec![
-                Operation::CreateFile {
-                    path: PathBuf::from("c.txt"),
-                },
-                Operation::CreateFile {
-                    path: PathBuf::from("d.txt"),
-                },
-            ],
-        ],
-    });
-    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
-    assert!(
-        outcome.batches > 0,
-        "expected at least one batch from two concurrent branches"
-    );
-}
-
-#[test]
-fn a_held_open_file_blocks_a_concurrent_delete_with_a_real_sharing_violation() {
-    if !stress_enabled() {
-        return;
-    }
-    // `ready_barrier` is the deterministic replacement for a fixed sleep
-    // guessing the hold has already opened its handle: the delete branch
-    // cannot even attempt `RemoveFile` until `HoldOpen` has genuinely opened
-    // the file and rendezvoused on the same barrier name.
-    let scenario = Scenario::new("spoiler-blocks-delete")
-        .then(Operation::CreateFile {
-            path: PathBuf::from("spoiled.txt"),
-        })
-        .then(Operation::Concurrent {
-            branches: vec![
-                vec![Operation::HoldOpen {
-                    path: PathBuf::from("spoiled.txt"),
-                    duration: Duration::from_millis(100),
-                    ready_barrier: Some("spoiler-open".to_string()),
-                }],
-                vec![
-                    Operation::Barrier {
-                        name: "spoiler-open".to_string(),
-                    },
-                    Operation::RemoveFile {
-                        path: PathBuf::from("spoiled.txt"),
-                    },
-                ],
-            ],
-        });
-    let (_outcome, dir) = run_scenario_keep_dir(&scenario, seed(), &HarnessParams::default());
-
-    // The held-open handle has no `FILE_SHARE_DELETE`, so the concurrent
-    // `RemoveFile` -- unblocked only once the hold is confirmed open -- must
-    // fail with a real sharing violation: the file is still here, not merely
-    // "probably" spoiled.
-    assert!(
-        dir.path().join("spoiled.txt").exists(),
-        "the spoiler should have blocked the concurrent delete"
-    );
-
-    dir.cleanup();
-}
-
-#[test]
-fn a_deliberately_tiny_queue_bound_never_wedges_under_overwhelming_load() {
-    if !stress_enabled() {
-        return;
-    }
-    let scenario = Scenario::new("queue-overwhelm")
-        .then(Operation::OpenSessionBounded {
-            name: "tiny".to_string(),
-            bound: 2,
-        })
-        .then(Operation::Subscribe {
-            session: "tiny".to_string(),
-            watch: "tiny-watch".to_string(),
-            path: PathBuf::new(),
-            subtree: true,
-        })
-        .then_repeated(
-            5_000,
-            vec![Operation::CreateFile {
-                path: PathBuf::from("overwhelmed.txt"),
-            }],
-        )
-        .then(Operation::CancelWatch {
-            watch: "tiny-watch".to_string(),
-        })
-        .then(Operation::CloseSession {
-            name: "tiny".to_string(),
-        });
-    let params = HarnessParams::for_operation_count(scenario.operation_count());
-    // A bound this small, hit this hard, is expected to force backpressure
-    // (D-11/D-29) -- the point of this test is that the harness's own
-    // deadline assertion inside `run_scenario` never trips, not that zero
-    // desyncs occur.
-    let outcome = run_scenario(&scenario, seed(), &params);
-    assert!(
-        outcome.batches > 0,
-        "expected at least one batch despite the tiny queue bound"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // M9.5: the scenario library above is also persisted as JSON fixtures under
 // `tests/scenarios/`. This test is the generic, data-driven runner: it does
 // not know about any particular scenario, only how to load and execute one.
 // ---------------------------------------------------------------------------
 
-#[test]
-fn every_persisted_json_fixture_runs_through_the_harness() {
-    if !stress_enabled() {
-        return;
+/// Tests that have never run in CI: they returned early unless `WINDOWS_FILE_WATCHER_STRESS` was set, which nothing sets,
+/// so they reported as passing without running. They are ignored with a `probation:` reason instead, which is what
+/// the probation tier selects by (DEVELOPMENT.md, "Test tiers"). Run by hand with `-- --ignored`.
+mod probation {
+    use super::*;
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; under a second"]
+    fn a_small_scenario_runs_through_the_harness_and_is_fully_accounted_for() {
+        let scenario = Scenario::new("harness-smoke")
+            .then(Operation::CreateFile {
+                path: PathBuf::from("a.txt"),
+            })
+            .then(Operation::CreateFile {
+                path: PathBuf::from("b.txt"),
+            })
+            .then(Operation::Rename {
+                from: PathBuf::from("a.txt"),
+                to: PathBuf::from("c.txt"),
+            })
+            .then(Operation::RemoveFile {
+                path: PathBuf::from("b.txt"),
+            });
+
+        let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+        assert!(
+            outcome.batches > 0,
+            "expected at least one batch from {} operations",
+            scenario.operation_count()
+        );
     }
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scenarios");
-    let mut ran = 0;
-    for entry in std::fs::read_dir(&dir).expect("read tests/scenarios") {
-        let entry = entry.expect("read dir entry");
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        let contents = std::fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-        let scenario: Scenario = serde_json::from_str(&contents)
-            .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; about 133 s"]
+    fn a_burst_of_churn_across_a_few_files_is_observed() {
+        let files = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_CHURN_FILES", 5);
+        let touches = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_CHURN_TOUCHES", 50_000);
+        let scenario = churn_scenario(files, touches);
         let params = HarnessParams::for_operation_count(scenario.operation_count());
         let outcome = run_scenario(&scenario, seed(), &params);
         assert!(
             outcome.batches > 0,
-            "fixture {} produced no batches",
-            path.display()
+            "expected at least one batch from {} operations",
+            scenario.operation_count()
         );
-        ran += 1;
     }
-    assert!(ran > 0, "no JSON fixtures found under {}", dir.display());
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; about 7 s"]
+    fn delete_wait_reintroduce_survives_irregular_timing() {
+        let rounds = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_REINTRODUCE_ROUNDS", 25);
+        // Bounds above Windows's ~23ms scheduling floor (D-73): a (1, 40) range
+        // would round every draw up to the same one tick, silently degrading
+        // "irregular" timing into a fixed delay.
+        let scenario = delete_wait_reintroduce_scenario(
+            rounds,
+            Duration::from_millis(25),
+            Duration::from_millis(250),
+        );
+        let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+        assert!(
+            outcome.batches > 0,
+            "expected at least one batch from {rounds} delete/reintroduce rounds"
+        );
+    }
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; about 1 s"]
+    fn plain_renames_are_observed() {
+        let count = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_RENAME_COUNT", 500);
+        let scenario = rename_scenario(count);
+        let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+        assert!(
+            outcome.batches > 0,
+            "expected at least one batch from {count} renames"
+        );
+    }
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; under a second"]
+    fn a_directory_can_reuse_a_removed_files_name_and_back() {
+        let scenario = cross_type_name_reuse_scenario();
+        let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+        assert!(
+            outcome.batches > 0,
+            "expected at least one batch from the cross-type name-reuse sequence"
+        );
+    }
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; under a second"]
+    fn a_fast_two_entity_swap_leaves_the_filesystem_in_the_expected_end_state() {
+        let scenario = fast_two_entity_swap_scenario();
+        let (outcome, dir) = run_scenario_keep_dir(&scenario, seed(), &HarnessParams::default());
+
+        // Whatever the watcher reported, the OS itself must have applied both
+        // renames without the second clobbering the first: the real end state is
+        // what actually answers "did the swap confuse anything" independent of
+        // the notification stream.
+        assert!(dir.path().join("y").is_file(), "x -> y did not land");
+        assert!(dir.path().join("x").is_dir(), "z -> x did not land");
+        assert!(!dir.path().join("z").exists(), "z should no longer exist");
+        assert!(
+            outcome.batches > 0,
+            "expected at least one batch from the swap"
+        );
+
+        dir.cleanup();
+    }
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; about 18 s"]
+    fn sessions_and_watches_enter_and_exit_with_delays_between_transitions() {
+        let rounds = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_LIFECYCLE_ROUNDS", 25);
+        // Bounds above Windows's ~23ms scheduling floor (D-73); see the
+        // back-to-back variant below for the intentionally near-zero posture.
+        let scenario = session_watch_churn_with_delays_scenario(
+            rounds,
+            Duration::from_millis(25),
+            Duration::from_millis(250),
+        );
+        let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+        assert!(
+            outcome.batches > 0,
+            "expected at least one batch from {rounds} session/watch churn rounds"
+        );
+    }
+
+    /// The same churn, but with no delay between transitions at all -- the
+    /// "hit it hard, continuously" posture, kept alongside the delayed one above
+    /// so both timing postures are exercised, not just the spaced-out one.
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; under a second"]
+    fn sessions_and_watches_enter_and_exit_back_to_back() {
+        let rounds = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_LIFECYCLE_ROUNDS", 25);
+        let scenario = session_watch_churn_with_delays_scenario(
+            rounds,
+            Duration::ZERO,
+            Duration::from_micros(1),
+        );
+        let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+        assert!(
+            outcome.batches > 0,
+            "expected at least one batch from {rounds} back-to-back session/watch churn rounds"
+        );
+    }
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; under a second"]
+    fn multiple_sessions_can_be_open_at_once_and_each_is_drained() {
+        let scenario = Scenario::new("two-sessions")
+            .then(Operation::OpenSession {
+                name: "second".to_string(),
+            })
+            .then(Operation::Subscribe {
+                session: "second".to_string(),
+                watch: "second-watch".to_string(),
+                path: PathBuf::new(),
+                subtree: true,
+            })
+            .then(Operation::CreateFile {
+                path: PathBuf::from("seen-by-both.txt"),
+            })
+            .then(Operation::CancelWatch {
+                watch: "second-watch".to_string(),
+            })
+            .then(Operation::CloseSession {
+                name: "second".to_string(),
+            });
+        let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+        assert!(
+            outcome.batches >= 2,
+            "expected the initial watch and the second session's watch to each report the same file create, got {} batches",
+            outcome.batches
+        );
+    }
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; under a second"]
+    fn concurrent_branches_run_at_the_same_time_and_are_all_accounted_for() {
+        let scenario = Scenario::new("concurrent-branches").then(Operation::Concurrent {
+            branches: vec![
+                vec![
+                    Operation::CreateFile {
+                        path: PathBuf::from("a.txt"),
+                    },
+                    Operation::CreateFile {
+                        path: PathBuf::from("b.txt"),
+                    },
+                ],
+                vec![
+                    Operation::CreateFile {
+                        path: PathBuf::from("c.txt"),
+                    },
+                    Operation::CreateFile {
+                        path: PathBuf::from("d.txt"),
+                    },
+                ],
+            ],
+        });
+        let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+        assert!(
+            outcome.batches > 0,
+            "expected at least one batch from two concurrent branches"
+        );
+    }
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; under a second"]
+    fn a_held_open_file_blocks_a_concurrent_delete_with_a_real_sharing_violation() {
+        // `ready_barrier` is the deterministic replacement for a fixed sleep
+        // guessing the hold has already opened its handle: the delete branch
+        // cannot even attempt `RemoveFile` until `HoldOpen` has genuinely opened
+        // the file and rendezvoused on the same barrier name.
+        let scenario = Scenario::new("spoiler-blocks-delete")
+            .then(Operation::CreateFile {
+                path: PathBuf::from("spoiled.txt"),
+            })
+            .then(Operation::Concurrent {
+                branches: vec![
+                    vec![Operation::HoldOpen {
+                        path: PathBuf::from("spoiled.txt"),
+                        duration: Duration::from_millis(100),
+                        ready_barrier: Some("spoiler-open".to_string()),
+                    }],
+                    vec![
+                        Operation::Barrier {
+                            name: "spoiler-open".to_string(),
+                        },
+                        Operation::RemoveFile {
+                            path: PathBuf::from("spoiled.txt"),
+                        },
+                    ],
+                ],
+            });
+        let (_outcome, dir) = run_scenario_keep_dir(&scenario, seed(), &HarnessParams::default());
+
+        // The held-open handle has no `FILE_SHARE_DELETE`, so the concurrent
+        // `RemoveFile` -- unblocked only once the hold is confirmed open -- must
+        // fail with a real sharing violation: the file is still here, not merely
+        // "probably" spoiled.
+        assert!(
+            dir.path().join("spoiled.txt").exists(),
+            "the spoiler should have blocked the concurrent delete"
+        );
+
+        dir.cleanup();
+    }
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; about 3 s"]
+    fn a_deliberately_tiny_queue_bound_never_wedges_under_overwhelming_load() {
+        let scenario = Scenario::new("queue-overwhelm")
+            .then(Operation::OpenSessionBounded {
+                name: "tiny".to_string(),
+                bound: 2,
+            })
+            .then(Operation::Subscribe {
+                session: "tiny".to_string(),
+                watch: "tiny-watch".to_string(),
+                path: PathBuf::new(),
+                subtree: true,
+            })
+            .then_repeated(
+                5_000,
+                vec![Operation::CreateFile {
+                    path: PathBuf::from("overwhelmed.txt"),
+                }],
+            )
+            .then(Operation::CancelWatch {
+                watch: "tiny-watch".to_string(),
+            })
+            .then(Operation::CloseSession {
+                name: "tiny".to_string(),
+            });
+        let params = HarnessParams::for_operation_count(scenario.operation_count());
+        // A bound this small, hit this hard, is expected to force backpressure
+        // (D-11/D-29) -- the point of this test is that the harness's own
+        // deadline assertion inside `run_scenario` never trips, not that zero
+        // desyncs occur.
+        let outcome = run_scenario(&scenario, seed(), &params);
+        assert!(
+            outcome.batches > 0,
+            "expected at least one batch despite the tiny queue bound"
+        );
+    }
+
+    #[test]
+    #[ignore = "probation: was gated on WINDOWS_FILE_WATCHER_STRESS and so never run in CI; about 21 s"]
+    fn every_persisted_json_fixture_runs_through_the_harness() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scenarios");
+        let mut ran = 0;
+        for entry in std::fs::read_dir(&dir).expect("read tests/scenarios") {
+            let entry = entry.expect("read dir entry");
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let contents = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            let scenario: Scenario = serde_json::from_str(&contents)
+                .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+            let params = HarnessParams::for_operation_count(scenario.operation_count());
+            let outcome = run_scenario(&scenario, seed(), &params);
+            assert!(
+                outcome.batches > 0,
+                "fixture {} produced no batches",
+                path.display()
+            );
+            ran += 1;
+        }
+        assert!(ran > 0, "no JSON fixtures found under {}", dir.display());
+    }
 }

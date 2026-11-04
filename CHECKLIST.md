@@ -632,8 +632,4 @@ is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it
 
 - [x] **M45.9** -- The four waits that are their claim were measured, none was shortened, and each says why beside its constant. -> [completed 2026-11-04](COMPLETED-CHECKLIST.md#m459)
 
-- [ ] **M45.10** -- Review the remaining tests of a second or more against the same rule, starting with
-  `windows-file-watcher`'s scenario stress and `windows-ioring-sys`' properties under every resolution, by
-  re-measuring the workspace once M45.5 to M45.9 are in.
-
-  > **-> UNBLOCKS PARKED WORK:** completing this unblocks `M45+` in [PARKED.md](PARKED.md#m45-plus), and the publishers' merge-or-delete in [PARKED.md](PARKED.md#m45-plus-publishers).
+- [x] **M45.10** -- The workspace was re-measured: 17 file-watcher stress tests that never ran are on probation, and the 13 tests still over a second are each left with a reason. -> [completed 2026-11-04](COMPLETED-CHECKLIST.md#m4510)

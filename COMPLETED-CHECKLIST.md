@@ -4470,3 +4470,49 @@ the reasoning and the measurement beside it, so the next reader who asks why a t
   the suite.
 
 Nothing about the tests changed but names and comments, so no sabotage sweep was run: the values are identical.
+
+## Moved 2026-11-04 14:51:18 -05:00 -- M45.10, the re-measurement
+
+### <a id="m4510"></a>M45.10 -- The workspace was re-measured: 17 file-watcher stress tests that never ran are on probation, and the 13 tests still over a second are each left with a reason. *(completed 2026-11-04 14:51:18 -05:00)*
+
+Run serially (`--test-threads 1`) over the whole workspace, with libtest's JSON timings.
+
+| | At M45's planning | After M45.1 to M45.9 |
+|---|---|---|
+| Tests run | 7185 | 6865 (96 ignored) |
+| Serial time | 140 s | 101.6 s |
+| Tests of a second or more | 22, totalling 65 s | 13, totalling 31.5 s |
+
+**A suite that tested nothing.** `windows-file-watcher`'s `tests/stress.rs` (4 tests) and `tests/scenario_stress.rs`
+(13 tests) returned at once unless `WINDOWS_FILE_WATCHER_STRESS` was set. Nothing in CI sets it, so each
+reported as passing in 0.00 s while running nothing, and because none was `#[ignore]`d the census of
+`tools/check-test-tiers.ps1` could not see them. Run for real they take about 237 s serially (one test, the
+churn burst, is 133 s of it) and all 17 pass. The guards are removed; each test is now in a `mod probation`
+with a `probation:` ignore reason carrying its measured cost, so they run in the daily workflow and are
+recorded, and a plain `cargo test` says they are ignored and not that they passed. Run through
+`tools/run-tier.ps1 -Module probation`, 17 passed, 0 failed, each keyed
+`crates/windows-file-watcher/tests/<file>.rs::probation::<name>`. The ungated unit tests in both files stay
+where they were, and `WINDOWS_FILE_WATCHER_STRESS_SEED` still seeds the generator (D-66). The census reports
+probation 23 (the six of M45.4 and these 17).
+
+**The 13 tests still over a second, left as they are, each for the reason its claim gives:**
+
+- The census (8.2 s): the engineer ruled the time acceptable.
+- The three waits of M45.9 (two job-launcher bounds, 3.1 s each; the debugger test, 2.0 s): measured, and each says why beside its constant.
+- `azure_shape` (1.9 s) and the two `runner_log` tests (1.3 s each) of M45.7: timing claims.
+- The barrier-pair test in `scenario_stress` (2.0 s): a two-second timeout is what it asserts.
+- The doorbell multiplier-2 test (1.4 s): the setting under test is the multiplier, and the divisor that shrinks the other
+  probe tests is refused beside it ("not both"), so the smallest non-default run is twice the workload.
+- `runs_of_different_builds_are_refused` (1.7 s): it starts `node` once per committed copy of each capture script and per case,
+  and running every committed copy is its claim.
+- `the_listed_streams_reach_the_commands_own_children` (1.1 s): the grandchild has to outlive its command, and `ping -n 2` is
+  the smallest delay a batch file has that needs no console; the test returns as soon as the grandchild's line appears.
+- `properties_under_every_resolution` (1.3 s): its coverage thresholds are fractions of `PLANS`, so the scale is
+  the claim; the generator is clock-seeded, which a design note records as approved.
+- `win-durable-ioring`'s remote-path test (0.7 s to 3.0 s between runs): the variance is the loopback share's, not the test's scale.
+
+No sabotage entry names a moved test, and the tests' bodies are unchanged, so no sweep was run.
+
+The two parked items this unblocked are not ready to be graduated: what each waits for is a run on a runner
+after the branch merges (the post-merge sweeps for `M45+.1`, the first scheduled long-haul runs for
+`M45+.2`), so each has a restated gate in [PARKED.md](PARKED.md).
