@@ -228,6 +228,15 @@ jobs:
       - name: Run test-check-test-tiers.ps1 (Windows PowerShell 5.1)
         shell: powershell
         run: ./tools/test-check-test-tiers.ps1
+      # The planner that decides whether the long-haul workflow runs: a defect in it is quiet
+      # in both directions, the tier never running while the schedule stays green or running
+      # daily on an unchanged main. Both hosts, as above.
+      - name: Run test-plan-long-haul.ps1
+        shell: pwsh
+        run: ./tools/test-plan-long-haul.ps1
+      - name: Run test-plan-long-haul.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-plan-long-haul.ps1
       # pwsh only, and deliberately not repeated under 5.1 like the step above:
       # check-encoding.ps1 carries curated mojibake with no BOM, so 5.1 decodes
       # it as ANSI and cannot parse it. The suite says so and refuses to run

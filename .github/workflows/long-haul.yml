@@ -1,0 +1,102 @@
+# Copyright (c) Mike Grier.
+#
+# The long-haul and probation test tiers. See DEVELOPMENT.md, "Test tiers", and
+# DESIGN-NOTES.md, "long-haul-tier".
+#
+# A test whose scale is the point rather than the claim is `#[ignore = "long-haul: ..."]`
+# in a module named `long_haul`, so ci.yml and every sabotage entry skip it and this
+# workflow runs it. A test that has never run anywhere is the same with `probation`.
+# libtest selects by name and not by ignore reason, which is why the module is part of
+# the convention and why tools/check-test-tiers.ps1 holds the two in step.
+#
+# WHEN IT RUNS. Daily, and only when `main` has moved since the last run that
+# completed: on an unchanged `main` a run would repeat the last one's result at the cost
+# of a workspace build and every long test. tools/plan-long-haul.ps1 decides, and has
+# tests of its own. A manual dispatch always runs, on the branch it is dispatched from.
+#
+# WHAT FAILS IT. The long-haul tier: a failure there fails the run, since those tests
+# are the full-scale form of claims the push-time suites hold at a small size. The
+# probation tier does not: its tests have no record yet, and a failure is data rather
+# than a verdict. It runs after the long-haul tier, and whatever the long-haul tier did.
+#
+# WHY IT IS NOT PART OF THE SABOTAGE SWEEP. A sweep runs a crate's whole suite once per
+# entry, so a tier that costs minutes would be paid for hundreds of times. A sweep never
+# passes `--ignored` and so never pays for either tier.
+name: long-haul
+
+on:
+  schedule:
+    # Off the hour, when scheduled runs are least delayed.
+    - cron: '47 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One at a time, never cancelling: a run cancelled by the next one would count as not
+# completed, and the commit it was on would be run again.
+concurrency:
+  group: long-haul
+  cancel-in-progress: false
+
+jobs:
+  # Asks whether `main` has moved. Needs `actions: read` to list the earlier runs.
+  plan:
+    name: plan
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Decide whether main has moved
+        id: plan
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: ./tools/plan-long-haul.ps1 -EventName "${env:EVENT_NAME}" -Sha "${env:RUN_SHA}" -CurrentRunId "${env:RUN_ID}" -GitHubOutput "${env:GITHUB_OUTPUT}"
+
+  tiers:
+    name: long-haul and probation
+    needs: plan
+    if: ${{ needs.plan.outputs.run == 'true' }}
+    runs-on: windows-latest
+    # The long tier's tests cost seconds each, not hours; a run past this has stalled.
+    timeout-minutes: 120
+    # See ci.yml: without this, rustup's directory-scoped toolchain file would win over
+    # the toolchain just installed.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      RUST_BACKTRACE: 1
+      RUST_LIB_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: long-haul
+      # Library, binary, integration and example test targets, as `cargo test` builds
+      # them, and not the doctests: a doctest cannot sit in a `long_haul` module.
+      # `--no-fail-fast` so every crate's tier reports rather than the first to fail.
+      - name: cargo test (long-haul tier)
+        run: 'cargo test --workspace --all-features --locked --no-fail-fast --lib --bins --tests --examples -- --ignored long_haul::'
+      # After the long-haul tier, and whether or not it passed, but never cancelled.
+      - name: cargo test (probation tier)
+        id: probation
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: 'cargo test --workspace --all-features --locked --no-fail-fast --lib --bins --tests --examples -- --ignored probation::'
+      # A failed probation step leaves the job green, so say what it did where it is read.
+      - name: Report the probation tier
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          PROBATION_OUTCOME: ${{ steps.probation.outcome }}
+        run: |
+          "probation tier: ${env:PROBATION_OUTCOME}" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append

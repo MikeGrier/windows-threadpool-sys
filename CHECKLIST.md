@@ -615,10 +615,8 @@ is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it
 
 - [x] **M45.1** -- The tiers' convention and its census: `tools/check-test-tiers.ps1` refuses a test whose ignore reason and module disagree about its tier, in CI on every push. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m451)
 
-- [ ] **M45.2** -- `long-haul.yml`: daily, and only when `main` has moved since the last completed run,
-  plus manual dispatch. It runs `--ignored long_haul` across the workspace, and a failure there fails the
-  run. Then it runs `--ignored probation`, whose failures do not fail the run. Separate from the
-  sabotage sweep, which never passes `--ignored` and so never pays for either tier.
+- [x] **M45.2** -- `long-haul.yml`: daily when `main` has moved, plus dispatch; the long-haul tier fails the run, the probation tier does not. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m452)
+
 
 - [ ] **M45.3** -- Keep each probation test's results across runs, and report them. The report gives each
   probation test's runs, passes and current run of passes, which is what promoting it from `probation`

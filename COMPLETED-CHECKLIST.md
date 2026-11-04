@@ -4210,3 +4210,38 @@ libtest writes an ignore reason into its JSON without escaping a backslash, so t
 administrative-share tests (`\\localhost\C$`) is not valid JSON and a strict parse refuses the line. The
 census reads such a line by its shape. The branch that refuses a line that is neither is not reached by any
 test, because no executable the suite can build writes one.
+
+## Moved 2026-11-03 19:18:51 -05:00 -- M45.2: the long-haul workflow
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m452"></a>M45.2 -- `long-haul.yml`: daily when `main` has moved, plus dispatch; the long-haul tier fails the run, the probation tier does not. *(completed 2026-11-03 19:18:51 -05:00)*
+
+- [x] **M45.2** -- `long-haul.yml`: daily, and only when `main` has moved since the last completed run,
+  plus manual dispatch. It runs `--ignored long_haul` across the workspace, and a failure there fails the
+  run. Then it runs `--ignored probation`, whose failures do not fail the run. Separate from the
+  sabotage sweep, which never passes `--ignored` and so never pays for either tier.
+
+**Done.** [.github/workflows/long-haul.yml](.github/workflows/long-haul.yml) has a `plan` job and a `tiers` job.
+`plan` runs [tools/plan-long-haul.ps1](tools/plan-long-haul.ps1): a dispatch always runs, and a schedule runs unless
+the most recent earlier run that completed (succeeded, failed or timed out; a cancelled run did not complete) was on
+the commit being run now. When the earlier runs cannot be listed it runs, with a warning, since not being able to ask
+is not evidence that nothing changed. `tiers` runs the long-haul tier and then the probation tier, which is
+`continue-on-error` and reports its outcome in the run summary, after the long-haul tier whether or not that passed.
+The commands select the library, binary, integration and example test targets and not the doctests, since a doctest
+cannot sit in a `long_haul` module.
+
+[tools/test-plan-long-haul.ps1](tools/test-plan-long-haul.ps1) tests each rule in both directions on PowerShell 7 and
+Windows PowerShell 5.1, in CI with the other harness suites, including the path that asks GitHub through a fake `gh` and
+the arguments it was given. [tools/sabotage-long-haul.json](tools/sabotage-long-haul.json) re-injects each rule's defect.
+Windows PowerShell 5.1 returns a parsed JSON array as one object, which the planner enumerates; the suite found that on
+its first 5.1 run, and the real `gh` output would have hit it.
+
+One entry is a declared equivalent mutant: a dispatch never has the earlier runs loaded, so the decision's own check for
+a non-schedule event gives the same answer as the rule for a schedule with no earlier run. The entry is expected to
+survive and says it will come back caught if the loader's check is ever removed.
+
+The workflow itself has never run: nothing in the repository can run a GitHub schedule, so the first dispatch after it
+reaches `main` is the first time its two jobs and the `gh` call run on a runner. The commands were run locally, on the
+workspace, where nothing is tiered yet and every executable reports no tests selected, and on a fixture crate whose
+long-haul tests were selected and whose other ignored tests were not.

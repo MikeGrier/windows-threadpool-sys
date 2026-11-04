@@ -86,6 +86,15 @@ marker but is not spelled as one. CI runs it after the all-features `cargo test`
 [tools/test-check-test-tiers.ps1](tools/test-check-test-tiers.ps1) tests it. The reasoning is in
 [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
 
+[.github/workflows/long-haul.yml](.github/workflows/long-haul.yml) runs the tiers: `cargo test --workspace
+--all-features --locked --no-fail-fast --lib --bins --tests --examples -- --ignored long_haul::`, and then the
+same with `probation::`. It runs daily when `main` has moved since the last run that completed, and on a manual
+dispatch (from any branch, always). A failure in the long-haul tier fails the run. A failure in the probation
+tier does not: that step is `continue-on-error`, and the run's summary says what it did. The decision whether
+`main` has moved is [tools/plan-long-haul.ps1](tools/plan-long-haul.ps1), tested by
+[tools/test-plan-long-haul.ps1](tools/test-plan-long-haul.ps1). To run a tier locally, pass the same arguments
+for the crate in hand: `cargo test -p <crate> --all-features -- --ignored long_haul::`.
+
 ## Release process
 
 `release-please` owns version changes, tags, and changelog updates. Each crate

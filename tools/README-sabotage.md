@@ -225,6 +225,16 @@ you what it fails to look at; only injecting the defect can.
     -CargoCommand (Resolve-Path tools\sabotage-tiers-runner.cmd).Path
 ```
 
+[sabotage-long-haul.json](sabotage-long-haul.json) is the same for [plan-long-haul.ps1](plan-long-haul.ps1), the planner
+behind the long-haul workflow, judged by [test-plan-long-haul.ps1](test-plan-long-haul.ps1) through
+[sabotage-long-haul-runner.cmd](sabotage-long-haul-runner.cmd). It carries one declared equivalent mutant, an entry
+that is expected to survive and says why.
+
+```powershell
+.\tools\run-sabotage.ps1 -Manifest tools\sabotage-long-haul.json `
+    -CargoCommand (Resolve-Path tools\sabotage-long-haul-runner.cmd).Path
+```
+
 Runs on **Windows PowerShell 5.1 and PowerShell 7 alike**, like the other
 scripts in this directory, and the full sweep is verified on both. Worth stating
 because the two differ in ways that bite here specifically: 5.1 rejects
