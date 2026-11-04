@@ -211,6 +211,38 @@
       "why": "The two flags choose the entries by different rules, so a run given both would use one and silently ignore the other.",
       "find": ["if (-not [string]::IsNullOrWhiteSpace($Since) -and -not [string]::IsNullOrWhiteSpace($Diff)) {"],
       "replace": ["if ($false) {"]
+    },
+    {
+      "name": "a hardware-dependent entry that is caught is scored as misbehaving",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "An entry declared hardware-dependent is a measurement: on one machine the tests catch it and on another they do not. Scoring only the survived side would make every machine that catches it a red sweep, which is the failure that prompted the declaration. Added with hardware-dependent, the engineer's ruling of 2026-11-03, for an entry whose result depends on the device it runs on.",
+      "find": ["        'failed' { $sabotage.expect -eq 'caught' -or $hardware }"],
+      "replace": ["        'failed' { $sabotage.expect -eq 'caught' }"]
+    },
+    {
+      "name": "a hardware-dependent entry whose patch does not build is scored as behaving",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "A patch that does not compile measured nothing, on any machine. Letting hardware-dependent absorb it would turn a broken manifest entry into a permanent green that no sweep ever reports. Added with hardware-dependent, the engineer's ruling of 2026-11-03, for an entry whose result depends on the device it runs on.",
+      "find": ["        'build-failed' { $refusedAsNamed }"],
+      "replace": ["        'build-failed' { $refusedAsNamed -or $sabotage.expect -eq 'hardware-dependent' }"]
+    },
+    {
+      "name": "a hardware-dependent result does not say it was this machine's",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "The verdict line is where the measurement is kept: without the note it reads as an ordinary caught or survived, and a reader comparing two runs cannot tell a machine difference from a change in the tests. Added with hardware-dependent, the engineer's ruling of 2026-11-03, for an entry whose result depends on the device it runs on.",
+      "find": ["        $actual = \"$actual -- on this machine; either is declared\""],
+      "replace": ["        $actual = \"$actual\""]
+    },
+    {
+      "name": "hardware-dependent is refused as an unknown expect",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "The validator holds the list of values scoring understands; one missing from it refuses every manifest that uses it before a single entry runs. Added with hardware-dependent, the engineer's ruling of 2026-11-03, for an entry whose result depends on the device it runs on.",
+      "find": ["    if (@('caught', 'survives', 'refused-by-build', 'hardware-dependent') -notcontains $entry.expect) {"],
+      "replace": ["    if (@('caught', 'survives', 'refused-by-build') -notcontains $entry.expect) {"]
     }
   ]
 }

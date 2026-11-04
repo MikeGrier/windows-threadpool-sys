@@ -42,6 +42,14 @@
     it -- so a harness with no timeout hangs too, and a lost-wakeup defect that
     hangs the suite has been detected exactly as intended.
 
+    AN ENTRY CAN DECLARE ITS RESULT HARDWARE-DEPENDENT. `expect` is normally
+    one verdict, but some sabotages measure the machine as much as the tests: a
+    device that orders a flush behind outstanding writes hides a missing barrier,
+    and one that does not exposes it. Such an entry declares
+    `hardware-dependent`, which counts caught and survived alike and reports
+    which one this machine gave; a patch that does not build, or a run that
+    never reached the tests, still fails, since neither is a measurement.
+
     THE BASELINE MUST BE GREEN FIRST. Against an already-red suite every
     sabotage "fails" and the whole sweep means nothing while looking like a
     clean bill of health. This script refuses to start until the unmodified
@@ -1148,14 +1156,14 @@ foreach ($entry in @($spec.sabotages)) {
                 ) -join "`n") 2
         }
     }
-    if (@('caught', 'survives', 'refused-by-build') -notcontains $entry.expect) {
+    if (@('caught', 'survives', 'refused-by-build', 'hardware-dependent') -notcontains $entry.expect) {
         # Checked because an unrecognised value is not inert: `expect` is
         # compared for equality when scoring, so anything else can never match
         # and the entry would be reported as misbehaving on every run, whatever
         # the suite actually did.
         Exit-WithMessage (@(
                 "The sabotage '$($entry.name)' declares expect = '$($entry.expect)'."
-                "It must be 'caught', 'survives' or 'refused-by-build'."
+                "It must be 'caught', 'survives', 'refused-by-build' or 'hardware-dependent'."
             ) -join "`n") 2
     }
     # `buildError` is what makes a build failure count, so it is required
@@ -1866,10 +1874,18 @@ foreach ($sabotage in $selected) {
     if ($sabotage.expect -eq 'refused-by-build' -and @('passed', 'failed', 'hung') -contains $run.Outcome) {
         $actual = "BUILT CLEANLY: the guard did not fire; then $actual"
     }
+    # A hardware-dependent entry's result is a measurement of the machine it ran
+    # on, so either verdict on the tests is what it declared; the line says which
+    # this machine gave. Anything that is not a verdict on the tests -- a patch
+    # that does not build, a run that never started -- is still a failure.
+    $hardware = $sabotage.expect -eq 'hardware-dependent' -and @('passed', 'failed', 'hung') -contains $run.Outcome
+    if ($hardware) {
+        $actual = "$actual -- on this machine; either is declared"
+    }
     $ok = switch ($run.Outcome) {
-        'passed' { $sabotage.expect -eq 'survives' }
-        'failed' { $sabotage.expect -eq 'caught' }
-        'hung' { $sabotage.expect -eq 'caught' }
+        'passed' { $sabotage.expect -eq 'survives' -or $hardware }
+        'failed' { $sabotage.expect -eq 'caught' -or $hardware }
+        'hung' { $sabotage.expect -eq 'caught' -or $hardware }
         'build-failed' { $refusedAsNamed }
         default { $false }
     }
