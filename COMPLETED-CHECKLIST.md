@@ -4355,3 +4355,41 @@ All 28 entries of the crate's sabotage manifest behave as declared on the change
 is the answer to whether the shrink lost a detection; the entries were swept whole and not by diff because the tests changed and
 not the code they judge. The cancellation test accepts `Completed` as well as `Cancelled`, so it never asserted the
 enumeration was still running; that is unchanged, and is why a smaller count loses nothing there.
+
+## Moved 2026-11-03 23:13:51 -05:00 -- M45.7: the tail watcher's tests at the size their claims need
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m457"></a>M45.7 -- `win-multi-file-tail-watcher`'s seven scale-bearing tests run smaller with their full-scale forms long-haul; the quiet-between-bursts waits are left and say why. *(completed 2026-11-03 23:13:51 -05:00)*
+
+- [x] **M45.7** -- `win-multi-file-tail-watcher`: the large roster dropped during a poll, the job log under the
+  tiny and default options, the children whose output is reassembled, and the real-writer tests. Shrink
+  where the scale is not the claim; where it is a timing claim (a reader quiet between bursts), say so
+  and leave it.
+
+**Done.** Each of these now takes its size as a parameter, runs small, and keeps its original size as a `long_haul::` test beside
+it; all seven long-haul forms passed through the long-haul tier. The sizes, and what each claim needs of one:
+
+- **The two roster tests** (a request during a poll of 20000 files; a drop during it) assert a ratio, one step against a pass, and
+  skip the comparison when a pass is under 10 ms. So the size they need is one whose pass is measurable, not one that is large. A
+  pass cost about 4.4 microseconds a file here, so 5000 gives about 22 ms, twice the floor; 2000 gave 8 ms, under it, which would
+  have made the claim vacuous on this machine. 5000 is used and the full 20000, with ten times the floor, is long-haul. Registering
+  the files was most of what each cost.
+- **The two job logs** (default and tiny options) write 36 loop steps in three bursts instead of 360. A burst still crosses many
+  buffers and exhausts the tiny options' pool, which is the claim; the silences are not shortened.
+- **The children whose output is reassembled** (the engine's, and the layer's) use 24 child processes where they used 200 and 150: more
+  than three times the layer's queue of eight and many times the four buffers. A child process each was most of what they cost.
+- **The real-writer park-and-resume test** registers 100 files, 20 of them written, where it registered 300 with 60. The constants
+  it asserted against were tied to 60 writers (a writer at index 40, more than 20 rounds a pass), so both are now derived from the
+  writer count; the strict inequality it had is kept.
+
+**What is left, and why.** `a_command_that_is_silent_then_writes_a_burst_is_delivered_at_once_and_the_reader_is_quiet_between`
+takes a second and a half and is not shortened, with a comment saying so: its claim is that the reader is quiet across a silence,
+a claim about time, and a shorter silence is a window in which a reader that wakes by itself is less likely to be seen. The 200 ms
+quiet checks in the job-log tests and the 300 ms one after the real-writer test are the same kind and are left. Tests of under a
+second, the watcher engine's child tests among them, are `M45.10`'s.
+
+**Sabotage.** The published catcher record names the entries each of these tests caught; 20 entries across the crate's two
+manifests were caught by one of the seven, and all 20 behave as declared on the smaller tests. The record names no entry caught by
+the two roster tests, so nothing the shrink could lose was recorded for them. The record is at a commit before this change and is
+a hint, not a proof; the rest of the crate's entries are caught by tests this did not touch.

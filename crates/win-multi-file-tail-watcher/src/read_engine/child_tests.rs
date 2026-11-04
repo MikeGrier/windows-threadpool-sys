@@ -144,12 +144,17 @@ impl Fixture {
     }
 }
 
-#[test]
-fn what_children_write_is_reassembled_by_range_each_byte_delivered_once() {
-    const COUNT: u32 = 200;
+/// Several times the four buffers the engine reads through, so most files wait for one while others
+/// are being read. A child process each is most of what the test costs.
+const CHILDREN: u32 = 24;
+
+/// The count the test was first written at. See [`long_haul`].
+const MANY_CHILDREN: u32 = 200;
+
+fn what_children_write_is_reassembled_by_range(count: u32) {
     const PASSES: u64 = 30;
     let dir = TempDir::new("re-child-whole");
-    let mut fixture = Fixture::new(&dir, COUNT, PASSES, 4);
+    let mut fixture = Fixture::new(&dir, count, PASSES, 4);
     let mut taken = Taken::default();
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut polls = 0;
@@ -173,6 +178,21 @@ fn what_children_write_is_reassembled_by_range_each_byte_delivered_once() {
             .map(|piece| piece.range.end - piece.range.start)
             .sum();
         assert_eq!(total, PASSES * LINE_LEN, "file {value} is read to its end");
+    }
+}
+
+#[test]
+fn what_children_write_is_reassembled_by_range_each_byte_delivered_once() {
+    what_children_write_is_reassembled_by_range(CHILDREN);
+}
+
+mod long_haul {
+    use super::*;
+
+    #[test]
+    #[ignore = "long-haul: starts 200 child processes"]
+    fn what_many_children_write_is_reassembled_by_range_each_byte_delivered_once() {
+        what_children_write_is_reassembled_by_range(MANY_CHILDREN);
     }
 }
 

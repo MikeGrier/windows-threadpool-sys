@@ -68,15 +68,20 @@ impl Writers {
     }
 }
 
-#[test]
-fn polls_on_the_thread_pool_deliver_what_children_write_each_byte_once() {
-    const COUNT: u32 = 150;
+/// Three times the watcher SQ of eight, so polls park and are continued, and many times the four
+/// buffers. A child process each is most of what the test costs.
+const CHILDREN: u32 = 24;
+
+/// The count the test was first written at. See [`long_haul`].
+const MANY_CHILDREN: u32 = 150;
+
+fn polls_on_the_thread_pool_deliver_what_children_write(count: u32) {
     const PASSES: u64 = 30;
     let dir = TempDir::new("rl-child-polls");
     // A watcher SQ of eight, so polls park and are continued, a pool of four buffers of eight
     // bytes, and a client SQ of two.
     let layer = layer_with(8, 4, 2);
-    let mut writers = Writers::start(&dir, &layer, COUNT, PASSES);
+    let mut writers = Writers::start(&dir, &layer, count, PASSES);
     let mut taken = Taken::default();
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut polls = 0;
@@ -102,6 +107,21 @@ fn polls_on_the_thread_pool_deliver_what_children_write_each_byte_once() {
         assert_eq!(total, PASSES * LINE_LEN, "file {value} is read to its end");
     }
     assert!(layer.take_failure().is_none());
+}
+
+#[test]
+fn polls_on_the_thread_pool_deliver_what_children_write_each_byte_once() {
+    polls_on_the_thread_pool_deliver_what_children_write(CHILDREN);
+}
+
+mod long_haul {
+    use super::*;
+
+    #[test]
+    #[ignore = "long-haul: starts 150 child processes"]
+    fn polls_on_the_thread_pool_deliver_what_many_children_write_each_byte_once() {
+        polls_on_the_thread_pool_deliver_what_children_write(MANY_CHILDREN);
+    }
 }
 
 #[test]

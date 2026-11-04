@@ -626,10 +626,7 @@ is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it
 
 - [x] **M45.6** -- `windows-file-enumeration-sys`'s three large-directory tests run over 600 files with the minimum buffer, and their full-scale forms are long-haul. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m456)
 
-- [ ] **M45.7** -- `win-multi-file-tail-watcher`: the large roster dropped during a poll, the job log under the
-  tiny and default options, the children whose output is reassembled, and the real-writer tests. Shrink
-  where the scale is not the claim; where it is a timing claim (a reader quiet between bursts), say so
-  and leave it.
+- [x] **M45.7** -- `win-multi-file-tail-watcher`'s seven scale-bearing tests run smaller with their full-scale forms long-haul; the quiet-between-bursts waits are left and say why. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m457)
 
 - [ ] **M45.8** -- `windows-platform-probes`: the tests that run every registered probe, or a cost probe at a
   multiplier, at full workload. Run the probes at the smallest workload that still shows what each test
