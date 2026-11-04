@@ -624,9 +624,7 @@ is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it
 
 - [x] **M45.5** -- `blocking_push`'s capacity test writes past a declared capacity of 32 and its full-scale form is long-haul. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m455)
 
-- [ ] **M45.6** -- `windows-file-enumeration-sys`: the directory of thousands of entries and the two large
-  running enumerations that are cancelled or dropped. Each to the size its claim needs, the full size
-  long-haul.
+- [x] **M45.6** -- `windows-file-enumeration-sys`'s three large-directory tests run over 600 files with the minimum buffer, and their full-scale forms are long-haul. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m456)
 
 - [ ] **M45.7** -- `win-multi-file-tail-watcher`: the large roster dropped during a poll, the job log under the
   tiny and default options, the children whose output is reassembled, and the real-writer tests. Shrink

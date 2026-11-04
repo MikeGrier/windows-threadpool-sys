@@ -13,17 +13,27 @@ use crate::support::{Scratch, borrow_all, drain_to_terminal, entry_names, many_f
 
 /// Large enough that no single native buffer holds every record in one
 /// refill, and large enough that the record/time quantum budget spans
-/// several quanta even with the default buffer.
+/// several quanta even with the default buffer. The full scale; see
+/// [`long_haul`].
 const MANY: usize = 4_000;
 
-#[test]
-fn a_directory_with_thousands_of_entries_delivers_every_one_exactly_once() {
-    let names = many_file_names(MANY);
+/// More than two quanta of records (a quantum is at most 256), which with the
+/// minimum buffer is also many refills: the same two things [`MANY`] exists to
+/// force, from far fewer files, since creating them is what the test costs.
+const SPANNING: usize = 600;
+
+/// Every entry of a directory of `count` files arrives exactly once when the
+/// request uses a native buffer of `buffer` bytes.
+fn delivers_every_entry_exactly_once(count: usize, buffer: usize) {
+    let names = many_file_names(count);
     let borrowed = borrow_all(&names);
     let scratch = Scratch::with_files(&borrowed);
 
     let (session, receiver) = Session::new(16, 256).expect("room");
-    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let request = EnumerationRequest::for_path(scratch.path())
+        .expect("resolvable")
+        .with_buffer_capacity(buffer)
+        .expect("representable");
     let handle = session.try_begin(request).expect("room");
     let enumeration = handle.id();
     handle.detach();
@@ -35,6 +45,24 @@ fn a_directory_with_thousands_of_entries_delivers_every_one_exactly_once() {
     let mut expected = names;
     expected.sort();
     assert_eq!(delivered, expected, "no entry lost or duplicated at scale");
+}
+
+#[test]
+fn a_directory_spanning_many_refills_and_quanta_delivers_every_entry_exactly_once() {
+    delivers_every_entry_exactly_once(SPANNING, MINIMUM_BUFFER_CAPACITY);
+}
+
+/// The same claim at the scale the module is named for: thousands of entries
+/// through the default buffer. Nothing about it differs from the test above
+/// but the size, which is why it is the long-haul form of it.
+mod long_haul {
+    use super::*;
+
+    #[test]
+    #[ignore = "long-haul: creates 4000 files and enumerates them through the default buffer"]
+    fn a_directory_with_thousands_of_entries_delivers_every_one_exactly_once() {
+        delivers_every_entry_exactly_once(MANY, DEFAULT_BUFFER_CAPACITY);
+    }
 }
 
 #[test]

@@ -4334,3 +4334,24 @@ queue of four, so a seal never meets a completion queue it cannot drain into and
 entry "a pop refused for want of room is a fault" survived. It was caught at 24 and at 32, and 32 is kept for margin; the
 reasoning is on the constant. All 9 entries that patch the example behave as declared. The two entries' find strings that named
 `EPOCH_WRITES` follow it to `epoch_writes`.
+
+## Moved 2026-11-03 22:44:38 -05:00 -- M45.6: the large-directory tests at the size their claims need
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m456"></a>M45.6 -- `windows-file-enumeration-sys`'s three large-directory tests run over 600 files with the minimum buffer, and their full-scale forms are long-haul. *(completed 2026-11-03 22:44:38 -05:00)*
+
+- [x] **M45.6** -- `windows-file-enumeration-sys`: the directory of thousands of entries and the two large
+  running enumerations that are cancelled or dropped. Each to the size its claim needs, the full size
+  long-haul.
+
+**Done.** What these tests need of a directory is many refills of the native buffer and several quanta (a quantum is at most 256
+records), not thousands of files: the 1 KiB minimum buffer gives many refills from a few hundred entries, and creating the files
+is what each test cost. Each of the three now takes a count and a buffer size, runs over 600 files with the minimum buffer, and
+keeps its original form, 4000 files through the default buffer, as `long_haul::` beside it under its original name. The
+integration suite now takes under a second, and the three long-haul forms passed through the long-haul tier.
+
+All 28 entries of the crate's sabotage manifest behave as declared on the changed tests. None of them needed the large size, which
+is the answer to whether the shrink lost a detection; the entries were swept whole and not by diff because the tests changed and
+not the code they judge. The cancellation test accepts `Completed` as well as `Cancelled`, so it never asserted the
+enumeration was still running; that is unchanged, and is why a smaller count loses nothing there.
