@@ -7,32 +7,62 @@ use std::time::{Duration, Instant};
 use win_durable_ioring::{DurableRing, IoTargetKey, PushRefusal};
 
 use super::{
-    Blocked, Delivery, FILE, GaveUp, OPERATIONS, Scratch, build, push_blocking, run, write_at,
+    Blocked, Delivery, FILE, GaveUp, OPERATIONS, Scratch, build, push_blocking, run, run_with,
+    write_at,
 };
 
-/// Far more writes than the queues hold, so a push the ring will not take is certain.
-const WRITES: usize = 200;
+/// Ten times the entries the queues hold, so a push the ring will not take is certain.
+const WRITES: usize = 40;
 const QUEUE: u32 = 4;
-/// More writes than the instance is built for, so the declared capacity is certain to be reached.
-const PAST_CAPACITY: usize = 3 * OPERATIONS;
+/// A small declared capacity, which the writes below are measured against. The claim is that a
+/// consumer that seals and pops gets through more than it, and that holds at any size -- but not
+/// every defect is reachable at any size: an epoch is an eighth of the capacity, and below about
+/// 24 operations an epoch is smaller than the queue, so a seal never meets a completion queue it
+/// cannot drain into and a pop refused for want of room never happens, which the sabotage entry
+/// "a pop refused for want of room is a fault" needs. Measured, not derived: 16 let it through,
+/// 24 and 32 caught it.
+const SMALL_OPERATIONS: usize = 32;
+
+/// Three times the capacity a run is built for, so that capacity is certain to be reached.
+fn past(operations: usize) -> usize {
+    3 * operations
+}
 
 fn block() -> Vec<u8> {
     vec![7; 8]
 }
 
-#[test]
-fn writes_past_the_declared_capacity_are_taken_by_sealing_and_popping() {
-    // The instance holds a write's place until its completion is popped and a seal has covered it,
-    // so a consumer that never seals is refused at its declared operations however fast it pops.
-    // Every delivery has to get through, and has to have sealed to do it.
+/// The instance holds a write's place until its completion is popped and a seal has covered it,
+/// so a consumer that never seals is refused at its declared operations however fast it pops.
+/// Every delivery has to get through, and has to have sealed to do it.
+fn writes_past_the_declared_capacity(operations: usize) {
     for delivery in [Delivery::Pool, Delivery::Pumped, Delivery::Signalled] {
-        let report = run(delivery, PAST_CAPACITY, QUEUE);
-        assert_eq!(report.pushed, PAST_CAPACITY, "{delivery:?}: {report:?}");
-        assert_eq!(report.completed, PAST_CAPACITY, "{delivery:?}: {report:?}");
+        let writes = past(operations);
+        let report = run_with(delivery, writes, QUEUE, operations);
+        assert_eq!(report.pushed, writes, "{delivery:?}: {report:?}");
+        assert_eq!(report.completed, writes, "{delivery:?}: {report:?}");
         assert!(
             report.sealed > 1,
             "{delivery:?} sealed as it went: {report:?}"
         );
+    }
+}
+
+#[test]
+fn writes_past_a_small_declared_capacity_are_taken_by_sealing_and_popping() {
+    writes_past_the_declared_capacity(SMALL_OPERATIONS);
+}
+
+/// The same claim at the size the demonstration is built for, which is the full scale: three times
+/// its declared operations, under each delivery. Nothing about it differs from the small one but
+/// the size.
+mod long_haul {
+    use super::*;
+
+    #[test]
+    #[ignore = "long-haul: three deliveries of three times the 256 operations the example is built for"]
+    fn writes_past_the_demonstrations_declared_capacity_are_taken_by_sealing_and_popping() {
+        writes_past_the_declared_capacity(OPERATIONS);
     }
 }
 
@@ -67,7 +97,7 @@ fn a_pool_instance_takes_them_by_waiting_for_the_pool() {
 #[test]
 fn a_refusal_waiting_cannot_clear_is_returned_at_once_with_its_buffer() {
     let scratch = Scratch::new("unknown-file");
-    let mut ring = build(Delivery::Pumped, &scratch, 8);
+    let mut ring = build(Delivery::Pumped, &scratch, 8, OPERATIONS);
     let lineage = ring.default_lineage();
     let mut rooms = 0;
     let Err(Blocked { refused, why }) = push_blocking(
@@ -116,7 +146,7 @@ fn fill(ring: &mut super::Ring, lineage: &win_durable_ioring::LineageHandle) -> 
 #[test]
 fn a_push_that_never_gets_room_times_out_and_hands_its_buffer_back() {
     let scratch = Scratch::new("times-out");
-    let mut ring = build(Delivery::Pumped, &scratch, QUEUE);
+    let mut ring = build(Delivery::Pumped, &scratch, QUEUE, OPERATIONS);
     let lineage = ring.default_lineage();
     let filled = fill(&mut ring, &lineage);
     let mut rooms = 0;
@@ -150,7 +180,7 @@ fn a_push_that_never_gets_room_times_out_and_hands_its_buffer_back() {
 #[test]
 fn a_make_room_that_fails_is_reported_and_hands_the_push_back() {
     let scratch = Scratch::new("room-fails");
-    let mut ring = build(Delivery::Pumped, &scratch, QUEUE);
+    let mut ring = build(Delivery::Pumped, &scratch, QUEUE, OPERATIONS);
     let lineage = ring.default_lineage();
     let filled = fill(&mut ring, &lineage);
     let Err(Blocked { refused, why }) = push_blocking(
@@ -173,7 +203,7 @@ fn a_make_room_that_fails_is_reported_and_hands_the_push_back() {
 #[test]
 fn a_push_the_ring_takes_never_calls_make_room() {
     let scratch = Scratch::new("takes-it");
-    let mut ring = build(Delivery::Pumped, &scratch, 8);
+    let mut ring = build(Delivery::Pumped, &scratch, 8, OPERATIONS);
     let lineage = ring.default_lineage();
     let mut rooms = 0;
     let id = push_blocking(

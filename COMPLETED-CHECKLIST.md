@@ -4312,3 +4312,25 @@ entry removes the argument. That is a choice made here, recorded as one in the d
 All six were run for the first time here, through `run-tier.ps1` for the two crates with `IORING_STRESS_TRIALS=5`, and
 all passed; the 4 GiB test allocated and passed on this machine. The default trial budget was not run, so what the tier costs
 at that size on a runner is not known; the workflow's timeout bounds it, and the first results will say.
+
+## Moved 2026-11-03 22:12:12 -05:00 -- M45.5: the blocking_push example at the size its claim needs
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m455"></a>M45.5 -- `blocking_push`'s capacity test writes past a declared capacity of 32 and its full-scale form is long-haul. *(completed 2026-11-03 22:12:12 -05:00)*
+
+- [x] **M45.5** -- `win-durable-ioring`'s `blocking_push` example: write past a small declared capacity, not
+  three times 256 writes, and keep the full scale as a long-haul test.
+
+**Done.** [blocking_push](crates/win-durable-ioring/examples/blocking_push/main.rs) takes the instance's declared operations
+as a parameter (`build` and a new `run_with`; `run` keeps the demonstration's 256), and seals an epoch every eighth of
+them. The test that writes past the declared capacity now does it at 32, with 96 writes under each delivery, and its
+full-scale form, three times 256 under each, is `tests::long_haul::...`, which passed through the long-haul tier. The other
+tests that wrote 200 writes through a queue of 4 now write 40, which is ten times what the queue holds, as their claim needs.
+The example's tests take about a tenth of a second.
+
+The smaller size lost a detection, and the sabotage sweep is what showed it. At 16 operations an epoch is two writes, below the
+queue of four, so a seal never meets a completion queue it cannot drain into and a pop is never refused for want of room: the
+entry "a pop refused for want of room is a fault" survived. It was caught at 24 and at 32, and 32 is kept for margin; the
+reasoning is on the constant. All 9 entries that patch the example behave as declared. The two entries' find strings that named
+`EPOCH_WRITES` follow it to `epoch_writes`.

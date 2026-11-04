@@ -622,8 +622,7 @@ is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it
 
 - [x] **M45.4** -- The six never-run tests (five flush-barrier stress instruments and the 4 GiB buffer test) are on probation, and a tier runs one test at a time. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m454)
 
-- [ ] **M45.5** -- `win-durable-ioring`'s `blocking_push` example: write past a small declared capacity, not
-  three times 256 writes, and keep the full scale as a long-haul test.
+- [x] **M45.5** -- `blocking_push`'s capacity test writes past a declared capacity of 32 and its full-scale form is long-haul. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m455)
 
 - [ ] **M45.6** -- `windows-file-enumeration-sys`: the directory of thousands of entries and the two large
   running enumerations that are cancelled or dropped. Each to the size its claim needs, the full size

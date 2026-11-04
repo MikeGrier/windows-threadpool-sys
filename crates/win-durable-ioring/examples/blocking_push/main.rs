@@ -212,8 +212,9 @@ impl Drop for Scratch {
 /// are measured against: a consumer that writes past it without sealing is refused.
 pub const OPERATIONS: usize = 256;
 
-/// An instance over `scratch`, delivered as `delivery`, with queues of `queue` entries.
-pub fn build(delivery: Delivery, scratch: &Scratch, queue: u32) -> Ring {
+/// An instance over `scratch`, delivered as `delivery`, with queues of `queue` entries and built for
+/// `operations` operations at once.
+pub fn build(delivery: Delivery, scratch: &Scratch, queue: u32, operations: usize) -> Ring {
     Ring::new(Setup {
         submission_queue_size: queue,
         completion_queue_size: queue,
@@ -221,7 +222,7 @@ pub fn build(delivery: Delivery, scratch: &Scratch, queue: u32) -> Ring {
         buffers: Vec::new(),
         provider: None,
         capacity: Capacity {
-            operations: OPERATIONS,
+            operations,
             lineages: 4,
             imports: 4,
             targets: 4,
@@ -265,10 +266,13 @@ pub struct Report {
     pub sealed: usize,
 }
 
-/// How many writes go into one epoch before it is sealed. Well under [`OPERATIONS`]: an epoch's
-/// writes hold their places until it is sealed and the seal is durable, so the instance has to be
-/// able to hold several epochs' worth while their seals complete.
-const EPOCH_WRITES: usize = 32;
+/// How many writes go into one epoch before it is sealed, for an instance built for `operations`: an
+/// eighth of them, so well under. An epoch's writes hold their places until it is sealed and the
+/// seal is durable, so the instance has to be able to hold several epochs' worth while their seals
+/// complete.
+fn epoch_writes(operations: usize) -> usize {
+    (operations / 8).max(1)
+}
 
 /// The next entry, or `None` when there is none yet. That includes a pop the backend refused for
 /// want of room: popping rings for what a seal queued, and the backend will not take it until its
@@ -314,12 +318,20 @@ fn settle(
 /// that, blocking whenever the ring will not take one, then collect every completion.
 ///
 /// The instance holds a write's place until its completion is popped and a seal has covered it, so
-/// this does both as it goes: it seals an epoch every [`EPOCH_WRITES`] writes, and its `make_room`
+/// this does both as it goes: it seals an epoch every [`epoch_writes`] writes, and its `make_room`
 /// pops what is waiting as well as draining. That is what lets it push more writes than the
 /// instance is built to hold at once ([`OPERATIONS`]).
 pub fn run(delivery: Delivery, writes: usize, queue: u32) -> Report {
+    run_with(delivery, writes, queue, OPERATIONS)
+}
+
+/// [`run`] for an instance built for `operations` operations, which is what the writes are measured
+/// against: the claim is that a consumer that seals and pops gets through more than that, and it
+/// holds at any size, so a test can use a small one.
+pub fn run_with(delivery: Delivery, writes: usize, queue: u32, operations: usize) -> Report {
     let scratch = Scratch::new(&format!("{delivery:?}"));
-    let mut ring = build(delivery, &scratch, queue);
+    let mut ring = build(delivery, &scratch, queue, operations);
+    let epoch_writes = epoch_writes(operations);
     let lineage = ring.default_lineage();
     let seal = |ring: &mut Ring, epoch: u64| {
         ring.make_durable_through(lineage.at(epoch))
@@ -354,7 +366,7 @@ pub fn run(delivery: Delivery, writes: usize, queue: u32) -> Report {
             Err(blocked) => panic!("a push gave up: {:?}", blocked.why),
         }
         in_epoch += 1;
-        if in_epoch == EPOCH_WRITES {
+        if in_epoch == epoch_writes {
             seal(&mut ring, epoch);
             (sealed, last_sealed) = (sealed + 1, Some(epoch));
             (epoch, in_epoch) = (epoch + 1, 0);

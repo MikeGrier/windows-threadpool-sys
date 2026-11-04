@@ -2283,7 +2283,7 @@
       "file": "examples/blocking_push/main.rs",
       "expect": "caught",
       "why": "A write keeps its place until its completion is popped and a seal has covered it, so a run that seals only at the end is refused at the declared operations however fast it pops, and its push times out. This is the defect the review found: writes past 256 panicked.",
-      "find": ["        if in_epoch == EPOCH_WRITES {"],
+      "find": ["        if in_epoch == epoch_writes {"],
       "replace": ["        if false {"]
     },
     {
