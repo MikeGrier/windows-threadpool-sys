@@ -4393,3 +4393,37 @@ second, the watcher engine's child tests among them, are `M45.10`'s.
 manifests were caught by one of the seven, and all 20 behave as declared on the smaller tests. The record names no entry caught by
 the two roster tests, so nothing the shrink could lose was recorded for them. The record is at a commit before this change and is
 a hint, not a proof; the rest of the crate's entries are caught by tests this did not touch.
+
+## Moved 2026-11-04 09:28:29 -05:00 -- M45.8: the platform probes' tests at the workload their claims need
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the probes' own is in [crates/windows-platform-probes/DESIGN-NOTES.md](crates/windows-platform-probes/DESIGN-NOTES.md).
+
+### <a id="m458"></a>M45.8 -- The census and the cost-probe tests run the cost probes at a twentieth of their workload through a new `--iteration-divisor`, with full-length forms long-haul. *(completed 2026-11-04 09:28:29 -05:00)*
+
+- [x] **M45.8** -- `windows-platform-probes`: the tests that run every registered probe, or a cost probe at a
+  multiplier, at full workload. Run the probes at the smallest workload that still shows what each test
+  checks, with full workload long-haul.
+
+**Done.** The probes had no way to run lighter: the cost probes took only a whole-number multiplier of at least one, and the
+multiplier test ran the request probe at twice its workload. So the cost probes gain `--iteration-divisor N`, the counterpart
+of `--iteration-multiplier`: each loop runs a Nth of its usual count and at least once, so a shortened run goes round every loop
+and its report has every line a full one has. A run is lengthened or shortened, never both; it says so beside its banner like a
+lengthened run, and every row now carries `"iteration_divisor"` (1 by default). The census, the table-matches-row tests and the
+multiplier test then use it: the census runs the cost probes at a twentieth, the two both-readers tests at a twentieth, and the
+multiplier test runs the doorbell probe (the quick one) where it ran the request probe. Each keeps its full-length form as a
+`long_haul::` test, the request probe at twice its workload among them; all four passed through the long-haul tier.
+
+The request probe's run went from about 5.5 s to 0.3 s, and the census from about 12 s to about 6 s.
+
+**What is left, and the blocker.** The census still takes about 6 s, and most of that is the peer-index-cache probe (3.9 s) and
+the core-affinity probe (1.5 s), which measure through `windows-placement-probe` where the workload is a `pub const` of two
+million baked into both `measure()` functions and into the run-plan arithmetic. A setting there changes the public signature of
+a function in a second published crate, which is the engineer's decision to make and not this item's, so it is
+[M45.8.1](CHECKLIST.md) and is open. Nothing else in the crate costs a second or more except the capture-script test
+(1.7 s), which is `M45.10`'s.
+
+**Sabotage.** Nine new entries cover the divisor (not shortening, shortening to zero, starting a loop that did not run, allowing
+both settings, refusing the no-op value beside a multiplier, a huge divisor read as one, the report line, and each probe's row).
+The 16 entries whose patched file changed, among them those nine and two controls that survive by design, and the 15 the published
+catcher record names as caught by a test this changed, all behave as declared. Two existing entries followed the code: the request
+row's find string gained the new field, and the control that shortens the queue probe's run moved with its constant.

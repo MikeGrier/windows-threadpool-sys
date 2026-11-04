@@ -255,10 +255,10 @@
       "expect": "caught",
       "why": "A machine reader would see a scaled run's figures with nothing saying they were not the default's.",
       "find": [
-        "        r#\"{{\"reason\":\"x-probe-request-cost\",\"arch\":\"{}\",\"iteration_multiplier\":{},{fields}}}\"#,"
+        "        r#\"{{\"reason\":\"x-probe-request-cost\",\"arch\":\"{}\",\"iteration_multiplier\":{},\"iteration_divisor\":{},{fields}}}\"#,"
       ],
       "replace": [
-        "        r#\"{{\"reason\":\"x-probe-request-cost\",\"arch\":\"{}\",\"ignored\":{},{fields}}}\"#,"
+        "        r#\"{{\"reason\":\"x-probe-request-cost\",\"arch\":\"{}\",\"ignored\":{},\"iteration_divisor\":{},{fields}}}\"#,"
       ]
     },
     {
@@ -1430,10 +1430,10 @@
       "expect": "survives",
       "why": "A control: how much a short run measures is incidental to which lines its report carries.",
       "find": [
-        "        \"1000\","
+        "    \"1000\","
       ],
       "replace": [
-        "        \"998\","
+        "    \"998\","
       ]
     },
     {
@@ -1585,6 +1585,114 @@
       ],
       "replace": [
         "        .max(1)\n"
+      ]
+    },
+    {
+      "name": "M45.8 divisor: a divided loop is not shortened",
+      "file": "src/probe_args.rs",
+      "expect": "caught",
+      "why": "The divisor exists so a test of what a cost probe says does not run its full workload. A divisor that changes nothing leaves that test as long as the one it replaced.",
+      "find": [
+        "            (lengthened / self.divisor).max(1)"
+      ],
+      "replace": [
+        "            lengthened.max(1)"
+      ]
+    },
+    {
+      "name": "M45.8 divisor: a divided loop can run no iterations",
+      "file": "src/probe_args.rs",
+      "expect": "caught",
+      "why": "A shortened run still goes round every loop, so its report has every line a full one has. A loop divided to zero iterations measures nothing and divides by it.",
+      "find": [
+        "            (lengthened / self.divisor).max(1)"
+      ],
+      "replace": [
+        "            lengthened / self.divisor"
+      ]
+    },
+    {
+      "name": "M45.8 divisor: a loop that did not run is made to",
+      "file": "src/probe_args.rs",
+      "expect": "caught",
+      "why": "The floor of one iteration is for a loop that ran; a loop the probe gave no iterations is not one the setting should start.",
+      "find": [
+        "        if lengthened == 0 {"
+      ],
+      "replace": [
+        "        if false {"
+      ]
+    },
+    {
+      "name": "M45.8 divisor: a run is lengthened and shortened at once",
+      "file": "src/probe_args.rs",
+      "expect": "caught",
+      "why": "A run that did both would have a length no single setting names, and its report line could say only one of them.",
+      "find": [
+        "            if chosen.divisor > 1 && chosen.times > 1 {"
+      ],
+      "replace": [
+        "            if false {"
+      ]
+    },
+    {
+      "name": "M45.8 divisor: a divisor of one is refused beside a multiplier",
+      "file": "src/probe_args.rs",
+      "expect": "caught",
+      "why": "A divisor of one shortens nothing, so a multiplier beside it is a lengthened run and not both.",
+      "find": [
+        "            if chosen.divisor > 1 && chosen.times > 1 {"
+      ],
+      "replace": [
+        "            if chosen.divisor >= 1 && chosen.times >= 1 {"
+      ]
+    },
+    {
+      "name": "M45.8 divisor: a divisor too large for a u32 is read as one",
+      "file": "src/probe_args.rs",
+      "expect": "caught",
+      "why": "A divisor past every loop shortens each to its one iteration, as u32::MAX does. Read as one it would be the default, and a run asked to be as short as possible would be as long as can be.",
+      "find": [
+        ".unwrap_or(u32::MAX);"
+      ],
+      "replace": [
+        ".unwrap_or(1);"
+      ]
+    },
+    {
+      "name": "M45.8 divisor: a shortened run reports itself as a multiplied one",
+      "file": "src/probe_args.rs",
+      "expect": "caught",
+      "why": "A shortened run says so beside its banner. Reported as a multiplier of one it would read as a run that was not shortened, so its figures would pass for the published ones.",
+      "find": [
+        "        } else if self.divisor > 1 {"
+      ],
+      "replace": [
+        "        } else if false {"
+      ]
+    },
+    {
+      "name": "M45.8 divisor: the doorbell probe's row drops the divisor",
+      "file": "src/bin/doorbell_cost.rs",
+      "expect": "caught",
+      "why": "A machine reader would see a shortened run's figures with nothing in the row saying they were not the default's.",
+      "find": [
+        "\"iteration_multiplier\":{},\"iteration_divisor\":{},{}\"#,"
+      ],
+      "replace": [
+        "\"iteration_multiplier\":{},\"ignored\":{},{}\"#,"
+      ]
+    },
+    {
+      "name": "M45.8 divisor: the request probe's row drops the divisor",
+      "file": "src/bin/request_cost.rs",
+      "expect": "caught",
+      "why": "The same for the request probe, whose full run is the slow one a reader is most likely to shorten.",
+      "find": [
+        "\"iteration_multiplier\":{},\"iteration_divisor\":{},{fields}"
+      ],
+      "replace": [
+        "\"iteration_multiplier\":{},\"ignored\":{},{fields}"
       ]
     }
   ]

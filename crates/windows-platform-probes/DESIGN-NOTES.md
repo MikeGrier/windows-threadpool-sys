@@ -2455,12 +2455,21 @@ on the unchanged configuration. Before `M4.2` that was a source edit and a rebui
 - **`probe-queue-contention` takes `--pushes-per-producer N`, `--repetitions N` and
   `--producers a,b,...`.** The three axes the item named -- duration, repetitions, concurrency --
   are these three.
-- **The cost probes, `probe-request-cost` and `probe-doorbell-cost`, take one setting,
-  `--iteration-multiplier N`.** Each times fixed loops and divides; neither repeats a measurement
-  nor varies a thread count, so lengthening the loops is the whole of
+- **The cost probes, `probe-request-cost` and `probe-doorbell-cost`, take one setting for the span,
+  `--iteration-multiplier N`** (and its counterpart, below). Each times fixed loops and divides;
+  neither repeats a measurement nor varies a thread count, so lengthening the loops is the whole of
   "more of the same" for them. One multiplier scales every loop the probe runs, the doorbell
   probe's park-and-wake rounds included, so the loops keep the lengths relative to each other that
   they were written with.
+- **`--iteration-divisor N` shortens the span the same way, and is not for figures.** Each loop
+  runs a Nth of its usual count, and at least once, so a shortened run still goes round every loop
+  and its report has every line a full one has. It exists because a test of what a probe *says* --
+  that its table and its row agree, that it reports the setting it used, that a census finds its
+  row -- does not need the figures, and a cost probe's default run is seconds long; the queue
+  probe already had settings to run short, and the census used them. A run is lengthened or
+  shortened and never both: a multiplier and a divisor both above one is refused. A shortened run
+  says so beside its banner, `iteration divisor: N (NOT the default ...)`, as a lengthened one
+  does, and adds `"iteration_divisor":N` to the row, which every run carries (1 by default).
 - **A value is given as `--name value` or `--name=value`**, parsed by
   [src/probe_args.rs](src/probe_args.rs), shared so that every probe that takes settings parses
   and refuses the same way.
@@ -2477,8 +2486,8 @@ on the unchanged configuration. Before `M4.2` that was a source edit and a rebui
   probe counts its loop in `u32`. These are this crate's limits, not a platform's.
 - **A run reports what it used, beside the banner, and says when that was not the default.** The
   queue probe's sampling line ends `(the defaults)` or `(NOT the defaults: ...)`; the cost probes
-  print `iteration multiplier: N` followed by the same distinction, and add
-  `"iteration_multiplier":N` to their NDJSON line. This is
+  print `iteration multiplier: N` (or the divisor's line) followed by the same distinction, and
+  add `"iteration_multiplier":N` and `"iteration_divisor":N` to their NDJSON line. This is
   [A probe reports observations parameterized by their capture](#d-observations-not-verdicts)
   applied to settings that are now part of the capture.
 - **The sampling is carried in the observation, not beside it.** `Observation.sampling` is what

@@ -380,11 +380,12 @@ fn render(out: &mut dyn std::fmt::Write, multiplier: IterationMultiplier) {
     let _ = writeln!(
         out,
         concat!(
-            r#"{{"reason":"x-probe-doorbell-cost","arch":"{}","iteration_multiplier":{},{}"#,
+            r#"{{"reason":"x-probe-doorbell-cost","arch":"{}","iteration_multiplier":{},"iteration_divisor":{},{}"#,
             r#""park_and_wake_round_trip_ns":{},"doorbell_over_empty_submit":{}}}"#
         ),
         std::env::consts::ARCH,
         multiplier.get(),
+        multiplier.divisor(),
         fields,
         park.map_or("null".to_string(), |n| format!("{n:.1}")),
         observation

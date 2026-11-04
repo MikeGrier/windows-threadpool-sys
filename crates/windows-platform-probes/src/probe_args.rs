@@ -22,7 +22,8 @@
 //!
 //! Only the axes a stated diagnostic step varies are reachable: the length of a timed span, and,
 //! for the probe that repeats, the repetitions and the producer counts. The cost probes neither
-//! repeat nor vary concurrency, so their one setting is the span.
+//! repeat nor vary concurrency, so their settings are the span: lengthened by a multiplier or
+//! shortened by a divisor.
 
 use std::fmt;
 
@@ -157,67 +158,112 @@ pub fn usage(probe: &str, flags: &[Flag]) -> String {
     text
 }
 
-/// How many times its usual count each timed loop of a cost probe runs: the length of the span
-/// (`M4.2`).
+/// How many times its usual count each timed loop of a cost probe runs, or what fraction of it:
+/// the length of the span (`M4.2`).
 ///
 /// One multiplier for every loop, rather than a count per loop, so the loops keep the proportions
 /// they were given -- those that make a kernel call run fewer iterations than those that do not --
-/// and lengthening the span is one decision. The default is 1, the run the published figures came
+/// and changing the span is one decision. The default is 1, the run the published figures came
 /// from.
+///
+/// The span is lengthened by a multiplier or shortened by a divisor, never both: a run that did
+/// both would have a length no single setting names. A shortened run is for a caller that wants
+/// the probe's report and not its figures, a test of what the report says among them, and says so
+/// in the report like a lengthened one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct IterationMultiplier(u32);
+pub struct IterationMultiplier {
+    times: u32,
+    divisor: u32,
+}
 
 impl Default for IterationMultiplier {
     fn default() -> Self {
-        Self(1)
+        Self {
+            times: 1,
+            divisor: 1,
+        }
     }
 }
 
 impl IterationMultiplier {
-    /// The one setting the cost probes take.
-    pub const FLAGS: [Flag; 1] = [Flag {
-        name: "iteration-multiplier",
-        value: "N",
-        help: "each timed loop runs N times its usual count, lengthening the span; 1 when not given",
-    }];
+    /// The settings the cost probes take.
+    pub const FLAGS: [Flag; 2] = [
+        Flag {
+            name: "iteration-multiplier",
+            value: "N",
+            help: "each timed loop runs N times its usual count, lengthening the span; 1 when not given",
+        },
+        Flag {
+            name: "iteration-divisor",
+            value: "N",
+            help: "each timed loop runs a Nth of its usual count, at least once, shortening the span; \
+                   not with --iteration-multiplier; 1 when not given",
+        },
+    ];
 
     /// The multiplier a command line asks for, given that the probe's longest loop runs
     /// `largest` iterations at the default.
     ///
     /// # Errors
     ///
-    /// What [`parse`] refuses, a value that is not a whole number of at least one, and a
-    /// multiplier that would take the longest loop past `u32::MAX` iterations, which is what a
-    /// loop counts in.
+    /// What [`parse`] refuses, a value that is not a whole number of at least one, a multiplier
+    /// that would take the longest loop past `u32::MAX` iterations, which is what a loop counts
+    /// in, and a multiplier and a divisor both given and both above one.
     pub fn from_args(
         args: impl IntoIterator<Item = String>,
         largest: u32,
     ) -> Result<Self, ArgError> {
         let given = parse(args, &Self::FLAGS)?;
-        let Some(value) = given.get("iteration-multiplier") else {
-            return Ok(Self::default());
-        };
-        let multiplier = u32::try_from(positive("iteration-multiplier", value)?).ok();
-        match multiplier {
-            Some(multiplier) if largest.checked_mul(multiplier).is_some() => Ok(Self(multiplier)),
-            _ => Err(ArgError::Invalid {
-                flag: "iteration-multiplier",
-                value: value.to_owned(),
-                reason: format!(
-                    "takes the longest loop, {largest} iterations at the default, past {} iterations",
-                    u32::MAX
-                ),
-            }),
+        let mut chosen = Self::default();
+        if let Some(value) = given.get("iteration-multiplier") {
+            let multiplier = u32::try_from(positive("iteration-multiplier", value)?).ok();
+            chosen.times = match multiplier {
+                Some(multiplier) if largest.checked_mul(multiplier).is_some() => multiplier,
+                _ => {
+                    return Err(ArgError::Invalid {
+                        flag: "iteration-multiplier",
+                        value: value.to_owned(),
+                        reason: format!(
+                            "takes the longest loop, {largest} iterations at the default, past {} \
+                             iterations",
+                            u32::MAX
+                        ),
+                    });
+                }
+            };
         }
+        if let Some(value) = given.get("iteration-divisor") {
+            // Past `u32::MAX` a divisor shortens every loop to its one iteration, as `u32::MAX`
+            // does, so it is saturated and not refused.
+            chosen.divisor =
+                u32::try_from(positive("iteration-divisor", value)?).unwrap_or(u32::MAX);
+            if chosen.divisor > 1 && chosen.times > 1 {
+                return Err(ArgError::Invalid {
+                    flag: "iteration-divisor",
+                    value: value.to_owned(),
+                    reason: "a run is lengthened or shortened, not both, and \
+                             --iteration-multiplier is also given"
+                        .to_owned(),
+                });
+            }
+        }
+        Ok(chosen)
     }
 
-    /// The multiplier.
+    /// The multiplier, 1 when the run is not lengthened.
     #[must_use]
     pub const fn get(self) -> u32 {
-        self.0
+        self.times
     }
 
-    /// `iterations` times the multiplier.
+    /// The divisor, 1 when the run is not shortened.
+    #[must_use]
+    pub const fn divisor(self) -> u32 {
+        self.divisor
+    }
+
+    /// `iterations` times the multiplier, over the divisor, and never fewer than one for a loop
+    /// that ran at all: a shortened run still goes round every loop.
     ///
     /// # Panics
     ///
@@ -226,16 +272,21 @@ impl IterationMultiplier {
     /// mistake.
     #[must_use]
     pub fn scale(self, iterations: u32) -> u32 {
-        iterations.checked_mul(self.0).unwrap_or_else(|| {
+        let lengthened = iterations.checked_mul(self.times).unwrap_or_else(|| {
             panic!(
                 "{iterations} iterations times {} passes u32::MAX; the probe gave \
                  `from_args` a smaller longest loop than it runs",
-                self.0
+                self.times
             )
-        })
+        });
+        if lengthened == 0 {
+            0
+        } else {
+            (lengthened / self.divisor).max(1)
+        }
     }
 
-    /// Whether this is the multiplier a run given no settings uses.
+    /// Whether this is the setting a run given no settings uses.
     #[must_use]
     pub fn is_default(self) -> bool {
         self == Self::default()
@@ -248,12 +299,18 @@ impl IterationMultiplier {
     #[must_use]
     pub fn report_line(self) -> String {
         if self.is_default() {
-            format!("iteration multiplier: {} (the default)", self.0)
+            "iteration multiplier: 1 (the default)".to_owned()
+        } else if self.divisor > 1 {
+            format!(
+                "iteration divisor: {} (NOT the default: set on the command line, so these \
+                 figures are not the published ones)",
+                self.divisor
+            )
         } else {
             format!(
                 "iteration multiplier: {} (NOT the default: set on the command line, so these \
                  figures are not the published ones)",
-                self.0
+                self.times
             )
         }
     }

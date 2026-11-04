@@ -132,9 +132,11 @@ fn a_queue_run_of_one_producer_making_one_push_is_measured() {
     );
 }
 
-#[test]
-fn a_cost_probe_given_a_multiplier_reports_it_beside_its_banner_and_in_its_row() {
-    let output = run(REQUEST, &["--iteration-multiplier", "2"]);
+/// What a cost probe given `--iteration-multiplier 2` reports: the setting beside its banner and in its
+/// row, which is a claim about the report and not about the figures, so any cost probe shows it. The
+/// doorbell probe is the quick one; the request probe's run is [`long_haul`].
+fn a_cost_probe_given_a_multiplier_reports_it(binary: &str) {
+    let output = run(binary, &["--iteration-multiplier", "2"]);
     let stdout = String::from_utf8(output.stdout).expect("a probe's report is UTF-8");
     assert!(
         output.status.success(),
@@ -151,6 +153,64 @@ fn a_cost_probe_given_a_multiplier_reports_it_beside_its_banner_and_in_its_row()
         .find(|line| line.starts_with('{'))
         .expect("the NDJSON row");
     assert!(row.contains(r#""iteration_multiplier":2,"#), "{row}");
+    assert!(row.contains(r#""iteration_divisor":1,"#), "{row}");
+}
+
+#[test]
+fn a_cost_probe_given_a_multiplier_reports_it_beside_its_banner_and_in_its_row() {
+    a_cost_probe_given_a_multiplier_reports_it(DOORBELL);
+}
+
+/// The same for the request probe, shortened: the probe takes a divisor so that a test of what its report
+/// says does not run its full workload.
+#[test]
+fn a_cost_probe_given_a_divisor_reports_it_beside_its_banner_and_in_its_row() {
+    let output = run(REQUEST, &["--iteration-divisor", "20"]);
+    let stdout = String::from_utf8(output.stdout).expect("a probe's report is UTF-8");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        lines[1].starts_with("iteration divisor: 20 (NOT the default"),
+        "the line after the banner says what the run used: {stdout}"
+    );
+    let row = lines
+        .iter()
+        .find(|line| line.starts_with('{'))
+        .expect("the NDJSON row");
+    assert!(
+        row.contains(r#""iteration_multiplier":1,"iteration_divisor":20,"#),
+        "{row}"
+    );
+}
+
+#[test]
+fn a_cost_probe_refuses_to_be_both_lengthened_and_shortened() {
+    assert_refused(
+        REQUEST,
+        &["--iteration-multiplier", "2", "--iteration-divisor", "2"],
+        "not both",
+    );
+    assert_refused(
+        DOORBELL,
+        &["--iteration-divisor", "0"],
+        "must be at least 1",
+    );
+}
+
+/// The request probe at twice its usual length, which is most of what this file costs. Nothing about it
+/// differs from the doorbell probe's run but the probe and the time.
+mod long_haul {
+    use super::*;
+
+    #[test]
+    #[ignore = "long-haul: runs the request probe at twice its usual workload"]
+    fn the_request_probe_given_a_multiplier_reports_it_beside_its_banner_and_in_its_row() {
+        a_cost_probe_given_a_multiplier_reports_it(REQUEST);
+    }
 }
 
 #[test]

@@ -252,3 +252,99 @@ fn the_report_line_says_the_multiplier_and_whether_it_is_the_default() {
         assert!(second.parse::<f64>().is_err(), "{line}");
     }
 }
+
+// --- The divisor, which shortens the span --------------------------------------------------------
+
+#[test]
+fn a_divisor_shortens_every_loop_by_the_same_factor_and_never_below_one_iteration() {
+    let divided = IterationMultiplier::from_args(args(&["--iteration-divisor", "10"]), 100_000)
+        .expect("valid");
+    assert_eq!(divided.divisor(), 10);
+    assert_eq!(divided.get(), 1, "a shortened run is not a lengthened one");
+    assert!(!divided.is_default());
+    assert_eq!(divided.scale(100_000), 10_000);
+    assert_eq!(divided.scale(20_000), 2_000);
+    assert_eq!(divided.scale(5), 1, "a loop still goes round once");
+    assert_eq!(divided.scale(1), 1);
+    assert_eq!(
+        divided.scale(0),
+        0,
+        "a loop that did not run is not made to"
+    );
+}
+
+#[test]
+fn a_divisor_of_one_is_the_default_and_a_divisor_alone_does_not_lengthen() {
+    let one =
+        IterationMultiplier::from_args(args(&["--iteration-divisor", "1"]), 10).expect("valid");
+    assert_eq!(one, IterationMultiplier::default());
+    assert!(one.is_default());
+    assert_eq!(IterationMultiplier::default().divisor(), 1);
+}
+
+#[test]
+fn a_run_is_lengthened_or_shortened_and_not_both() {
+    let error = IterationMultiplier::from_args(
+        args(&["--iteration-multiplier", "2", "--iteration-divisor", "2"]),
+        10,
+    )
+    .expect_err("both");
+    assert!(
+        matches!(
+            &error,
+            ArgError::Invalid {
+                flag: "iteration-divisor",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("not both"), "{error}");
+    // One of them being the no-op value is not both.
+    let lengthened = IterationMultiplier::from_args(
+        args(&["--iteration-multiplier", "2", "--iteration-divisor", "1"]),
+        10,
+    )
+    .expect("a divisor of one shortens nothing");
+    assert_eq!((lengthened.get(), lengthened.divisor()), (2, 1));
+    let shortened = IterationMultiplier::from_args(
+        args(&["--iteration-multiplier", "1", "--iteration-divisor", "2"]),
+        10,
+    )
+    .expect("a multiplier of one lengthens nothing");
+    assert_eq!((shortened.get(), shortened.divisor()), (1, 2));
+}
+
+#[test]
+fn a_divisor_of_zero_or_text_is_refused_and_one_past_u32_is_taken_as_the_largest() {
+    for refused in ["0", "two", "-3"] {
+        assert!(
+            IterationMultiplier::from_args(args(&["--iteration-divisor", refused]), 10).is_err(),
+            "{refused}"
+        );
+    }
+    let beyond_u32 = (u64::from(u32::MAX) + 1).to_string();
+    let huge = IterationMultiplier::from_args(args(&["--iteration-divisor", &beyond_u32]), 10)
+        .expect("a divisor past every loop shortens each to one iteration, as the largest does");
+    assert_eq!(huge.scale(1_000_000), 1);
+}
+
+#[test]
+fn the_report_line_says_a_divisor_and_that_it_is_not_the_default() {
+    let divided = IterationMultiplier::from_args(args(&["--iteration-divisor=8"]), 10)
+        .expect("valid")
+        .report_line();
+    assert!(
+        divided.starts_with("iteration divisor: 8 (NOT the default"),
+        "{divided}"
+    );
+    let second = divided.split_whitespace().nth(1).expect("two words");
+    assert!(second.parse::<f64>().is_err(), "{divided}");
+}
+
+#[test]
+fn the_usage_of_the_cost_probes_names_both_settings() {
+    let text = usage("probe-example", &IterationMultiplier::FLAGS);
+    assert!(text.contains("--iteration-multiplier N"), "{text}");
+    assert!(text.contains("--iteration-divisor N"), "{text}");
+}

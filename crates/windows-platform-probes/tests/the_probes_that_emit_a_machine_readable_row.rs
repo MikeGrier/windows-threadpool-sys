@@ -61,23 +61,35 @@ const DEADLINE: Duration = Duration::from_secs(120);
 /// built with `Row::new` answers falsely.
 const MAY_NOT_EXIT: [&str; 1] = ["probe-cancel-io"];
 
+/// The queue probe's short command line: one producer, one repetition and a thousand pushes take a
+/// fraction of a second against the default's minute.
+const QUEUE_SHORT: &[&str] = &[
+    "--producers",
+    "1",
+    "--repetitions",
+    "1",
+    "--pushes-per-producer",
+    "1000",
+];
+
+/// A cost probe's short command line: a twentieth of each loop, which still goes round every one.
+const COST_SHORT: &[&str] = &["--iteration-divisor", "20"];
+
 /// Probes run with a command line that keeps them short, and that command line.
 ///
 /// The settings change how much is measured, never which lines the report
 /// carries, so a short run answers the census's question as well as a full
-/// one. One producer, one repetition and a thousand pushes take a fraction of a
-/// second against the default's minute.
-const SHORT_RUNS: [(&str, &[&str]); 1] = [(
-    "probe-queue-contention",
-    &[
-        "--producers",
-        "1",
-        "--repetitions",
-        "1",
-        "--pushes-per-producer",
-        "1000",
-    ],
-)];
+/// one. The probes that take no setting are run as they are.
+const SHORT_RUNS: [(&str, &[&str]); 3] = [
+    ("probe-queue-contention", QUEUE_SHORT),
+    ("probe-request-cost", COST_SHORT),
+    ("probe-doorbell-cost", COST_SHORT),
+];
+
+/// What the census keeps short whatever its length: the queue probe's normal run is a minute and a half,
+/// which is not a thing to wait for in any tier. The census at full length runs every other probe
+/// as it is. See [`long_haul`].
+const ALWAYS_SHORT: [(&str, &[&str]); 1] = [("probe-queue-contention", QUEUE_SHORT)];
 
 /// Every `[[bin]]` name the manifest registers.
 fn registered_binaries(manifest: &str) -> Vec<String> {
@@ -204,8 +216,7 @@ fn emits_a_row(name: &str, mut command: Command, may_not_exit: bool, deadline: D
     }
 }
 
-#[test]
-fn every_registered_probe_emits_a_machine_readable_row() {
+fn every_registered_probe_emits_a_row(short_runs: &[(&str, &[&str])]) {
     let manifest = std::fs::read_to_string(crate_root().join("Cargo.toml"))
         .expect("the crate's manifest is readable");
     let registered = registered_binaries(&manifest);
@@ -222,7 +233,7 @@ fn every_registered_probe_emits_a_machine_readable_row() {
              waited on, which is the hang the excuse exists to avoid"
         );
     }
-    for (name, _) in SHORT_RUNS {
+    for (name, _) in short_runs {
         assert!(
             registered.iter().any(|registered| registered == name),
             "`{name}` is given a short command line by name, so it must still be \
@@ -235,7 +246,7 @@ fn every_registered_probe_emits_a_machine_readable_row() {
     let mut without_a_row: Vec<&str> = Vec::new();
     for name in &registered {
         let executable = directory.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-        let arguments = SHORT_RUNS
+        let arguments = short_runs
             .iter()
             .find(|(short, _)| short == name)
             .map_or(&[][..], |(_, arguments)| *arguments);
@@ -252,6 +263,23 @@ fn every_registered_probe_emits_a_machine_readable_row() {
         "every probe's normal run emits a row of raw data (`d-every-probe-emits-a-row` \
          in DESIGN-NOTES.md), and these did not: {without_a_row:?}"
     );
+}
+
+#[test]
+fn every_registered_probe_emits_a_machine_readable_row() {
+    every_registered_probe_emits_a_row(&SHORT_RUNS);
+}
+
+/// The census with the cost probes at their normal length, which is what "normal run" says. The probes
+/// that take a setting to run short are the only difference from the test above.
+mod long_haul {
+    use super::*;
+
+    #[test]
+    #[ignore = "long-haul: runs every probe, the cost probes at their usual workload"]
+    fn every_registered_probe_emits_a_machine_readable_row_at_full_length() {
+        every_registered_probe_emits_a_row(&ALWAYS_SHORT);
+    }
 }
 
 /// A `cmd.exe` running `script`, with a stdin it can wait on forever.
