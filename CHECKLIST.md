@@ -282,6 +282,8 @@ last learned. The decision and its alternatives are in
 
   > **-> UNBLOCKS PARKED WORK:** completing this unblocks `M34.25` in [PARKED.md](PARKED.md#m3425-plus).
 
+- [x] **M34.26** -- Add `expect: hardware-dependent` to the sabotage harness, and declare the RS-C-4 covering-flag entry with it.
+
 ## M37 -- Discharge the failable-call standard across the workspace
 
 Numbered M37, not M22. This section arrived from PR #84, which numbered it M22 without knowing

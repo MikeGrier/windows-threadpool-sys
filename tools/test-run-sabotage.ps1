@@ -1591,6 +1591,8 @@ Test-Case 'a sweep of planned overruns kills what overruns and spares what is gi
         New-FauxRun 'sleeps past the bound, but its own bound allows it' 'sleep 5 fail' 'caught' 'caught \(suite failed, exit 101\)' `
             -Extra @{ timeoutSeconds = 9 }
         New-FauxRun 'finishes under the bound' 'sleep 1 pass' 'survives' 'survived \(NOT caught\)'
+        New-FauxRun 'hardware-dependent, and the tests hang' 'hang' 'hardware-dependent' `
+            ("caught \(tests HUNG past ${b}s\)" + [regex]::Escape(' -- on this machine; either is declared'))
     )
     $root = New-FauxFixture -Runs $runs
     try {
@@ -1636,6 +1638,31 @@ Test-Case 'a sweep whose runs do not do what their entries declared fails, and n
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Remove-Fixture $root
     }
+}
+
+Test-Case 'a hardware-dependent entry behaves as declared caught or survived, says which, and still fails when the tests never ran' {
+    # Both sides of the declaration, and its edge: a run that survives and one that
+    # fails are each what it declared, and the line says which this machine gave; a
+    # patch that does not build is not a measurement of the machine, so it fails as
+    # it would under any other declaration. The hang is left to the overrun cases,
+    # where its cost is paid: here it would cost a whole bound.
+    $either = ' -- on this machine; either is declared'
+    $runs = @(
+        New-FauxRun 'the device orders the flush itself' 'pass' 'hardware-dependent' ('survived \(NOT caught\)' + [regex]::Escape($either))
+        New-FauxRun 'the device does not' 'fail' 'hardware-dependent' ('caught \(suite failed, exit 101\)' + [regex]::Escape($either))
+        New-FauxRun 'the patch does not build' 'build-fail' 'hardware-dependent' 'MANIFEST DOES NOT COMPILE \(tests never ran\)' -Ok $false
+    )
+    $root = New-FauxFixture -Runs $runs
+    try {
+        $result = Invoke-FauxSweep -Root $root
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-FauxPlanReported -Runs $runs -Output $result.Output
+        Assert-Match '1 of 3 sabotages did not behave as declared\.' $result.Output
+        $listed = $result.Output.Substring($result.Output.IndexOf('UNEXPECTED RESULTS'))
+        Assert-Match '(?m)^\s+the patch does not build\s*$' $listed 'the build failure is listed'
+        Assert-False ($listed -match 'orders the flush itself|the device does not') 'neither measurement is listed'
+    }
+    finally { Remove-Fixture $root }
 }
 
 Test-Case 'the same plan gives the same verdicts on every sweep' {

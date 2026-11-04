@@ -726,25 +726,13 @@
       ]
     },
     {
-      "name": "DECLARED BLIND SPOT: dropping the covering flag does not fire RS-C-4 on this machine",
+      "name": "HARDWARE-DEPENDENT: dropping the covering flag fires RS-C-4 only where the device does not order the flush",
       "file": "tests/flush_barrier.rs",
-      "expect": "survives",
-      "why": "A hardware-dependent limit on the conformance assertion's SENSITIVITY, measured rather than assumed. Running the treatment case with FlushCoverage::Unordered removes the barrier entirely, and on a machine where the device stack orders a flush behind that file's outstanding writes by itself -- which this file's own header documents, and which is the case here -- no preceding write completes after the flush even unflagged, so the assertion stays green. It is therefore NOT a portable demonstration that the assertion can go red: on the spike's machine it would be caught, on this one it survives. Recorded because a reader would otherwise reasonably expect this to be the calibration for RS-C-4, and it cannot be. What the assertion still does everywhere is report a violation if one occurs, which is the conformance job; what it cannot do everywhere is prove it would notice.",
-      "testArgs": [
-        "test",
-        "-p",
-        "windows-ioring-sys",
-        "--locked",
-        "--all-features",
-        "--test",
-        "flush_barrier"
-      ],
-      "find": [
-        "    let covering = run_case(&mut ring, handle, FlushCoverage::CoversPrecedingOperations);"
-      ],
-      "replace": [
-        "    let covering = run_case(&mut ring, handle, FlushCoverage::Unordered);"
-      ]
+      "expect": "hardware-dependent",
+      "why": "A hardware-dependent limit on the conformance assertion's SENSITIVITY, measured rather than assumed. Running the treatment case with FlushCoverage::Unordered removes the barrier entirely. On a machine whose device stack orders a flush behind that file's outstanding writes by itself -- which this file's own header documents -- no preceding write completes after the flush even unflagged, so the assertion stays green and the entry survives; on one whose stack does not, the assertion fires and it is caught. It was declared survives from the machine it was written on, and GitHub runners have since given both answers: survived in the nightly sweep of 2026-11-03 (run 41595881867), caught in the post-merge sweeps of c714e83b (run 41569818547) and 13f06742 (run 41714398521). So it is declared hardware-dependent (D-65), and each sweep's line records which this machine gave. It is NOT a portable demonstration that the assertion can go red. What the assertion still does everywhere is report a violation if one occurs, which is the conformance job; what it cannot do everywhere is prove it would notice.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "flush_barrier"],
+      "find": ["    let covering = run_case(&mut ring, handle, FlushCoverage::CoversPrecedingOperations);"],
+      "replace": ["    let covering = run_case(&mut ring, handle, FlushCoverage::Unordered);"]
     },
     {
       "name": "M26.7: a kernel test goes back to asserting a completion is already poppable",

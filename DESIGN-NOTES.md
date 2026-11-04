@@ -3109,6 +3109,24 @@ job as an artifact, so the job that can write never runs a test.
   [PARKED.md](PARKED.md#m45-plus-publishers), for when the new one has been shown to work.
 
 What was weighed is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-probation-results-are-kept).
+
+<a id="sabotage-hardware-dependent"></a>**An entry whose result depends on the machine declares `hardware-dependent`.**
+The engineer, 2026-11-03, choosing among taking such an entry out of its manifest into documentation, a new
+expectation, and leaving it to fail at random. The case was `windows-ioring-sys`' entry that drops a flush's
+covering flag: it was declared to survive from the machine it was written on, and GitHub runners have since
+both caught it and not, so every full sweep failed or passed on which runner it drew. `expect:
+hardware-dependent` scores caught and survived alike and puts `-- on this machine; either is declared` on
+the verdict line, so which one a machine gave is kept; a patch that does not build, or a run that never
+reached the tests, still fails, since it measured nothing.
+
+- **It is for the machine, not for flakiness.** An entry whose result varies because the tests are
+  timing-sensitive, or because the runner was slow, is a defect in the entry or the tests, and
+  `hardware-dependent` would hide it. The `why` of an entry declaring it says what about the machine
+  decides the result.
+- **Why not documentation alone.** The entry still runs everywhere and still fails a sweep on a patch that
+  stops compiling; moved into prose, nothing would notice the day the patch stopped applying.
+
+The work is [CHECKLIST.md](CHECKLIST.md) `M34.26`.
 ## <a id="compile-fail-pins-its-code"></a>A `compile_fail` doctest names the error it exists to produce
 
 **Every `compile_fail` doctest pins its expected error code -- ```` ```compile_fail,E0502 ```` -- and CI
