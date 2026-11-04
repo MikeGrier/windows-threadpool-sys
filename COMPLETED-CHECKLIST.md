@@ -4418,8 +4418,8 @@ The request probe's run went from about 5.5 s to 0.3 s, and the census from abou
 **What is left, and the blocker.** The census still takes about 6 s, and most of that is the peer-index-cache probe (3.9 s) and
 the core-affinity probe (1.5 s), which measure through `windows-placement-probe` where the workload is a `pub const` of two
 million baked into both `measure()` functions and into the run-plan arithmetic. A setting there changes the public signature of
-a function in a second published crate, which is the engineer's decision to make and not this item's, so it is
-[M45.8.1](CHECKLIST.md) and is open. Nothing else in the crate costs a second or more except the capture-script test
+a function in a second published crate, which was the engineer's decision to make and not this item's; it became
+M45.8.1 and was withdrawn the same day, below. Nothing else in the crate costs a second or more except the capture-script test
 (1.7 s), which is `M45.10`'s.
 
 **Sabotage.** Nine new entries cover the divisor (not shortening, shortening to zero, starting a loop that did not run, allowing
@@ -4427,3 +4427,17 @@ both settings, refusing the no-op value beside a multiplier, a huge divisor read
 The 16 entries whose patched file changed, among them those nine and two controls that survive by design, and the 15 the published
 catcher record names as caught by a test this changed, all behave as declared. Two existing entries followed the code: the request
 row's find string gained the new field, and the control that shortens the queue probe's run moved with its constant.
+
+## Moved 2026-11-04 12:14:16 -05:00 -- M45.8.1: withdrawn
+
+### <a id="m4581"></a>M45.8.1 -- Withdrawn: a setting for the size of the peer-index-cache and core-affinity probes is not worth a second crate's public API change for about six seconds. *(withdrawn 2026-11-04 12:14:16 -05:00)*
+
+- [x] **M45.8.1** -- `windows-placement-probe`: a setting for how many items its peer-index-cache and core-affinity
+  measurements move, so the census in `windows-platform-probes` can run those two probes short as it does the
+  others. **Withdrawn, and not done.**
+
+The engineer, 2026-11-04, after the cost was set out (those two probes are most of what the census still takes, about 3.9 s and
+1.5 s of the six or so it takes, on debug builds): "6s is not a huge problem in terms of the time, IMO". The setting would have
+meant a `measure_with(items)` in two modules of `windows-placement-probe`, a count carried in each observation, and the figures
+that divide by the `ITEMS` constant dividing by it, which is a change of public API in a second published crate. The census
+keeps running both probes at their normal length. Nothing is scheduled.

@@ -630,8 +630,6 @@ is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it
 
 - [x] **M45.8** -- The census and the cost-probe tests run the cost probes at a twentieth of their workload through a new `--iteration-divisor`, with full-length forms long-haul. -> [completed 2026-11-04](COMPLETED-CHECKLIST.md#m458)
 
-- [ ] **M45.8.1** -- `windows-placement-probe`: a setting for how many items its peer-index-cache and core-affinity\n  measurements move, so the census in `windows-platform-probes` can run those two probes short as it does the\n  others. `ITEMS` is a `pub const` of two million that both `measure()` functions and the run-plan arithmetic\n  (`timed_runs() * ITEMS`) are written against, so a setting changes the signature of a public function in a\n  second published crate and what its figures divide by. Those two probes are most of what the census still costs\n  (about 3.9 s and 1.5 s of the six or so it takes). **Needs the engineer's decision on the shape of the setting**:\n  a parameter to `measure`, or a settings type with a default as the cost probes' is.
-
 - [ ] **M45.9** -- The tests whose wait is their claim: `win-job-launcher`'s bound killing a descendant or a
   grandchild, `win-debugging-sys`' process that outlives its bound, and the registration bounds in
   `win-durable-ioring`. Shorten a bound only where the claim holds at the shorter one; otherwise leave it
