@@ -32,3 +32,16 @@ milestone of [CHECKLIST.md](CHECKLIST.md), and the file is deleted when it is em
   is left until it is known how often a stall still reaches a control once they do. A control's patch
   changes nothing, so a timeout on one cannot be a detection; a timeout on an entry declared `caught`
   can be, and stays one either way.
+
+## <a id="m45-plus-publishers"></a>M45+ -- The two publishers of a record to a branch (parked behind M45.10)
+
+- [ ] **M45+.2** -- Merge or delete the copy. `tools/publish-probation-results.ps1` and `Get-ProbationBranch` in
+  `tools/probation-common.ps1` repeat the approach of `tools/publish-sabotage-catchers.ps1` and
+  `Get-SabotageRecordBranch` in `tools/common.ps1`: ask the remote for the branch, build a blob, a tree and a
+  commit with plumbing in an index of its own, push a fast-forward, retry from a fresh fetch. Decide whether
+  one parameterised publisher serves both, or whether the two stay apart.
+
+  **Gate:** [M45.10](CHECKLIST.md). The probation publisher is a copy so that building it left the sabotage harness
+  alone (`DESIGN-NOTES.md`, "probation-results"), and it is to be judged after the scheduled workflow has run it
+  against the real remote, which nothing before M45.10 does. A merge edits `tools/common.ps1`, which every
+  sabotage sweep takes as an input.

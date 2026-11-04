@@ -1,0 +1,394 @@
+{
+  "description": "Sabotages for the probation tier's results -- probation-common.ps1, run-tier.ps1, publish-probation-results.ps1 and report-probation.ps1 -- judged by test-probation.ps1. Run with tools/run-sabotage.ps1 -Manifest tools/sabotage-probation.json -CargoCommand tools/sabotage-probation-runner.cmd; see tools/README-sabotage.md.",
+  "root": "..",
+  "package": "sabotage-probation",
+  "testArgs": [
+    "--suite"
+  ],
+  "sabotages": [
+    {
+      "name": "a failure does not end the run of passes",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "The run of passes is what promotion is decided on. A failure that leaves it standing would show a test that failed last night as having passed every night.",
+      "find": [
+        "else { $t.streak = 0; $t.last = $script:ProbationFail }"
+      ],
+      "replace": [
+        "else { $t.last = $script:ProbationFail }"
+      ]
+    },
+    {
+      "name": "a pass is not counted as a pass",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "The record gives passes beside runs, and a candidate is judged on them.",
+      "find": [
+        "if ($outcome.Outcome -eq $script:ProbationPass) { $t.passes++; $t.streak++;"
+      ],
+      "replace": [
+        "if ($outcome.Outcome -eq $script:ProbationPass) { $t.streak++;"
+      ]
+    },
+    {
+      "name": "a run already applied is applied again",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "A publisher that retries from a fresh fetch applies the run to what it fetched, which may already hold it. Counted twice, a test is a run nearer promotion than it has earned.",
+      "find": [
+        "if ($Record.latestRun -eq $RunId) { return $Record }"
+      ],
+      "replace": [
+        "if ($false) { return $Record }"
+      ]
+    },
+    {
+      "name": "the latest run does not move on",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "The report knows a test was not in the latest run by its last run being another. A latest run that never moves leaves a promoted or deleted test reading as current.",
+      "find": [
+        "    $Record.latestRun = $RunId"
+      ],
+      "replace": [
+        "    $Record.latestRun = $Record.latestRun"
+      ]
+    },
+    {
+      "name": "a candidate needs one pass more than the threshold",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "The threshold is the passes in a row that make a candidate, so a test at it is one.",
+      "find": [
+        "elseif ($t.streak -ge $Threshold)"
+      ],
+      "replace": [
+        "elseif ($t.streak -gt $Threshold)"
+      ]
+    },
+    {
+      "name": "a test whose last run failed is not called failing",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "A test that has passed four in a row and failed the fifth is not a candidate, and the report says what it is.",
+      "find": [
+        "elseif ($t.last -eq $script:ProbationFail) { $script:StatusFailing }"
+      ],
+      "replace": [
+        "elseif ($false) { $script:StatusFailing }"
+      ]
+    },
+    {
+      "name": "a test the latest run did not report is called current",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "A test promoted to long_haul stops being reported. Its streak stands in the record, and without this it would be listed as a candidate for what it no longer is.",
+      "find": [
+        "$status = if ($t.lastRun -ne $Record.latestRun) { $script:StatusAbsent }"
+      ],
+      "replace": [
+        "$status = if ($false) { $script:StatusAbsent }"
+      ]
+    },
+    {
+      "name": "a threshold of zero is accepted",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "Every test has passed zero runs in a row, so a threshold of zero makes every test a candidate.",
+      "find": [
+        "if ($Threshold -lt 1) { throw \"The threshold"
+      ],
+      "replace": [
+        "if ($Threshold -lt 0) { throw \"The threshold"
+      ]
+    },
+    {
+      "name": "a test that started and never reported is counted as a pass",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "A test that aborts its process is the case probation exists for. Counted as a pass, or as nothing, it would be promoted.",
+      "find": [
+        "Outcome = $script:ProbationFail; Note = 'started and never"
+      ],
+      "replace": [
+        "Outcome = $script:ProbationPass; Note = 'started and never"
+      ]
+    },
+    {
+      "name": "a test left pending by one executable is carried into the next",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "Its name would then be recorded under the next executable's target, which is a different test.",
+      "find": [
+        "            & $closeTarget"
+      ],
+      "replace": [
+        "            $null = 0"
+      ]
+    },
+    {
+      "name": "a test left pending at the end of the capture is dropped",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "The last executable is the one a crash is most likely to end the capture in.",
+      "find": [
+        "& $closeTarget # the end of the capture closes the last executable"
+      ],
+      "replace": [
+        "$null = 0 # the end of the capture closes the last executable"
+      ]
+    },
+    {
+      "name": "a test is keyed by its file name and not its source path",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "Two crates both have a src/lib.rs and a tests/integration.rs. Keyed by the leaf, their tests are one test.",
+      "find": [
+        "($source -replace"
+      ],
+      "replace": [
+        "([System.IO.Path]::GetFileName($source) -replace"
+      ]
+    },
+    {
+      "name": "an executable that is not a test build is a test executable",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "A library or binary build names an executable that is not a test harness, and a header naming one would be given a target that has no tests.",
+      "find": [
+        "-or -not $message.profile.test) { continue }"
+      ],
+      "replace": [
+        ") { continue }"
+      ]
+    },
+    {
+      "name": "a record of another version is read as this one",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "A layout this does not know, read as this one, publishes over it with a record the other reader cannot read.",
+      "find": [
+        "if ($json.version -ne $script:ProbationRecordVersion) {"
+      ],
+      "replace": [
+        "if ($false) {"
+      ]
+    },
+    {
+      "name": "the keys are sorted by the host's culture",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "A record is compared as text, so two hosts must write the same bytes. Culture order puts a before B and ordinal does not.",
+      "find": [
+        "[Array]::Sort($keys, [System.StringComparer]::Ordinal)"
+      ],
+      "replace": [
+        "[Array]::Sort($keys)"
+      ]
+    },
+    {
+      "name": "a time read as a DateTime is written in the host's own format",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "PowerShell 7 reads an ISO 8601 string out of JSON as a DateTime, and written back it would come out as 01/01/2026 00:00:00 and differ from what the branch holds, so every publish would commit.",
+      "find": [
+        "if ($Value -is [DateTime]) { return"
+      ],
+      "replace": [
+        "if ($false) { return"
+      ]
+    },
+    {
+      "name": "the push is forced",
+      "file": "tools/publish-probation-results.ps1",
+      "expect": "caught",
+      "why": "A rejected push means another publisher moved the branch since the fetch. Forcing it past that overwrites the run they published.",
+      "find": [
+        "git -C $RepositoryRoot push --quiet $Remote"
+      ],
+      "replace": [
+        "git -C $RepositoryRoot push --quiet --force $Remote"
+      ]
+    },
+    {
+      "name": "an unreachable remote is read as an absent branch",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "`ls-remote --exit-code` exits 2 for no matching ref and 128 for a remote it could not ask. A publisher that took the second for the first would write a root commit over history it could not see.",
+      "find": [
+        "if ($asked.ExitCode -eq 2) { return & $result $false $null $null $null }"
+      ],
+      "replace": [
+        "if ($asked.ExitCode -ne 0) { return & $result $false $null $null $null }"
+      ]
+    },
+    {
+      "name": "the branch is asked for by its bare name",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "ls-remote matches a pattern against the tail of each ref, so the bare name also finds refs/heads/other/probation-results.",
+      "find": [
+        "ls-remote --exit-code --heads $Remote \"refs/heads/$Branch\" }"
+      ],
+      "replace": [
+        "ls-remote --exit-code --heads $Remote $Branch }"
+      ]
+    },
+    {
+      "name": "a run the branch already holds is published again",
+      "file": "tools/publish-probation-results.ps1",
+      "expect": "caught",
+      "why": "Publishing it again would add a commit that changes nothing, on every retry and every re-publish.",
+      "find": [
+        "if ($record.latestRun -eq $RunId) {"
+      ],
+      "replace": [
+        "if ($false) {"
+      ]
+    },
+    {
+      "name": "a run that selected nothing creates the branch",
+      "file": "tools/publish-probation-results.ps1",
+      "expect": "caught",
+      "why": "The first run, before any test is on probation, would create a branch holding an empty record.",
+      "find": [
+        "if ($incoming.Count -eq 0 -and $record.tests.Count -eq 0) {"
+      ],
+      "replace": [
+        "if ($false) {"
+      ]
+    },
+    {
+      "name": "a commit is made without its parent",
+      "file": "tools/publish-probation-results.ps1",
+      "expect": "caught",
+      "why": "A root commit over a branch the remote already has is not a fast-forward, and is refused every time.",
+      "find": [
+        "if ($state.Present) { $arguments += @('-p', $state.Commit) }"
+      ],
+      "replace": [
+        "if ($false) { $arguments += @('-p', $state.Commit) }"
+      ]
+    },
+    {
+      "name": "a branch that could not be asked about is published over anyway",
+      "file": "tools/publish-probation-results.ps1",
+      "expect": "caught",
+      "why": "The error is the only thing that says the remote was unreachable and not empty.",
+      "find": [
+        "if ($state.Error) { return $state.Error }"
+      ],
+      "replace": [
+        "if ($false) { return $state.Error }"
+      ]
+    },
+    {
+      "name": "missing outcomes exit zero",
+      "file": "tools/publish-probation-results.ps1",
+      "expect": "caught",
+      "why": "A publisher that was not given what it publishes must not look like one that published.",
+      "find": [
+        "Write-Host \"No outcomes to publish at $Outcomes.\"; exit 2"
+      ],
+      "replace": [
+        "Write-Host \"No outcomes to publish at $Outcomes.\"; exit 0"
+      ]
+    },
+    {
+      "name": "a remote that cannot be asked exits zero",
+      "file": "tools/report-probation.ps1",
+      "expect": "caught",
+      "why": "A report of nothing is not a report of an empty record.",
+      "find": [
+        "if ($state.Error) { Write-Host $state.Error; exit 1 }"
+      ],
+      "replace": [
+        "if ($state.Error) { Write-Host $state.Error; exit 0 }"
+      ]
+    },
+    {
+      "name": "the report is not appended to the step summary",
+      "file": "tools/report-probation.ps1",
+      "expect": "caught",
+      "why": "The summary is where the result of a run is read.",
+      "find": [
+        "if ($SummaryPath) {"
+      ],
+      "replace": [
+        "if ($false) {"
+      ]
+    },
+    {
+      "name": "libtest is not asked for its JSON output",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "The unstable format is what carries each test's outcome, and it is asked for with RUSTC_BOOTSTRAP, which libtest honours whatever the value is set to, so the entry removes the variable. Without it the run is text, and nothing is read from it.",
+      "find": [
+        "    $env:RUSTC_BOOTSTRAP = '1'"
+      ],
+      "replace": [
+        "    Remove-Item Env:\\RUSTC_BOOTSTRAP -ErrorAction SilentlyContinue"
+      ]
+    },
+    {
+      "name": "the step does not exit with cargo's code",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "A failing probation test fails its step; that is how it is seen.",
+      "find": [
+        "exit $cargoExit"
+      ],
+      "replace": [
+        "exit 0"
+      ]
+    },
+    {
+      "name": "ignored tests are not asked for",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "A tier's tests are ignored, so a run that does not pass --ignored runs none of them.",
+      "find": [
+        "-- --ignored $Module"
+      ],
+      "replace": [
+        "-- $Module"
+      ]
+    },
+    {
+      "name": "a build that failed exits zero",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "A run over tests that did not build is not a run that found nothing wrong.",
+      "find": [
+        "exit $built.ExitCode"
+      ],
+      "replace": [
+        "exit 0"
+      ]
+    },
+    {
+      "name": "the record's tests are told apart without regard to case",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "A Rust test name is case-sensitive and two can differ only by case. Compared without regard to it, they are one test in the record, and one test's failures are another's passes. `[ordered]@{}` and PowerShell's own object properties both compare this way, which is how the record came to be an ordinal dictionary and a list.",
+      "find": [
+        "-ArgumentList ([System.StringComparer]::Ordinal)"
+      ],
+      "replace": [
+        "-ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)"
+      ]
+    },
+    {
+      "name": "CONTROL: the explanation on the branch is reworded",
+      "file": "tools/publish-probation-results.ps1",
+      "expect": "survives",
+      "why": "The manifest checking itself. This changes what a reader of the branch sees and nothing a test claims, so it MUST survive -- if it comes back caught, the suite is matching on incidental wording rather than behaviour, and its other results are worth less than they look.",
+      "find": [
+        "To read it, run"
+      ],
+      "replace": [
+        "To look at it, run"
+      ]
+    }
+  ]
+}

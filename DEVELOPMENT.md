@@ -86,14 +86,21 @@ marker but is not spelled as one. CI runs it after the all-features `cargo test`
 [tools/test-check-test-tiers.ps1](tools/test-check-test-tiers.ps1) tests it. The reasoning is in
 [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
 
-[.github/workflows/long-haul.yml](.github/workflows/long-haul.yml) runs the tiers: `cargo test --workspace
---all-features --locked --no-fail-fast --lib --bins --tests --examples -- --ignored long_haul::`, and then the
-same with `probation::`. It runs daily when `main` has moved since the last run that completed, and on a manual
-dispatch (from any branch, always). A failure in the long-haul tier fails the run. A failure in the probation
-tier does not: that step is `continue-on-error`, and the run's summary says what it did. The decision whether
-`main` has moved is [tools/plan-long-haul.ps1](tools/plan-long-haul.ps1), tested by
-[tools/test-plan-long-haul.ps1](tools/test-plan-long-haul.ps1). To run a tier locally, pass the same arguments
-for the crate in hand: `cargo test -p <crate> --all-features -- --ignored long_haul::`.
+[.github/workflows/long-haul.yml](.github/workflows/long-haul.yml) runs the tiers, the long-haul tier and then the
+probation tier, each through [tools/run-tier.ps1](tools/run-tier.ps1), which owns the command that selects a tier.
+It runs daily when `main` has moved since the last run that completed, and on a manual dispatch (from any branch,
+always). A failure in the long-haul tier fails the run. A failure in the probation tier does not: that step is
+`continue-on-error`. The decision whether `main` has moved is [tools/plan-long-haul.ps1](tools/plan-long-haul.ps1),
+tested by [tools/test-plan-long-haul.ps1](tools/test-plan-long-haul.ps1). To run a tier locally:
+`./tools/run-tier.ps1 -Module long_haul -OutputDirectory .scratch/tiers/long_haul`, or for one crate,
+`cargo test -p <crate> --all-features -- --ignored long_haul::`.
+
+What each probation test did is kept across runs on the `probation-results` branch, which holds one generated file and
+shares no history with `main`. To read it, run `./tools/report-probation.ps1`: each test's runs, passes, current run of
+passes and latest result, and which tests have passed enough runs in a row (`-Threshold`) to be candidates for promotion.
+Promoting one is a change to the test, moving it from the `probation` module to `long_haul`; the report decides nothing,
+and the threshold is a working position (see [DESIGN-NOTES.md](DESIGN-NOTES.md#probation-results)). The scripts are
+tested by [tools/test-probation.ps1](tools/test-probation.ps1).
 
 ## Release process
 

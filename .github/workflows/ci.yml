@@ -237,6 +237,17 @@ jobs:
       - name: Run test-plan-long-haul.ps1 (Windows PowerShell 5.1)
         shell: powershell
         run: ./tools/test-plan-long-haul.ps1
+      # The scripts that run a tier, keep what each probation test did on a branch, and report
+      # it. A defect in them is quiet: a test counted as passing that did not, a run counted
+      # twice, or a test that killed its process counted as never having run. The publisher
+      # runs against a bare repository, and the runner against real one-crate workspaces. Both
+      # hosts, as above.
+      - name: Run test-probation.ps1
+        shell: pwsh
+        run: ./tools/test-probation.ps1
+      - name: Run test-probation.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-probation.ps1
       # pwsh only, and deliberately not repeated under 5.1 like the step above:
       # check-encoding.ps1 carries curated mojibake with no BOM, so 5.1 decodes
       # it as ANSI and cannot parse it. The suite says so and refuses to run

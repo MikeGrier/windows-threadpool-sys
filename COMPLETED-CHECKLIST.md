@@ -4245,3 +4245,44 @@ The workflow itself has never run: nothing in the repository can run a GitHub sc
 reaches `main` is the first time its two jobs and the `gh` call run on a runner. The commands were run locally, on the
 workspace, where nothing is tiered yet and every executable reports no tests selected, and on a fixture crate whose
 long-haul tests were selected and whose other ignored tests were not.
+
+## Moved 2026-11-03 21:35:43 -05:00 -- M45.3: the probation tier's results
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#probation-results).
+
+### <a id="m453"></a>M45.3 -- Probation results are kept on the `probation-results` branch and reported; the promotion threshold stays a working position. *(completed 2026-11-03 21:35:43 -05:00)*
+
+- [x] **M45.3** -- Keep each probation test's results across runs, and report them. The report gives each
+  probation test's runs, passes and current run of passes, which is what promoting it from `probation`
+  to `long_haul` -- a code change -- is decided on. Where the results live is this item's to decide
+  (artifacts expire; the sabotage record's branch is the pattern that does not), and so is the
+  promotion threshold, which is a working position until the first results exist.
+
+**Done.** Where the results live is decided: a branch of their own, `probation-results`, holding one generated
+`results.json`, written by a `record` job in [long-haul.yml](.github/workflows/long-haul.yml) and read by
+[report-probation.ps1](tools/report-probation.ps1). The tests run in a job with read-only access and hand what each
+did to the `record` job as an artifact, so the job that can write never runs a test.
+[run-tier.ps1](tools/run-tier.ps1) now owns the command that selects a tier, and both of the workflow's tiers go through
+it; it reads each test's outcome from libtest's JSON events, keys it by the source path of the target its executable was
+built from, and counts a test that started and never reported (its executable aborted) as a failure.
+[publish-probation-results.ps1](tools/publish-probation-results.ps1) applies a run once, whatever the number of retries,
+and never forces. The reasoning is in [DESIGN-NOTES.md](DESIGN-NOTES.md#probation-results) and
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-probation-results-are-kept).
+
+The promotion threshold is **not decided**: the report takes it as `-Threshold` and labels its default a working
+position, because there is no result yet to suggest a number. It is the one part of this item left open on purpose, and
+nothing is scheduled for it: the first results are what settle it.
+
+[tools/test-probation.ps1](tools/test-probation.ps1) tests the parse, the record, the report, the publisher against a bare
+repository (including a race and a branch whose name merely ends the same) and the runner against real one-crate
+workspaces, one of which has an executable that aborts, on PowerShell 7 and Windows PowerShell 5.1, in CI with the other
+harness suites. [tools/sabotage-probation.json](tools/sabotage-probation.json) re-injects 31 defects and a control, and all
+behave as declared. Its sweep found two things: a surviving entry showed that `[ordered]@{}` compares keys without regard to
+case, so the record would have merged two tests that differ only by case (it is now a list on disk and an ordinal dictionary
+in memory); and `RUSTC_BOOTSTRAP=0` still turns on libtest's unstable options, because libtest only checks that the
+variable is set, so the entry that was meant to switch them off removes the variable instead.
+
+The workflow has not run on a runner, so the first dispatch after it reaches `main` is the first time the `record` job, its
+artifact hand-off and the push to the new branch run for real. Nothing is on probation yet (`M45.4` puts the first tests
+there), so that run will publish nothing and report an empty record. The `record` job's publisher is a copy of the sabotage
+record's, on purpose; the merge-or-delete decision is parked as `M45+.2`.

@@ -618,11 +618,7 @@ is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it
 - [x] **M45.2** -- `long-haul.yml`: daily when `main` has moved, plus dispatch; the long-haul tier fails the run, the probation tier does not. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m452)
 
 
-- [ ] **M45.3** -- Keep each probation test's results across runs, and report them. The report gives each
-  probation test's runs, passes and current run of passes, which is what promoting it from `probation`
-  to `long_haul` -- a code change -- is decided on. Where the results live is this item's to decide
-  (artifacts expire; the sabotage record's branch is the pattern that does not), and so is the
-  promotion threshold, which is a working position until the first results exist.
+- [x] **M45.3** -- Probation results are kept on the `probation-results` branch and reported; the promotion threshold stays a working position. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m453)
 
 - [ ] **M45.4** -- Put the never-run tests on probation: `windows-ioring-sys`' five flush-barrier stress
   tests ("saturates a disk with background writers"; "writes tens of MiB per trial") and
@@ -653,4 +649,4 @@ is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it
   `windows-file-watcher`'s scenario stress and `windows-ioring-sys`' properties under every resolution, by
   re-measuring the workspace once M45.5 to M45.9 are in.
 
-  > **-> UNBLOCKS PARKED WORK:** completing this unblocks `M45+` in [PARKED.md](PARKED.md#m45-plus).
+  > **-> UNBLOCKS PARKED WORK:** completing this unblocks `M45+` in [PARKED.md](PARKED.md#m45-plus), and the publishers' merge-or-delete in [PARKED.md](PARKED.md#m45-plus-publishers).

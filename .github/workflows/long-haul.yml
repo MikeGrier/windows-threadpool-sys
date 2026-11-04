@@ -18,6 +18,8 @@
 # are the full-scale form of claims the push-time suites hold at a small size. The
 # probation tier does not: its tests have no record yet, and a failure is data rather
 # than a verdict. It runs after the long-haul tier, and whatever the long-haul tier did.
+# Its results are kept across runs on the probation-results branch, by the last job, and
+# reported in the run's summary (DESIGN-NOTES.md, "probation-results").
 #
 # WHY IT IS NOT PART OF THE SABOTAGE SWEEP. A sweep runs a crate's whole suite once per
 # entry, so a tier that costs minutes would be paid for hundreds of times. A sweep never
@@ -81,22 +83,70 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: long-haul
-      # Library, binary, integration and example test targets, as `cargo test` builds
-      # them, and not the doctests: a doctest cannot sit in a `long_haul` module.
-      # `--no-fail-fast` so every crate's tier reports rather than the first to fail.
-      - name: cargo test (long-haul tier)
-        run: 'cargo test --workspace --all-features --locked --no-fail-fast --lib --bins --tests --examples -- --ignored long_haul::'
+      # tools/run-tier.ps1 owns the command that selects a tier: the library, binary,
+      # integration and example test targets with `--ignored` and the tier's module
+      # filter, and not the doctests, since a doctest cannot sit in a `long_haul`
+      # module. `--no-fail-fast` so every crate's tier reports rather than the first
+      # to fail. It writes what each test did, and exits with cargo's own code.
+      - name: Run the long-haul tier
+        shell: pwsh
+        run: ./tools/run-tier.ps1 -Module long_haul -OutputDirectory .scratch/tiers/long_haul
       # After the long-haul tier, and whether or not it passed, but never cancelled.
-      - name: cargo test (probation tier)
+      - name: Run the probation tier
         id: probation
         if: ${{ !cancelled() }}
         continue-on-error: true
-        run: 'cargo test --workspace --all-features --locked --no-fail-fast --lib --bins --tests --examples -- --ignored probation::'
-      # A failed probation step leaves the job green, so say what it did where it is read.
-      - name: Report the probation tier
+        shell: pwsh
+        run: ./tools/run-tier.ps1 -Module probation -OutputDirectory .scratch/tiers/probation
+      # What each probation test did, for the job below that keeps it. Passed on as an
+      # artifact so that the job holding write access never runs the tests, which run
+      # here with read-only access.
+      - name: Upload what each probation test did
         if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: probation-outcomes
+          path: .scratch/tiers/probation/outcomes.json
+          if-no-files-found: warn
+          retention-days: 1
+          overwrite: true
+
+  # Keeps what each probation test did, across runs, on the `probation-results` branch,
+  # and reports it (DESIGN-NOTES.md, "probation-results"). The only job here that writes
+  # to the repository, and it writes one branch, which holds nothing but this record. It
+  # runs the scripts of the checkout this run is for and none of the tests, which ran in
+  # the job above with read-only access.
+  #
+  # Not fatal, as the sweep's equivalent is not: the record only ever gains or misses a
+  # run, and a red run for a publish that failed would be read as a test that did.
+  record:
+    name: keep the probation results
+    needs: [plan, tiers]
+    if: ${{ always() && needs.plan.outputs.run == 'true' }}
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download what each probation test did
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: probation-outcomes
+          path: .scratch/probation
+      # The id of the run and its attempt: a re-run of the jobs is another run of the
+      # tests, and applying the same id twice is applying it once.
+      - name: Publish the results to the probation-results branch
+        if: ${{ hashFiles('.scratch/probation/outcomes.json') != '' }}
+        continue-on-error: true
         shell: pwsh
         env:
-          PROBATION_OUTCOME: ${{ steps.probation.outcome }}
-        run: |
-          "probation tier: ${env:PROBATION_OUTCOME}" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          RUN_ID: ${{ github.run_id }}.${{ github.run_attempt }}
+          RUN_SHA: ${{ github.sha }}
+        run: ./tools/publish-probation-results.ps1 -Outcomes .scratch/probation/outcomes.json -RunId "${env:RUN_ID}" -Commit "${env:RUN_SHA}"
+      # Read back from the branch, so what is reported is what is kept, and so that a
+      # run that could not publish still reports what the branch holds.
+      - name: Report the probation tier
+        continue-on-error: true
+        shell: pwsh
+        run: ./tools/report-probation.ps1 -SummaryPath "${env:GITHUB_STEP_SUMMARY}"

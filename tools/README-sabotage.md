@@ -235,6 +235,17 @@ that is expected to survive and says why.
     -CargoCommand (Resolve-Path tools\sabotage-long-haul-runner.cmd).Path
 ```
 
+[sabotage-probation.json](sabotage-probation.json) is the same for the scripts that keep the probation tier's results --
+[probation-common.ps1](probation-common.ps1), [run-tier.ps1](run-tier.ps1),
+[publish-probation-results.ps1](publish-probation-results.ps1) and [report-probation.ps1](report-probation.ps1) -- judged by
+[test-probation.ps1](test-probation.ps1) through [sabotage-probation-runner.cmd](sabotage-probation-runner.cmd). That suite
+builds real one-crate workspaces, so each entry costs close to a minute.
+
+```powershell
+.\tools\run-sabotage.ps1 -Manifest tools\sabotage-probation.json `
+    -CargoCommand (Resolve-Path tools\sabotage-probation-runner.cmd).Path
+```
+
 Runs on **Windows PowerShell 5.1 and PowerShell 7 alike**, like the other
 scripts in this directory, and the full sweep is verified on both. Worth stating
 because the two differ in ways that bite here specifically: 5.1 rejects

@@ -3052,11 +3052,56 @@ test's cost is paid on each; a test whose claim holds at a small size is written
   tests which don't fail the run but we gather data on whether they succeed or fail and we can promote
   them to non-probationary once they succeed for enough runs"). It runs after the long-haul tier, its
   failures do not fail the run, and its results are kept across runs. Promotion is a code change, moving
-  the test to `long_haul`. **Working positions, not decisions:** how many passes are enough, and where the
-  results are kept; both are `M45.3`'s, decided once there are results to look at.
+  the test to `long_haul`. Where the results are kept is [probation-results](#probation-results).
+  **A working position, not a decision:** how many passes are enough, which is `M45.3`'s to settle once
+  there are results to look at.
 
 The work is [CHECKLIST.md](CHECKLIST.md) `M45`. What prompted it, and the measurements, are in
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-a-long-haul-tier).
+<a id="probation-results"></a>**Each probation test's results are kept across runs on a branch of their own, `probation-results`, and reported; how many passes are enough is a working position.**
+`M45.3` left this to its own work, having said only that artifacts expire and that the sabotage record's
+branch is the pattern that does not. The record, `results.json`, is derived data in the same sense as the
+[sabotage record](#sabotage-records), so it has the same home and the same reasons: a branch that shares no
+history with `main`, written by the `record` job of
+[long-haul.yml](.github/workflows/long-haul.yml) with
+[publish-probation-results.ps1](tools/publish-probation-results.ps1), and read by
+[report-probation.ps1](tools/report-probation.ps1), which prints each test's runs, passes, current run of
+passes and latest result. The tests run in a job with read-only access and hand what each did to the `record`
+job as an artifact, so the job that can write never runs a test.
+
+- **What a result is.** [run-tier.ps1](tools/run-tier.ps1) runs a tier through libtest's JSON events, which are
+  unstable and are asked for as [check-test-tiers.ps1](tools/check-test-tiers.ps1) asks for them, and reads
+  what each test did from them and not from text meant for a person. A test is keyed by the source path of the
+  target its executable was built from, relative to the workspace, and its path inside it: cargo's own
+  `Running` header names a path relative to the package, which two crates share, so the executable is mapped
+  to its target from the build's JSON. An executable that cargo ran and the build did not produce is an error.
+  cargo's output and the events are one file by one redirect, because the header says which executable the
+  events after it belong to and two pipes read on two threads do not keep that order.
+- **A test's key is case-sensitive.** Two Rust tests can differ only by case, and PowerShell's ordered
+  dictionaries and object properties both treat those as one, which would merge two tests' counts. The record
+  is a list on disk and an ordinal-keyed dictionary in memory for that reason.
+- **A test that started and was never reported is a failure.** The executable stopped under it, by a crash or
+  an abort; counting that as a pass, or as nothing, would promote exactly the test probation is for. A test
+  of an executable that stopped before it started is not known to exist and is not counted.
+- **A run is applied once.** Each run has an id (the workflow's run and its attempt, since a re-run of the
+  jobs is another run of the tests), and a record whose latest run is that id is left as it is, so a retry
+  from a fresh fetch cannot count a run twice. The record's latest run moving on is also how a test that was
+  not in it is known: it was promoted, renamed or deleted, and the report says so and does not call it a
+  candidate for what it no longer is. Its counts are kept; nothing prunes the record.
+- **The threshold is the report''s, and is a working position.** The report calls a test a candidate when its
+  latest result is a pass and its current run of passes has reached `-Threshold`. The
+  default is a guess made before a result exists, it decides nothing -- promotion is a change to the test --
+  and it is a parameter so that what the first results suggest can be tried without a code change. It has no
+  decision ID and nothing binds to it.
+- **Not fatal.** The publish and the report are `continue-on-error`, as the sweep''s record is: a result the
+  record misses is a run it lacks, and a red run for a publish that failed would be read as a test that did.
+- **The plumbing is a copy, deliberately.** [publish-probation-results.ps1](tools/publish-probation-results.ps1)
+  and `Get-ProbationBranch` follow [publish-sabotage-catchers.ps1](tools/publish-sabotage-catchers.ps1) and
+  `Get-SabotageRecordBranch` rather than generalising them, so that building this did not touch the sabotage
+  harness, which a change to `common.ps1` would have re-swept in full. Whether to merge them is parked, in
+  [PARKED.md](PARKED.md#m45-plus-publishers), for when the new one has been shown to work.
+
+What was weighed is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-probation-results-are-kept).
 ## <a id="compile-fail-pins-its-code"></a>A `compile_fail` doctest names the error it exists to produce
 
 **Every `compile_fail` doctest pins its expected error code -- ```` ```compile_fail,E0502 ```` -- and CI
