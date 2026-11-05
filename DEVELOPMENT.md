@@ -82,7 +82,10 @@ convention. [tools/check-test-tiers.ps1](tools/check-test-tiers.ps1) asks every 
 list and refuses a test whose reason and module disagree: marked but not in the module (nothing would run
 it), in the module but not marked (it would run on every push, or be swept into the tier for another
 reason), a path that contains `long_haul::` without a module of that name, and a reason that reads like a
-marker but is not spelled as one. CI runs it after the all-features `cargo test`, and
+marker but is not spelled as one. It also reads the workflows' `cargo test` commands that run ignored tests
+(`--include-ignored`, `--ignored`) and refuses one that would select a tier test, by its packages, targets, name
+filters and `--skip`s: a tier never runs on a push, so such a command skips both tiers
+(`--skip long_haul:: --skip probation::`) or names the tests it is for. CI runs it after the all-features `cargo test`, and
 [tools/test-check-test-tiers.ps1](tools/test-check-test-tiers.ps1) tests it. The reasoning is in
 [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
 

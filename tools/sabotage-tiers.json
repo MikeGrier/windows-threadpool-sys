@@ -117,6 +117,90 @@
       "replace": ["ignore_message = '' }"]
     },
     {
+      "name": "a workflow command that runs every ignored test is not read",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "A cargo test line with --include-ignored or --ignored selects every ignored test it is not told to skip, which includes the tiers, so a push would run them. The check reads those lines; without it nothing notices one.",
+      "find": [
+        "Get-WorkflowTierViolation -Tests $tests -Directory $WorkflowDirectory)"
+      ],
+      "replace": [
+        "$null)"
+      ]
+    },
+    {
+      "name": "--ignored alone is not read as selecting ignored tests",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "`--ignored` runs the ignored tests just as `--include-ignored` does, so a command that spells it that way selects the tiers too.",
+      "find": [
+        "(--include-ignored|--ignored)\\b"
+      ],
+      "replace": [
+        "(--include-ignored)\\b"
+      ]
+    },
+    {
+      "name": "a skip is not honoured",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "A command that skips the tiers by name selects none of them, and one that skips only one selects the other; a check that ignored the skips would refuse the commands that are right.",
+      "find": [
+        "if ($skipped) { continue }"
+      ],
+      "replace": [
+        "if ($false) { continue }"
+      ]
+    },
+    {
+      "name": "a name filter is not honoured",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "A command with a name filter selects only the tests whose names contain it, so one naming other tests selects no tier test; a check that ignored the filters would refuse it.",
+      "find": [
+        "if ($filters.Count -gt 0) {"
+      ],
+      "replace": [
+        "if ($false) {"
+      ]
+    },
+    {
+      "name": "the packages a command names are not honoured",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "A command with -p selects that package's tests and no other's; a check that took every package would refuse a command for a package that has no tier test.",
+      "find": [
+        "if ($packages.Count -gt 0 -and $packages -notcontains $test.package) { continue }"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "the targets a command names are not honoured",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "A command with --test or --lib selects only those executables; a check that took every target would refuse a command for a target that holds no tier test.",
+      "find": [
+        "if ($kinds.Count -gt 0 -or $named.Count -gt 0) {"
+      ],
+      "replace": [
+        "if ($false) {"
+      ]
+    },
+    {
+      "name": "an exact name is matched as a part of one",
+      "file": "tools/check-test-tiers.ps1",
+      "expect": "caught",
+      "why": "Under --exact a name selects only the test of that whole name, so a name that is only part of a tier test's selects nothing of it.",
+      "find": [
+        "$exact = $true"
+      ],
+      "replace": [
+        "$exact = $false"
+      ]
+    },
+    {
       "name": "CONTROL: the problems are listed in another order",
       "file": "tools/check-test-tiers.ps1",
       "expect": "survives",

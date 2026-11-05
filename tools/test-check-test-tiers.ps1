@@ -83,7 +83,48 @@ function Invoke-OnListing {
         ConvertTo-Json -Compress -InputObject ([ordered]@{ binary = 'fixture'; name = $t[0]; ignore = [bool]$t[1]; ignore_message = [string]$t[2] })
     }
     [System.IO.File]::WriteAllText($path, (($lines -join "`n") + "`n"))
-    return Invoke-Checker @{ ListingPath = $path }
+    # An empty workflow directory, so that the repository's own workflows are not judged against a made-up listing.
+    return Invoke-Checker @{ ListingPath = $path; WorkflowDirectory = (New-Root) }
+}
+
+# A recorded listing of tests each of which is @(name, ignored, reason, package, kind, target), and a workflow
+# whose steps are the commands given.
+function Invoke-OnWorkflow {
+    param([object[]] $Tests, [string[]] $Commands)
+    $path = Join-Path (New-Root) 'listing.ndjson'
+    $lines = foreach ($t in $Tests) {
+        ConvertTo-Json -Compress -InputObject ([ordered]@{ binary = $t[5]; package = $t[3]; kind = $t[4]; name = $t[0]; ignore = [bool]$t[1]; ignore_message = [string]$t[2] })
+    }
+    [System.IO.File]::WriteAllText($path, (($lines -join "`n") + "`n"))
+    $directory = New-Root
+    $steps = foreach ($command in $Commands) { "      - run: $command" }
+    [System.IO.File]::WriteAllText((Join-Path $directory 'ci.yml'), "jobs:`n  t:`n    steps:`n" + ($steps -join "`n") + "`n")
+    return Invoke-Checker @{ ListingPath = $path; WorkflowDirectory = $directory }
+}
+
+# The tests the workflow cases select among: a crate with a unit-test executable and an integration target, each with
+# an ordinary ignored test and a test of each tier, and a second crate with one of its own.
+$workflowTests = @(
+    @('plain', $false, '', 'alpha', 'lib', 'alpha'),
+    @('needs_a_share', $true, 'needs the administrative share', 'alpha', 'lib', 'alpha'),
+    @('long_haul::heavy', $true, 'long-haul: about 3s', 'alpha', 'lib', 'alpha'),
+    @('probation::untried', $true, 'probation: never run', 'alpha', 'lib', 'alpha'),
+    @('needs_a_share_too', $true, 'needs the administrative share', 'alpha', 'test', 'scenarios'),
+    @('long_haul::heavy_scenario', $true, 'long-haul: about 9s', 'alpha', 'test', 'scenarios'),
+    @('long_haul::beta_heavy', $true, 'long-haul: about 2s', 'beta', 'lib', 'beta')
+)
+
+function Test-WorkflowFlagged {
+    param([string] $Command, [string] $Pattern, [string] $Message)
+    $r = Invoke-OnWorkflow $workflowTests @($Command)
+    Assert-Equal 1 $r.Exit "$Message -- $($r.Output)"
+    Assert-Match $Pattern $r.Output $Message
+}
+
+function Test-WorkflowAccepted {
+    param([string] $Command, [string] $Message)
+    $r = Invoke-OnWorkflow $workflowTests @($Command)
+    Assert-Equal 0 $r.Exit "$Message -- $($r.Output)"
 }
 
 function Test-Flagged {
@@ -216,6 +257,53 @@ $cases = @(
             Assert-Match 'long_haul::a' $r.Output 'the first is named'
             Assert-Match 'tests::b' $r.Output 'the second is named'
             Assert-NoMatch '\bfine\b' $r.Output 'a conforming test is not mentioned'
+        }
+    },
+    @{
+        Name = 'a-workflow-that-runs-every-ignored-test-would-run-the-tiers-and-is-refused'
+        Run  = {
+            Test-WorkflowFlagged 'cargo test -p alpha --locked -- --include-ignored' '(?s)ci.yml:4.*long_haul::heavy' 'no skip'
+            Test-WorkflowFlagged 'cargo test -p alpha --locked -- --ignored' 'would run' '--ignored selects them the same way'
+            Test-WorkflowFlagged 'cargo test --workspace --locked -- --include-ignored' 'would run 4 tier test' 'no package named is every package, beta''s included'
+        }
+    },
+    @{
+        Name = 'a-workflow-that-skips-both-tiers-is-accepted'
+        Run  = {
+            Test-WorkflowAccepted 'cargo test -p alpha --locked -- --include-ignored --skip long_haul:: --skip probation::' 'both skipped, other ignored tests still selected'
+            Test-WorkflowAccepted 'cargo test -p alpha --locked -- --skip probation:: --include-ignored --skip long_haul::' 'in either order'
+            Test-WorkflowFlagged 'cargo test -p alpha --locked -- --include-ignored --skip long_haul::' 'probation::untried' 'one tier skipped is not both'
+            Test-WorkflowFlagged 'cargo test -p alpha --locked -- --include-ignored --skip probation::' 'long_haul::heavy' 'and the other way'
+        }
+    },
+    @{
+        Name = 'a-workflow-is-judged-by-the-tests-it-selects-not-by-its-spelling'
+        Run  = {
+            Test-WorkflowAccepted 'cargo test -p beta --locked --lib -- --include-ignored need' 'a package with no tier test selected by that name'
+            Test-WorkflowAccepted 'cargo test -p alpha --locked -- --include-ignored needs_a_share' 'a name filter that matches no tier test'
+            Test-WorkflowFlagged 'cargo test -p alpha --locked -- --include-ignored heavy' 'long_haul::heavy' 'a name filter that matches one'
+            Test-WorkflowAccepted 'cargo test -p alpha --locked -- --include-ignored --exact needs_a_share' 'an exact name'
+            Test-WorkflowAccepted 'cargo test -p alpha --locked -- --include-ignored --exact heavy' 'an exact name is the whole name, not a part of one'
+            Test-WorkflowFlagged 'cargo test -p alpha --locked -- --include-ignored --exact long_haul::heavy' 'long_haul::heavy' 'an exact name that is a tier test'
+            Test-WorkflowAccepted 'cargo test -p other --locked -- --include-ignored' 'a package with no tier tests'
+        }
+    },
+    @{
+        Name = 'a-workflow-target-selection-narrows-what-it-runs'
+        Run  = {
+            Test-WorkflowFlagged 'cargo test -p alpha --locked --test scenarios -- --include-ignored' 'long_haul::heavy_scenario' 'a target holding a tier test'
+            Test-WorkflowAccepted 'cargo test -p beta --locked --test scenarios -- --include-ignored' 'the same target name in a package that has none'
+            $r = Invoke-OnWorkflow $workflowTests @('cargo test -p alpha --locked --test scenarios -- --include-ignored')
+            Assert-NoMatch 'alpha long_haul::heavy \(' $r.Output 'the unit-test executable of the package is not selected by --test'
+            Test-WorkflowFlagged 'cargo test -p alpha --locked --lib -- --include-ignored' 'long_haul::heavy \(' '--lib selects the unit tests'
+            Test-WorkflowAccepted 'cargo test -p alpha --locked --bins -- --include-ignored' 'no binaries, so no tier test'
+        }
+    },
+    @{
+        Name = 'a-command-that-does-not-run-ignored-tests-is-not-read'
+        Run  = {
+            Test-WorkflowAccepted 'cargo test -p alpha --locked' 'ignored tests are not run without a flag'
+            Test-WorkflowAccepted 'cargo build -p alpha --all-targets' 'and a build is not a test run'
         }
     },
     @{

@@ -599,7 +599,7 @@ jobs:
         env:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
-        run: cargo test -p windows-platform-probes --locked --no-fail-fast -- --include-ignored
+        run: cargo test -p windows-platform-probes --locked --no-fail-fast -- --include-ignored --skip long_haul:: --skip probation::
       - name: cargo test (windows-platform-probes oracle-in-renderer integration target)
         env:
           RUST_BACKTRACE: 1

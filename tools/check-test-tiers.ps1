@@ -25,17 +25,26 @@
 # (the same arrangement as the compile_fail doctest check). That is set for the executables only.
 #
 #   ./tools/check-test-tiers.ps1                           # the workspace, all features (CI)
+# A TIER NEVER RUNS ON A PUSH. A `cargo test ... -- --include-ignored` (or `--ignored`) in a workflow selects every
+# ignored test it is not told to skip, and a tier test is ignored, so an unfiltered one would run the tier on every
+# push and defeat the point of having one. Each such command is checked against the census for the tests it would
+# select (Get-WorkflowTierViolation): its packages, its targets, its name filters and its `--skip`s. The commands
+# the tiers run through are tools/run-tier.ps1, which is not a `cargo test` line in a workflow and so is not read.
+#
+#   ./tools/check-test-tiers.ps1                           # the workspace, all features (CI)
 #   ./tools/check-test-tiers.ps1 -ListingPath FILE         # a recorded listing, for the tests
 #   ./tools/check-test-tiers.ps1 -RepositoryRoot DIR -CargoArgs @('--workspace')   # a fixture workspace
 #
 # Exit: 0 consistent, 1 a test breaks a rule, 2 the census could not be taken.
 #
 # A listing file is one JSON object per line: {"binary":"<name>","name":"<test path>","ignore":<bool>,
-# "ignore_message":"<reason>"}. tools/test-check-test-tiers.ps1 writes them.
+# "ignore_message":"<reason>"}, with the optional "package" and "kind" (lib, bin, test, example) of the executable
+# the workflow check selects by. tools/test-check-test-tiers.ps1 writes them.
 [CmdletBinding()]
 param(
     [string] $RepositoryRoot,
     [string] $ListingPath,
+    [string] $WorkflowDirectory,
     [string[]] $CargoArgs = @('--workspace', '--all-features', '--locked')
 )
 
@@ -43,6 +52,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if (-not $RepositoryRoot) { $RepositoryRoot = Split-Path -Parent $PSScriptRoot }
+if (-not $WorkflowDirectory) { $WorkflowDirectory = Join-Path $RepositoryRoot '.github/workflows' }
 
 # The tiers, spelled once. `Marker` is what an ignore reason starts with, `Module` the module a tier's tests sit
 # in, and `Pattern` what a reason that is MEANT as the marker looks like when it is not spelled right. The
@@ -110,6 +120,101 @@ function Get-TierViolation {
     }
 }
 
+# The package a cargo `package_id` names, in either of the forms cargo has written it: `path+file:///dir#name@1.0.0`,
+# or `path+file:///dir/name#1.0.0` when the name is the directory's, or the older `name 1.0.0 (path+file:///dir)`.
+function Get-PackageName {
+    param([string] $PackageId)
+    if ($PackageId -match '#(?<name>[^@#/]+)@') { return $Matches['name'] }
+    if ($PackageId -match '/(?<name>[^/#]+)#\d') { return $Matches['name'] }
+    if ($PackageId -match '^(?<name>\S+) \d') { return $Matches['name'] }
+    return ''
+}
+
+# The tier tests a workflow's `cargo test` command would run. `Command` is the text from `cargo test` on.
+# Selection is cargo's and libtest's: the packages (`-p`, else all), the targets (`--lib`, `--bins`, `--bin`,
+# `--examples`, `--example`, `--test`, `--tests`, `--all-targets`, else all), and then, over the names, the
+# positional filters (a substring, or the whole name under `--exact`) and the `--skip`s.
+function Get-CommandTierSelection {
+    param([string] $Command, [object[]] $Tests)
+    $tokens = @(($Command -replace "[`"']", '') -split '\s+' | Where-Object { $_ })
+    $split = [array]::IndexOf($tokens, '--')
+    $cargoSide = @(if ($split -lt 0) { $tokens } else { $tokens[0..($split - 1)] })
+    $harnessSide = @(if ($split -lt 0) { } else { $tokens | Select-Object -Skip ($split + 1) })
+
+    $packages = New-Object System.Collections.Generic.List[string]
+    $kinds = New-Object System.Collections.Generic.List[string]
+    $named = New-Object System.Collections.Generic.List[string]
+    $valueFlags = @('-p', '--package', '--test', '--bin', '--example', '--features', '-F', '--target', '--manifest-path', '--target-dir', '--profile', '-j', '--jobs', '--exclude')
+    for ($i = 0; $i -lt $cargoSide.Count; $i++) {
+        $token = $cargoSide[$i]
+        $value = if ($i + 1 -lt $cargoSide.Count) { $cargoSide[$i + 1] } else { '' }
+        switch -CaseSensitive ($token) {
+            { $_ -in '-p', '--package' } { $packages.Add($value); $i++; continue }
+            '--test' { $named.Add('test:' + $value); $i++; continue }
+            '--bin' { $named.Add('bin:' + $value); $i++; continue }
+            '--example' { $named.Add('example:' + $value); $i++; continue }
+            '--lib' { $kinds.Add('lib'); continue }
+            '--bins' { $kinds.Add('bin'); continue }
+            '--examples' { $kinds.Add('example'); continue }
+            { $_ -in '--tests', '--all-targets' } { $kinds.AddRange([string[]]@('lib', 'bin', 'test', 'example')); continue }
+            { $_ -in $valueFlags } { $i++; continue }
+        }
+    }
+    $filters = New-Object System.Collections.Generic.List[string]
+    $skips = New-Object System.Collections.Generic.List[string]
+    $exact = $false
+    for ($i = 0; $i -lt $harnessSide.Count; $i++) {
+        $token = $harnessSide[$i]
+        if ($token -eq '--skip') { if ($i + 1 -lt $harnessSide.Count) { $skips.Add($harnessSide[$i + 1]) }; $i++ }
+        elseif ($token -eq '--exact') { $exact = $true }
+        elseif ($token -in '--test-threads', '--format', '-Z', '--logfile', '--color', '--shuffle-seed') { $i++ }
+        elseif (-not $token.StartsWith('-')) { $filters.Add($token) }
+    }
+
+    foreach ($test in $Tests) {
+        $reason = if ($test.ignore) { [string]$test.ignore_message } else { '' }
+        $tier = $tiers | Where-Object { $reason.StartsWith($_.Marker, [System.StringComparison]::Ordinal) } | Select-Object -First 1
+        if (-not $tier) { continue }
+        if ($packages.Count -gt 0 -and $packages -notcontains $test.package) { continue }
+        if ($kinds.Count -gt 0 -or $named.Count -gt 0) {
+            $targeted = ($kinds -contains $test.kind) -or ($named -contains ($test.kind + ':' + $test.binary))
+            if (-not $targeted) { continue }
+        }
+        if ($filters.Count -gt 0) {
+            $hit = $false
+            foreach ($filter in $filters) { if (($exact -and $test.name -ceq $filter) -or (-not $exact -and $test.name.Contains($filter))) { $hit = $true } }
+            if (-not $hit) { continue }
+        }
+        $skipped = $false
+        foreach ($skip in $skips) { if (($exact -and $test.name -ceq $skip) -or (-not $exact -and $test.name.Contains($skip))) { $skipped = $true } }
+        if ($skipped) { continue }
+        [pscustomobject]@{ Tier = $tier.Name; Test = $test }
+    }
+}
+
+function Get-WorkflowTierViolation {
+    param([object[]] $Tests, [string] $Directory)
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { return }
+    foreach ($file in Get-ChildItem -LiteralPath $Directory -File | Where-Object { $_.Extension -in '.yml', '.yaml' }) {
+        $lines = [System.IO.File]::ReadAllLines($file.FullName)
+        for ($n = 0; $n -lt $lines.Count; $n++) {
+            $match = [regex]::Match($lines[$n], '\bcargo test\b.*\s(--include-ignored|--ignored)\b')
+            if (-not $match.Success) { continue }
+            $command = $lines[$n].Substring($lines[$n].IndexOf('cargo test')).Trim()
+            $selected = @(Get-CommandTierSelection -Command $command -Tests $Tests)
+            if ($selected.Count -gt 0) {
+                $first = $selected | Select-Object -First 3 | ForEach-Object { "$($_.Test.package)::$($_.Test.binary) $($_.Test.name) ($($_.Tier))" }
+                [pscustomobject]@{
+                    Binary  = "$($file.Name):$($n + 1)"
+                    Name    = $command
+                    Reason  = ''
+                    Problem = "runs ignored tests without skipping the tiers, so it would run $($selected.Count) tier test(s) on a push, for example: $($first -join '; '). Add `--skip long_haul:: --skip probation::`, or name the tests it is for."
+                }
+            }
+        }
+    }
+}
+
 # The tests every executable lists, as records. Exits 2 when the census cannot be taken, because a census that
 # silently saw fewer tests than exist would pass for the wrong reason.
 function Get-TestListing {
@@ -141,7 +246,7 @@ function Get-TestListing {
     $executables = @($built | Where-Object { $_ -like '{*' } | ForEach-Object {
             try { $_ | ConvertFrom-Json } catch { $null }
         } | Where-Object { $null -ne $_ -and $_.reason -eq 'compiler-artifact' -and $_.executable -and $_.profile.test } |
-            ForEach-Object { [pscustomobject]@{ Name = $_.target.name; Path = $_.executable } } |
+            ForEach-Object { [pscustomobject]@{ Name = $_.target.name; Path = $_.executable; Package = (Get-PackageName ([string]$_.package_id)); Kind = [string]@($_.target.kind)[0] } } |
             Sort-Object Path -Unique)
     if ($executables.Count -eq 0) {
         Write-Host 'cargo built no test executables, so there is nothing to ask.'
@@ -178,7 +283,7 @@ function Get-TestListing {
                 if (-not $line.TrimStart().StartsWith('{')) { continue }
                 $event = ConvertFrom-LibtestLine -Line $line
                 if ($null -ne $event) {
-                    [pscustomobject]@{ binary = $exe.Name; name = $event.name; ignore = $event.ignore; ignore_message = $event.ignore_message }
+                    [pscustomobject]@{ binary = $exe.Name; package = $exe.Package; kind = $exe.Kind; name = $event.name; ignore = $event.ignore; ignore_message = $event.ignore_message }
                 }
             }
         }
@@ -191,12 +296,19 @@ $tests = @(if ($ListingPath) {
         foreach ($line in [System.IO.File]::ReadAllLines($ListingPath)) {
             if ($line.Trim().Length -eq 0) { continue }
             $record = $line | ConvertFrom-Json
-            [pscustomobject]@{ binary = [string]$record.binary; name = [string]$record.name; ignore = [bool]$record.ignore; ignore_message = [string]$record.ignore_message }
+            [pscustomobject]@{
+                binary         = [string]$record.binary
+                package        = if ($record.PSObject.Properties['package']) { [string]$record.package } else { '' }
+                kind           = if ($record.PSObject.Properties['kind']) { [string]$record.kind } else { '' }
+                name           = [string]$record.name
+                ignore         = [bool]$record.ignore
+                ignore_message = [string]$record.ignore_message
+            }
         }
     }
     else { Get-TestListing })
 
-$violations = @(Get-TierViolation -Tests $tests | Sort-Object Binary, Name, Problem)
+$violations = @(@(Get-TierViolation -Tests $tests) + @(Get-WorkflowTierViolation -Tests $tests -Directory $WorkflowDirectory) | Sort-Object Binary, Name, Problem)
 if ($violations.Count -gt 0) {
     foreach ($v in $violations) {
         Write-Host "$($v.Binary): $($v.Name)"
