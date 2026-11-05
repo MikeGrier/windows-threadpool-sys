@@ -4565,3 +4565,36 @@ So nothing is wrapped here. The item as written:
     `DfsGetClientInfo` (a DFS link to the target it is using), `GetDriveTypeW` (a removable or RAM disk, which no
     handle-based documented call reports), and `GetVolumePathNameW` with `GetVolumeNameForVolumeMountPointW` (the volume a
     name resolves to, for the prediction of `M39.3`). Anything the handle answers is asked of the handle.
+
+## Moved 2026-11-05 16:49:13 -05:00 -- M39.2.2: a local file's flush domains
+
+### <a id="m3922"></a>M39.2.2 -- A file `win-durable-ioring` opens has its volume's disks found as its flush domains, a virtual disk followed by its bus type, all or nothing. *(completed 2026-11-05 16:49:13 -05:00)*
+
+The decision is [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117), which now also records that a virtual disk is decided by its bus type and not by the dependency query's error.
+
+- `win-volume-sys` gained `storage_device_descriptor` and `StorageBusType` (`StorageDeviceProperty`, one function per property by [WV-D-9](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-9)), with seven sabotage entries, all caught. The `STORAGE_BUS_TYPE` page lists `BusTypeNvmeof` as 20, which `windows-sys` 0.61.2 does not declare.
+- `win-durable-ioring`'s `file_domains` walks a storage stack behind a trait: the file's volume from its final path in GUID form, the volume's disks from `OpenedVolume` with no data access, a disk's bus type, and a file-backed disk's host volumes. `OpenedFile::admit` keeps what it finds, `OpenedFile::flush_domains` reports it, and `Win32FileTarget::new` carries it as `from_volume` carries a volume's. The bound on volumes followed counts volumes as followed, after a sabotage that skipped the visited check was caught only by hanging.
+- Tests: the rule against a stack in memory, in both directions (virtual disks nested, several hosts, a loop, the bound and one short of it, and a failure at each step leaving no domains); a local file against what its volume derives; a file opened in either mode carrying its domains into its target; a declaration adding to what was found; a file over `\\localhost\C$` finding none (ignored for the administrative share, and added to the CI step that runs this crate's share test); and a scratch virtual disk, through the step that already attaches one for the raw-volume tests, observing for the first time whether a VHD's disk reports `BusTypeFileBackedVirtual` and whether its dependency names the temporary directory's volume. That last one needs an administrator and has not run on this machine.
+- Four tests restated the old rule (a file target's domains are only what was declared) and now state the new one. The `dioring` tests use temporary files, all on one disk, to stand for files on separate devices; their `target` helper sets the found disk aside through a test-only `without_found_domains`. The public opt-out stays reserved and unbuilt, as DI-D-117 records.
+- Nine sabotage entries for the derivation and one control that survives, and two older entries repointed at the reshaped `Win32FileTarget::new`; all behave as declared.
+
+The item as written:
+
+- [x] **M39.2.2** -- **A local file's domains, all or nothing, with the texts that change with them** (absorbs what
+    was `M39.2.4`, which could not land apart: the first code that derives a domain is what makes the old texts false).
+    The handle's final path in `VOLUME_NAME_GUID` form names its volume; the volume, opened with no access as
+    `win-volume-sys`' tests do, gives its disk extents; each disk is `disk_flush_domain`. A disk whose bus type is
+    `BusTypeFileBackedVirtual` (`STORAGE_DEVICE_DESCRIPTOR`, read through a new `win-volume-sys` entry, one function per
+    property by [WV-D-9](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-9)) is followed through its storage dependency to
+    the volume holding its backing file, and on from there. The bus type decides it, and not the dependency query's
+    error: [the `GetStorageDependencyInformation` page](https://learn.microsoft.com/en-us/windows/win32/api/virtdisk/nf-virtdisk-getstoragedependencyinformation)
+    (read 2026-11-05) names no error for a volume that is not on a virtual disk, so `0xC03A0015` is a measurement
+    ([WV-D-10](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-10)) and nothing is built on it. No real dependency entry has
+    been observed, because attaching a virtual disk needs an elevated token, so that hop's test needs a privileged run
+    or a stated gap. Any hop that fails leaves the file with no found domains, which is unknown and shares fate with
+    everything; never a partial set. A remote file's final path has no volume GUID, so until `M39.2.3` it is unknown
+    the same way. `with_domains` stays, adding what Windows does not show, and its documentation names it: the disks of
+    a Storage Spaces pool, the disks behind a hardware RAID controller, and a cache a controller shares between disks.
+    The texts [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117) amends change here: the file target's "are
+    what it cannot know", and [API.md](crates/durable-ioring/API.md) section 13's "a locality helper's job". Two commits,
+    since two crates' code changes: the `win-volume-sys` entry, then the derivation.

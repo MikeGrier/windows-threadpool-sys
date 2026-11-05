@@ -1011,16 +1011,16 @@
       "file": "src/windows_backend/file_target.rs",
       "expect": "caught",
       "why": "The class must come from how the file was opened, never from the target.",
-      "find": ["            domains: Vec::new(),\n            warranty: B::WARRANTY,\n"],
-      "replace": ["            domains: Vec::new(),\n            warranty: WarrantyClass::Complete,\n"]
+      "find": ["            handle: file.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: B::WARRANTY,\n"],
+      "replace": ["            handle: file.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: WarrantyClass::Complete,\n"]
     },
     {
       "name": "DI-10.1: a target drops what its file offers",
       "file": "src/windows_backend/file_target.rs",
       "expect": "caught",
       "why": "An unbuffered file's write-through capability is what lets a consumer ask for it; the kernel refuses it on a cached file.",
-      "find": ["            domains: Vec::new(),\n            warranty: B::WARRANTY,\n            capabilities: B::CAPABILITIES,\n"],
-      "replace": ["            domains: Vec::new(),\n            warranty: B::WARRANTY,\n            capabilities: Capabilities::NONE,\n"]
+      "find": ["            handle: file.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: B::WARRANTY,\n            capabilities: B::CAPABILITIES,\n"],
+      "replace": ["            handle: file.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: B::WARRANTY,\n            capabilities: Capabilities::NONE,\n"]
     },
     {
       "name": "DI-10.1: a target takes no alignment from its file",
@@ -2301,6 +2301,78 @@
       "why": "Popping rings for the commit a seal queued, and the backend will not take it until its completions are drained: DrainNeeded. That is nothing to pop yet and a reason to make room; treating it as a fault ends the run at the first seal under a pumped delivery.",
       "find": ["                        | RefusalKind::DrainNeeded"],
       "replace": ["                        | RefusalKind::Busy"]
+    },
+    {
+      "name": "M39.2.2: a disk that cannot describe itself is taken as not file-backed",
+      "file": "src/windows_backend/file_domains.rs",
+      "expect": "caught",
+      "why": "All or nothing: a step that fails leaves no domains, and taking a failure as \"not a virtual disk\" would leave out the backing file's volume, a partial set.",
+      "find": ["            backed |= stack.is_file_backed(disk)?;"],
+      "replace": ["            backed |= stack.is_file_backed(disk).unwrap_or(false);"]
+    },
+    {
+      "name": "M39.2.2: a virtual disk is not followed to its backing file",
+      "file": "src/windows_backend/file_domains.rs",
+      "expect": "caught",
+      "why": "The disks of the volume holding a VHD's file are what a flush of the VHD reaches; leaving them out is a missing domain.",
+      "find": ["        if backed {"],
+      "replace": ["        if false && backed {"]
+    },
+    {
+      "name": "M39.2.2: the volume's own disks are not kept",
+      "file": "src/windows_backend/file_domains.rs",
+      "expect": "caught",
+      "why": "A file's domains are its volume's disks; a VHD's own disk is kept as well, since an extra domain is safe.",
+      "find": ["            disks.insert(disk);"],
+      "replace": ["            let _ = disk;"]
+    },
+    {
+      "name": "M39.2.2: one volume short of the limit is refused",
+      "file": "src/windows_backend/file_domains.rs",
+      "expect": "caught",
+      "why": "The limit is how many volumes are followed; one short of it is followed to the end.",
+      "find": ["        if followed > MAX_VOLUMES {"],
+      "replace": ["        if followed >= MAX_VOLUMES {"]
+    },
+    {
+      "name": "M39.2.2: a volume visited before is visited again",
+      "file": "src/windows_backend/file_domains.rs",
+      "expect": "caught",
+      "why": "A loop in the dependencies must end with the domains found, not run to the limit and leave none.",
+      "find": ["        if !visited.insert(volume.as_str().to_owned()) {"],
+      "replace": ["        if !visited.insert(volume.as_str().to_owned()) && false {"]
+    },
+    {
+      "name": "M39.2.2: the final path is taken whole as the volume",
+      "file": "src/windows_backend/file_domains.rs",
+      "expect": "caught",
+      "why": "A final path in GUID form is the volume and then the file's path; only the first part names the volume.",
+      "find": ["    VolumePath::guid(&path[..=end]).ok()"],
+      "replace": ["    VolumePath::guid(&path[..]).ok()"]
+    },
+    {
+      "name": "M39.2.2: the open finds no domains",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "DI-D-117: a file this crate opens has its domains derived at the open.",
+      "find": ["        let domains = file_domains::found(&file_domains::Windows, &handle);"],
+      "replace": ["        let domains = Vec::new();"]
+    },
+    {
+      "name": "M39.2.2: a file target does not carry what its file found",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "What the open found is what the target reports, as a volume's are.",
+      "find": ["        let found = file.flush_domains().to_vec();"],
+      "replace": ["        let found: Vec<FlushDomain> = Vec::new();"]
+    },
+    {
+      "name": "CONTROL: M39.2.2, the limit on volumes followed is one larger",
+      "file": "src/windows_backend/file_domains.rs",
+      "expect": "survives",
+      "why": "A control: the tests name the limit through the constant, so moving it changes nothing they claim. If this comes back caught, a test depends on the number rather than the rule.",
+      "find": ["const MAX_VOLUMES: usize = 16;"],
+      "replace": ["const MAX_VOLUMES: usize = 17;"]
     }
   ]
 }

@@ -522,24 +522,8 @@ raw volume derives, so a file and a volume on one disk share fate by constructio
 
   - [x] **M39.2.1** -- The derivation needs none of the name-based candidates; `NetDfsGetClientInfo` moves to `M39.2.3` and the volume-path calls to `M39.3`. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m3921)
 
-  - [ ] **M39.2.2** -- **A local file's domains, all or nothing, with the texts that change with them** (absorbs what
-    was `M39.2.4`, which could not land apart: the first code that derives a domain is what makes the old texts false).
-    The handle's final path in `VOLUME_NAME_GUID` form names its volume; the volume, opened with no access as
-    `win-volume-sys`' tests do, gives its disk extents; each disk is `disk_flush_domain`. A disk whose bus type is
-    `BusTypeFileBackedVirtual` (`STORAGE_DEVICE_DESCRIPTOR`, read through a new `win-volume-sys` entry, one function per
-    property by [WV-D-9](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-9)) is followed through its storage dependency to
-    the volume holding its backing file, and on from there. The bus type decides it, and not the dependency query's
-    error: [the `GetStorageDependencyInformation` page](https://learn.microsoft.com/en-us/windows/win32/api/virtdisk/nf-virtdisk-getstoragedependencyinformation)
-    (read 2026-11-05) names no error for a volume that is not on a virtual disk, so `0xC03A0015` is a measurement
-    ([WV-D-10](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-10)) and nothing is built on it. No real dependency entry has
-    been observed, because attaching a virtual disk needs an elevated token, so that hop's test needs a privileged run
-    or a stated gap. Any hop that fails leaves the file with no found domains, which is unknown and shares fate with
-    everything; never a partial set. A remote file's final path has no volume GUID, so until `M39.2.3` it is unknown
-    the same way. `with_domains` stays, adding what Windows does not show, and its documentation names it: the disks of
-    a Storage Spaces pool, the disks behind a hardware RAID controller, and a cache a controller shares between disks.
-    The texts [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117) amends change here: the file target's "are
-    what it cannot know", and [API.md](crates/durable-ioring/API.md) section 13's "a locality helper's job". Two commits,
-    since two crates' code changes: the `win-volume-sys` entry, then the derivation.
+  - [x] **M39.2.2** -- A file `win-durable-ioring` opens has its volume's disks found as its flush domains, a virtual disk followed by its bus type, all or nothing. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m3922)
+
   - [ ] **M39.2.3** -- **A remote file's domain.** The server, from the handle's final path, which the open already reads
     to refuse a remote device for an unbuffered file and which follows mapped drives and links; a DFS link resolved
     through `NetDfsGetClientInfo`, wrapped as an entry in `windows-namespace-request-sys` if this item keys by server

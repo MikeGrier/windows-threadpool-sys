@@ -392,7 +392,7 @@ jobs:
         env:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
-        run: cargo test -p win-durable-ioring --locked --lib -- --include-ignored an_unbuffered_file_is_refused_on_a_remote_device
+        run: cargo test -p win-durable-ioring --locked --lib -- --include-ignored an_unbuffered_file_is_refused_on_a_remote_device a_file_on_a_share_has_no_domains_found
       # A raw volume against a real one: a scratch virtual disk, created and attached with diskpart,
       # which the runner's administrator account can do and a developer's usually cannot (DI-D-61).
       # Nothing here is real storage; each test detaches and deletes its own disk. A failure here is

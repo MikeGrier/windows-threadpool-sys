@@ -48,6 +48,7 @@ use durable_ioring::{IoFault, IoTargetKey, WriteCaching};
 
 mod disposition;
 mod file_attributes;
+mod file_domains;
 mod file_id;
 mod file_rights;
 mod file_target;

@@ -340,12 +340,19 @@ fn declared_domains_are_added_to_a_volumes_and_never_take_one_away() {
 }
 
 #[test]
-fn a_file_targets_domains_are_only_what_is_declared() {
+fn a_file_targets_domains_are_its_volumes_disks_and_what_is_declared() {
+    // DI-D-117: a file this crate opened has its volume's disks found, as a volume has, and a
+    // declaration adds to them.
     let temp = TempFile::new("ov-file-domains");
     let file =
         OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write()).expect("open");
+    let mut expected = file.flush_domains().to_vec();
+    assert!(!expected.is_empty(), "a local file's disks are found");
     let target = Win32FileTarget::new(file).with_domains([disk_flush_domain(9)]);
-    assert_eq!(target.flush_domains(), [disk_flush_domain(9)]);
+    if !expected.contains(&disk_flush_domain(9)) {
+        expected.push(disk_flush_domain(9));
+    }
+    assert_eq!(target.flush_domains(), expected.as_slice());
 }
 
 #[test]
