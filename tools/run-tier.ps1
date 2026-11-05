@@ -20,7 +20,9 @@
     Writes `outcomes.json` to the output directory: each test's key, its outcome (`pass` or
     `fail`) and, for a failure, what it printed. Prints the failures. Exits with cargo's own
     exit code, so a failing test fails the step; 2 when the outcomes could not be read from
-    what the run wrote, which is a defect of this check and says nothing about the tests.
+    what the run wrote (a line of it that was not an event counts, since a result lost that way
+    would be recorded as a test not run), or when an argument could not be passed through cmd;
+    both are defects of this check and say nothing about the tests.
 
 .PARAMETER Module
     The tier's module: `long_haul` or `probation`.
@@ -67,6 +69,23 @@ $capturePath = Join-Path $OutputDirectory 'capture.txt'
 $outcomesPath = Join-Path $OutputDirectory 'outcomes.json'
 foreach ($stale in @($buildPath, $capturePath, $outcomesPath)) { Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue }
 
+# One argument as cmd reads it in a batch file: quoted when it holds anything cmd or the C runtime
+# would split or act on, with `%` doubled, which a batch file would otherwise expand. A double quote
+# inside an argument has no spelling that both cmd and the runtime read the same way, so the caller refuses it.
+function ConvertTo-CmdArgument {
+    param([string] $Argument)
+    $text = $Argument.Replace('%', '%%')
+    if ($text -eq '' -or $text -match '[^A-Za-z0-9_\-.:\\/=+,@%]') {
+        $text = $text -replace '(\\+)$', '$1$1'
+        return '"' + $text + '"'
+    }
+    return $text
+}
+
+foreach ($argument in $CargoArgs) {
+    if ($argument.Contains('"')) { Write-Host "A cargo argument with a double quote cannot be passed through cmd: $argument"; exit 2 }
+}
+
 Push-Location -LiteralPath $RepositoryRoot
 try {
     # The build, for the map from each executable to the target it came from. Incremental
@@ -82,7 +101,12 @@ try {
     # A batch file, so that the redirect is cmd's and both streams are written to one
     # handle, in the order they happen. A PowerShell `2>&1` reads them on separate threads.
     $runner = Join-Path $OutputDirectory 'run.cmd'
-    $arguments = ($CargoArgs -join ' ') + " -- --ignored $Module`:: --test-threads $TestThreads -Z unstable-options --format json"
+    # Each argument is quoted for cmd, since the build above took them as an array and a path with a
+    # space in it must reach this phase as one argument too. `--color never` because the headers
+    # are read as plain text: with `CARGO_TERM_COLOR=always` set, as some CI hosts set it, cargo
+    # wraps `Running` in escape codes and no executable would be recognised.
+    $quoted = @(@($CargoArgs | ForEach-Object { ConvertTo-CmdArgument $_ }) + @('--color', 'never'))
+    $arguments = ($quoted -join ' ') + " -- --ignored $Module`:: --test-threads $TestThreads -Z unstable-options --format json"
     [System.IO.File]::WriteAllText($runner, "@echo off`r`ncargo test $arguments > `"$capturePath`" 2>&1`r`nexit /b %ERRORLEVEL%`r`n")
     $previous = $env:RUSTC_BOOTSTRAP
     $env:RUSTC_BOOTSTRAP = '1'
@@ -102,6 +126,14 @@ try {
 }
 catch {
     Write-Host "The outcomes of the $Module tier could not be read from $capturePath`: $($_.Exception.Message)"
+    exit 2
+}
+# An event line that could not be read is a result that was lost, and the record treats a test
+# a run does not report as one that was not run. A partial `outcomes.json` would be recorded as
+# the whole run, so none is written.
+if ($read.Problems.Count -gt 0) {
+    foreach ($problem in $read.Problems) { Write-Host "unread: $problem" }
+    Write-Host "The outcomes of the $Module tier could not be read from $capturePath`: $($read.Problems.Count) line(s) were not events."
     exit 2
 }
 

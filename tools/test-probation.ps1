@@ -201,9 +201,9 @@ function New-Fixture {
 }
 
 function Invoke-Tier {
-    param([string] $Root, [string] $Module, [hashtable] $Extra = @{})
+    param([string] $Root, [string] $Module, [hashtable] $Extra = @{}, [string[]] $CargoArgs = @('--lib', '--tests', '--no-fail-fast'))
     $out = Join-Path (New-Root) 'out'
-    $text = & $runner -Module $Module -OutputDirectory $out -RepositoryRoot $Root -CargoArgs @('--lib', '--tests', '--no-fail-fast') @Extra 6>&1 | Out-String -Width $captureWidth
+    $text = & $runner -Module $Module -OutputDirectory $out -RepositoryRoot $Root -CargoArgs $CargoArgs @Extra 6>&1 | Out-String -Width $captureWidth
     $outcomes = $null
     $file = Join-Path $out 'outcomes.json'
     if (Test-Path -LiteralPath $file) { $outcomes = [System.IO.File]::ReadAllText($file) | ConvertFrom-Json }
@@ -660,6 +660,54 @@ mod probation { #[test] #[ignore = "probation: new"] fn passes() {} }
             Assert-True ($r.Exit -ne 0) "the step fails -- $($r.Output)"
             Assert-Equal 'fail' (Get-Verdict $r 'src/lib.rs::probation::aborts') 'a test that killed its process is a failure, not a test never run'
             Assert-Equal 'pass' (Get-Verdict $r 'tests/second.rs::probation::passes') 'the next executable ran and reported, as --no-fail-fast says'
+        }
+    },
+    @{
+        Name = 'a-tier-is-read-whatever-colour-cargo-is-told-to-use'
+        Run  = {
+            $root = New-Fixture @{ 'src\lib.rs' = 'mod probation { #[test] #[ignore = "probation: new"] fn passes() {} }' }
+            $previous = $env:CARGO_TERM_COLOR
+            $env:CARGO_TERM_COLOR = 'always'
+            try { $r = Invoke-Tier $root 'probation' }
+            finally { if ($null -eq $previous) { Remove-Item Env:\CARGO_TERM_COLOR -ErrorAction SilentlyContinue } else { $env:CARGO_TERM_COLOR = $previous } }
+            Assert-Equal 0 $r.Exit "a host that asks for colour does not change what a run says -- $($r.Output)"
+            Assert-Equal 'pass' (Get-Verdict $r 'src/lib.rs::probation::passes') 'the test was recorded'
+        }
+    },
+    @{
+        Name = 'a-cargo-argument-with-a-space-reaches-the-run-as-one-argument'
+        Run  = {
+            $root = New-Fixture @{ 'src\lib.rs' = 'mod probation { #[test] #[ignore = "probation: new"] fn passes() {} }' }
+            $target = Join-Path (New-Root) 'a %USERNAME% target dir'
+            $r = Invoke-Tier $root 'probation' @{} @('--lib', '--no-fail-fast', '--target-dir', $target)
+            Assert-Equal 0 $r.Exit "the build and the run both took the directory whole, a percent sign included -- $($r.Output)"
+            Assert-Equal 'pass' (Get-Verdict $r 'src/lib.rs::probation::passes') 'and the test was recorded'
+            # A batch file replaces %USERNAME% with the value; the run that did would build into that directory instead.
+            $expanded = Join-Path (Split-Path -Parent $target) ('a ' + $env:USERNAME + ' target dir')
+            Assert-True (-not (Test-Path -LiteralPath $expanded)) 'the percent signs were passed as they are, and not read as a variable'
+            $quote = Invoke-Tier $root 'probation' @{} @('--lib', '--cfg=a"b')
+            Assert-Equal 2 $quote.Exit "an argument cmd cannot carry is refused, not half passed -- $($quote.Output)"
+        }
+    },
+    @{
+        Name = 'a-line-that-is-not-an-event-fails-the-step-and-writes-no-outcomes'
+        Run  = {
+            # A child that inherits the test run's stdout writes into the capture past libtest, so a line
+            # that is not a test event lands among the events.
+            $root = New-Fixture @{
+                'src\lib.rs' = @'
+mod probation {
+    #[test] #[ignore = "probation: new"] fn first() {
+        std::process::Command::new("cmd").args(["/c", "echo { this is not an event"]).status().unwrap();
+    }
+    #[test] #[ignore = "probation: new"] fn second() {}
+}
+'@
+            }
+            $r = Invoke-Tier $root 'probation'
+            Assert-Equal 2 $r.Exit "tests that passed do not make a run whose capture could not be read whole -- $($r.Output)"
+            Assert-Equal $null $r.Outcomes 'no partial record is written for the publisher to take as the whole run'
+            Assert-Match 'unread: not JSON' $r.Output 'the line is named'
         }
     },
     @{

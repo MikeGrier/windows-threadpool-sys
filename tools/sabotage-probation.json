@@ -391,6 +391,65 @@
       ]
     },
     {
+      "name": "cargo is not told to use no colour",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "The executable headers are read as plain text. A host that sets CARGO_TERM_COLOR=always has cargo wrap them in escape codes, and then no executable is recognised and the run cannot be read.",
+      "find": [
+        "+ @('--color', 'never'))"
+      ],
+      "replace": [
+        "+ @())"
+      ]
+    },
+    {
+      "name": "the run's cargo arguments are joined without quoting",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "The build took each argument whole, as an array; the batch file the run goes through must pass each of them whole as well, and a path with a space in it comes apart if it is only joined.",
+      "find": [
+        "ForEach-Object { ConvertTo-CmdArgument $_ }"
+      ],
+      "replace": [
+        "ForEach-Object { $_ }"
+      ]
+    },
+    {
+      "name": "a percent sign in an argument is left for the batch file to expand",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "In a batch file %NAME% is replaced by the variable's value, so a directory that has one in its name reaches cargo as a different directory unless the percent signs are doubled.",
+      "find": [
+        "$text = $Argument.Replace('%', '%%')"
+      ],
+      "replace": [
+        "$text = $Argument"
+      ]
+    },
+    {
+      "name": "an argument cmd cannot carry is not refused",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "A double quote has no spelling that cmd and the C runtime read the same way, so the argument is refused up front and not passed half understood.",
+      "find": [
+        "if ($argument.Contains('\"')) { Write-Host"
+      ],
+      "replace": [
+        "if ($false) { Write-Host"
+      ]
+    },
+    {
+      "name": "lines of the capture that are not events are passed over",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "A line that could not be read is a result that may have been lost, and the record treats a test a run does not report as one that was not run. Writing outcomes anyway would record a partial run as the whole one.",
+      "find": [
+        "if ($read.Problems.Count -gt 0) {"
+      ],
+      "replace": [
+        "if ($false) {"
+      ]
+    },    {
       "name": "CONTROL: the explanation on the branch is reworded",
       "file": "tools/publish-probation-results.ps1",
       "expect": "survives",
