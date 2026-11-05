@@ -603,35 +603,3 @@ yanks are needed, is [DE-D-8](crates/durable-ioring-events/DESIGN-NOTES.md#de-d-
   The engineer's own step, with their crates.io login: `cargo yank --version 0.1.1 durable-ioring-events`, then
   `cargo yank --version 0.5.0 win-durable-ioring` and `cargo yank --version 0.5.1 win-durable-ioring`.
   Both driver releases require the events crate at 0.1.1 or later within 0.1, so all three go, and the replacements must exist first.
-
-## M45 -- A long-haul tier, a probation tier, and suites that do only what their claims need
-
-Each pull request's CI, and each sabotage entry, runs a crate's whole suite, so every test pays its cost
-on every one of them. Measured locally, 22 of the workspace's tests take a second or more and account
-for nearly half of its serial test time; on GitHub runners, tests doing real file I/O have stalled for
-many seconds while idle, which failed sabotage controls on the post-merge sweeps of `c714e83b` and
-`13f06742`. So a test's scale is kept only where the claim needs it, and the scale for its own sake moves
-to a long-haul tier that runs daily. Tests that have never run anywhere start on probation. The decision
-is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it are in
-[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-a-long-haul-tier).
-
-- [x] **M45.1** -- The tiers' convention and its census: `tools/check-test-tiers.ps1` refuses a test whose ignore reason and module disagree about its tier, in CI on every push. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m451)
-
-- [x] **M45.2** -- `long-haul.yml`: daily when `main` has moved, plus dispatch; the long-haul tier fails the run, the probation tier does not. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m452)
-
-
-- [x] **M45.3** -- Probation results are kept on the `probation-results` branch and reported; the promotion threshold stays a working position. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m453)
-
-- [x] **M45.4** -- The six never-run tests (five flush-barrier stress instruments and the 4 GiB buffer test) are on probation, and a tier runs one test at a time. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m454)
-
-- [x] **M45.5** -- `blocking_push`'s capacity test writes past a declared capacity of 32 and its full-scale form is long-haul. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m455)
-
-- [x] **M45.6** -- `windows-file-enumeration-sys`'s three large-directory tests run over 600 files with the minimum buffer, and their full-scale forms are long-haul. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m456)
-
-- [x] **M45.7** -- `win-multi-file-tail-watcher`'s seven scale-bearing tests run smaller with their full-scale forms long-haul; the quiet-between-bursts waits are left and say why. -> [completed 2026-11-03](COMPLETED-CHECKLIST.md#m457)
-
-- [x] **M45.8** -- The census and the cost-probe tests run the cost probes at a twentieth of their workload through a new `--iteration-divisor`, with full-length forms long-haul. -> [completed 2026-11-04](COMPLETED-CHECKLIST.md#m458)
-
-- [x] **M45.9** -- The four waits that are their claim were measured, none was shortened, and each says why beside its constant. -> [completed 2026-11-04](COMPLETED-CHECKLIST.md#m459)
-
-- [x] **M45.10** -- The workspace was re-measured: 17 file-watcher stress tests that never ran are on probation, and the 13 tests still over a second are each left with a reason. -> [completed 2026-11-04](COMPLETED-CHECKLIST.md#m4510)

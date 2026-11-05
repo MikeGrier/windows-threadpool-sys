@@ -4516,3 +4516,20 @@ No sabotage entry names a moved test, and the tests' bodies are unchanged, so no
 The two parked items this unblocked are not ready to be graduated: what each waits for is a run on a runner
 after the branch merges (the post-merge sweeps for `M45+.1`, the first scheduled long-haul runs for
 `M45+.2`), so each has a restated gate in [PARKED.md](PARKED.md).
+
+## Moved 2026-11-04 21:46:04 -05:00 -- M45, a long-haul tier, a probation tier, and suites that do only what their claims need
+
+### <a id="m45"></a>M45 -- A long-haul tier, a probation tier, and suites that do only what their claims need. *(completed 2026-11-04)*
+
+Each pull request's CI, and each sabotage entry, runs a crate's whole suite, so every test pays its cost on every one of them.
+Measured locally, 22 of the workspace's tests took a second or more and accounted for nearly half of its serial test time; on
+GitHub runners, tests doing real file I/O stalled for many seconds while idle, which failed sabotage controls on the post-merge
+sweeps of `c714e83b` and `13f06742`. So a test's scale is kept only where the claim needs it, and the scale for its own sake
+moves to a long-haul tier that runs daily. Tests that have never run anywhere start on probation. The decision is
+[DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the measurements behind it are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-a-long-haul-tier). Landed as pull request #178.
+
+Its items, each archived under its own heading above: [M45.1](#m451), [M45.2](#m452), [M45.3](#m453), [M45.4](#m454),
+[M45.5](#m455), [M45.6](#m456), [M45.7](#m457), [M45.8](#m458) (and [M45.8.1](#m4581), withdrawn), [M45.9](#m459) and
+[M45.10](#m4510). The work this left waiting on a run on a runner is parked as `M45+.1` and `M45+.2` in
+[PARKED.md](PARKED.md).

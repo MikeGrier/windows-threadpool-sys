@@ -3063,7 +3063,7 @@ test's cost is paid on each; a test whose claim holds at a small size is written
   **A working position, not a decision:** how many passes are enough, which is `M45.3`'s to settle once
   there are results to look at.
 
-The work is [CHECKLIST.md](CHECKLIST.md) `M45`. What prompted it, and the measurements, are in
+The work is [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#m45) `M45`. What prompted it, and the measurements, are in
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-a-long-haul-tier).
 <a id="probation-results"></a>**Each probation test's results are kept across runs on a branch of their own, `probation-results`, and reported; how many passes are enough is a working position.**
 `M45.3` left this to its own work, having said only that artifacts expire and that the sabotage record's
