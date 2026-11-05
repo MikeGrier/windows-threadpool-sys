@@ -2921,3 +2921,23 @@ domains are found: "I would think that the data would be determined at open".
   in root `M39.2`.
 
 **Scheduled work:** root `M39.2` to `M39.4` in [CHECKLIST.md](../../CHECKLIST.md).
+
+## <a id="di-d-118"></a>DI-D-118: a directory's flush domains are predicted from its own handle, and a file's are checked against the prediction
+
+**Decided by the engineer, 2026-11-05 (root `M39.3`): "yes option 1".** The alternative was resolving the directory's
+name with `GetVolumePathNameW` and `GetVolumeNameForVolumeMountPointW`: two new entries, and a second statement of
+"which volume is this path on" beside the derivation, free to disagree with it.
+
+- **How.** `DirectoryDomains::predict` opens the directory through `windows-namespace-request-sys`' `OpenFile` with no
+  access and `FILE_FLAG_BACKUP_SEMANTICS`, which is what opening a directory needs, and runs [DI-D-117](#di-d-117)'s
+  derivation on that handle: one rule, the same bytes. The handle is a probe and never a target, so this is not the
+  flag [DI-D-64](#di-d-64) leaves out of a target's open options; that ruling stands.
+- **A prediction is never a declaration.** A file's domains are always what its own open derived. The directory's path is
+  resolved again at each create, so a junction swapped between the two sends the file elsewhere; `confirm` compares the
+  file's own domains with the prediction and reports a `DomainMismatch` with both, which is how that is noticed. An open
+  relative to the directory's handle would close the race, and stays parked as [DI-15.3](PARKED.md).
+- **A prediction that cannot be made is an error with its reason**, never an empty set that looks like an answer: a
+  directory on a share is not predicted, as a file on one has none found.
+- **It blocks**, as an open does; a caller that cannot block calls it on a thread that can.
+
+**Scheduled work:** none beyond root `M39.4`.
