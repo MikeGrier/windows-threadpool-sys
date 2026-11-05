@@ -3091,8 +3091,9 @@ job as an artifact, so the job that can write never runs a test.
   an abort; counting that as a pass, or as nothing, would promote exactly the test probation is for. A test
   of an executable that stopped before it started is not known to exist and is not counted.
 - **A run is applied once.** Each run has an id (the workflow's run and its attempt, since a re-run of the
-  jobs is another run of the tests), and a record whose latest run is that id is left as it is, so a retry
-  from a fresh fetch cannot count a run twice. The id is the one the job that ran the tests wrote beside
+  jobs is another run of the tests), and a record that has had that id applied, as its latest run or an earlier one, is left as it is,
+  so a retry from a fresh fetch cannot count a run twice and a replay of an old run cannot put its results over a
+  newer one's (the record keeps every applied id, one a day). The id is the one the job that ran the tests wrote beside
   the outcomes, not the keeping job's own attempt: that job can be re-run alone over the same outcomes,
   and naming them by its new attempt would count tests that did not run again. The record's latest run moving on is also how a test that was
   not in it is known: it was promoted, renamed or deleted, and the report says so and does not call it a
