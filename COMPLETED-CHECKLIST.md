@@ -4624,3 +4624,23 @@ Its steps are archived above: [M39.2.1](#m3921) (no name-based call is needed), 
 
 - [x] **M39.2** -- **Derive a file's found domains at its open, all or nothing**, in `OpenedFile::admit`, for opens by path
   and by identifier ([DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117)).
+
+## Moved 2026-11-05 17:36:55 -05:00 -- M39.3: predicting a directory's domains
+
+### <a id="m393"></a>M39.3 -- `DirectoryDomains::predict` derives a directory's domains from its own handle, and `confirm` checks a file's against them. *(completed 2026-11-05 17:36:55 -05:00)*
+
+The decision is [DI-D-118](crates/durable-ioring/DESIGN-NOTES.md#di-d-118): the engineer chose the directory's own handle over resolving its name (2026-11-05, "yes option 1"). `win-durable-ioring`'s `directory_domains` opens the directory through the namespace crate's `OpenFile` with no access and backup semantics, reusing `open_request` (now visible within the backend), and runs `file_domains::derive` on the handle. `confirm` returns a `DomainMismatch` carrying both sides. Tests: a directory predicts its volume's disks, a file created in it confirms, a differing prediction and one with an extra domain are mismatches, a missing directory is the open's own `NotFound`, a failing stack is an error and not an empty set, and over the loopback share a local prediction does not confirm the file and a shared directory is not predicted (ignored for the share; named so the existing CI step runs it). Measured on the way: a remote handle's final path in GUID form is refused by `GetFinalPathNameByHandleW` with `ERROR_PATH_NOT_FOUND`. Four sabotage entries, all caught. `GetVolumePathNameW` and `GetVolumeNameForVolumeMountPointW` are not wrapped.
+
+The item as written:
+
+- [x] **M39.3** -- **Predict a directory's domains before a file is created, and confirm them at the open.** A consumer
+  presents storage roots as directories and wants to know, before creating files, where they will land: the
+  directory's volume, mount points included: through `GetVolumePathNameW` and `GetVolumeNameForVolumeMountPointW`
+  (read 2026-11-05; the first resolves a name to the mount point its end lies under), or through the derivation of
+  `M39.2` from the directory's own handle, opened through the route; which is this item's to settle. Its path is resolved again at
+  each create, so a junction swapped between the two sends the file elsewhere; the open's own derivation is what the
+  file's declaration uses, so a swap cannot make it wrong, and the prediction is compared with it and a mismatch
+  reported. An open relative to the directory's handle would close the race, and is parked as
+  [DI-15.3](crates/durable-ioring/PARKED.md) for want of a documented call. From
+  [the design session](design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#the-real-world-model);
+  the engineer, 2026-10-21: "The volume id refinement is a good catch for that race condition."

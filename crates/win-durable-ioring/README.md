@@ -310,6 +310,12 @@ assert_eq!(scrubber.file_id()?, writer.file_id()?);
 
 ### A raw volume
 
+A file this crate opens has its flush domains found from its handle: the disks of its volume, all or nothing,
+and none for a file on a share ([DI-D-117](../durable-ioring/DESIGN-NOTES.md#di-d-117)). Before creating files,
+`DirectoryDomains::predict` gives the domains a file created in a directory will have, by the same derivation run on
+the directory's handle, and `confirm` checks a file's own against it, which is how a junction swapped between the two
+is noticed ([DI-D-118](../durable-ioring/DESIGN-NOTES.md#di-d-118)). A prediction is never a declaration.
+
 A raw volume is a target too ([DI-D-61](../durable-ioring/DESIGN-NOTES.md#di-d-61)): one handle, one
 commit per volume, and **regions are offsets the consumer allocates inside it**, not targets of their
 own. `OpenedVolume` opens it by a path that can only name a volume, a drive letter or a volume GUID,

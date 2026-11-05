@@ -525,17 +525,7 @@ raw volume derives, so a file and a volume on one disk share fate by constructio
 
   - [x] **M39.2.3** -- A file on a share is unknown: no key is derived for it, and a consumer that knows its storage declares it. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m3923)
 
-- [ ] **M39.3** -- **Predict a directory's domains before a file is created, and confirm them at the open.** A consumer
-  presents storage roots as directories and wants to know, before creating files, where they will land: the
-  directory's volume, mount points included: through `GetVolumePathNameW` and `GetVolumeNameForVolumeMountPointW`
-  (read 2026-11-05; the first resolves a name to the mount point its end lies under), or through the derivation of
-  `M39.2` from the directory's own handle, opened through the route; which is this item's to settle. Its path is resolved again at
-  each create, so a junction swapped between the two sends the file elsewhere; the open's own derivation is what the
-  file's declaration uses, so a swap cannot make it wrong, and the prediction is compared with it and a mismatch
-  reported. An open relative to the directory's handle would close the race, and is parked as
-  [DI-15.3](crates/durable-ioring/PARKED.md) for want of a documented call. From
-  [the design session](design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#the-real-world-model);
-  the engineer, 2026-10-21: "The volume id refinement is a good catch for that race condition."
+- [x] **M39.3** -- `DirectoryDomains::predict` derives a directory's domains from its own handle, and `confirm` checks a file's against them. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m393)
 
 - [ ] **M39.4** -- **Show it end to end, in the shape of the working model:** a data directory and a log on separate
   disks, files opened through the namespace route with their domains derived, and a failed flush on one shown not to

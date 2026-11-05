@@ -2373,6 +2373,38 @@
       "why": "A control: the tests name the limit through the constant, so moving it changes nothing they claim. If this comes back caught, a test depends on the number rather than the rule.",
       "find": ["const MAX_VOLUMES: usize = 16;"],
       "replace": ["const MAX_VOLUMES: usize = 17;"]
+    },
+    {
+      "name": "M39.3: a file is confirmed whatever its domains",
+      "file": "src/windows_backend/directory_domains.rs",
+      "expect": "caught",
+      "why": "A prediction is checked against what the file's open found, which is how a consumer learns a file landed elsewhere.",
+      "find": ["        if file.flush_domains() == self.domains.as_slice() {"],
+      "replace": ["        if true {"]
+    },
+    {
+      "name": "M39.3: the directory is opened without backup semantics",
+      "file": "src/windows_backend/directory_domains.rs",
+      "expect": "caught",
+      "why": "Opening a directory needs FILE_FLAG_BACKUP_SEMANTICS; without it there is no handle to derive from.",
+      "find": ["    flags: FILE_FLAG_BACKUP_SEMANTICS,"],
+      "replace": ["    flags: 0,"]
+    },
+    {
+      "name": "M39.3: a prediction that could not be made is an empty one",
+      "file": "src/windows_backend/directory_domains.rs",
+      "expect": "caught",
+      "why": "A prediction that failed is reported with its reason, and not handed back as a set that looks like an answer.",
+      "find": ["        let domains = file_domains::derive(stack, handle)?;"],
+      "replace": ["        let domains = file_domains::derive(stack, handle).unwrap_or_default();"]
+    },
+    {
+      "name": "M39.3: a mismatch reports the prediction as what was found",
+      "file": "src/windows_backend/directory_domains.rs",
+      "expect": "caught",
+      "why": "A mismatch carries both sides, so a consumer can see where the file landed.",
+      "find": ["                found: file.flush_domains().to_vec(),"],
+      "replace": ["                found: self.domains.clone(),"]
     }
   ]
 }

@@ -50,7 +50,7 @@ use super::file_rights::FileRights;
 use super::share_mode::ShareMode;
 
 mod by_id;
-mod open_request;
+pub(in crate::windows_backend) mod open_request;
 mod reopen;
 
 pub use by_id::{ByIdOptions, ByIdRequest, IdentityMismatch};
