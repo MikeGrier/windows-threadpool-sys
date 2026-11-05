@@ -31,7 +31,10 @@ milestone of [CHECKLIST.md](CHECKLIST.md), and the file is deleted when it is em
   runner, so only sweeps on runners can show how often it still happens. The question arose from controls in
   `win-durable-ioring` timing out on runners whose tests stalled while idle (post-merge sweeps of
   `c714e83b` and `13f06742`); the engineer, 2026-11-03, chose first to make the suites do less, and this
-  is left until it is known how often a stall still reaches a control once they do. A control's patch
+  is left until it is known how often a stall still reaches a control once they do. One data point is already
+  in, from before M45 landed: the post-merge sweep of `main` after the `hardware-dependent` change had a control ("the abandoned-through bound takes its operands in the other order", shard
+  `durable-ioring` 25/49) hang past its 21 s bound inside `win-durable-ioring`'s `blocking_push` capacity test, which [M45.5](COMPLETED-CHECKLIST.md#m455)
+  is the item that made smaller. Whether a stall still reaches a control after M45 is what the next sweeps show. A control's patch
   changes nothing, so a timeout on one cannot be a detection; a timeout on an entry declared `caught`
   can be, and stays one either way.
 
