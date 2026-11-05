@@ -2869,3 +2869,42 @@ sample does not attempt `no_std`.
 
 **Scheduled work:** `DI-M24` and `DI-21.3` to `DI-21.8`, with `DI-21.5.1` to `DI-21.5.3` for reservations, reading by LSN
 and shared clients, in [CHECKLIST.md](CHECKLIST.md), and `DI-21+.2` in [PARKED.md](PARKED.md).
+
+## <a id="di-d-117"></a>DI-D-117: a file `win-durable-ioring` opens has its flush domains derived at the open, all or nothing
+
+**Decided by the engineer, 2026-11-05 (root [M39.1](../../COMPLETED-CHECKLIST.md#m391)), from the assistant's
+investigation.** The scope, in the engineer's words: "this isn't saying that durable ioring only supports this but that our
+assistance for computing domains comes when you use the namespace crate. [...] Advanced users who want to hand handles to
+the durable ioring directly, I will assume are advanced enough to also manage their domains directly." Asked when the
+domains are found: "I would think that the data would be determined at open".
+
+- **Where.** In `OpenedFile::admit`, the checks every open makes on the handle it opened, so an open by path and an open by
+  identifier ([DI-D-70](#di-d-70)) both derive them, and `Win32FileTarget::new` carries them as `from_volume` carries a
+  volume's ([DI-D-61](#di-d-61)). A target made any other way has none found and declares its own with `with_domains`, as
+  before. The steps are root [M39.2](../../CHECKLIST.md)'s; a local file's domains are the same `disk_flush_domain` bytes a
+  raw volume derives, so a file and a volume on one disk share fate by construction.
+- **All or nothing.** A hop that fails leaves the file with no found domains, which is unknown and shares fate with every
+  target: the safe default. A partial set is never produced, since a missing domain is the one way a declaration makes the
+  contract false ([DI-D-21](#di-d-21)).
+- **Why at the open and not on first request.** `IoTarget::flush_domains` is an accessor the core reads once, in
+  `describe`, when it adds the target; deriving there would put blocking device I/O, with no error to report, in the core's
+  add path. The open is the call a consumer already arranges to run where blocking is acceptable, and target construction
+  does no I/O. `OpenedVolume::open` already reads its extents at the open.
+- **By identifier, all of it.** Every step reads the handle: its final path, its volume, the volume's disks, a remote
+  file's server. The caller's name is needed only for root `M39.3`'s prediction before a file exists, and possibly for a DFS
+  link, which root `M39.2.1` checks.
+- **A snapshot, stated.** The domains are those of the moment of the open. A volume later extended onto another disk is not
+  seen; deriving later would not see it either.
+- **What it costs.** Measured once, 2026-11-05, on the engineer's development machine: about half as much again as a local
+  open, and a small part of an open over a loopback share, where an unbuffered open already makes the one query a remote
+  file needs. Not a reason to defer anything; a figure for a consumer weighing the reserved opt-out below.
+- **An opt-out's shape is reserved, and none is built.** The engineer: "Reserve the shape but we don't need to implement it
+  today." If one is added, it is a method on the request (`OpenRequest` and `ByIdRequest`), as `with_security_descriptor`
+  is, and not a `FileOptions` field, since the options are the parameters of the OS calls ([DI-D-64](#di-d-64)); and it
+  takes a `#[non_exhaustive]` enum whose default derives, so a mode added later, skipping or a per-volume cache, breaks
+  no caller. **No work is scheduled for it.**
+- **What it amends.** `win-durable-ioring`'s file target says a file's domains "are what it cannot know", and
+  [API.md](API.md) section 13 calls the derivation "a locality helper's job outside this crate". Both change with the code,
+  in root `M39.2`.
+
+**Scheduled work:** root `M39.2` to `M39.4` in [CHECKLIST.md](../../CHECKLIST.md).

@@ -4533,3 +4533,16 @@ Its items, each archived under its own heading above: [M45.1](#m451), [M45.2](#m
 [M45.5](#m455), [M45.6](#m456), [M45.7](#m457), [M45.8](#m458) (and [M45.8.1](#m4581), withdrawn), [M45.9](#m459) and
 [M45.10](#m4510). The work this left waiting on a run on a runner is parked as `M45+.1` and `M45+.2` in
 [PARKED.md](PARKED.md).
+
+## Moved 2026-11-05 16:20:42 -05:00 -- M39.1: when a file's flush domains are derived
+
+### <a id="m391"></a>M39.1 -- A file opened through the namespace route has its flush domains derived at the open, all or nothing; an opt-out's shape is reserved and not built. *(completed 2026-11-05 16:20:42 -05:00)*
+
+The decision is [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117). Both choices the item named were settled by the engineer, 2026-11-05: at the open ("I would think that the data would be determined at open"), which the investigation supported on the core's interface, where blocking work belongs, and the raw volume's precedent; and an open by identifier gets the whole derivation, since every step reads the handle. An opt-out was weighed and its shape reserved without building it ("Reserve the shape but we don't need to implement it today."). The item as written:
+
+- [x] **M39.1** -- **Record the decision, and settle its two open choices.** A decision in durable-ioring's
+  [DESIGN-NOTES.md](crates/durable-ioring/DESIGN-NOTES.md), amending what `win-durable-ioring` says a file can know and
+  what [API.md](crates/durable-ioring/API.md) section 13 says ("a locality helper's job outside this crate"), with the
+  engineer's ruling quoted. The choices: whether a file's domains are derived at the open (every open pays for a few
+  queries, one of them on the volume) or on first request; and whether an open by identifier (`OpenFileById`), which has
+  a hint handle and no name, gets the handle-based half or none.

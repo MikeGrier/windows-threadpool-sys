@@ -515,14 +515,10 @@ The keys are the identifier's **exact bytes**, interned by dioring (the engineer
 [DI-2.10](crates/durable-ioring/COMPLETED-CHECKLIST.md)); a file's local keys are the same `disk_flush_domain` bytes a
 raw volume derives, so a file and a volume on one disk share fate by construction.
 
-- [ ] **M39.1** -- **Record the decision, and settle its two open choices.** A decision in durable-ioring's
-  [DESIGN-NOTES.md](crates/durable-ioring/DESIGN-NOTES.md), amending what `win-durable-ioring` says a file can know and
-  what [API.md](crates/durable-ioring/API.md) section 13 says ("a locality helper's job outside this crate"), with the
-  engineer's ruling quoted. The choices: whether a file's domains are derived at the open (every open pays for a few
-  queries, one of them on the volume) or on first request; and whether an open by identifier (`OpenFileById`), which has
-  a hint handle and no name, gets the handle-based half or none.
+- [x] **M39.1** -- A file opened through the namespace route has its flush domains derived at the open, all or nothing; an opt-out's shape is reserved and not built. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m391)
 
-- [ ] **M39.2** -- **Derive a file's found domains at its open, all or nothing.**
+- [ ] **M39.2** -- **Derive a file's found domains at its open, all or nothing**, in `OpenedFile::admit`, for opens by path
+  and by identifier ([DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117)).
 
   - [ ] **M39.2.1** -- **Wrap the name-based calls the derivation needs**, as entries in
     `windows-namespace-request-sys`, which exists for synchronous namespace calls that can block on the network. Check
@@ -547,7 +543,9 @@ raw volume derives, so a file and a volume on one disk share fate by constructio
     found domains, which is unknown and shares fate with everything: the safe default, never a partial set, which is the
     one way a declaration makes the contract false. `with_domains` stays, adding what Windows does not show, and its
     documentation names it: the disks of a Storage Spaces pool (reachable only through the Storage Management API's WMI
-    classes), the disks behind a hardware RAID controller, and a cache a controller shares between disks.
+    classes), the disks behind a hardware RAID controller, and a cache a controller shares between disks. The texts
+    DI-D-117 amends change here, with the code: the file target's "are what it cannot know", and
+    [API.md](crates/durable-ioring/API.md) section 13's "a locality helper's job".
 
 - [ ] **M39.3** -- **Predict a directory's domains before a file is created, and confirm them at the open.** A consumer
   presents storage roots as directories and wants to know, before creating files, where they will land: the
