@@ -2895,6 +2895,13 @@ domains are found: "I would think that the data would be determined at open".
   link, which root `M39.2.1` checks.
 - **A snapshot, stated.** The domains are those of the moment of the open. A volume later extended onto another disk is not
   seen; deriving later would not see it either.
+- **A file on a share is unknown, and no key is derived for it.** The engineer, 2026-11-05, choosing among leaving it
+  unknown, one key for every remote file, and a key per server: "Go with a then". A server's name is not its identity
+  (one machine answers to several names), servers in a cluster share disks, a DFS link hides its target, and a share
+  can be this machine's own disk, which the documented loopback flag is not documented to catch by every name. Any key
+  would let two files that share fate carry different keys, which is a missing domain; unknown cannot be wrong. A
+  consumer that knows where a share's storage is declares it with `with_domains`, and with none found what it declares
+  is the file's whole set.
 - **A virtual disk is decided by its bus type.** A disk whose `STORAGE_DEVICE_DESCRIPTOR` bus type is
   `BusTypeFileBackedVirtual` is followed through the volume's storage dependency to the volume holding its backing file;
   any other is not, and the dependency query is never asked. That query's page names no error for a volume that is not on
