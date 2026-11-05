@@ -490,41 +490,79 @@ Historical means `COMPLETED-*` archives, `design-sessions/`, measurement capture
   and the root [DESIGN-NOTES.md](DESIGN-NOTES.md). Commit as `docs`, one commit per crate so each
   scope stays accurate.
 
-## M39 -- A locality helper: a file's flush domains from Windows' storage topology
+## M39 -- A file's flush domains, derived when it is opened through the namespace route
 
 Opened 2026-10-06 from the durable-ioring design session
-([DESIGN-SESSION-2026-10-05-epoch-ring.md](design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md)).
-durable-ioring takes, per file, a set of opaque **flush-domain** keys
-([DI-D-21](crates/durable-ioring/DESIGN-NOTES.md#di-d-21)) and never looks at Windows' storage
-stack itself. Something has to derive those keys. That derivation is policy -- deciding what counts
-as one domain -- so it does not belong in a `-sys` crate. It is built on the per-call entries in
-`windows-namespace-request-sys`' `NR-2` ([CHECKLIST.md](crates/windows-namespace-request-sys/CHECKLIST.md)).
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md)) as a free-standing
+locality helper; **re-scoped 2026-11-05** by the engineer. durable-ioring takes, per file, a set of opaque
+**flush-domain** keys ([DI-D-21](crates/durable-ioring/DESIGN-NOTES.md#di-d-21)) and never looks at Windows' storage
+stack itself. Everything that consumes the keys is built: declarations, failure import, and the routing provider
+([DI-12.2](crates/durable-ioring/COMPLETED-CHECKLIST.md#di-122)). `win-durable-ioring` already derives them for a raw
+volume or disk from its extents, as `disk_flush_domain` ([DI-D-61](crates/durable-ioring/DESIGN-NOTES.md#di-d-61)); for a
+file it derives none, and its documentation says a file's domains "are what it cannot know", so a consumer declares them
+with `with_domains`.
 
-- [ ] **M39.1** -- **Decide where the helper lives.** Candidates: a new crate (a facility, so no
-  `win-` prefix by [the naming rule](DESIGN-NOTES.md#new-crates-take-the-win-prefix)); the io-domains
-  planner, which already owns residency and placement; or the consumer's own code, with this
-  workspace providing only the calls. An engineer's decision; record it as a root decision.
+**The scope, in the engineer's words (2026-11-05):** "this isn't saying that durable ioring only supports this but that
+our assistance for computing domains comes when you use the namespace crate. This way we have the namespace available to
+use namespace based OS functions as well as the handle based ones. Advanced users who want to hand handles to the durable
+ioring directly, I will assume are advanced enough to also manage their domains directly." So the derivation belongs to
+`win-durable-ioring`'s open, which goes through `windows-namespace-request-sys`' `OpenFile` and has both the name and the
+handle in `OpenRequest::perform`; a target made any other way declares its own, as today. That settles the old `M39.1`
+(where the helper lives) and drops its facts-or-policy question: the policy is `win-durable-ioring`'s, as it is for a raw
+volume, and each OS call stays one entry in the namespace or volume crate.
 
-- [ ] **M39.2** -- **Build the traversal and its keys.** File handle, to volume GUID path, to disk
-  extents, to each disk's unique identifier and NUMA node; a virtual disk recursively through its
-  backing file; an SMB path to server and share. Output: the file's set of flush-domain keys, each
-  with the attributes a planner wants (the NUMA node, the volume, the kind of domain), and an
-  explicit *unknown* when a hop fails rather than a guess. Known blind spots, to be stated in its
-  documentation rather than papered over: a Storage Spaces virtual disk hides its pool members,
-  which two spaces in one pool may share; a RAID controller's cache is not visible as a separate
-  domain. The engineer's own VHDX layer composes its domains the same way, from its backing file.
+The keys are the identifier's **exact bytes**, interned by dioring (the engineer, 2026-10-06, under
+[DI-2.10](crates/durable-ioring/COMPLETED-CHECKLIST.md)); a file's local keys are the same `disk_flush_domain` bytes a
+raw volume derives, so a file and a volume on one disk share fate by construction.
 
-- [ ] **M39.3** -- **Predict a directory's domains, and confirm each file's by its handle.** A consumer presents storage
-  roots as directories and creates files in them by name, so the helper maps a directory once to the domains a file created
-  in it will have: the directory's volume, mount points included, by the traversal of `M39.2` from the directory's handle.
-  The directory's path is resolved again at each create, so a junction swapped between the two sends the file elsewhere;
-  an open relative to the directory's handle would close that, and is parked as
-  [DI-15.3](crates/durable-ioring/PARKED.md) for want of a documented call. So after each open the helper reads the new
-  file's volume from its own handle (`GetFileInformationByHandleEx` with `FileIdInfo`, whose volume serial number is the
-  documented field) and compares it with the prediction, reporting a mismatch before the file is declared to dioring. From
+- [ ] **M39.1** -- **Record the decision, and settle its two open choices.** A decision in durable-ioring's
+  [DESIGN-NOTES.md](crates/durable-ioring/DESIGN-NOTES.md), amending what `win-durable-ioring` says a file can know and
+  what [API.md](crates/durable-ioring/API.md) section 13 says ("a locality helper's job outside this crate"), with the
+  engineer's ruling quoted. The choices: whether a file's domains are derived at the open (every open pays for a few
+  queries, one of them on the volume) or on first request; and whether an open by identifier (`OpenFileById`), which has
+  a hint handle and no name, gets the handle-based half or none.
+
+- [ ] **M39.2** -- **Derive a file's found domains at its open, all or nothing.**
+
+  - [ ] **M39.2.1** -- **Wrap the name-based calls the derivation needs**, as entries in
+    `windows-namespace-request-sys`, which exists for synchronous namespace calls that can block on the network. Check
+    each against its page first and record which were checked. Candidates, none yet confirmed for this use:
+    `DfsGetClientInfo` (a DFS link to the target it is using), `GetDriveTypeW` (a removable or RAM disk, which no
+    handle-based documented call reports), and `GetVolumePathNameW` with `GetVolumeNameForVolumeMountPointW` (the volume a
+    name resolves to, for the prediction of `M39.3`). Anything the handle answers is asked of the handle.
+
+  - [ ] **M39.2.2** -- **A local file's domains.** The handle's final path in `VOLUME_NAME_GUID` form names its
+    volume; the volume, opened with no access as `win-volume-sys`' tests do, gives its disk extents; each disk is
+    `disk_flush_domain`. A disk that is a virtual disk is followed through its storage dependency to the volume holding
+    its backing file, and on from there. No real dependency entry has been observed yet, because attaching a virtual disk
+    needs an elevated token ([WV-D-10](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-10)), so that hop's test needs a
+    privileged run or a stated gap.
+
+  - [ ] **M39.2.3** -- **A remote file's domain.** The server, from the handle's final path, which the open already reads
+    to refuse a remote device for an unbuffered file and which follows mapped drives and links; a DFS link resolved
+    through its name. Keyed by server and not by share, since two shares on one server sit on disks this cannot see and
+    the coarser key is the safe one.
+
+  - [ ] **M39.2.4** -- **All or nothing, and what is left to the consumer.** Any hop that fails leaves the file with no
+    found domains, which is unknown and shares fate with everything: the safe default, never a partial set, which is the
+    one way a declaration makes the contract false. `with_domains` stays, adding what Windows does not show, and its
+    documentation names it: the disks of a Storage Spaces pool (reachable only through the Storage Management API's WMI
+    classes), the disks behind a hardware RAID controller, and a cache a controller shares between disks.
+
+- [ ] **M39.3** -- **Predict a directory's domains before a file is created, and confirm them at the open.** A consumer
+  presents storage roots as directories and wants to know, before creating files, where they will land: the
+  directory's volume, mount points included, through the name-based calls of `M39.2.1`. Its path is resolved again at
+  each create, so a junction swapped between the two sends the file elsewhere; the open's own derivation is what the
+  file's declaration uses, so a swap cannot make it wrong, and the prediction is compared with it and a mismatch
+  reported. An open relative to the directory's handle would close the race, and is parked as
+  [DI-15.3](crates/durable-ioring/PARKED.md) for want of a documented call. From
   [the design session](design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#the-real-world-model);
   the engineer, 2026-10-21: "The volume id refinement is a good catch for that race condition."
 
+- [ ] **M39.4** -- **Show it end to end, in the shape of the working model:** a data directory and a log on separate
+  disks, files opened through the namespace route with their domains derived, and a failed flush on one shown not to
+  make the other's writes suspect. Coarse on purpose: whether that can be shown without hardware that fails on demand is
+  settled once `M39.2` is built.
 ## M42 -- Apply the documented-contract rule to the refusals that already exist
 
 The rule is in [DESIGN-NOTES.md](DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) (the engineer,
