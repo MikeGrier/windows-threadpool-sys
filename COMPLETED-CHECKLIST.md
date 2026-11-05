@@ -4546,3 +4546,22 @@ The decision is [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117). Both
   engineer's ruling quoted. The choices: whether a file's domains are derived at the open (every open pays for a few
   queries, one of them on the volume) or on first request; and whether an open by identifier (`OpenFileById`), which has
   a hint handle and no name, gets the handle-based half or none.
+
+## Moved 2026-11-05 16:23:59 -05:00 -- M39.2.1: the name-based calls the derivation needs
+
+### <a id="m3921"></a>M39.2.1 -- The derivation needs none of the name-based candidates; `NetDfsGetClientInfo` moves to `M39.2.3` and the volume-path calls to `M39.3`. *(completed 2026-11-05 16:23:59 -05:00)*
+
+Each candidate's page was read on 2026-11-05.
+
+- `GetDriveTypeW`: reports a removable, fixed, CD-ROM, RAM or network drive for a root path. Nothing in the derivation acts on the kind, and a device that does not answer the extents query already leaves a file unknown ([DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117)), so it is not wrapped.
+- `GetVolumePathNameW` with `GetVolumeNameForVolumeMountPointW`: resolve a name to the mount point its end lies under, and that to a volume. The derivation reads the opened handle, so `M39.2` does not need them; `M39.3`'s prediction before a file exists may, and the item now names them beside the alternative of deriving from the directory's own handle.
+- `NetDfsGetClientInfo` (the plan called it `DfsGetClientInfo`; this is the documented name): reads the DFS client's cache for a DFS root or link's UNC path, needs no special group membership, and levels 3 and 4 report the targets. Needed only if `M39.2.3` keys a remote file by its server, so the item now carries it.
+
+So nothing is wrapped here. The item as written:
+
+- [x] **M39.2.1** -- **Wrap the name-based calls the derivation needs**, as entries in
+    `windows-namespace-request-sys`, which exists for synchronous namespace calls that can block on the network. Check
+    each against its page first and record which were checked. Candidates, none yet confirmed for this use:
+    `DfsGetClientInfo` (a DFS link to the target it is using), `GetDriveTypeW` (a removable or RAM disk, which no
+    handle-based documented call reports), and `GetVolumePathNameW` with `GetVolumeNameForVolumeMountPointW` (the volume a
+    name resolves to, for the prediction of `M39.3`). Anything the handle answers is asked of the handle.

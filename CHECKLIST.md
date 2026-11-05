@@ -520,12 +520,7 @@ raw volume derives, so a file and a volume on one disk share fate by constructio
 - [ ] **M39.2** -- **Derive a file's found domains at its open, all or nothing**, in `OpenedFile::admit`, for opens by path
   and by identifier ([DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117)).
 
-  - [ ] **M39.2.1** -- **Wrap the name-based calls the derivation needs**, as entries in
-    `windows-namespace-request-sys`, which exists for synchronous namespace calls that can block on the network. Check
-    each against its page first and record which were checked. Candidates, none yet confirmed for this use:
-    `DfsGetClientInfo` (a DFS link to the target it is using), `GetDriveTypeW` (a removable or RAM disk, which no
-    handle-based documented call reports), and `GetVolumePathNameW` with `GetVolumeNameForVolumeMountPointW` (the volume a
-    name resolves to, for the prediction of `M39.3`). Anything the handle answers is asked of the handle.
+  - [x] **M39.2.1** -- The derivation needs none of the name-based candidates; `NetDfsGetClientInfo` moves to `M39.2.3` and the volume-path calls to `M39.3`. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m3921)
 
   - [ ] **M39.2.2** -- **A local file's domains.** The handle's final path in `VOLUME_NAME_GUID` form names its
     volume; the volume, opened with no access as `win-volume-sys`' tests do, gives its disk extents; each disk is
@@ -536,7 +531,9 @@ raw volume derives, so a file and a volume on one disk share fate by constructio
 
   - [ ] **M39.2.3** -- **A remote file's domain.** The server, from the handle's final path, which the open already reads
     to refuse a remote device for an unbuffered file and which follows mapped drives and links; a DFS link resolved
-    through its name. Keyed by server and not by share, since two shares on one server sit on disks this cannot see and
+    through `NetDfsGetClientInfo`, wrapped as an entry in `windows-namespace-request-sys` if this item keys by server
+    (read 2026-11-05: it reads the DFS client's cache for a DFS root or link's UNC path, needs no special group
+    membership, and its levels 3 and 4 report the targets). Keyed by server and not by share, since two shares on one server sit on disks this cannot see and
     the coarser key is the safe one.
 
   - [ ] **M39.2.4** -- **All or nothing, and what is left to the consumer.** Any hop that fails leaves the file with no
@@ -549,7 +546,9 @@ raw volume derives, so a file and a volume on one disk share fate by constructio
 
 - [ ] **M39.3** -- **Predict a directory's domains before a file is created, and confirm them at the open.** A consumer
   presents storage roots as directories and wants to know, before creating files, where they will land: the
-  directory's volume, mount points included, through the name-based calls of `M39.2.1`. Its path is resolved again at
+  directory's volume, mount points included: through `GetVolumePathNameW` and `GetVolumeNameForVolumeMountPointW`
+  (read 2026-11-05; the first resolves a name to the mount point its end lies under), or through the derivation of
+  `M39.2` from the directory's own handle, opened through the route; which is this item's to settle. Its path is resolved again at
   each create, so a junction swapped between the two sends the file elsewhere; the open's own derivation is what the
   file's declaration uses, so a swap cannot make it wrong, and the prediction is compared with it and a mismatch
   reported. An open relative to the directory's handle would close the race, and is parked as
