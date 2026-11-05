@@ -136,7 +136,7 @@ function Publish-Once {
 
     $record = New-ProbationRecord
     if ($state.Present -and $null -ne $state.Text) { $record = ConvertFrom-ProbationRecordText $state.Text }
-    if ($record.latestRun -eq $RunId) {
+    if ($record.appliedRuns.Contains($RunId)) {
         Write-Host "The $Branch branch on $Remote already holds run $RunId; nothing to publish."
         return $null
     }

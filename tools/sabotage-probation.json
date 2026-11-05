@@ -36,7 +36,7 @@
       "expect": "caught",
       "why": "A publisher that retries from a fresh fetch applies the run to what it fetched, which may already hold it. Counted twice, a test is a run nearer promotion than it has earned.",
       "find": [
-        "if ($Record.latestRun -eq $RunId) { return $Record }"
+        "if ($Record.appliedRuns.Contains($RunId)) { return $Record }"
       ],
       "replace": [
         "if ($false) { return $Record }"
@@ -240,7 +240,7 @@
       "expect": "caught",
       "why": "Publishing it again would add a commit that changes nothing, on every retry and every re-publish.",
       "find": [
-        "if ($record.latestRun -eq $RunId) {"
+        "if ($record.appliedRuns.Contains($RunId)) {"
       ],
       "replace": [
         "if ($false) {"
@@ -450,6 +450,90 @@
         "if ($false) {"
       ]
     },    {
+      "name": "a run is applied once only if it is the latest",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "A run replayed after a later one, a re-run of the keeping job over an older artifact, would be counted again and its results put over the later run's, hiding a failure.",
+      "find": [
+        "if ($Record.appliedRuns.Contains($RunId)) { return $Record }"
+      ],
+      "replace": [
+        "if ($Record.latestRun -eq $RunId) { return $Record }"
+      ]
+    },
+    {
+      "name": "the publisher compares only the latest run",
+      "file": "tools/publish-probation-results.ps1",
+      "expect": "caught",
+      "why": "The branch is asked whether it holds the run, and holding it means having applied it, whichever run came after.",
+      "find": [
+        "if ($record.appliedRuns.Contains($RunId)) {"
+      ],
+      "replace": [
+        "if ($record.latestRun -eq $RunId) {"
+      ]
+    },
+    {
+      "name": "the applied runs are not written to the record",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "A list that is not kept is forgotten by the next publisher, which reads the record from the branch.",
+      "find": [
+        "appliedRuns = [string[]]$Record.appliedRuns.ToArray(); "
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "a latest run is not counted as applied when the record has no list",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "A record written before the list existed names its latest run, and that run has been applied.",
+      "find": [
+        "if ($record.latestRun -and -not $record.appliedRuns.Contains($record.latestRun)) {"
+      ],
+      "replace": [
+        "if ($false) {"
+      ]
+    },
+    {
+      "name": "an executable is read from the last parenthesis of its header",
+      "file": "tools/probation-common.ps1",
+      "expect": "caught",
+      "why": "The directory above an executable can have parentheses in it (Program Files (x86)); the file name cannot.",
+      "find": [
+        "$header = [regex]::Match($line, '^\\s*Running\\s.*[\\\\/](?<exe>[^\\\\/()]+\\.exe)\\)\\s*$')"
+      ],
+      "replace": [
+        "$header = [regex]::Match($line, '^\\s*Running\\s.*\\((?<exe>[^()]+)\\)\\s*$')"
+      ]
+    },
+    {
+      "name": "the batch file is written to the output directory",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "The caller chooses the output directory, and cmd reads a %NAME% in the path of a batch file it is started with as a variable.",
+      "find": [
+        "$runner = Join-Path ([System.IO.Path]::GetTempPath()) ('run-tier-' + [guid]::NewGuid().ToString('N') + '.cmd')"
+      ],
+      "replace": [
+        "$runner = Join-Path $OutputDirectory 'run.cmd'"
+      ]
+    },
+    {
+      "name": "a percent sign in the capture path is left for the batch file to expand",
+      "file": "tools/run-tier.ps1",
+      "expect": "caught",
+      "why": "In a batch file a redirect to a path with %NAME% in it goes to wherever the variable's value names.",
+      "find": [
+        "$($capturePath.Replace('%', '%%'))"
+      ],
+      "replace": [
+        "$capturePath"
+      ]
+    },
+    {
       "name": "CONTROL: the explanation on the branch is reworded",
       "file": "tools/publish-probation-results.ps1",
       "expect": "survives",

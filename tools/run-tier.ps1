@@ -99,15 +99,17 @@ try {
     }
 
     # A batch file, so that the redirect is cmd's and both streams are written to one
-    # handle, in the order they happen. A PowerShell `2>&1` reads them on separate threads.
-    $runner = Join-Path $OutputDirectory 'run.cmd'
+    # handle, in the order they happen. A PowerShell `2>&1` reads them on separate threads. It is
+    # written to the temp directory and not beside the output: the caller chooses the output
+    # directory, and cmd reads a `%NAME%` in the path it is started with as a variable.
+    $runner = Join-Path ([System.IO.Path]::GetTempPath()) ('run-tier-' + [guid]::NewGuid().ToString('N') + '.cmd')
     # Each argument is quoted for cmd, since the build above took them as an array and a path with a
     # space in it must reach this phase as one argument too. `--color never` because the headers
     # are read as plain text: with `CARGO_TERM_COLOR=always` set, as some CI hosts set it, cargo
     # wraps `Running` in escape codes and no executable would be recognised.
     $quoted = @(@($CargoArgs | ForEach-Object { ConvertTo-CmdArgument $_ }) + @('--color', 'never'))
     $arguments = ($quoted -join ' ') + " -- --ignored $Module`:: --test-threads $TestThreads -Z unstable-options --format json"
-    [System.IO.File]::WriteAllText($runner, "@echo off`r`ncargo test $arguments > `"$capturePath`" 2>&1`r`nexit /b %ERRORLEVEL%`r`n")
+    [System.IO.File]::WriteAllText($runner, "@echo off`r`ncargo test $arguments > `"$($capturePath.Replace('%', '%%'))`" 2>&1`r`nexit /b %ERRORLEVEL%`r`n")
     $previous = $env:RUSTC_BOOTSTRAP
     $env:RUSTC_BOOTSTRAP = '1'
     try {
@@ -116,6 +118,7 @@ try {
     }
     finally {
         if ($null -eq $previous) { Remove-Item Env:\RUSTC_BOOTSTRAP -ErrorAction SilentlyContinue } else { $env:RUSTC_BOOTSTRAP = $previous }
+        Remove-Item -LiteralPath $runner -Force -ErrorAction SilentlyContinue
     }
 }
 finally { Pop-Location }

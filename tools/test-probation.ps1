@@ -201,8 +201,8 @@ function New-Fixture {
 }
 
 function Invoke-Tier {
-    param([string] $Root, [string] $Module, [hashtable] $Extra = @{}, [string[]] $CargoArgs = @('--lib', '--tests', '--no-fail-fast'))
-    $out = Join-Path (New-Root) 'out'
+    param([string] $Root, [string] $Module, [hashtable] $Extra = @{}, [string[]] $CargoArgs = @('--lib', '--tests', '--no-fail-fast'), [string] $OutputName = 'out')
+    $out = Join-Path (New-Root) $OutputName
     $text = & $runner -Module $Module -OutputDirectory $out -RepositoryRoot $Root -CargoArgs $CargoArgs @Extra 6>&1 | Out-String -Width $captureWidth
     $outcomes = $null
     $file = Join-Path $out 'outcomes.json'
@@ -265,6 +265,16 @@ $cases = @(
             Assert-Equal 'fail' $failed.Outcome 'the failure'
             Assert-Equal 'it broke' $failed.Note 'and what it printed'
             Assert-Equal 0 $read.Problems.Count 'nothing was unreadable'
+        }
+    },
+    @{
+        Name = 'a-header-whose-directory-has-parentheses-is-still-read'
+        Run  = {
+            $read = Read-Capture @(
+                '     Running unittests src\lib.rs (C:\Program Files (x86)\work (2)\target\debug\deps\a-111.exe)',
+                (New-Started 'm::passes'), (New-Result 'm::passes' 'ok'), $suiteOk) $mapOne
+            Assert-Equal 'pass' (Get-Outcome $read 'crates/a/src/lib.rs::m::passes')[0].Outcome 'the executable is found by its file name'
+            Assert-Equal 0 $read.Problems.Count 'and nothing was left unread'
         }
     },
     @{
@@ -356,6 +366,23 @@ $cases = @(
             Assert-Equal $t0 $r.latestAt 'and changes nothing'
             $r = Add-ProbationRun -Record $r -Outcomes (New-Run @(, @('k', 'pass'))) -RunId 'r1.2' -Commit $sha1 -At $t1
             Assert-Equal 2 $r.tests['k'].runs 'a re-run is another run of the tests'
+        }
+    },
+    @{
+        Name = 'a-run-replayed-after-a-later-one-is-not-counted-and-does-not-replace-its-results'
+        Run  = {
+            $r = Add-ProbationRun -Record (New-ProbationRecord) -Outcomes (New-Run @(, @('k', 'pass'))) -RunId 'r1' -Commit $sha1 -At $t0
+            $r = Add-ProbationRun -Record $r -Outcomes (New-Run @(, @('k', 'fail'))) -RunId 'r2' -Commit $sha2 -At $t1
+            $r = Add-ProbationRun -Record $r -Outcomes (New-Run @(, @('k', 'pass'))) -RunId 'r1' -Commit $sha1 -At $t2
+            Assert-Equal 2 $r.tests['k'].runs 'r1 is counted once, though r2 came after it'
+            Assert-Equal 'fail' $r.tests['k'].last 'and its pass did not replace the later failure'
+            Assert-Equal 'r2' $r.latestRun 'r2 is still the latest'
+            $again = ConvertFrom-ProbationRecordText (ConvertTo-ProbationRecordText $r)
+            $again = Add-ProbationRun -Record $again -Outcomes (New-Run @(, @('k', 'pass'))) -RunId 'r1' -Commit $sha1 -At $t2
+            Assert-Equal 2 $again.tests['k'].runs 'the applied runs are kept in the record, so a replay is refused after it is written and read back'
+            $old = ConvertFrom-ProbationRecordText '{ "version": 1, "latestRun": "r9", "latestAt": "$t0", "latestCommit": "$sha1", "tests": [] }'
+            $old = Add-ProbationRun -Record $old -Outcomes (New-Run @(, @('k', 'pass'))) -RunId 'r9' -Commit $sha1 -At $t1
+            Assert-Equal 0 $old.tests.Count 'a record written without the list counts its latest run as applied'
         }
     },
     @{
@@ -483,6 +510,22 @@ $cases = @(
             Assert-Match 'already holds run r1' $r.Output 'it says so'
             Assert-Equal $tip (Get-Tip $remote) 'the branch did not move'
             Assert-Equal 1 (Read-Published $remote).tests['k'].runs 'and the run was counted once'
+        }
+    },
+    @{
+        Name = 'an-earlier-run-published-again-after-a-later-one-commits-nothing'
+        Run  = {
+            $remote = New-Remote; $clone = New-Clone $remote
+            Assert-Equal 0 (Invoke-Publisher $clone (New-OutcomesFile @(, @('k', 'pass'))) 'r1').Exit 'r1'
+            Assert-Equal 0 (Invoke-Publisher $clone (New-OutcomesFile @(, @('k', 'fail'))) 'r2').Exit 'r2, which fails'
+            $tip = Get-Tip $remote
+            $r = Invoke-Publisher $clone (New-OutcomesFile @(, @('k', 'pass'))) 'r1'
+            Assert-Equal 0 $r.Exit $r.Output
+            Assert-Match 'already holds run r1' $r.Output 'it says so'
+            Assert-Equal $tip (Get-Tip $remote) 'the branch did not move'
+            $held = (Read-Published $remote).tests['k']
+            Assert-Equal 2 $held.runs 'r1 was counted once'
+            Assert-Equal 'fail' $held.last 'and the later failure was not replaced by the earlier pass'
         }
     },
     @{
@@ -687,6 +730,18 @@ mod probation { #[test] #[ignore = "probation: new"] fn passes() {} }
             Assert-True (-not (Test-Path -LiteralPath $expanded)) 'the percent signs were passed as they are, and not read as a variable'
             $quote = Invoke-Tier $root 'probation' @{} @('--lib', '--cfg=a"b')
             Assert-Equal 2 $quote.Exit "an argument cmd cannot carry is refused, not half passed -- $($quote.Output)"
+        }
+    },
+    @{
+        Name = 'an-output-directory-with-a-percent-sign-in-its-name-is-used-as-named'
+        Run  = {
+            $root = New-Fixture @{ 'src\lib.rs' = 'mod probation { #[test] #[ignore = "probation: new"] fn passes() {} }' }
+            $base = New-Root
+            $out = Join-Path $base 'out %USERNAME% dir'
+            $text = & $runner -Module probation -OutputDirectory $out -RepositoryRoot $root -CargoArgs @('--lib', '--no-fail-fast') 6>&1 | Out-String -Width $captureWidth
+            Assert-Equal 0 $LASTEXITCODE "the run went to the directory as named -- $text"
+            Assert-True (Test-Path -LiteralPath (Join-Path $out 'outcomes.json')) 'and its outcomes are there'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $base ('out ' + $env:USERNAME + ' dir')))) 'not in the directory cmd would have named'
         }
     },
     @{

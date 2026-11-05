@@ -13,9 +13,15 @@
     The record, `results.json`:
 
         { "version": 1, "latestRun": "<id>", "latestAt": "<time>", "latestCommit": "<sha>",
+          "appliedRuns": [ "<id>", ... ],
           "tests": [ { "test": "<target source path>::<test path>",
               "runs": N, "passes": N, "streak": N, "last": "pass|fail",
               "firstAt": "<time>", "lastAt": "<time>", "lastCommit": "<sha>", "lastRun": "<id>" } ] }
+
+    `appliedRuns` is every run the record has had applied, in the order they were. A run is applied once,
+    whichever run came after it: a replay of an earlier run (a re-run of the keeping job over an artifact
+    that is not the newest) must not count it again, and must not put its results over a later run's, which
+    comparing only the latest run would allow. A run is a day's work at most, so the list is one id a day.
 
     The tests are a list and not an object keyed by name: a test name is case-sensitive and two
     can differ only by case, which PowerShell's object properties and its ordered dictionaries
@@ -87,7 +93,9 @@ function ConvertFrom-ProbationCapture {
     }
 
     foreach ($line in [System.IO.File]::ReadAllLines($CapturePath)) {
-        $header = [regex]::Match($line, '^\s*Running\s.*\((?<exe>[^()]+)\)\s*$')
+        # The executable is read from the end of the line, by its file name, which cargo makes from a hash and so
+        # has no parenthesis in it; a directory above it can (`Program Files (x86)`).
+        $header = [regex]::Match($line, '^\s*Running\s.*[\\/](?<exe>[^\\/()]+\.exe)\)\s*$')
         if ($header.Success) {
             & $closeTarget
             $file = [System.IO.Path]::GetFileName($header.Groups['exe'].Value)
@@ -138,6 +146,7 @@ function New-ProbationRecord {
         latestRun    = ''
         latestAt     = ''
         latestCommit = ''
+        appliedRuns  = (New-Object System.Collections.Generic.List[string])
         tests        = (New-ProbationTable)
     }
 }
@@ -170,6 +179,9 @@ function ConvertFrom-ProbationRecordText {
     $record.latestRun = [string]$json.latestRun
     $record.latestAt = ConvertTo-ProbationTimeText $json.latestAt
     $record.latestCommit = [string]$json.latestCommit
+    if ($json.PSObject.Properties['appliedRuns']) { foreach ($id in @($json.appliedRuns)) { $record.appliedRuns.Add([string]$id) } }
+    # A record that names a latest run has had it applied, whatever list it was written with.
+    if ($record.latestRun -and -not $record.appliedRuns.Contains($record.latestRun)) { $record.appliedRuns.Add($record.latestRun) }
     foreach ($v in $json.tests) {
         $record.tests[[string]$v.test] = [ordered]@{
             runs       = [int]$v.runs
@@ -199,7 +211,7 @@ function ConvertTo-ProbationRecordText {
     }
     $json = [ordered]@{
         version = $script:ProbationRecordVersion; latestRun = $Record.latestRun; latestAt = $Record.latestAt
-        latestCommit = $Record.latestCommit; tests = $tests.ToArray()
+        latestCommit = $Record.latestCommit; appliedRuns = [string[]]$Record.appliedRuns.ToArray(); tests = $tests.ToArray()
     } | ConvertTo-Json -Depth 6
     return ($json -replace "`r`n", "`n") + "`n"
 }
@@ -207,11 +219,12 @@ function ConvertTo-ProbationRecordText {
 # `Record` with a run applied: each outcome adds a run, a pass adds a pass and a run of
 # passes, a failure ends the run of passes. A test the run did not report is left as it is,
 # and the record's latest run moves on, which is how the report knows a test was not in it.
-# Applying a run the record already has as its latest changes nothing, so a publisher that
-# retries from a fresh fetch cannot count a run twice. `Record` is changed and returned.
+# Applying a run the record already has applied, the latest or an earlier one, changes nothing, so a
+# publisher that retries from a fresh fetch cannot count a run twice, and a replay of an old run
+# cannot put its results over a newer one's. `Record` is changed and returned.
 function Add-ProbationRun {
     param($Record, [object[]] $Outcomes, [string] $RunId, [string] $Commit, [string] $At)
-    if ($Record.latestRun -eq $RunId) { return $Record }
+    if ($Record.appliedRuns.Contains($RunId)) { return $Record }
     foreach ($outcome in $Outcomes) {
         if (-not $Record.tests.Contains($outcome.Key)) {
             $Record.tests[$outcome.Key] = [ordered]@{
@@ -226,6 +239,7 @@ function Add-ProbationRun {
         $t.lastCommit = $Commit
         $t.lastRun = $RunId
     }
+    $Record.appliedRuns.Add($RunId)
     $Record.latestRun = $RunId
     $Record.latestAt = $At
     $Record.latestCommit = $Commit
