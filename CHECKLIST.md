@@ -517,8 +517,7 @@ raw volume derives, so a file and a volume on one disk share fate by constructio
 
 - [x] **M39.1** -- A file opened through the namespace route has its flush domains derived at the open, all or nothing; an opt-out's shape is reserved and not built. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m391)
 
-- [ ] **M39.2** -- **Derive a file's found domains at its open, all or nothing**, in `OpenedFile::admit`, for opens by path
-  and by identifier ([DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117)).
+- [x] **M39.2** -- A file `win-durable-ioring` opens has its flush domains derived at the open, all or nothing; a file on a share is unknown. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m392)
 
   - [x] **M39.2.1** -- The derivation needs none of the name-based candidates; `NetDfsGetClientInfo` moves to `M39.2.3` and the volume-path calls to `M39.3`. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m3921)
 

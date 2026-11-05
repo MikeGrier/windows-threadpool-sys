@@ -4615,3 +4615,12 @@ The item as written:
     (read 2026-11-05: it reads the DFS client's cache for a DFS root or link's UNC path, needs no special group
     membership, and its levels 3 and 4 report the targets). Keyed by server and not by share, since two shares on one server sit on disks this cannot see and
     the coarser key is the safe one.
+
+## Moved 2026-11-05 17:06:51 -05:00 -- M39.2: a file's flush domains, derived at its open
+
+### <a id="m392"></a>M39.2 -- A file `win-durable-ioring` opens has its flush domains derived at the open, all or nothing; a file on a share is unknown. *(completed 2026-11-05 17:06:51 -05:00)*
+
+Its steps are archived above: [M39.2.1](#m3921) (no name-based call is needed), [M39.2.2](#m3922) (a local file's domains, with `M39.2.4` folded in) and [M39.2.3](#m3923) (a file on a share is unknown). The decision is [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117). The item as written:
+
+- [x] **M39.2** -- **Derive a file's found domains at its open, all or nothing**, in `OpenedFile::admit`, for opens by path
+  and by identifier ([DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117)).
