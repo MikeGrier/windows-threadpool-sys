@@ -4598,3 +4598,20 @@ The item as written:
     The texts [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117) amends change here: the file target's "are
     what it cannot know", and [API.md](crates/durable-ioring/API.md) section 13's "a locality helper's job". Two commits,
     since two crates' code changes: the `win-volume-sys` entry, then the derivation.
+
+## Moved 2026-11-05 17:06:22 -05:00 -- M39.2.3: a remote file's domain
+
+### <a id="m3923"></a>M39.2.3 -- A file on a share is unknown: no key is derived for it, and a consumer that knows its storage declares it. *(completed 2026-11-05 17:06:22 -05:00)*
+
+The item as planned keyed a remote file by its server. Implementing it showed that unsafe: a server's name is not its identity, servers in a cluster share disks, a DFS link hides its target, and a share can be this machine's own disk, which `\\localhost\C$` showed reports as UNC and which the documented loopback flag is not documented to catch by every name. Each gives two files that share fate different keys, a missing domain. The engineer chose among leaving it unknown, one key for every remote file, and a key per server, 2026-11-05: "Go with a then", after the assistant corrected the reading that unknown keeps files apart (it shares fate with everything, the coarsest grouping). Recorded in [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117).
+
+No code changed for the behaviour: a remote handle's final path names no volume GUID, so `M39.2.2`'s derivation already found none. `Win32FileTarget`'s documentation now says no key is derived for a share and that, with none found, what a consumer declares is the file's whole set; the loopback test asserts that. `NetDfsGetClientInfo` is not wrapped, since nothing keys by server.
+
+The item as written:
+
+- [x] **M39.2.3** -- **A remote file's domain.** The server, from the handle's final path, which the open already reads
+    to refuse a remote device for an unbuffered file and which follows mapped drives and links; a DFS link resolved
+    through `NetDfsGetClientInfo`, wrapped as an entry in `windows-namespace-request-sys` if this item keys by server
+    (read 2026-11-05: it reads the DFS client's cache for a DFS root or link's UNC path, needs no special group
+    membership, and its levels 3 and 4 report the targets). Keyed by server and not by share, since two shares on one server sit on disks this cannot see and
+    the coarser key is the safe one.

@@ -393,7 +393,14 @@ fn a_file_on_a_share_has_no_domains_found_even_when_the_share_is_this_machine() 
         "a remote handle's final path names no volume"
     );
     assert!(opened.flush_domains().is_empty());
-    assert!(Win32FileTarget::new(opened).flush_domains().is_empty());
+    let target = Win32FileTarget::new(opened);
+    assert!(target.flush_domains().is_empty(), "unknown");
+
+    // A consumer that knows where the share's storage is declares it, and with none found that is
+    // the file's whole set: here, honestly, this machine's own disks.
+    let local = expected_for(&temp.0);
+    let declared = target.with_domains(local.clone());
+    assert_eq!(declared.flush_domains(), local.as_slice());
 }
 
 #[test]

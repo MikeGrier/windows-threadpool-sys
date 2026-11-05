@@ -42,7 +42,10 @@ use durable_ioring::{Access, Capabilities, Geometry, HasData, IoTarget, Warranty
 /// file on a share, or one whose volume could not be read, has none found and shares fate with every
 /// target. [`with_domains`](Self::with_domains) adds what Windows does not show, and never removes one
 /// found: the disks of a Storage Spaces pool, which two spaces in one pool may share; the disks behind
-/// a hardware RAID controller; and a cache a controller shares between disks.
+/// a hardware RAID controller; and a cache a controller shares between disks. On a file with none
+/// found, such as one on a share, what is declared is its whole set: no key is derived for a share,
+/// since a server's name is not its identity and a share can be this machine's own disk, so a
+/// consumer that knows where a share's storage is says so.
 #[derive(Clone, Debug)]
 pub struct Win32FileTarget {
     handle: SharedHandle,

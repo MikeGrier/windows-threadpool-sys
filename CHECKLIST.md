@@ -524,12 +524,7 @@ raw volume derives, so a file and a volume on one disk share fate by constructio
 
   - [x] **M39.2.2** -- A file `win-durable-ioring` opens has its volume's disks found as its flush domains, a virtual disk followed by its bus type, all or nothing. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m3922)
 
-  - [ ] **M39.2.3** -- **A remote file's domain.** The server, from the handle's final path, which the open already reads
-    to refuse a remote device for an unbuffered file and which follows mapped drives and links; a DFS link resolved
-    through `NetDfsGetClientInfo`, wrapped as an entry in `windows-namespace-request-sys` if this item keys by server
-    (read 2026-11-05: it reads the DFS client's cache for a DFS root or link's UNC path, needs no special group
-    membership, and its levels 3 and 4 report the targets). Keyed by server and not by share, since two shares on one server sit on disks this cannot see and
-    the coarser key is the safe one.
+  - [x] **M39.2.3** -- A file on a share is unknown: no key is derived for it, and a consumer that knows its storage declares it. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m3923)
 
 - [ ] **M39.3** -- **Predict a directory's domains before a file is created, and confirm them at the open.** A consumer
   presents storage roots as directories and wants to know, before creating files, where they will land: the
