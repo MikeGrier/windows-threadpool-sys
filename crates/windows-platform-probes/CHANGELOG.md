@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026.1105.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1022.0...windows-platform-probes-v2026.1105.0) (2026-11-05)
+
+
+### Features
+
+* **platform-probes:** add --iteration-divisor to the cost probes, and run their tests at it ([2d73ea1](https://github.com/MikeGrier/windows-threadpool-sys/commit/2d73ea13f859a4ae4eca2755437a132cff2aaed9))
+
 ## [2026.1022.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1020.0...windows-platform-probes-v2026.1022.0) (2026-10-22)
 
 
