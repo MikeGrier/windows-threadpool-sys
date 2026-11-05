@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "windows-platform-probes"
-version = "2026.1022.0"
+version = "2026.1105.0"
 dependencies = [
  "serde",
  "serde_json",
