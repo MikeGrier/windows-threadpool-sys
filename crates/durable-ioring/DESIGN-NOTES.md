@@ -2895,6 +2895,12 @@ domains are found: "I would think that the data would be determined at open".
   link, which root `M39.2.1` checks.
 - **A snapshot, stated.** The domains are those of the moment of the open. A volume later extended onto another disk is not
   seen; deriving later would not see it either.
+- **A virtual disk is decided by its bus type.** A disk whose `STORAGE_DEVICE_DESCRIPTOR` bus type is
+  `BusTypeFileBackedVirtual` is followed through the volume's storage dependency to the volume holding its backing file;
+  any other is not, and the dependency query is never asked. That query's page names no error for a volume that is not on
+  a virtual disk, so the code measured for one ([WV-D-10](../win-volume-sys/DESIGN-NOTES.md#wv-d-10)) is not built on.
+  The assistant's choice, made while implementing root `M39.2.2`. A file-backed disk whose host cannot be named leaves
+  the file unknown.
 - **What it costs.** Measured once, 2026-11-05, on the engineer's development machine: about half as much again as a local
   open, and a small part of an open over a loopback share, where an unbuffered open already makes the one query a remote
   file needs. Not a reason to defer anything; a figure for a consumer weighing the reserved opt-out below.
