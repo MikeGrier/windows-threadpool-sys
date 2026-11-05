@@ -3092,15 +3092,17 @@ job as an artifact, so the job that can write never runs a test.
   of an executable that stopped before it started is not known to exist and is not counted.
 - **A run is applied once.** Each run has an id (the workflow's run and its attempt, since a re-run of the
   jobs is another run of the tests), and a record whose latest run is that id is left as it is, so a retry
-  from a fresh fetch cannot count a run twice. The record's latest run moving on is also how a test that was
+  from a fresh fetch cannot count a run twice. The id is the one the job that ran the tests wrote beside
+  the outcomes, not the keeping job's own attempt: that job can be re-run alone over the same outcomes,
+  and naming them by its new attempt would count tests that did not run again. The record's latest run moving on is also how a test that was
   not in it is known: it was promoted, renamed or deleted, and the report says so and does not call it a
   candidate for what it no longer is. Its counts are kept; nothing prunes the record.
-- **The threshold is the report''s, and is a working position.** The report calls a test a candidate when its
+- **The threshold is the report's, and is a working position.** The report calls a test a candidate when its
   latest result is a pass and its current run of passes has reached `-Threshold`. The
   default is a guess made before a result exists, it decides nothing -- promotion is a change to the test --
   and it is a parameter so that what the first results suggest can be tried without a code change. It has no
   decision ID and nothing binds to it.
-- **Not fatal.** The publish and the report are `continue-on-error`, as the sweep''s record is: a result the
+- **Not fatal.** The publish and the report are `continue-on-error`, as the sweep's record is: a result the
   record misses is a run it lacks, and a red run for a publish that failed would be read as a test that did.
 - **The plumbing is a copy, deliberately.** [publish-probation-results.ps1](tools/publish-probation-results.ps1)
   and `Get-ProbationBranch` follow [publish-sabotage-catchers.ps1](tools/publish-sabotage-catchers.ps1) and

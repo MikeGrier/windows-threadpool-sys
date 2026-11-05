@@ -98,6 +98,15 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: ./tools/run-tier.ps1 -Module probation -OutputDirectory .scratch/tiers/probation
+      # The id of the run and attempt that ran the tests, kept beside what they did. The job
+      # below that keeps the results can be re-run alone, which is a new attempt of that job
+      # and not another run of the tests, so it must not name the run by its own attempt.
+      - name: Name the run that produced these results
+        if: ${{ !cancelled() && hashFiles('.scratch/tiers/probation/outcomes.json') != '' }}
+        shell: pwsh
+        env:
+          RUN_ID: ${{ github.run_id }}.${{ github.run_attempt }}
+        run: ' [System.IO.File]::WriteAllText(".scratch/tiers/probation/run-id.txt", $env:RUN_ID) '
       # What each probation test did, for the job below that keeps it. Passed on as an
       # artifact so that the job holding write access never runs the tests, which run
       # here with read-only access.
@@ -106,7 +115,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: probation-outcomes
-          path: .scratch/tiers/probation/outcomes.json
+          path: |
+            .scratch/tiers/probation/outcomes.json
+            .scratch/tiers/probation/run-id.txt
           if-no-files-found: warn
           retention-days: 1
           overwrite: true
@@ -134,16 +145,16 @@ jobs:
         with:
           name: probation-outcomes
           path: .scratch/probation
-      # The id of the run and its attempt: a re-run of the jobs is another run of the
-      # tests, and applying the same id twice is applying it once.
+      # The run is named by the id the job that ran the tests wrote beside the outcomes, not
+      # by this job's own attempt: a re-run of this job alone has the same outcomes, and
+      # applying the same id twice is applying it once.
       - name: Publish the results to the probation-results branch
-        if: ${{ hashFiles('.scratch/probation/outcomes.json') != '' }}
+        if: ${{ hashFiles('.scratch/probation/outcomes.json') != '' && hashFiles('.scratch/probation/run-id.txt') != '' }}
         continue-on-error: true
         shell: pwsh
         env:
-          RUN_ID: ${{ github.run_id }}.${{ github.run_attempt }}
           RUN_SHA: ${{ github.sha }}
-        run: ./tools/publish-probation-results.ps1 -Outcomes .scratch/probation/outcomes.json -RunId "${env:RUN_ID}" -Commit "${env:RUN_SHA}"
+        run: ./tools/publish-probation-results.ps1 -Outcomes .scratch/probation/outcomes.json -RunId (Get-Content -Raw .scratch/probation/run-id.txt).Trim() -Commit "${env:RUN_SHA}"
       # Read back from the branch, so what is reported is what is kept, and so that a
       # run that could not publish still reports what the branch holds.
       - name: Report the probation tier
