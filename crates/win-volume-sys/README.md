@@ -24,6 +24,10 @@ promise, as the workspace's naming decision defines it.
   and the NUMA node it is attached to, through `IOCTL_STORAGE_QUERY_PROPERTY`. They take a handle to
   a disk (`\\.\PhysicalDriveN`), opened with no access, and report what the device gave: the
   identifier's sections as bytes, not parsed, and the node unaltered.
+- **`storage_device_descriptor`** -- what a disk says it is (`StorageDeviceProperty`, the reply
+  `STORAGE_DEVICE_DESCRIPTOR`): its SCSI device type, removable media, command queueing, the bus it
+  is attached by as a `StorageBusType` that keeps any number the documentation does not name, and its
+  vendor, product, revision and serial strings as bytes. Same handle, same access.
 - **`query_storage_property`** -- the same control for any property and any kind of query, with
   the reply as the bytes the device gave, so a property this crate has no typed function for is one
   call away.

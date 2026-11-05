@@ -786,6 +786,62 @@
       "why": "A control: the structure is three u32s, twelve bytes, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["    let mut buffer = [0u8; size_of::<STORAGE_DEVICE_NUMBER>()];"],
       "replace": ["    let mut buffer = [0u8; 12];"]
+    },
+    {
+      "name": "M39.2.2: the descriptor function asks for a different property",
+      "file": "src/storage_device.rs",
+      "expect": "caught",
+      "why": "Another property's descriptor reads without error as a device descriptor; its version, which the page says is the structure's size, is what tells them apart.",
+      "find": ["    let input = query_input(StorageDeviceProperty, PropertyStandardQuery, &[])?;"],
+      "replace": ["    let input = query_input(StorageDeviceProperty + 1, PropertyStandardQuery, &[])?;"]
+    },
+    {
+      "name": "M39.2.2: the bus type is read from the bus-specific length field",
+      "file": "src/storage_device.rs",
+      "expect": "caught",
+      "why": "Each field is read from where the structure has it, and the bus type is what decides whether a disk is followed to its backing file.",
+      "find": ["            bus_type: StorageBusType::from_raw(word(layout::BUS_TYPE)?.cast_signed()),"],
+      "replace": ["            bus_type: StorageBusType::from_raw(word(layout::RAW_PROPERTIES_LENGTH)?.cast_signed()),"]
+    },
+    {
+      "name": "M39.2.2: an offset of zero is not read as no string",
+      "file": "src/storage_device.rs",
+      "expect": "caught",
+      "why": "The page: an offset of zero means the device has no such string.",
+      "find": ["            if offset == 0 {"],
+      "replace": ["            if offset == usize::MAX {"]
+    },
+    {
+      "name": "M39.2.2: a string that starts inside the fields is read",
+      "file": "src/storage_device.rs",
+      "expect": "caught",
+      "why": "A string inside the fixed fields would be read out of the fields themselves; the reply does not hold what its header says.",
+      "find": ["            if offset < layout::RAW_PROPERTIES {"],
+      "replace": ["            if offset < 1 {"]
+    },
+    {
+      "name": "M39.2.2: a string is carried with its terminator",
+      "file": "src/storage_device.rs",
+      "expect": "caught",
+      "why": "The string is the bytes before its terminator.",
+      "find": ["            Ok(Some(rest[..end].to_vec()))"],
+      "replace": ["            Ok(Some(rest[..=end].to_vec()))"]
+    },
+    {
+      "name": "M39.2.2: the bus-specific bytes are not bounded by their length",
+      "file": "src/storage_device.rs",
+      "expect": "caught",
+      "why": "The bus-specific bytes are the length the descriptor says, and a length past the reply is refused.",
+      "find": ["            .and_then(|end| bytes.get(layout::RAW_PROPERTIES..end))"],
+      "replace": ["            .map(|_| &bytes[layout::RAW_PROPERTIES..])"]
+    },
+    {
+      "name": "M39.2.2: BusTypeNvmeof is misnumbered",
+      "file": "src/storage_device.rs",
+      "expect": "caught",
+      "why": "The STORAGE_BUS_TYPE page lists it as 20; windows-sys does not declare it, so the number here is the only statement of it.",
+      "find": ["    pub const NVMEOF: Self = Self(20);"],
+      "replace": ["    pub const NVMEOF: Self = Self(21);"]
     }
   ]
 }
