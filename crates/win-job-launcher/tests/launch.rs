@@ -27,6 +27,18 @@ const LAUNCHER: &str = env!("CARGO_BIN_EXE_win-job-launcher");
 /// A long-running command: `ping` waits about a second between echoes.
 const LONG: [&str; 4] = ["ping", "-n", "60", "127.0.0.1"];
 
+/// The bound, in milliseconds, of the two tests that start a descendant and wait for the bound to kill it.
+///
+/// **It is the claim, and it is not shortened.** Each test waits for its descendant to hold the marker before
+/// the bound may fire, and a bound that fires first is a test that never saw what it claims to. Setting a
+/// descendant up takes a chain of `cmd` starts: measured, the grandchild holds the marker after about 60 ms
+/// and the orphan, behind a middle script that exits, after about 160 ms on an idle machine, and about 0.35 s
+/// and 1.0 s with every processor busy, which is what a stalled runner looks like. A bound of three seconds
+/// is three times the loaded figure; a bound of one and a half would be one and a half times it, and the
+/// price of saving a second and a half would be a test that fails when the machine is slow. The two run
+/// side by side, so together they cost one bound of wall time.
+const DESCENDANT_BOUND_MS: u32 = 3_000;
+
 /// A scratch directory unique to one test, removed when dropped.
 struct Scratch(PathBuf);
 
@@ -280,7 +292,7 @@ fn the_bound_kills_a_grandchild() {
     // The script's cmd holds the marker; its ping is the grandchild.
     let s = Scratch::new("grandchild");
     let script = holder(&s);
-    let (child, start) = spawn(&s, 3_000, &[script.to_str().unwrap()]);
+    let (child, start) = spawn(&s, DESCENDANT_BOUND_MS, &[script.to_str().unwrap()]);
     let marker = s.path("marker.txt");
     wait_until_held(&marker);
     let run = finish(&s, start, child.wait_with_output().unwrap());
@@ -310,7 +322,7 @@ fn the_bound_kills_a_descendant_whose_parent_has_exited() {
         "top.cmd",
         "start \"\" /b cmd /d /c \"{dir}\\middle.cmd\"\nping -n 60 127.0.0.1 >nul",
     );
-    let (child, start) = spawn(&s, 3_000, &[top.to_str().unwrap()]);
+    let (child, start) = spawn(&s, DESCENDANT_BOUND_MS, &[top.to_str().unwrap()]);
     let marker = s.path("marker.txt");
     wait_until_held(&marker);
     let run = finish(&s, start, child.wait_with_output().unwrap());

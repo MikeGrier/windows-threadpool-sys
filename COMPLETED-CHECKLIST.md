@@ -4183,3 +4183,336 @@ crates' checklists; this is only the order and the links, and each item's own ch
 - [x] **M44.3** -- `windows-waitable-queues`: its doorbell's `duplicate` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
 
 - [x] **M44.4** -- `win-job-launcher`: `duplicate_inheritable` becomes `duplicate_handle`, and the crate depends on `win-handles-sys`.
+
+## Moved 2026-11-03 18:41:21 -05:00 -- M45.1: the test tiers' convention and its census
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m451"></a>M45.1 -- The tiers' convention and its census: `tools/check-test-tiers.ps1` refuses a test whose ignore reason and module disagree about its tier, in CI on every push. *(completed 2026-11-03 18:41:21 -05:00)*
+
+- [x] **M45.1** -- The tiers' convention and its census. A long-haul test is
+  `#[ignore = "long-haul: <what it costs>"]` and sits in a module named `long_haul`; a probation test is
+  `#[ignore = "probation: <what it costs>"]` in a module named `probation`, since libtest filters by name
+  and not by ignore reason. A census script fails when a reason and its module path disagree in either
+  direction, so a test cannot be marked into a tier that never selects it; it runs in CI on every push,
+  with tests of its own for both directions. DEVELOPMENT.md states the convention.
+
+**Done.** [tools/check-test-tiers.ps1](tools/check-test-tiers.ps1) asks every test executable for its list
+(`--list --format json`, which carries each test's ignore reason) and exits 0 consistent, 1 for a test that
+breaks a rule, 2 when the census could not be taken: a `harness = false` target, a build that failed, or a
+missing listing. It runs in the all-features `build + test` job after `cargo test`.
+[tools/test-check-test-tiers.ps1](tools/test-check-test-tiers.ps1) tests each rule in both directions from
+recorded listings, and against a fixture workspace whose real executable is asked, on PowerShell 7 and
+Windows PowerShell 5.1; [tools/sabotage-tiers.json](tools/sabotage-tiers.json) re-injects each rule's
+defect. The convention is in [DEVELOPMENT.md](DEVELOPMENT.md#test-tiers).
+
+libtest writes an ignore reason into its JSON without escaping a backslash, so the reason of the
+administrative-share tests (`\\localhost\C$`) is not valid JSON and a strict parse refuses the line. The
+census reads such a line by its shape. The branch that refuses a line that is neither is not reached by any
+test, because no executable the suite can build writes one.
+
+## Moved 2026-11-03 19:18:51 -05:00 -- M45.2: the long-haul workflow
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m452"></a>M45.2 -- `long-haul.yml`: daily when `main` has moved, plus dispatch; the long-haul tier fails the run, the probation tier does not. *(completed 2026-11-03 19:18:51 -05:00)*
+
+- [x] **M45.2** -- `long-haul.yml`: daily, and only when `main` has moved since the last completed run,
+  plus manual dispatch. It runs `--ignored long_haul` across the workspace, and a failure there fails the
+  run. Then it runs `--ignored probation`, whose failures do not fail the run. Separate from the
+  sabotage sweep, which never passes `--ignored` and so never pays for either tier.
+
+**Done.** [.github/workflows/long-haul.yml](.github/workflows/long-haul.yml) has a `plan` job and a `tiers` job.
+`plan` runs [tools/plan-long-haul.ps1](tools/plan-long-haul.ps1): a dispatch always runs, and a schedule runs unless
+the most recent earlier run that completed (succeeded, failed or timed out; a cancelled run did not complete) was on
+the commit being run now. When the earlier runs cannot be listed it runs, with a warning, since not being able to ask
+is not evidence that nothing changed. `tiers` runs the long-haul tier and then the probation tier, which is
+`continue-on-error` and reports its outcome in the run summary, after the long-haul tier whether or not that passed.
+The commands select the library, binary, integration and example test targets and not the doctests, since a doctest
+cannot sit in a `long_haul` module.
+
+[tools/test-plan-long-haul.ps1](tools/test-plan-long-haul.ps1) tests each rule in both directions on PowerShell 7 and
+Windows PowerShell 5.1, in CI with the other harness suites, including the path that asks GitHub through a fake `gh` and
+the arguments it was given. [tools/sabotage-long-haul.json](tools/sabotage-long-haul.json) re-injects each rule's defect.
+Windows PowerShell 5.1 returns a parsed JSON array as one object, which the planner enumerates; the suite found that on
+its first 5.1 run, and the real `gh` output would have hit it.
+
+One entry is a declared equivalent mutant: a dispatch never has the earlier runs loaded, so the decision's own check for
+a non-schedule event gives the same answer as the rule for a schedule with no earlier run. The entry is expected to
+survive and says it will come back caught if the loader's check is ever removed.
+
+The workflow itself has never run: nothing in the repository can run a GitHub schedule, so the first dispatch after it
+reaches `main` is the first time its two jobs and the `gh` call run on a runner. The commands were run locally, on the
+workspace, where nothing is tiered yet and every executable reports no tests selected, and on a fixture crate whose
+long-haul tests were selected and whose other ignored tests were not.
+
+## Moved 2026-11-03 21:35:43 -05:00 -- M45.3: the probation tier's results
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#probation-results).
+
+### <a id="m453"></a>M45.3 -- Probation results are kept on the `probation-results` branch and reported; the promotion threshold stays a working position. *(completed 2026-11-03 21:35:43 -05:00)*
+
+- [x] **M45.3** -- Keep each probation test's results across runs, and report them. The report gives each
+  probation test's runs, passes and current run of passes, which is what promoting it from `probation`
+  to `long_haul` -- a code change -- is decided on. Where the results live is this item's to decide
+  (artifacts expire; the sabotage record's branch is the pattern that does not), and so is the
+  promotion threshold, which is a working position until the first results exist.
+
+**Done.** Where the results live is decided: a branch of their own, `probation-results`, holding one generated
+`results.json`, written by a `record` job in [long-haul.yml](.github/workflows/long-haul.yml) and read by
+[report-probation.ps1](tools/report-probation.ps1). The tests run in a job with read-only access and hand what each
+did to the `record` job as an artifact, so the job that can write never runs a test.
+[run-tier.ps1](tools/run-tier.ps1) now owns the command that selects a tier, and both of the workflow's tiers go through
+it; it reads each test's outcome from libtest's JSON events, keys it by the source path of the target its executable was
+built from, and counts a test that started and never reported (its executable aborted) as a failure.
+[publish-probation-results.ps1](tools/publish-probation-results.ps1) applies a run once, whatever the number of retries,
+and never forces. The reasoning is in [DESIGN-NOTES.md](DESIGN-NOTES.md#probation-results) and
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-probation-results-are-kept).
+
+The promotion threshold is **not decided**: the report takes it as `-Threshold` and labels its default a working
+position, because there is no result yet to suggest a number. It is the one part of this item left open on purpose, and
+nothing is scheduled for it: the first results are what settle it.
+
+[tools/test-probation.ps1](tools/test-probation.ps1) tests the parse, the record, the report, the publisher against a bare
+repository (including a race and a branch whose name merely ends the same) and the runner against real one-crate
+workspaces, one of which has an executable that aborts, on PowerShell 7 and Windows PowerShell 5.1, in CI with the other
+harness suites. [tools/sabotage-probation.json](tools/sabotage-probation.json) re-injects 31 defects and a control, and all
+behave as declared. Its sweep found two things: a surviving entry showed that `[ordered]@{}` compares keys without regard to
+case, so the record would have merged two tests that differ only by case (it is now a list on disk and an ordinal dictionary
+in memory); and `RUSTC_BOOTSTRAP=0` still turns on libtest's unstable options, because libtest only checks that the
+variable is set, so the entry that was meant to switch them off removes the variable instead.
+
+The workflow has not run on a runner, so the first dispatch after it reaches `main` is the first time the `record` job, its
+artifact hand-off and the push to the new branch run for real. Nothing is on probation yet (`M45.4` puts the first tests
+there), so that run will publish nothing and report an empty record. The `record` job's publisher is a copy of the sabotage
+record's, on purpose; the merge-or-delete decision is parked as `M45+.2`.
+
+## Moved 2026-11-03 21:52:41 -05:00 -- M45.4: the never-run tests on probation
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m454"></a>M45.4 -- The six never-run tests (five flush-barrier stress instruments and the 4 GiB buffer test) are on probation, and a tier runs one test at a time. *(completed 2026-11-03 21:52:41 -05:00)*
+
+- [x] **M45.4** -- Put the never-run tests on probation: `windows-ioring-sys`' five flush-barrier stress
+  tests ("saturates a disk with background writers"; "writes tens of MiB per trial") and
+  `win-durable-ioring`'s test that allocates a buffer of more than 4 GiB.
+
+**Done.** The five instruments in [flush_barrier_stress.rs](crates/windows-ioring-sys/tests/flush_barrier_stress.rs) sit in
+a `mod probation` with reasons that start `probation:`, and the 4 GiB test in `win-durable-ioring`'s
+`windows_backend::tests` does the same; the census reports six probation tests and no disagreement. Their names are
+unchanged, so a filter by name still finds them, but their libtest path gained `probation::`, so
+[soak-flush-barrier.ps1](tools/soak-flush-barrier.ps1), which runs them with `--exact`, now passes the module path.
+
+Putting them on probation found something the tier had to do: [run-tier.ps1](tools/run-tier.ps1) ran a tier's tests in
+parallel, and the stress instruments' own docs say `--test-threads 1` "is not optional decoration" (three of them start
+contention writers, and two once collided on a temp file under a parallel harness). It now passes `--test-threads`, one by
+default, with `-TestThreads` to raise it; a test with an overlap-detecting fixture covers both directions, and a sabotage
+entry removes the argument. That is a choice made here, recorded as one in the decision, and not one the engineer was asked.
+
+All six were run for the first time here, through `run-tier.ps1` for the two crates with `IORING_STRESS_TRIALS=5`, and
+all passed; the 4 GiB test allocated and passed on this machine. The default trial budget was not run, so what the tier costs
+at that size on a runner is not known; the workflow's timeout bounds it, and the first results will say.
+
+## Moved 2026-11-03 22:12:12 -05:00 -- M45.5: the blocking_push example at the size its claim needs
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m455"></a>M45.5 -- `blocking_push`'s capacity test writes past a declared capacity of 32 and its full-scale form is long-haul. *(completed 2026-11-03 22:12:12 -05:00)*
+
+- [x] **M45.5** -- `win-durable-ioring`'s `blocking_push` example: write past a small declared capacity, not
+  three times 256 writes, and keep the full scale as a long-haul test.
+
+**Done.** [blocking_push](crates/win-durable-ioring/examples/blocking_push/main.rs) takes the instance's declared operations
+as a parameter (`build` and a new `run_with`; `run` keeps the demonstration's 256), and seals an epoch every eighth of
+them. The test that writes past the declared capacity now does it at 32, with 96 writes under each delivery, and its
+full-scale form, three times 256 under each, is `tests::long_haul::...`, which passed through the long-haul tier. The other
+tests that wrote 200 writes through a queue of 4 now write 40, which is ten times what the queue holds, as their claim needs.
+The example's tests take about a tenth of a second.
+
+The smaller size lost a detection, and the sabotage sweep is what showed it. At 16 operations an epoch is two writes, below the
+queue of four, so a seal never meets a completion queue it cannot drain into and a pop is never refused for want of room: the
+entry "a pop refused for want of room is a fault" survived. It was caught at 24 and at 32, and 32 is kept for margin; the
+reasoning is on the constant. All 9 entries that patch the example behave as declared. The two entries' find strings that named
+`EPOCH_WRITES` follow it to `epoch_writes`.
+
+## Moved 2026-11-03 22:44:38 -05:00 -- M45.6: the large-directory tests at the size their claims need
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m456"></a>M45.6 -- `windows-file-enumeration-sys`'s three large-directory tests run over 600 files with the minimum buffer, and their full-scale forms are long-haul. *(completed 2026-11-03 22:44:38 -05:00)*
+
+- [x] **M45.6** -- `windows-file-enumeration-sys`: the directory of thousands of entries and the two large
+  running enumerations that are cancelled or dropped. Each to the size its claim needs, the full size
+  long-haul.
+
+**Done.** What these tests need of a directory is many refills of the native buffer and several quanta (a quantum is at most 256
+records), not thousands of files: the 1 KiB minimum buffer gives many refills from a few hundred entries, and creating the files
+is what each test cost. Each of the three now takes a count and a buffer size, runs over 600 files with the minimum buffer, and
+keeps its original form, 4000 files through the default buffer, as `long_haul::` beside it under its original name. The
+integration suite now takes under a second, and the three long-haul forms passed through the long-haul tier.
+
+All 28 entries of the crate's sabotage manifest behave as declared on the changed tests. None of them needed the large size, which
+is the answer to whether the shrink lost a detection; the entries were swept whole and not by diff because the tests changed and
+not the code they judge. The cancellation test accepts `Completed` as well as `Cancelled`, so it never asserted the
+enumeration was still running; that is unchanged, and is why a smaller count loses nothing there.
+
+## Moved 2026-11-03 23:13:51 -05:00 -- M45.7: the tail watcher's tests at the size their claims need
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m457"></a>M45.7 -- `win-multi-file-tail-watcher`'s seven scale-bearing tests run smaller with their full-scale forms long-haul; the quiet-between-bursts waits are left and say why. *(completed 2026-11-03 23:13:51 -05:00)*
+
+- [x] **M45.7** -- `win-multi-file-tail-watcher`: the large roster dropped during a poll, the job log under the
+  tiny and default options, the children whose output is reassembled, and the real-writer tests. Shrink
+  where the scale is not the claim; where it is a timing claim (a reader quiet between bursts), say so
+  and leave it.
+
+**Done.** Each of these now takes its size as a parameter, runs small, and keeps its original size as a `long_haul::` test beside
+it; all seven long-haul forms passed through the long-haul tier. The sizes, and what each claim needs of one:
+
+- **The two roster tests** (a request during a poll of 20000 files; a drop during it) assert a ratio, one step against a pass, and
+  skip the comparison when a pass is under 10 ms. So the size they need is one whose pass is measurable, not one that is large. A
+  pass cost about 4.4 microseconds a file here, so 5000 gives about 22 ms, twice the floor; 2000 gave 8 ms, under it, which would
+  have made the claim vacuous on this machine. 5000 is used and the full 20000, with ten times the floor, is long-haul. Registering
+  the files was most of what each cost.
+- **The two job logs** (default and tiny options) write 36 loop steps in three bursts instead of 360. A burst still crosses many
+  buffers and exhausts the tiny options' pool, which is the claim; the silences are not shortened.
+- **The children whose output is reassembled** (the engine's, and the layer's) use 24 child processes where they used 200 and 150: more
+  than three times the layer's queue of eight and many times the four buffers. A child process each was most of what they cost.
+- **The real-writer park-and-resume test** registers 100 files, 20 of them written, where it registered 300 with 60. The constants
+  it asserted against were tied to 60 writers (a writer at index 40, more than 20 rounds a pass), so both are now derived from the
+  writer count; the strict inequality it had is kept.
+
+**What is left, and why.** `a_command_that_is_silent_then_writes_a_burst_is_delivered_at_once_and_the_reader_is_quiet_between`
+takes a second and a half and is not shortened, with a comment saying so: its claim is that the reader is quiet across a silence,
+a claim about time, and a shorter silence is a window in which a reader that wakes by itself is less likely to be seen. The 200 ms
+quiet checks in the job-log tests and the 300 ms one after the real-writer test are the same kind and are left. Tests of under a
+second, the watcher engine's child tests among them, are `M45.10`'s.
+
+**Sabotage.** The published catcher record names the entries each of these tests caught; 20 entries across the crate's two
+manifests were caught by one of the seven, and all 20 behave as declared on the smaller tests. The record names no entry caught by
+the two roster tests, so nothing the shrink could lose was recorded for them. The record is at a commit before this change and is
+a hint, not a proof; the rest of the crate's entries are caught by tests this did not touch.
+
+## Moved 2026-11-04 09:28:29 -05:00 -- M45.8: the platform probes' tests at the workload their claims need
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier); the probes' own is in [crates/windows-platform-probes/DESIGN-NOTES.md](crates/windows-platform-probes/DESIGN-NOTES.md).
+
+### <a id="m458"></a>M45.8 -- The census and the cost-probe tests run the cost probes at a twentieth of their workload through a new `--iteration-divisor`, with full-length forms long-haul. *(completed 2026-11-04 09:28:29 -05:00)*
+
+- [x] **M45.8** -- `windows-platform-probes`: the tests that run every registered probe, or a cost probe at a
+  multiplier, at full workload. Run the probes at the smallest workload that still shows what each test
+  checks, with full workload long-haul.
+
+**Done.** The probes had no way to run lighter: the cost probes took only a whole-number multiplier of at least one, and the
+multiplier test ran the request probe at twice its workload. So the cost probes gain `--iteration-divisor N`, the counterpart
+of `--iteration-multiplier`: each loop runs a Nth of its usual count and at least once, so a shortened run goes round every loop
+and its report has every line a full one has. A run is lengthened or shortened, never both; it says so beside its banner like a
+lengthened run, and every row now carries `"iteration_divisor"` (1 by default). The census, the table-matches-row tests and the
+multiplier test then use it: the census runs the cost probes at a twentieth, the two both-readers tests at a twentieth, and the
+multiplier test runs the doorbell probe (the quick one) where it ran the request probe. Each keeps its full-length form as a
+`long_haul::` test, the request probe at twice its workload among them; all four passed through the long-haul tier.
+
+The request probe's run went from about 5.5 s to 0.3 s, and the census from about 12 s to about 6 s.
+
+**What is left, and the blocker.** The census still takes about 6 s, and most of that is the peer-index-cache probe (3.9 s) and
+the core-affinity probe (1.5 s), which measure through `windows-placement-probe` where the workload is a `pub const` of two
+million baked into both `measure()` functions and into the run-plan arithmetic. A setting there changes the public signature of
+a function in a second published crate, which was the engineer's decision to make and not this item's; it became
+M45.8.1 and was withdrawn the same day, below. Nothing else in the crate costs a second or more except the capture-script test
+(1.7 s), which is `M45.10`'s.
+
+**Sabotage.** Nine new entries cover the divisor (not shortening, shortening to zero, starting a loop that did not run, allowing
+both settings, refusing the no-op value beside a multiplier, a huge divisor read as one, the report line, and each probe's row).
+The 16 entries whose patched file changed, among them those nine and two controls that survive by design, and the 15 the published
+catcher record names as caught by a test this changed, all behave as declared. Two existing entries followed the code: the request
+row's find string gained the new field, and the control that shortens the queue probe's run moved with its constant.
+
+## Moved 2026-11-04 12:14:16 -05:00 -- M45.8.1: withdrawn
+
+### <a id="m4581"></a>M45.8.1 -- Withdrawn: a setting for the size of the peer-index-cache and core-affinity probes is not worth a second crate's public API change for about six seconds. *(withdrawn 2026-11-04 12:14:16 -05:00)*
+
+- [x] **M45.8.1** -- `windows-placement-probe`: a setting for how many items its peer-index-cache and core-affinity
+  measurements move, so the census in `windows-platform-probes` can run those two probes short as it does the
+  others. **Withdrawn, and not done.**
+
+The engineer, 2026-11-04, after the cost was set out (those two probes are most of what the census still takes, about 3.9 s and
+1.5 s of the six or so it takes, on debug builds): "6s is not a huge problem in terms of the time, IMO". The setting would have
+meant a `measure_with(items)` in two modules of `windows-placement-probe`, a count carried in each observation, and the figures
+that divide by the `ITEMS` constant dividing by it, which is a change of public API in a second published crate. The census
+keeps running both probes at their normal length. Nothing is scheduled.
+
+## Moved 2026-11-04 13:07:34 -05:00 -- M45.9: the tests whose wait is their claim
+
+The decision is [DESIGN-NOTES.md](DESIGN-NOTES.md#long-haul-tier).
+
+### <a id="m459"></a>M45.9 -- The four waits that are their claim were measured, none was shortened, and each says why beside its constant. *(completed 2026-11-04 13:07:34 -05:00)*
+
+- [x] **M45.9** -- The tests whose wait is their claim: `win-job-launcher`'s bound killing a descendant or a
+  grandchild, `win-debugging-sys`' process that outlives its bound, and the registration bounds in
+  `win-durable-ioring`. Shorten a bound only where the claim holds at the shorter one; otherwise leave it
+  and say why.
+
+**Done, by leaving them.** The item asks for a bound to be shortened only where the claim holds at the shorter one, and for these it
+does not hold with the margin that keeps it from flaking on the stalled runners that prompted M45. Each is now a named constant with
+the reasoning and the measurement beside it, so the next reader who asks why a test waits three seconds finds out in the file.
+
+- **`win-job-launcher`, the grandchild and the orphan** (3 s each, side by side, so one bound of wall time). The bound may fire
+  only after the descendant holds the marker. Measured: about 60 ms for the grandchild and 160 ms for the orphan, behind a middle
+  script that exits, on an idle machine; about 0.35 s and 1.0 s with every processor busy. Three seconds is three times the loaded
+  figure, and one and a half would be one and a half times it, to save a second and a half.
+- **`win-debugging-sys`, a process that outlives its bound** (1.5 s). The assertion, no exit code, also holds for a process ended before it
+  started, so a shorter bound would still pass, but without showing that the process was running when the bound arrived. The margin is
+  what keeps the evidence real. The weaker evidence was left alone, since the stronger form would turn a slow start into a failure.
+- **`win-durable-ioring`, the three registration bounds** (a 600 ms stall against a 50 ms bound, 0.6 s each). The stall is twelve times
+  the bound and far below the 30 s default, which is what lets the test tell a bound that is honoured from one that is ignored. It is also
+  what each test waits for while the ring runs down. The crate's longest test is about as long, so shortening these would not shorten
+  the suite.
+
+Nothing about the tests changed but names and comments, so no sabotage sweep was run: the values are identical.
+
+## Moved 2026-11-04 14:51:18 -05:00 -- M45.10, the re-measurement
+
+### <a id="m4510"></a>M45.10 -- The workspace was re-measured: 17 file-watcher stress tests that never ran are on probation, and the 13 tests still over a second are each left with a reason. *(completed 2026-11-04 14:51:18 -05:00)*
+
+Run serially (`--test-threads 1`) over the whole workspace, with libtest's JSON timings.
+
+| | At M45's planning | After M45.1 to M45.9 |
+|---|---|---|
+| Tests run | 7185 | 6865 (96 ignored) |
+| Serial time | 140 s | 101.6 s |
+| Tests of a second or more | 22, totalling 65 s | 13, totalling 31.5 s |
+
+**A suite that tested nothing.** `windows-file-watcher`'s `tests/stress.rs` (4 tests) and `tests/scenario_stress.rs`
+(13 tests) returned at once unless `WINDOWS_FILE_WATCHER_STRESS` was set. Nothing in CI sets it, so each
+reported as passing in 0.00 s while running nothing, and because none was `#[ignore]`d the census of
+`tools/check-test-tiers.ps1` could not see them. Run for real they take about 237 s serially (one test, the
+churn burst, is 133 s of it) and all 17 pass. The guards are removed; each test is now in a `mod probation`
+with a `probation:` ignore reason carrying its measured cost, so they run in the daily workflow and are
+recorded, and a plain `cargo test` says they are ignored and not that they passed. Run through
+`tools/run-tier.ps1 -Module probation`, 17 passed, 0 failed, each keyed
+`crates/windows-file-watcher/tests/<file>.rs::probation::<name>`. The ungated unit tests in both files stay
+where they were, and `WINDOWS_FILE_WATCHER_STRESS_SEED` still seeds the generator (D-66). The census reports
+probation 23 (the six of M45.4 and these 17).
+
+**The 13 tests still over a second, left as they are, each for the reason its claim gives:**
+
+- The census (8.2 s): the engineer ruled the time acceptable.
+- The three waits of M45.9 (two job-launcher bounds, 3.1 s each; the debugger test, 2.0 s): measured, and each says why beside its constant.
+- `azure_shape` (1.9 s) and the two `runner_log` tests (1.3 s each) of M45.7: timing claims.
+- The barrier-pair test in `scenario_stress` (2.0 s): a two-second timeout is what it asserts.
+- The doorbell multiplier-2 test (1.4 s): the setting under test is the multiplier, and the divisor that shrinks the other
+  probe tests is refused beside it ("not both"), so the smallest non-default run is twice the workload.
+- `runs_of_different_builds_are_refused` (1.7 s): it starts `node` once per committed copy of each capture script and per case,
+  and running every committed copy is its claim.
+- `the_listed_streams_reach_the_commands_own_children` (1.1 s): the grandchild has to outlive its command, and `ping -n 2` is
+  the smallest delay a batch file has that needs no console; the test returns as soon as the grandchild's line appears.
+- `properties_under_every_resolution` (1.3 s): its coverage thresholds are fractions of `PLANS`, so the scale is
+  the claim; the generator is clock-seeded, which a design note records as approved.
+- `win-durable-ioring`'s remote-path test (0.7 s to 3.0 s between runs): the variance is the loopback share's, not the test's scale.
+
+No sabotage entry names a moved test, and the tests' bodies are unchanged, so no sweep was run.
+
+The two parked items this unblocked are not ready to be graduated: what each waits for is a run on a runner
+after the branch merges (the post-merge sweeps for `M45+.1`, the first scheduled long-haul runs for
+`M45+.2`), so each has a restated gate in [PARKED.md](PARKED.md).

@@ -393,8 +393,9 @@ fn render(out: &mut dyn std::fmt::Write, multiplier: IterationMultiplier) {
 
     let _ = writeln!(
         out,
-        r#"{{"reason":"x-probe-request-cost","arch":"{}","iteration_multiplier":{},{fields}}}"#,
+        r#"{{"reason":"x-probe-request-cost","arch":"{}","iteration_multiplier":{},"iteration_divisor":{},{fields}}}"#,
         std::env::consts::ARCH,
         multiplier.get(),
+        multiplier.divisor(),
     );
 }

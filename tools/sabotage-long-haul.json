@@ -1,0 +1,136 @@
+{
+  "description": "Sabotages for tools/plan-long-haul.ps1, the planner that makes the long-haul workflow run daily and only when main has moved, judged by test-plan-long-haul.ps1. Run with tools/run-sabotage.ps1 -Manifest tools/sabotage-long-haul.json -CargoCommand tools/sabotage-long-haul-runner.cmd; see tools/README-sabotage.md.",
+  "root": "..",
+  "package": "sabotage-long-haul",
+  "testArgs": ["--suite"],
+  "sabotages": [
+    {
+      "name": "a manual dispatch asks GitHub for the earlier runs too",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "A dispatch always runs, so the listing is of no use to it, and a failure to list would put a warning on a run it could not have changed.",
+      "find": ["if ($EventName -eq 'schedule') {"],
+      "replace": ["if ($true) {"]
+    },
+    {
+      "name": "EQUIVALENT: a manual dispatch is held to the schedule's rule in the decision itself",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "survives",
+      "why": "An equivalent mutant, declared so that it is not looked for again. A dispatch never has the earlier runs loaded (the entry above is what guards that), so the decision's own check for a non-schedule event and the rule for a schedule with no earlier run give the same answer, run. If the loader's check is ever removed this becomes the only guard and the entry will come back caught, which is the signal to move it to `caught`.",
+      "find": ["    if ($EventName -ne 'schedule') {"],
+      "replace": ["    if ($false) {"]
+    },
+    {
+      "name": "a cancelled run counts as completed",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "A cancelled run ran no tests. Counting it would skip the commit it was on, and the tier would not run on it until main moved again.",
+      "find": ["$completedConclusions = @('success', 'failure', 'timed_out')"],
+      "replace": ["$completedConclusions = @('success', 'failure', 'timed_out', 'cancelled')"]
+    },
+    {
+      "name": "a timed-out run does not count as completed",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "A run that timed out reported a result. Without it the tier runs again each day on an unchanged main, to time out again.",
+      "find": ["$completedConclusions = @('success', 'failure', 'timed_out')"],
+      "replace": ["$completedConclusions = @('success', 'failure')"]
+    },
+    {
+      "name": "a failed run does not count as completed",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "A failed run is a result and the commit has been run. Repeating it on an unchanged main is a daily rerun that says the same thing and spends a workspace build on it.",
+      "find": ["$completedConclusions = @('success', 'failure', 'timed_out')"],
+      "replace": ["$completedConclusions = @('success', 'timed_out')"]
+    },
+    {
+      "name": "this run is counted among the earlier ones",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "The run being planned is on the commit being run, so a planner that counted it would find a run on this commit and skip, every time it could see itself.",
+      "find": ["Where-Object { \"$($_.databaseId)\" -ne $CurrentRunId -and $completedConclusions -contains [string]$_.conclusion }"],
+      "replace": ["Where-Object { $completedConclusions -contains [string]$_.conclusion }"]
+    },
+    {
+      "name": "the oldest completed run decides, not the latest",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "The question is whether main has moved since the LAST run. Judged against the first one ever, the answer is yes from the second day on and the tier runs daily regardless.",
+      "find": ["Sort-Object { [datetime]$_.createdAt } -Descending)"],
+      "replace": ["Sort-Object { [datetime]$_.createdAt })"]
+    },
+    {
+      "name": "any earlier run on this commit skips, not only the latest",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "A commit that ran, then was left behind, then came back as main's tip (a revert) has not been run since it came back. Matching any earlier run skips it though the last run was on something else.",
+      "find": ["    if ([string]$last.headSha -eq $Sha) {"],
+      "replace": ["    if (@($earlier | Where-Object { [string]$_.headSha -eq $Sha }).Count -gt 0) {"]
+    },
+    {
+      "name": "there being no earlier run skips",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "The first run, and the first after the listing is empty, must run: a planner that skipped would never run the tier at all, and the schedule would stay green.",
+      "find": ["Run = $true; Reason = 'no earlier run completed'"],
+      "replace": ["Run = $false; Reason = 'no earlier run completed'"]
+    },
+    {
+      "name": "main having moved skips",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "The case the schedule exists for.",
+      "find": ["    return [pscustomobject]@{ Run = $true; Reason = \"main moved from"],
+      "replace": ["    return [pscustomobject]@{ Run = $false; Reason = \"main moved from"]
+    },
+    {
+      "name": "a listing that could not be had skips",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "Not being able to ask is not evidence that nothing changed. A planner that skipped on an API failure would stop the tier for as long as the failure lasted and say nothing but a warning.",
+      "find": ["$plan = [pscustomobject]@{ Run = $true; Reason = 'the earlier runs could not be listed' }"],
+      "replace": ["$plan = [pscustomobject]@{ Run = $false; Reason = 'the earlier runs could not be listed' }"]
+    },
+    {
+      "name": "the earlier runs of every workflow are listed, not this one's",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "ci.yml runs on the same commits, so listing its runs finds one on this commit and skips. The tier would then run only when a commit reached main without a CI run, which is never.",
+      "find": ["gh run list --workflow $Workflow --branch $Branch"],
+      "replace": ["gh run list --branch $Branch"]
+    },
+    {
+      "name": "the earlier runs of every branch are listed, not main's",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "A dispatch from a branch is a run of this workflow too, on that branch's commit. Taken as the last run, it would make main look as though it had moved when it had not.",
+      "find": ["gh run list --workflow $Workflow --branch $Branch"],
+      "replace": ["gh run list --workflow $Workflow"]
+    },
+    {
+      "name": "the step output says run=true whatever was decided",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "The workflow reads only this file, so a decision printed to the log and not written is a decision that changes nothing.",
+      "find": ["\"run=$($plan.Run.ToString().ToLowerInvariant())`nreason=$($plan.Reason)`n\""],
+      "replace": ["\"run=true`nreason=$($plan.Reason)`n\""]
+    },
+    {
+      "name": "a missing runs file exits zero",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "caught",
+      "why": "A planner that could not be given its input must not look like one that decided.",
+      "find": ["Write-Host \"No runs file at $RunsPath.\"; exit 2"],
+      "replace": ["Write-Host \"No runs file at $RunsPath.\"; exit 0"]
+    },
+    {
+      "name": "CONTROL: the reason for the first run is reworded",
+      "file": "tools/plan-long-haul.ps1",
+      "expect": "survives",
+      "why": "The manifest checking itself. This changes what a reader sees and nothing a test claims, so it MUST survive -- if it comes back caught, the suite is matching on incidental wording rather than behaviour, and its other results are worth less than they look.",
+      "find": ["Reason = 'no earlier run completed'"],
+      "replace": ["Reason = 'there is no earlier run to compare with'"]
+    }
+  ]
+}

@@ -215,6 +215,37 @@ must stamp the file with the current time. The entry is caught.
 That is the argument for this file in one paragraph. A test suite cannot tell
 you what it fails to look at; only injecting the defect can.
 
+[sabotage-tiers.json](sabotage-tiers.json) is the same arrangement for
+[check-test-tiers.ps1](check-test-tiers.ps1), judged by
+[test-check-test-tiers.ps1](test-check-test-tiers.ps1) through
+[sabotage-tiers-runner.cmd](sabotage-tiers-runner.cmd):
+
+```powershell
+.\tools\run-sabotage.ps1 -Manifest tools\sabotage-tiers.json `
+    -CargoCommand (Resolve-Path tools\sabotage-tiers-runner.cmd).Path
+```
+
+[sabotage-long-haul.json](sabotage-long-haul.json) is the same for [plan-long-haul.ps1](plan-long-haul.ps1), the planner
+behind the long-haul workflow, judged by [test-plan-long-haul.ps1](test-plan-long-haul.ps1) through
+[sabotage-long-haul-runner.cmd](sabotage-long-haul-runner.cmd). It carries one declared equivalent mutant, an entry
+that is expected to survive and says why.
+
+```powershell
+.\tools\run-sabotage.ps1 -Manifest tools\sabotage-long-haul.json `
+    -CargoCommand (Resolve-Path tools\sabotage-long-haul-runner.cmd).Path
+```
+
+[sabotage-probation.json](sabotage-probation.json) is the same for the scripts that keep the probation tier's results --
+[probation-common.ps1](probation-common.ps1), [run-tier.ps1](run-tier.ps1),
+[publish-probation-results.ps1](publish-probation-results.ps1) and [report-probation.ps1](report-probation.ps1) -- judged by
+[test-probation.ps1](test-probation.ps1) through [sabotage-probation-runner.cmd](sabotage-probation-runner.cmd). That suite
+builds real one-crate workspaces, so each entry costs close to a minute.
+
+```powershell
+.\tools\run-sabotage.ps1 -Manifest tools\sabotage-probation.json `
+    -CargoCommand (Resolve-Path tools\sabotage-probation-runner.cmd).Path
+```
+
 Runs on **Windows PowerShell 5.1 and PowerShell 7 alike**, like the other
 scripts in this directory, and the full sweep is verified on both. Worth stating
 because the two differ in ways that bite here specifically: 5.1 rejects

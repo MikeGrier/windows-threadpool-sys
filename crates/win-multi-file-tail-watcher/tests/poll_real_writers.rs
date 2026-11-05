@@ -225,14 +225,25 @@ fn attentions(entries: &[SqEntry<u32>]) -> Vec<(u32, u64, u64)> {
         .collect()
 }
 
-#[test]
-fn children_writing_to_inherited_handles_are_reported_across_many_parks_and_resumes() {
+/// Registrations, every fifth a file a child writes, so a pass reports a few times more writers than
+/// the two slots hold and the poll parks and resumes between them. A child process each is most of
+/// what the test costs.
+const ROSTER: u32 = 100;
+
+/// The roster the test was first written at: sixty writers. See [`long_haul`].
+const FULL_ROSTER: u32 = 300;
+
+fn children_writing_to_inherited_handles_are_reported_across_parks_and_resumes(total: u32) {
     const PASSES: u64 = 5;
     let dir = TempDir::new("steps");
-    let mut fixture = Fixture::new(&dir, 300, 5, PASSES, true);
+    let mut fixture = Fixture::new(&dir, total, 5, PASSES, true);
     let late_path = dir.file("late.log", &[b'y'; 40]);
     let mut live: Vec<u32> = fixture.writers.iter().map(|(value, _)| *value).collect();
-    let dropped = live[40];
+    // Two thirds of the way along, so it is a writer in the middle of the poll whatever the roster.
+    let dropped = live[live.len() * 2 / 3];
+    // Parks and resumes: every two writers fill the slots once, and a pass takes more than two
+    // thirds of that many rounds.
+    let least_rounds = live.len() / SLOTS * 2 / 3;
     let mut late = None;
 
     let (entries, _) = poll_to_end(&fixture.watcher);
@@ -270,7 +281,10 @@ fn children_writing_to_inherited_handles_are_reported_across_many_parks_and_resu
         }
         assert_eq!(attentions(&entries), expected, "pass {pass}");
         assert_eq!(entries.last(), Some(&SqEntry::PollDone));
-        assert!(rounds > 20, "pass {pass} took {rounds} rounds");
+        assert!(
+            rounds > least_rounds,
+            "pass {pass} took {rounds} rounds, and a roster of {total} takes more than {least_rounds}"
+        );
     }
     drop(late);
     fixture.finish();
@@ -289,6 +303,21 @@ fn children_writing_to_inherited_handles_are_reported_across_many_parks_and_resu
         .poll()
         .expect("and the next poll is accepted");
     round(&fixture.watcher);
+}
+
+#[test]
+fn children_writing_to_inherited_handles_are_reported_across_many_parks_and_resumes() {
+    children_writing_to_inherited_handles_are_reported_across_parks_and_resumes(ROSTER);
+}
+
+mod long_haul {
+    use super::*;
+
+    #[test]
+    #[ignore = "long-haul: starts sixty child processes among 300 registrations"]
+    fn many_children_writing_to_inherited_handles_are_reported_across_many_parks_and_resumes() {
+        children_writing_to_inherited_handles_are_reported_across_parks_and_resumes(FULL_ROSTER);
+    }
 }
 
 #[test]

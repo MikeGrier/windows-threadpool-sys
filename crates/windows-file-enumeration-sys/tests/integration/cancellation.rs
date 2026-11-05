@@ -4,7 +4,10 @@
 
 use std::time::{Duration, Instant};
 
-use windows_file_enumeration_sys::{Completion, EnumerationRequest, Session, TerminalOutcome};
+use windows_file_enumeration_sys::{
+    Completion, DEFAULT_BUFFER_CAPACITY, EnumerationRequest, MINIMUM_BUFFER_CAPACITY, Session,
+    TerminalOutcome,
+};
 
 use crate::support::{Scratch, borrow_all, many_file_names};
 
@@ -36,17 +39,38 @@ fn cancelling_before_any_quantum_runs_still_yields_one_terminal() {
     assert!(receiver.try_recv().is_none(), "exactly one terminal");
 }
 
-#[test]
-fn cancelling_a_large_running_enumeration_ends_it_with_no_entry_after_the_terminal() {
-    // Thousands of entries keep a real worker busy for many quanta, giving
-    // the cancellation a real chance to land on a running, not yet finished,
-    // enumeration -- proof against the live engine, not a scripted one.
-    let names = many_file_names(4_000);
+/// A directory of `count` files, which a request with a native buffer of
+/// `buffer` bytes enumerates over many refills and quanta, so that an
+/// enumeration is still running when the test acts on it.
+fn running_enumeration(count: usize, buffer: usize) -> (Scratch, EnumerationRequest) {
+    let names = many_file_names(count);
     let borrowed = borrow_all(&names);
     let scratch = Scratch::with_files(&borrowed);
+    let request = EnumerationRequest::for_path(scratch.path())
+        .expect("resolvable")
+        .with_buffer_capacity(buffer)
+        .expect("representable");
+    (scratch, request)
+}
+
+/// More than two quanta of records (a quantum is at most 256), which with the
+/// minimum buffer is also many refills. Creating the files is what a test
+/// here costs, so this is as few as keeps an enumeration running for many
+/// quanta; [`FULL`] is the scale the claims were first made at.
+const SPANNING: usize = 600;
+
+/// Thousands of entries through the default buffer. See [`long_haul`].
+const FULL: usize = 4_000;
+
+/// Cancelling an enumeration of `count` entries ends it with exactly one
+/// terminal and no entry after it.
+fn cancelling_ends_it_with_no_entry_after_the_terminal(count: usize, buffer: usize) {
+    // Many quanta keep a real worker busy, giving the cancellation a real
+    // chance to land on a running, not yet finished, enumeration -- proof
+    // against the live engine, not a scripted one.
+    let (_scratch, request) = running_enumeration(count, buffer);
 
     let (session, receiver) = Session::new(8, 64).expect("room");
-    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
     let handle = session.try_begin(request).expect("room");
     let enumeration = handle.id();
     handle.cancel();
@@ -87,6 +111,11 @@ fn cancelling_a_large_running_enumeration_ends_it_with_no_entry_after_the_termin
 }
 
 #[test]
+fn cancelling_a_running_enumeration_over_many_refills_ends_it_with_no_entry_after_the_terminal() {
+    cancelling_ends_it_with_no_entry_after_the_terminal(SPANNING, MINIMUM_BUFFER_CAPACITY);
+}
+
+#[test]
 fn cancelling_an_already_completed_enumeration_adds_no_second_terminal() {
     let scratch = Scratch::empty();
     let (session, receiver) = Session::new(8, 8).expect("room");
@@ -119,14 +148,12 @@ fn cancelling_an_already_completed_enumeration_adds_no_second_terminal() {
     );
 }
 
-#[test]
-fn dropping_the_receiver_ends_a_large_running_enumeration_promptly() {
-    let names = many_file_names(4_000);
-    let borrowed = borrow_all(&names);
-    let scratch = Scratch::with_files(&borrowed);
+/// Dropping the receiver of an enumeration of `count` entries returns at once
+/// and releases the enumeration.
+fn dropping_the_receiver_ends_it_promptly(count: usize, buffer: usize) {
+    let (_scratch, request) = running_enumeration(count, buffer);
 
     let (session, receiver) = Session::new(8, 64).expect("room");
-    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
     let handle = session.try_begin(request).expect("room");
     handle.detach();
 
@@ -145,4 +172,28 @@ fn dropping_the_receiver_ends_a_large_running_enumeration_promptly() {
         std::thread::sleep(Duration::from_millis(2));
     }
     panic!("the abandoned enumeration was never released");
+}
+
+#[test]
+fn dropping_the_receiver_ends_an_enumeration_running_over_many_refills_promptly() {
+    dropping_the_receiver_ends_it_promptly(SPANNING, MINIMUM_BUFFER_CAPACITY);
+}
+
+/// The two claims above at the scale they were first made at: thousands of
+/// entries through the default buffer, which is mostly the time to create
+/// them. Nothing about either differs from its small form but the size.
+mod long_haul {
+    use super::*;
+
+    #[test]
+    #[ignore = "long-haul: creates 4000 files and cancels an enumeration of them"]
+    fn cancelling_a_large_running_enumeration_ends_it_with_no_entry_after_the_terminal() {
+        cancelling_ends_it_with_no_entry_after_the_terminal(FULL, DEFAULT_BUFFER_CAPACITY);
+    }
+
+    #[test]
+    #[ignore = "long-haul: creates 4000 files and drops the receiver of an enumeration of them"]
+    fn dropping_the_receiver_ends_a_large_running_enumeration_promptly() {
+        dropping_the_receiver_ends_it_promptly(FULL, DEFAULT_BUFFER_CAPACITY);
+    }
 }

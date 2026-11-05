@@ -42,6 +42,10 @@ fn lines(of: &[&str]) -> Vec<String> {
     of.iter().map(|l| (*l).to_owned()).collect()
 }
 
+// Not shortened, though it takes over a second: the claim is that the reader is quiet between a
+// silence and a burst, which is a claim about time. Three polls with 500 ms between them is the
+// silence, and a shorter one is a shorter window in which a reader that wakes on its own could be
+// seen to.
 #[test]
 fn a_command_that_is_silent_then_writes_a_burst_is_delivered_at_once_and_the_reader_is_quiet_between()
  {

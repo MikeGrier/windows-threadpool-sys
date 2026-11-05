@@ -29,9 +29,17 @@
 
 use std::process::Command;
 
+/// What the short runs ask of a probe: a twentieth of its loops, which still goes round each of them, so
+/// the table has every row it has at full length. The figures are not the published ones and the test
+/// does not read them as such: it compares the table with the row, digit for digit.
+const SHORT: &[&str] = &["--iteration-divisor", "20"];
+
 /// Every `label value` row of a probe's table, and its NDJSON line.
-fn run(binary: &str) -> (Vec<(String, f64)>, String) {
-    let output = Command::new(binary).output().expect("run the probe");
+fn run(binary: &str, args: &[&str]) -> (Vec<(String, f64)>, String) {
+    let output = Command::new(binary)
+        .args(args)
+        .output()
+        .expect("run the probe");
     assert!(
         output.status.success(),
         "the probe exited with {:?}; stderr: {}",
@@ -80,10 +88,11 @@ fn ndjson_number(line: &str, key: &str) -> Option<f64> {
 
 fn assert_table_matches_ndjson(
     binary: &str,
+    args: &[&str],
     key_for: impl Fn(&str) -> &'static str,
     every_label: &[&str],
 ) {
-    let (rows, ndjson) = run(binary);
+    let (rows, ndjson) = run(binary, args);
 
     // **`!rows.is_empty()` was the only guard on the recovery, and one row
     // satisfies it.** The filter above recovers rows heuristically -- column-0
@@ -135,8 +144,7 @@ fn assert_table_matches_ndjson(
     }
 }
 
-#[test]
-fn the_doorbell_probe_prints_every_figure_to_both_readers() {
+fn the_doorbell_probe_prints_every_figure(args: &[&str]) {
     // Every label, not just the unconditional ones: the census asks the NDJSON
     // which of them were measured, so a conditional label is required exactly on
     // the hosts that measured it.
@@ -146,16 +154,45 @@ fn the_doorbell_probe_prints_every_figure_to_both_readers() {
         .collect();
     assert_table_matches_ndjson(
         env!("CARGO_BIN_EXE_probe-doorbell-cost"),
+        args,
         windows_platform_probes::doorbell_cost::json_key,
         &every,
     );
 }
 
-#[test]
-fn the_request_probe_prints_every_figure_to_both_readers() {
+fn the_request_probe_prints_every_figure(args: &[&str]) {
     assert_table_matches_ndjson(
         env!("CARGO_BIN_EXE_probe-request-cost"),
+        args,
         windows_platform_probes::request_cost::json_key,
         &windows_platform_probes::request_cost::EVERY_LABEL,
     );
+}
+
+#[test]
+fn the_doorbell_probe_prints_every_figure_to_both_readers() {
+    the_doorbell_probe_prints_every_figure(SHORT);
+}
+
+#[test]
+fn the_request_probe_prints_every_figure_to_both_readers() {
+    the_request_probe_prints_every_figure(SHORT);
+}
+
+/// The same two checks over the probes' normal runs, which are seconds long. Nothing about them differs
+/// from the short runs but the length, which is what a figure printed to the digit is not about.
+mod long_haul {
+    use super::*;
+
+    #[test]
+    #[ignore = "long-haul: runs the doorbell probe at its usual workload"]
+    fn the_doorbell_probe_prints_every_figure_to_both_readers_at_full_length() {
+        the_doorbell_probe_prints_every_figure(&[]);
+    }
+
+    #[test]
+    #[ignore = "long-haul: runs the request probe at its usual workload"]
+    fn the_request_probe_prints_every_figure_to_both_readers_at_full_length() {
+        the_request_probe_prints_every_figure(&[]);
+    }
 }

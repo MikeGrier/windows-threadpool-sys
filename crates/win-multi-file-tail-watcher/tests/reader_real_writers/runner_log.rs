@@ -49,12 +49,21 @@ fn loop_body() -> String {
         .join("&")
 }
 
-fn run(options: &TailReaderOptions) {
+/// Three bursts with a silence before each, as the capture has them, in steps of the script's
+/// loop. Enough that each burst crosses many buffers and exhausts the tiny options' pool, which is
+/// what the claim needs; the child writing them is most of what the test costs.
+const BURSTS: [(u64, u64); 3] = [(1, 12), (13, 16), (17, 36)];
+
+/// The same shape ten times over, the size the test was first written at: 120, 40 and 200 steps.
+const FULL_BURSTS: [(u64, u64); 3] = [(1, 120), (121, 160), (161, 360)];
+
+/// The silence before each burst is not shortened: that nothing is delivered and nothing rings
+/// while a log is quiet is a claim about time, and a window shorter than a wake-up of the reader
+/// would stop being able to see one.
+fn run(options: &TailReaderOptions, bursts: [(u64, u64); 3]) {
     let dir = TempDir::new("runner");
     let path = dir.path("job.log");
 
-    // Three bursts with a silence before each: 120, 40 and 200 steps.
-    let bursts = [(1, 120), (121, 160), (161, 360)];
     let mut parts = Vec::new();
     for (from, to) in bursts {
         parts.push(gate());
@@ -130,20 +139,41 @@ fn run(options: &TailReaderOptions) {
     assert!(crossed > 0, "the log has lines longer than the buffer");
 }
 
-#[test]
-fn a_job_log_is_delivered_whole_under_the_default_options() {
-    run(&TailReaderOptions::default());
-}
-
-#[test]
-fn a_job_log_is_delivered_whole_under_the_tiny_options() {
-    // Eight-byte buffers: every line is cut across chunks, the pool and the client queue are
-    // exhausted by each burst, and the log is still whole.
+/// Eight-byte buffers: every line is cut across chunks, the pool and the client queue are exhausted
+/// by each burst, and the log is still whole.
+fn tiny_options() -> TailReaderOptions {
     let mut options = TailReaderOptions::default();
     options.buffer_len = 8;
     options.buffer_count = 4;
     options.client_sq_capacity = 2;
     options.ring_sq_size = 8;
     options.ring_cq_size = 16;
-    run(&options);
+    options
+}
+
+#[test]
+fn a_job_log_is_delivered_whole_under_the_default_options() {
+    run(&TailReaderOptions::default(), BURSTS);
+}
+
+#[test]
+fn a_job_log_is_delivered_whole_under_the_tiny_options() {
+    run(&tiny_options(), BURSTS);
+}
+
+/// The same two logs at the size they were first written at.
+mod long_haul {
+    use super::*;
+
+    #[test]
+    #[ignore = "long-haul: a child writes 360 loop steps of four lines, in three bursts"]
+    fn a_job_log_of_many_steps_is_delivered_whole_under_the_default_options() {
+        run(&TailReaderOptions::default(), FULL_BURSTS);
+    }
+
+    #[test]
+    #[ignore = "long-haul: a child writes 360 loop steps of four lines, in three bursts"]
+    fn a_job_log_of_many_steps_is_delivered_whole_under_the_tiny_options() {
+        run(&tiny_options(), FULL_BURSTS);
+    }
 }

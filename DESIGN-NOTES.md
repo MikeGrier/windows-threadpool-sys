@@ -3028,6 +3028,91 @@ last learned and not from nothing, which is what a clone's first scoped sweep ot
 The alternatives and what building it found are in
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-the-record-came-to-a-branch).
 
+<a id="long-haul-tier"></a>**A test's scale is kept where its claim needs it; scale for its own sake runs daily in a long-haul tier, and a test that has never run starts on probation.**
+The engineer, 2026-11-03, on the sabotage controls that timed out because a runner stalled under a
+suite doing real file I/O: "do less in each of these tests", since a lighter suite helps all of CI, and
+"perhaps we should have some heavy / long-haul runs for post-merge runs ... (but not as part of the
+sabotage full runs)". Every pull request's CI and every sabotage entry runs a crate's whole suite, so a
+test's cost is paid on each; a test whose claim holds at a small size is written at that size.
+
+- **The tiers are named, not inferred.** A long-haul test is `#[ignore = "long-haul: <what it costs>"]`
+  in a module named `long_haul`; a probation test is `#[ignore = "probation: <what it costs>"]` in a
+  module named `probation`. libtest selects by name, not by ignore reason, so the module path is what
+  runs a tier and the reason is what tells a reader why; a census fails when the two disagree, since a
+  test marked into a tier its name does not select would never run. The cost in the reason is
+  documentation (the engineer: "I don't know what the value of the 'cost' is other than pure
+  documentation but that's ok").
+- **The scale is moved, not dropped.** A test reduced to the size its claim needs keeps its full-scale
+  form as a long-haul test, so nothing that ran before stops running; it runs daily instead of on every
+  push.
+- **A tier runs one test at a time.** [run-tier.ps1](tools/run-tier.ps1) passes `--test-threads 1` by default.
+  These are the tests whose scale or timing is the point, so under a parallel harness each is measured under
+  the others' load, and for the flush-barrier stress instruments that is not a quibble: their own module docs
+  call the flag "not optional decoration", and two of them once collided on a temp file under the parallel
+  harness. `-TestThreads` raises it for a tier whose tests are known to be independent. This was found by
+  putting those instruments on probation, which is what the tier is for. It was chosen while implementing
+  `M45.4` and the engineer was not asked; it costs wall time, which the workflow's timeout bounds.
+- **Cadence: daily, and only when `main` has moved** (the engineer), plus manual dispatch, in a workflow
+  of its own. Not part of the sabotage sweep, which never passes `--ignored` and so never pays for either
+  tier.
+- **Probation is for a test that has never run in CI** (the engineer: a set "which run after the main
+  tests which don't fail the run but we gather data on whether they succeed or fail and we can promote
+  them to non-probationary once they succeed for enough runs"). It runs after the long-haul tier, its
+  failures do not fail the run, and its results are kept across runs. Promotion is a code change, moving
+  the test to `long_haul`. Where the results are kept is [probation-results](#probation-results).
+  **A working position, not a decision:** how many passes are enough, which is `M45.3`'s to settle once
+  there are results to look at.
+
+The work is [CHECKLIST.md](CHECKLIST.md) `M45`. What prompted it, and the measurements, are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-a-long-haul-tier).
+<a id="probation-results"></a>**Each probation test's results are kept across runs on a branch of their own, `probation-results`, and reported; how many passes are enough is a working position.**
+`M45.3` left this to its own work, having said only that artifacts expire and that the sabotage record's
+branch is the pattern that does not. The record, `results.json`, is derived data in the same sense as the
+[sabotage record](#sabotage-records), so it has the same home and the same reasons: a branch that shares no
+history with `main`, written by the `record` job of
+[long-haul.yml](.github/workflows/long-haul.yml) with
+[publish-probation-results.ps1](tools/publish-probation-results.ps1), and read by
+[report-probation.ps1](tools/report-probation.ps1), which prints each test's runs, passes, current run of
+passes and latest result. The tests run in a job with read-only access and hand what each did to the `record`
+job as an artifact, so the job that can write never runs a test.
+
+- **What a result is.** [run-tier.ps1](tools/run-tier.ps1) runs a tier through libtest's JSON events, which are
+  unstable and are asked for as [check-test-tiers.ps1](tools/check-test-tiers.ps1) asks for them, and reads
+  what each test did from them and not from text meant for a person. A test is keyed by the source path of the
+  target its executable was built from, relative to the workspace, and its path inside it: cargo's own
+  `Running` header names a path relative to the package, which two crates share, so the executable is mapped
+  to its target from the build's JSON. An executable that cargo ran and the build did not produce is an error.
+  cargo's output and the events are one file by one redirect, because the header says which executable the
+  events after it belong to and two pipes read on two threads do not keep that order.
+- **A test's key is case-sensitive.** Two Rust tests can differ only by case, and PowerShell's ordered
+  dictionaries and object properties both treat those as one, which would merge two tests' counts. The record
+  is a list on disk and an ordinal-keyed dictionary in memory for that reason.
+- **A test that started and was never reported is a failure.** The executable stopped under it, by a crash or
+  an abort; counting that as a pass, or as nothing, would promote exactly the test probation is for. A test
+  of an executable that stopped before it started is not known to exist and is not counted.
+- **A run is applied once.** Each run has an id (the workflow's run and its attempt, since a re-run of the
+  jobs is another run of the tests), and a record that has had that id applied, as its latest run or an earlier one, is left as it is,
+  so a retry from a fresh fetch cannot count a run twice and a replay of an old run cannot put its results over a
+  newer one's (the record keeps every applied id, one a day). The id is the one the job that ran the tests wrote beside
+  the outcomes, not the keeping job's own attempt: that job can be re-run alone over the same outcomes,
+  and naming them by its new attempt would count tests that did not run again. The record's latest run moving on is also how a test that was
+  not in it is known: it was promoted, renamed or deleted, and the report says so and does not call it a
+  candidate for what it no longer is. Its counts are kept; nothing prunes the record.
+- **The threshold is the report's, and is a working position.** The report calls a test a candidate when its
+  latest result is a pass and its current run of passes has reached `-Threshold`. The
+  default is a guess made before a result exists, it decides nothing -- promotion is a change to the test --
+  and it is a parameter so that what the first results suggest can be tried without a code change. It has no
+  decision ID and nothing binds to it.
+- **Not fatal.** The publish and the report are `continue-on-error`, as the sweep's record is: a result the
+  record misses is a run it lacks, and a red run for a publish that failed would be read as a test that did.
+- **The plumbing is a copy, deliberately.** [publish-probation-results.ps1](tools/publish-probation-results.ps1)
+  and `Get-ProbationBranch` follow [publish-sabotage-catchers.ps1](tools/publish-sabotage-catchers.ps1) and
+  `Get-SabotageRecordBranch` rather than generalising them, so that building this did not touch the sabotage
+  harness, which a change to `common.ps1` would have re-swept in full. Whether to merge them is parked, in
+  [PARKED.md](PARKED.md#m45-plus-publishers), for when the new one has been shown to work.
+
+What was weighed is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-probation-results-are-kept).
+
 <a id="sabotage-hardware-dependent"></a>**An entry whose result depends on the machine declares `hardware-dependent`.**
 The engineer, 2026-11-03, choosing among taking such an entry out of its manifest into documentation, a new
 expectation, and leaving it to fail at random. The case was `windows-ioring-sys`' entry that drops a flush's

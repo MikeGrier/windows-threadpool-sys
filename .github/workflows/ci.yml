@@ -218,6 +218,36 @@ jobs:
       - name: Run test-sabotage-records.ps1 (Windows PowerShell 5.1)
         shell: powershell
         run: ./tools/test-sabotage-records.ps1
+      # The check that a test's ignore reason and its module agree about its tier, driven
+      # both from recorded listings and against a real fixture workspace, because the
+      # JSON libtest writes is what it reads and is not always valid JSON. Both hosts:
+      # an ordinary script a developer may run under either.
+      - name: Run test-check-test-tiers.ps1
+        shell: pwsh
+        run: ./tools/test-check-test-tiers.ps1
+      - name: Run test-check-test-tiers.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-check-test-tiers.ps1
+      # The planner that decides whether the long-haul workflow runs: a defect in it is quiet
+      # in both directions, the tier never running while the schedule stays green or running
+      # daily on an unchanged main. Both hosts, as above.
+      - name: Run test-plan-long-haul.ps1
+        shell: pwsh
+        run: ./tools/test-plan-long-haul.ps1
+      - name: Run test-plan-long-haul.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-plan-long-haul.ps1
+      # The scripts that run a tier, keep what each probation test did on a branch, and report
+      # it. A defect in them is quiet: a test counted as passing that did not, a run counted
+      # twice, or a test that killed its process counted as never having run. The publisher
+      # runs against a bare repository, and the runner against real one-crate workspaces. Both
+      # hosts, as above.
+      - name: Run test-probation.ps1
+        shell: pwsh
+        run: ./tools/test-probation.ps1
+      - name: Run test-probation.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-probation.ps1
       # pwsh only, and deliberately not repeated under 5.1 like the step above:
       # check-encoding.ps1 carries curated mojibake with no BOM, so 5.1 decodes
       # it as ANSI and cannot parse it. The suite says so and refuses to run
@@ -327,6 +357,15 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test --workspace ${{ matrix.flags }} --locked --no-fail-fast
+      # A test's ignore reason and the module it sits in must agree about its tier, because
+      # the long-haul and probation runs select by module name: a test that disagrees is one
+      # nothing runs, and nothing else says so. It asks every test executable for its list,
+      # so it needs the all-features build above and nothing more. See DEVELOPMENT.md,
+      # "Test tiers".
+      - name: check test tiers
+        if: ${{ matrix.variant == 'all features' }}
+        shell: pwsh
+        run: ./tools/check-test-tiers.ps1
       # The UNC current-directory test is ignored by default because it needs a
       # reachable administrative share (`\\localhost\C$`), which an ordinary
       # developer account does not have -- running it by default would report an
@@ -560,7 +599,7 @@ jobs:
         env:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
-        run: cargo test -p windows-platform-probes --locked --no-fail-fast -- --include-ignored
+        run: 'cargo test -p windows-platform-probes --locked --no-fail-fast -- --include-ignored --skip long_haul:: --skip probation::'
       - name: cargo test (windows-platform-probes oracle-in-renderer integration target)
         env:
           RUST_BACKTRACE: 1

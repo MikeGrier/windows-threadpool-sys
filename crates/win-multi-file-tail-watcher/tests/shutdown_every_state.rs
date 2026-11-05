@@ -148,14 +148,21 @@ fn a_request_from_the_callers_wait_while_a_poll_is_parked_stops_it_and_poll_done
     wait.stop_and_drain();
 }
 
-#[test]
-fn a_request_from_the_callers_wait_while_a_poll_is_inside_its_probe_returns_at_once() {
-    const FILES: u32 = 20_000;
+/// The roster size at which a pass over it is long enough to measure against, with room to spare:
+/// the two claims below are ratios of one step to a pass, and each skips the comparison when a pass
+/// is under 10 ms, which a roster this size is about twice over on the machine it was measured on.
+/// Registering the files is what the tests cost, so this is no larger than that needs.
+const MEASURABLE: u32 = 5_000;
+
+/// The size the claims were first made at, with about ten times the floor. See [`long_haul`].
+const FULL: u32 = 20_000;
+
+fn a_request_while_a_poll_is_inside_its_probe_returns_at_once(files: u32) {
     let dir = TempDir::new("probe");
     let path = dir.file("a.log", b"0123456789");
     // Registered at their length, so a poll is all probe and reports nothing.
     let watcher = Arc::new(Watcher::new(4).expect("watcher"));
-    let _registrations: Vec<_> = (0..FILES)
+    let _registrations: Vec<_> = (0..files)
         .map(|n| watcher.register(&wtf(&path), 10, n).expect("register"))
         .collect();
     let start = Instant::now();
@@ -168,8 +175,8 @@ fn a_request_from_the_callers_wait_while_a_poll_is_inside_its_probe_returns_at_o
     let bell = doorbell_copy(&watcher);
     let start = Instant::now();
     watcher.poll().expect("poll");
-    // The poll is probing twenty thousand files, which does not ring the doorbell; ring it for the
-    // caller's wait.
+    // The poll is probing every file, which does not ring the doorbell; ring it for the caller's
+    // wait.
     ring(&bell);
     let took = requested
         .recv_timeout(Duration::from_secs(10))
@@ -188,6 +195,11 @@ fn a_request_from_the_callers_wait_while_a_poll_is_inside_its_probe_returns_at_o
     }
     assert!(matches!(watcher.poll(), Err(PollError::Shutdown)));
     wait.stop_and_drain();
+}
+
+#[test]
+fn a_request_from_the_callers_wait_while_a_poll_is_inside_its_probe_returns_at_once() {
+    a_request_while_a_poll_is_inside_its_probe_returns_at_once(MEASURABLE);
 }
 
 // A value whose clone waits for `release`, so a poll can be held inside the report.
@@ -283,15 +295,13 @@ fn repeated_requests_from_the_callers_wait_and_from_other_threads_are_harmless()
     wait.stop_and_drain();
 }
 
-#[test]
-fn dropping_during_a_poll_over_a_large_roster_takes_a_step_not_a_pass() {
-    const FILES: u32 = 20_000;
+fn dropping_during_a_poll_takes_a_step_not_a_pass(files: u32) {
     let dir = TempDir::new("drop-large");
     let path = dir.file("a.log", b"0123456789");
     // Registered at their length, so a poll is all probe and reports nothing.
     let build = || {
         let watcher = Watcher::<u32>::new(4).expect("watcher");
-        let registrations: Vec<_> = (0..FILES)
+        let registrations: Vec<_> = (0..files)
             .map(|n| watcher.register(&wtf(&path), 10, n).expect("register"))
             .collect();
         (watcher, registrations)
@@ -327,6 +337,31 @@ fn dropping_during_a_poll_over_a_large_roster_takes_a_step_not_a_pass() {
             with_a_request < pass / 2,
             "a drop after a request took {with_a_request:?} against a pass of {pass:?}"
         );
+    }
+}
+
+#[test]
+fn dropping_during_a_poll_over_a_measurable_roster_takes_a_step_not_a_pass() {
+    dropping_during_a_poll_takes_a_step_not_a_pass(MEASURABLE);
+}
+
+/// The two ratio claims at the size they were first made at, whose pass is long enough that the
+/// comparison is made on any machine. Nothing about either differs from its small form but the
+/// size, and registering twenty thousand files is most of what each costs.
+mod long_haul {
+    use super::*;
+
+    #[test]
+    #[ignore = "long-haul: registers 20000 files, twice for the drop"]
+    fn a_request_from_the_callers_wait_while_a_poll_is_inside_its_probe_of_a_large_roster_returns_at_once()
+     {
+        a_request_while_a_poll_is_inside_its_probe_returns_at_once(FULL);
+    }
+
+    #[test]
+    #[ignore = "long-haul: registers 20000 files, twice"]
+    fn dropping_during_a_poll_over_a_large_roster_takes_a_step_not_a_pass() {
+        dropping_during_a_poll_takes_a_step_not_a_pass(FULL);
     }
 }
 
