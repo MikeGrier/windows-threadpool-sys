@@ -6,7 +6,7 @@
 //! to know where those files will land before creating them -- a log apart from data, say. The
 //! prediction opens the directory through `windows-namespace-request-sys`' `OpenFile`, with no
 //! access and `FILE_FLAG_BACKUP_SEMANTICS`, which is what opening a directory needs, and runs the
-//! same derivation a file's open runs ([`file_domains`](super::file_domains), DI-D-117) on that
+//! same derivation a file's open runs ([`file_domains`], DI-D-117) on that
 //! handle, so the prediction and the file's domains are one rule and the same bytes.
 //!
 //! **A prediction is never a declaration.** A file's domains are always what its own open derived.

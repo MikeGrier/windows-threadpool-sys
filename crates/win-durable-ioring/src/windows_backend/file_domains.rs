@@ -103,7 +103,7 @@ pub(super) fn derive(
     Ok(disks.into_iter().map(disk_flush_domain).collect())
 }
 
-/// The flush domains of `file`, all or nothing: those [`derive`] finds, or none.
+/// The flush domains of `file`, all or nothing: those [`derive`](fn@derive) finds, or none.
 pub(super) fn found(stack: &impl StorageStack, file: &SharedHandle) -> Vec<FlushDomain> {
     derive(stack, file).unwrap_or_default()
 }
