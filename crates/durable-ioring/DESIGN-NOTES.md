@@ -2911,12 +2911,14 @@ domains are found: "I would think that the data would be determined at open".
 - **A raw volume and a raw disk are followed the same way.** Added 2026-11-05, from the review of PR #182, which found
   that a raw target on a virtual disk carried only its own disk while a file beside the disk's backing file carried the
   host's, so a failed commit on the raw target did not reach the file's writes ([CONTRACT.md](CONTRACT.md)'s complete
-  declarations). `OpenedVolume::open` and `OpenedDisk::open` now derive at the open by the same walk: a volume starts from
-  its own disks and asks its own storage dependency, as a file's volume is asked; a disk has no volume, so a disk that is
-  file-backed is asked with `GET_STORAGE_DEPENDENCY_FLAG_DISK_HANDLE` on its own `\\.\PhysicalDriveN` handle, opened with
-  no access. All or nothing as for a file: a step that fails leaves the raw target unknown, where before it had its own
-  disks, since its own disks alone would be the partial set this decision never produces. A volume derives before it
-  takes its lock, which would refuse the derivation's own opens. The disk route is exercised only by the
+  declarations). `OpenedVolume::open` and `OpenedDisk::open` now derive at the open by the same walk, seeded from the
+  handle the open retains and never from its path again, which a drive letter reassigned since the open would resolve to
+  another volume (the second review round of the same PR): a volume's own disks are the extents its handle reported, and
+  that handle is asked for its storage dependency; a disk is itself, and its handle is asked with
+  `GET_STORAGE_DEPENDENCY_FLAG_DISK_HANDLE`. Only the host volumes found are opened by name, as a file's are. All or
+  nothing as for a file: a step that fails leaves the raw target unknown, where before it had its own disks, since its
+  own disks alone would be the partial set this decision never produces. A volume derives before it takes its lock,
+  which would refuse the derivation's own opens of the hosts. The virtual-disk routes are exercised only by the
   administrator-only tests, which run on CI.
 - **What it costs.** Measured once, 2026-11-05, on the engineer's development machine: about half as much again as a local
   open, and a small part of an open over a loopback share, where an unbuffered open already makes the one query a remote
