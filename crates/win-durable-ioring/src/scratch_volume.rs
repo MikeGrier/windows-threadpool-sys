@@ -51,6 +51,11 @@ pub(crate) fn create_script(vhd: &Path, megabytes: u32, letter: char) -> String 
     )
 }
 
+/// The `diskpart` script that puts an NTFS file system on the volume at drive letter `letter`.
+pub(crate) fn format_script(letter: char) -> String {
+    format!("select volume {letter}\nformat fs=ntfs quick\n")
+}
+
 /// The `diskpart` script that detaches the virtual disk at `vhd`.
 pub(crate) fn detach_script(vhd: &Path) -> String {
     format!(
@@ -161,6 +166,30 @@ impl ScratchVolume {
         let volume = Self { vhd, letter };
         volume.wait_until_mounted()?;
         Ok(volume)
+    }
+
+    /// A volume of `megabytes` with an NTFS file system on it, for a test that needs files on a
+    /// virtual disk rather than the raw volume itself.
+    pub(crate) fn create_formatted(megabytes: u32) -> io::Result<Self> {
+        let volume = Self::create(megabytes)?;
+        run_diskpart(&format_script(volume.letter), "format")?;
+        let started = Instant::now();
+        while !volume.root().is_dir() {
+            if started.elapsed() >= MOUNT_PATIENCE {
+                return Err(io::Error::other(format!(
+                    "the scratch file system did not appear at {}",
+                    volume.root().display()
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        Ok(volume)
+    }
+
+    /// The root directory of the volume's file system, for a volume made by
+    /// [`create_formatted`](Self::create_formatted).
+    pub(crate) fn root(&self) -> PathBuf {
+        PathBuf::from(format!("{}:\\", self.letter))
     }
 
     /// The path to open the volume at.

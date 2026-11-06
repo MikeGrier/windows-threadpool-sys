@@ -4644,3 +4644,21 @@ The item as written:
   [DI-15.3](crates/durable-ioring/PARKED.md) for want of a documented call. From
   [the design session](design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#the-real-world-model);
   the engineer, 2026-10-21: "The volume id refinement is a good catch for that race condition."
+
+## Moved 2026-11-05 19:13:58 -05:00 -- M39.4: the working model end to end
+
+### <a id="m394"></a>M39.4 -- The working model end to end: a failure of the data file's storage reaches the log exactly when their derived domains share a disk. *(completed 2026-11-05 19:13:58 -05:00)*
+
+Built as the engineer agreed (2026-11-05, "implement m39.4 in the way you suggest"), in `win-durable-ioring`'s `dioring/tests/working_model.rs`:
+
+- **On any machine:** a data directory under the temporary directory and a log directory under `RUNNER_TEMP` when set, otherwise also under the temporary directory. Each directory is predicted and its file confirmed (DI-D-118), both files are opened through the route with their domains derived (DI-D-117), each gets one write, and a failure imported over the data file's derived domains is checked: the data write is suspect, and the log's exactly when the two files' domains share a disk. It prints which case ran. Here it was the shared case (one disk); nothing guarantees the separate case runs anywhere. An imported failure stands in for a failed flush because, in a seal that flushes both files, the order in which the two flushes complete decides whether the log's write was already covered, and an import has no order.
+- **On CI only:** a file on a formatted scratch virtual disk (`ScratchVolume::create_formatted`, new, with its script tested) and a file in the temporary directory, which holds the disk's backing file. The virtual disk's file has the host's domains and its own disk besides; a failure of the host's disks reaches both writes, and one of the virtual disk's own disk reaches only its file. It needs an administrator, so it is ignored and runs in the CI step that already attaches scratch disks, whose name filter now includes it. It has not run on this machine.
+
+No sabotage entry was added: the entries for the derivation (an open that finds nothing, a target that does not carry what was found) are also caught by the end-to-end test.
+
+The item as written:
+
+- [x] **M39.4** -- **Show it end to end, in the shape of the working model:** a data directory and a log on separate
+  disks, files opened through the namespace route with their domains derived, and a failed flush on one shown not to
+  make the other's writes suspect. Coarse on purpose: whether that can be shown without hardware that fails on demand is
+  settled once `M39.2` is built.

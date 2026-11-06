@@ -527,10 +527,8 @@ raw volume derives, so a file and a volume on one disk share fate by constructio
 
 - [x] **M39.3** -- `DirectoryDomains::predict` derives a directory's domains from its own handle, and `confirm` checks a file's against them. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m393)
 
-- [ ] **M39.4** -- **Show it end to end, in the shape of the working model:** a data directory and a log on separate
-  disks, files opened through the namespace route with their domains derived, and a failed flush on one shown not to
-  make the other's writes suspect. Coarse on purpose: whether that can be shown without hardware that fails on demand is
-  settled once `M39.2` is built.
+- [x] **M39.4** -- The working model end to end: a failure of the data file's storage reaches the log exactly when their derived domains share a disk. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m394)
+
 ## M42 -- Apply the documented-contract rule to the refusals that already exist
 
 The rule is in [DESIGN-NOTES.md](DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) (the engineer,

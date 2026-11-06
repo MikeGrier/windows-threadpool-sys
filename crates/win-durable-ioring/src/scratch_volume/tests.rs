@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use super::{
-    associated_disk, create_disk_script, create_script, detach_script, free_letter,
+    associated_disk, create_disk_script, create_script, detach_script, format_script, free_letter,
     letter_is_taken, online_script, release_letter, reserve_letter, scratch_directory,
 };
 
@@ -20,6 +20,14 @@ fn the_create_script_makes_attaches_partitions_and_assigns() {
     assert_eq!(lines[2], "attach vdisk");
     assert_eq!(lines[3], "create partition primary");
     assert_eq!(lines[4], "assign letter=Y");
+}
+
+#[test]
+fn the_format_script_selects_the_volume_by_its_letter_and_puts_ntfs_on_it() {
+    assert_eq!(
+        format_script('Y').lines().collect::<Vec<_>>(),
+        ["select volume Y", "format fs=ntfs quick"]
+    );
 }
 
 #[test]

@@ -58,6 +58,7 @@ mod keys;
 mod delays;
 // The default diagnostic sink, and a chosen one in its place: DI-12.1.6.
 mod diagnostics;
+mod working_model;
 
 type Ring = Dioring<Vec<u8>>;
 type V = crate::WindowsIds<u64>;
