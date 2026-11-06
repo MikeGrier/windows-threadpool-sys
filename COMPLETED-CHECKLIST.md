@@ -4662,3 +4662,11 @@ The item as written:
   disks, files opened through the namespace route with their domains derived, and a failed flush on one shown not to
   make the other's writes suspect. Coarse on purpose: whether that can be shown without hardware that fails on demand is
   settled once `M39.2` is built.
+
+## Moved 2026-11-05 19:14:25 -05:00 -- M39, a file's flush domains derived at its open
+
+### <a id="m39"></a>M39 -- A file's flush domains, derived when it is opened through the namespace route. *(completed 2026-11-05)*
+
+Opened 2026-10-06 as a free-standing locality helper and re-scoped by the engineer on 2026-11-05: help computing flush domains comes when a file is opened through the namespace crate, and a consumer handing handles to the durable ioring directly manages its own. A file `win-durable-ioring` opens now has its volume's disks found as its flush domains, the same keys a raw volume derives, with a virtual disk followed by its bus type, all or nothing; a file on a share is unknown; and a directory's domains can be predicted from its own handle and a file's confirmed against them. The decisions are [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117) and [DI-D-118](crates/durable-ioring/DESIGN-NOTES.md#di-d-118); a dropped proposal is [WV-D-13](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-13).
+
+Its items, each archived under its own heading above: [M39.1](#m391), [M39.2](#m392) with [M39.2.1](#m3921), [M39.2.2](#m3922) and [M39.2.3](#m3923), [M39.3](#m393) and [M39.4](#m394).

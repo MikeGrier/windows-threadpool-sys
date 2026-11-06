@@ -490,45 +490,6 @@ Historical means `COMPLETED-*` archives, `design-sessions/`, measurement capture
   and the root [DESIGN-NOTES.md](DESIGN-NOTES.md). Commit as `docs`, one commit per crate so each
   scope stays accurate.
 
-## M39 -- A file's flush domains, derived when it is opened through the namespace route
-
-Opened 2026-10-06 from the durable-ioring design session
-([DESIGN-SESSION-2026-10-05-epoch-ring.md](design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md)) as a free-standing
-locality helper; **re-scoped 2026-11-05** by the engineer. durable-ioring takes, per file, a set of opaque
-**flush-domain** keys ([DI-D-21](crates/durable-ioring/DESIGN-NOTES.md#di-d-21)) and never looks at Windows' storage
-stack itself. Everything that consumes the keys is built: declarations, failure import, and the routing provider
-([DI-12.2](crates/durable-ioring/COMPLETED-CHECKLIST.md#di-122)). `win-durable-ioring` already derives them for a raw
-volume or disk from its extents, as `disk_flush_domain` ([DI-D-61](crates/durable-ioring/DESIGN-NOTES.md#di-d-61)); for a
-file it derives none, and its documentation says a file's domains "are what it cannot know", so a consumer declares them
-with `with_domains`.
-
-**The scope, in the engineer's words (2026-11-05):** "this isn't saying that durable ioring only supports this but that
-our assistance for computing domains comes when you use the namespace crate. This way we have the namespace available to
-use namespace based OS functions as well as the handle based ones. Advanced users who want to hand handles to the durable
-ioring directly, I will assume are advanced enough to also manage their domains directly." So the derivation belongs to
-`win-durable-ioring`'s open, which goes through `windows-namespace-request-sys`' `OpenFile` and has both the name and the
-handle in `OpenRequest::perform`; a target made any other way declares its own, as today. That settles the old `M39.1`
-(where the helper lives) and drops its facts-or-policy question: the policy is `win-durable-ioring`'s, as it is for a raw
-volume, and each OS call stays one entry in the namespace or volume crate.
-
-The keys are the identifier's **exact bytes**, interned by dioring (the engineer, 2026-10-06, under
-[DI-2.10](crates/durable-ioring/COMPLETED-CHECKLIST.md)); a file's local keys are the same `disk_flush_domain` bytes a
-raw volume derives, so a file and a volume on one disk share fate by construction.
-
-- [x] **M39.1** -- A file opened through the namespace route has its flush domains derived at the open, all or nothing; an opt-out's shape is reserved and not built. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m391)
-
-- [x] **M39.2** -- A file `win-durable-ioring` opens has its flush domains derived at the open, all or nothing; a file on a share is unknown. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m392)
-
-  - [x] **M39.2.1** -- The derivation needs none of the name-based candidates; `NetDfsGetClientInfo` moves to `M39.2.3` and the volume-path calls to `M39.3`. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m3921)
-
-  - [x] **M39.2.2** -- A file `win-durable-ioring` opens has its volume's disks found as its flush domains, a virtual disk followed by its bus type, all or nothing. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m3922)
-
-  - [x] **M39.2.3** -- A file on a share is unknown: no key is derived for it, and a consumer that knows its storage declares it. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m3923)
-
-- [x] **M39.3** -- `DirectoryDomains::predict` derives a directory's domains from its own handle, and `confirm` checks a file's against them. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m393)
-
-- [x] **M39.4** -- The working model end to end: a failure of the data file's storage reaches the log exactly when their derived domains share a disk. -> [completed 2026-11-05](COMPLETED-CHECKLIST.md#m394)
-
 ## M42 -- Apply the documented-contract rule to the refusals that already exist
 
 The rule is in [DESIGN-NOTES.md](DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) (the engineer,
