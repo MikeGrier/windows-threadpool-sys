@@ -6,14 +6,19 @@
 //! stack is tested through files on this machine's own volumes, against what a raw volume derives.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs::File;
 use std::io;
+use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use durable_ioring::{FlushDomain, IoTarget, NoData};
 use win_shared_os_owned_handle::SharedHandle;
 
-use super::{StorageStack, Windows, derive, found, host_volume, volume_prefix};
+use super::{
+    StorageStack, Windows, derive, disk_domains, disk_found, found, host_volume, volume_domains,
+    volume_found, volume_prefix,
+};
 use crate::dioring::tests::{TempFile, wtf};
 use crate::scratch_volume::{ScratchVolume, scratch_directory};
 use crate::windows_backend::{
@@ -32,6 +37,7 @@ struct Stack {
     disks: BTreeMap<String, Vec<u32>>,
     backed: BTreeSet<u32>,
     hosts: BTreeMap<String, Vec<VolumePath>>,
+    disk_hosts: BTreeMap<u32, Vec<VolumePath>>,
     disk_fails: BTreeSet<u32>,
 }
 
@@ -57,6 +63,11 @@ impl Stack {
     fn hosted_on(mut self, volume: &VolumePath, hosts: &[VolumePath]) -> Self {
         self.hosts
             .insert(volume.as_str().to_owned(), hosts.to_vec());
+        self
+    }
+
+    fn disk_hosted_on(mut self, disk: u32, hosts: &[VolumePath]) -> Self {
+        self.disk_hosts.insert(disk, hosts.to_vec());
         self
     }
 }
@@ -90,7 +101,22 @@ impl StorageStack for Stack {
             .cloned()
             .ok_or_else(|| missing("no dependency"))
     }
+
+    fn hosts_of_disk(&self, disk: u32) -> io::Result<Vec<VolumePath>> {
+        self.disk_hosts
+            .get(&disk)
+            .cloned()
+            .ok_or_else(|| missing("no disk dependency"))
+    }
 }
+
+/// `text` as UTF-16, the form the names arrive in.
+fn utf16(text: &str) -> Vec<u16> {
+    text.encode_utf16().collect()
+}
+
+/// A lone high surrogate: valid in a Windows name, not in Unicode.
+const LONE: u16 = 0xD800;
 
 /// Any handle: the stack in memory does not look at it.
 fn any_handle() -> (SharedHandle, TempFile) {
@@ -133,6 +159,92 @@ fn a_virtual_disk_adds_the_disks_of_the_volume_holding_its_backing_file_and_keep
         .with_disks(&volume(2), &[0]);
 
     assert_eq!(derive(&stack, &handle).expect("followed"), domains(&[0, 5]));
+}
+
+#[test]
+fn a_raw_volume_on_a_virtual_disk_shares_fate_with_the_volume_holding_its_backing_file() {
+    // The raw volume is volume 1, on disk 5, a VHD whose file is on volume 2, on disk 0: a file on
+    // volume 2 is on disk 0, so the raw volume must carry disk 0 too.
+    let stack = Stack::default()
+        .with_disks(&volume(1), &[5])
+        .backed_by_file(5)
+        .hosted_on(&volume(1), &[volume(2)])
+        .with_disks(&volume(2), &[0]);
+
+    assert_eq!(
+        volume_domains(&stack, &volume(1)).expect("followed"),
+        domains(&[0, 5])
+    );
+    assert_eq!(volume_found(&stack, &volume(1)), domains(&[0, 5]));
+}
+
+#[test]
+fn a_raw_volume_on_plain_disks_has_its_disks_and_is_not_asked_for_dependencies() {
+    let stack = Stack::default().with_disks(&volume(1), &[3, 1, 3]);
+    assert!(stack.hosts.is_empty());
+    assert_eq!(volume_found(&stack, &volume(1)), domains(&[1, 3]));
+}
+
+#[test]
+fn a_raw_volume_whose_virtual_disk_cannot_be_followed_has_no_domains() {
+    let no_dependency = Stack::default()
+        .with_disks(&volume(1), &[5])
+        .backed_by_file(5);
+    let mut no_descriptor = Stack::default().with_disks(&volume(1), &[5]);
+    no_descriptor.disk_fails.insert(5);
+    for (stack, what) in [
+        (no_dependency, "the dependency query"),
+        (no_descriptor, "the descriptor"),
+        (Stack::default(), "the extents"),
+    ] {
+        assert!(volume_domains(&stack, &volume(1)).is_err(), "{what}");
+        assert!(volume_found(&stack, &volume(1)).is_empty(), "{what}");
+    }
+}
+
+#[test]
+fn a_raw_disk_that_is_virtual_is_followed_through_its_own_dependency() {
+    // Disk 5 is a VHD whose file is on volume 2, on disk 0, whose own VHD file is on volume 3.
+    let stack = Stack::default()
+        .backed_by_file(5)
+        .disk_hosted_on(5, &[volume(2)])
+        .with_disks(&volume(2), &[4])
+        .backed_by_file(4)
+        .hosted_on(&volume(2), &[volume(3)])
+        .with_disks(&volume(3), &[0]);
+
+    assert_eq!(
+        disk_domains(&stack, 5).expect("followed"),
+        domains(&[0, 4, 5])
+    );
+    assert_eq!(disk_found(&stack, 5), domains(&[0, 4, 5]));
+}
+
+#[test]
+fn a_raw_plain_disk_is_itself_and_is_not_asked_for_dependencies() {
+    let stack = Stack::default();
+    assert!(stack.disk_hosts.is_empty());
+    assert_eq!(disk_found(&stack, 7), domains(&[7]));
+}
+
+#[test]
+fn a_raw_virtual_disk_that_cannot_be_followed_has_no_domains() {
+    let no_dependency = Stack::default().backed_by_file(5);
+    let no_hosts = Stack::default().backed_by_file(5).disk_hosted_on(5, &[]);
+    let host_no_extents = Stack::default()
+        .backed_by_file(5)
+        .disk_hosted_on(5, &[volume(2)]);
+    let mut no_descriptor = Stack::default();
+    no_descriptor.disk_fails.insert(5);
+    for (stack, what) in [
+        (no_dependency, "the dependency query"),
+        (no_hosts, "a dependency naming no host"),
+        (host_no_extents, "the host volume's extents"),
+        (no_descriptor, "the descriptor"),
+    ] {
+        assert!(disk_domains(&stack, 5).is_err(), "{what}");
+        assert!(disk_found(&stack, 5).is_empty(), "{what}");
+    }
 }
 
 #[test]
@@ -271,11 +383,19 @@ fn a_final_path_in_guid_form_names_its_volume_and_nothing_else_does() {
         format!(r"{guid}\dir\file.txt"),
     ] {
         assert_eq!(
-            volume_prefix(&path).expect("a volume").as_str(),
+            volume_prefix(&utf16(&path)).expect("a volume").as_str(),
             guid,
             "{path}"
         );
     }
+    // A path whose name holds a lone surrogate still names its volume: only the prefix is read.
+    let mut odd = utf16(&format!(r"{guid}\dir\"));
+    odd.extend([LONE, u16::from(b'x')]);
+    assert_eq!(volume_prefix(&odd).expect("a volume").as_str(), guid);
+    let mut inside = utf16(r"\\?\Volume{0123");
+    inside.push(LONE);
+    inside.extend(utf16(r"4567-89ab-cdef-0123-456789abcdef}\file"));
+    assert!(volume_prefix(&inside).is_none(), "a surrogate in the GUID");
     for path in [
         r"\\?\UNC\server\share\file",
         r"C:\file",
@@ -283,7 +403,7 @@ fn a_final_path_in_guid_form_names_its_volume_and_nothing_else_does() {
         r"\\?\Volume{not-a-guid}\file",
         "",
     ] {
-        assert!(volume_prefix(path).is_none(), "{path}");
+        assert!(volume_prefix(&utf16(path)).is_none(), "{path}");
     }
 }
 
@@ -291,14 +411,23 @@ fn a_final_path_in_guid_form_names_its_volume_and_nothing_else_does() {
 fn a_host_volume_is_a_guid_path_or_a_drive_root_and_nothing_else() {
     let guid = r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}";
     assert_eq!(
-        host_volume(&format!(r"{guid}\")).expect("guid").as_str(),
+        host_volume(&utf16(&format!(r"{guid}\")))
+            .expect("guid")
+            .as_str(),
         guid
     );
-    assert_eq!(host_volume(r"C:\").expect("drive").as_str(), r"\\.\C:");
-    assert_eq!(host_volume("d:").expect("drive").as_str(), r"\\.\D:");
+    assert_eq!(
+        host_volume(&utf16(r"C:\")).expect("drive").as_str(),
+        r"\\.\C:"
+    );
+    assert_eq!(
+        host_volume(&utf16("d:")).expect("drive").as_str(),
+        r"\\.\D:"
+    );
     for name in [r"C:\dir", "C", r"CC:\", r"\\server\share", r"1:\", ""] {
-        assert!(host_volume(name).is_none(), "{name}");
+        assert!(host_volume(&utf16(name)).is_none(), "{name}");
     }
+    assert!(host_volume(&[u16::from(b'C'), u16::from(b':'), LONE]).is_none());
 }
 
 // --- This machine -------------------------------------------------------------------------------
@@ -343,6 +472,23 @@ fn a_file_opened_by_this_crate_carries_its_domains_into_its_target_in_either_mod
         OpenedFile::<Unbuffered>::open(wtf(&temp.0), FileOptions::new().read().write())
             .expect("unbuffered");
     assert_eq!(unbuffered.flush_domains(), expected.as_slice());
+}
+
+#[test]
+fn a_file_whose_name_is_not_unicode_still_has_its_volumes_domains() {
+    // A lone surrogate is a valid Windows name and not Unicode; only the volume prefix of the final
+    // path is read, so it changes nothing.
+    let base = TempFile::new("fd-surrogate");
+    let mut name = base.0.file_name().expect("a name").to_owned();
+    name.push(OsString::from_wide(&[0xD800]));
+    let temp = TempFile(base.0.with_file_name(name));
+    File::create(&temp.0).expect("create a file named with a lone surrogate");
+
+    let opened =
+        OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write()).expect("open");
+
+    assert!(!opened.flush_domains().is_empty());
+    assert_eq!(opened.flush_domains(), expected_for(&base.0).as_slice());
 }
 
 #[test]

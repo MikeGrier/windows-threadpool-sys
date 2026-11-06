@@ -21,13 +21,16 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use durable_ioring::{DurableRing, Entry, FlushDomain, ImportScope, IoTargetKey};
+use durable_ioring::{DurableRing, Entry, FlushDomain, ImportScope, IoTarget, IoTargetKey};
 
 use super::pushes::{Harness, instance};
 use crate::dioring::TargetSetup;
 use crate::dioring::tests::wtf;
-use crate::scratch_volume::ScratchVolume;
-use crate::windows_backend::{Cached, DirectoryDomains, FileOptions, OpenedFile, Win32FileTarget};
+use crate::scratch_volume::{ScratchDisk, ScratchVolume, scratch_directory};
+use crate::windows_backend::{
+    Cached, DirectoryDomains, DiskOptions, DiskPath, FileOptions, OpenedDisk, OpenedFile,
+    OpenedVolume, Unbuffered, VolumeOptions, Win32FileTarget,
+};
 
 const LOG: IoTargetKey = IoTargetKey(10);
 const DATA: IoTargetKey = IoTargetKey(11);
@@ -90,11 +93,13 @@ fn suspects_of_a_failure_of(harness: &mut Harness, domains: &[FlushDomain]) -> V
 
 /// A ring over `log` and `data`, each with the domains its open derived, and one write to each.
 fn ring_with_a_write_to_each(log: OpenedFile, data: OpenedFile) -> Harness {
+    ring_over(Win32FileTarget::new(log), Win32FileTarget::new(data))
+}
+
+/// A ring over `log` and `data` with one write to each, both completed.
+fn ring_over(log: Win32FileTarget, data: Win32FileTarget) -> Harness {
     let mut harness = Harness::new(instance(
-        vec![
-            TargetSetup::new(LOG, Win32FileTarget::new(log)),
-            TargetSetup::new(DATA, Win32FileTarget::new(data)),
-        ],
+        vec![TargetSetup::new(LOG, log), TargetSetup::new(DATA, data)],
         Vec::new(),
     ));
     harness.write(LOG, 0, b"log record", 1, 1);
@@ -177,4 +182,56 @@ fn a_file_on_a_virtual_disk_shares_fate_with_the_volume_holding_its_backing_file
     );
     harness.finish();
     drop(on_disk);
+}
+
+/// A raw `target` on a scratch disk and a file beside the disk's backing file: a failure of the
+/// host's storage reaches the raw target's write, and one of the raw target's own disk alone does not
+/// reach the file's.
+fn a_raw_target_on_a_virtual_disk_shares_fate_with_a_file_on_its_host(target: Win32FileTarget) {
+    let on_host = Directory::under(&scratch_directory(), "raw-host");
+    let (host_file, _) = on_host.open("data.db");
+    let host_domains = host_file.flush_domains().to_vec();
+    let own: Vec<FlushDomain> = target
+        .flush_domains()
+        .iter()
+        .filter(|domain| !host_domains.contains(domain))
+        .cloned()
+        .collect();
+    assert!(!own.is_empty(), "the virtual disk's own disk");
+
+    let mut harness = ring_over(target, Win32FileTarget::new(host_file));
+    assert_eq!(
+        suspects_of_a_failure_of(&mut harness, &host_domains),
+        [0, 1],
+        "a failure of the host's disks reaches the raw target on the virtual disk"
+    );
+    assert_eq!(
+        suspects_of_a_failure_of(&mut harness, &own),
+        [0],
+        "a failure of the virtual disk alone does not reach the host's file"
+    );
+    harness.finish();
+}
+
+#[test]
+#[ignore = "needs an administrator: creates and attaches a virtual disk"]
+fn a_raw_volume_on_a_virtual_disk_shares_fate_with_a_file_on_its_host() {
+    let scratch = ScratchVolume::create(64).expect("a scratch volume");
+    let volume = OpenedVolume::<Unbuffered>::open(&scratch.path(), VolumeOptions::new())
+        .expect("open the raw volume");
+    a_raw_target_on_a_virtual_disk_shares_fate_with_a_file_on_its_host(
+        Win32FileTarget::from_volume(volume),
+    );
+}
+
+#[test]
+#[ignore = "needs an administrator: creates and attaches a virtual disk"]
+fn a_raw_disk_that_is_virtual_shares_fate_with_a_file_on_its_host() {
+    let scratch = ScratchDisk::create(64).expect("a scratch disk");
+    let disk =
+        OpenedDisk::<Unbuffered>::open(DiskPath::number(scratch.disk_number()), DiskOptions::new())
+            .expect("open the raw disk");
+    a_raw_target_on_a_virtual_disk_shares_fate_with_a_file_on_its_host(Win32FileTarget::from_disk(
+        disk,
+    ));
 }

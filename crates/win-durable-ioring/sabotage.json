@@ -1131,7 +1131,7 @@
       "file": "src/windows_backend/file_target.rs",
       "expect": "caught",
       "why": "The disk is the domain a commit failure on it can reach; a target that reports none shares fate with every target, which over-reports, and with no domain of its own, so a consumer cannot declare a file on the same disk against it.",
-      "find": ["        let found = vec![disk.flush_domain()];"],
+      "find": ["        let found = disk.flush_domains().to_vec();"],
       "replace": ["        let found: Vec<FlushDomain> = Vec::new();"]
     },
     {
@@ -2347,8 +2347,8 @@
       "file": "src/windows_backend/file_domains.rs",
       "expect": "caught",
       "why": "A final path in GUID form is the volume and then the file's path; only the first part names the volume.",
-      "find": ["    VolumePath::guid(&path[..=end]).ok()"],
-      "replace": ["    VolumePath::guid(&path[..]).ok()"]
+      "find": ["    VolumePath::guid(&String::from_utf16(&path[..=end]).ok()?).ok()"],
+      "replace": ["    VolumePath::guid(&String::from_utf16(path).ok()?).ok()"]
     },
     {
       "name": "M39.2.2: the open finds no domains",
@@ -2405,6 +2405,56 @@
       "why": "A mismatch carries both sides, so a consumer can see where the file landed.",
       "find": ["                found: file.flush_domains().to_vec(),"],
       "replace": ["                found: self.domains.clone(),"]
-    }
+    },
+  {
+    "name": "PR #182: a raw disk that is a virtual disk is not followed to its backing file",
+    "file": "src/windows_backend/file_domains.rs",
+    "expect": "caught",
+    "why": "A raw virtual disk's flushes reach the disks holding its backing file, as a file's on it do; a raw target left without them does not share fate with a file on the host.",
+    "find": [
+      "        if stack.is_file_backed(disk)? {"
+    ],
+    "replace": [
+      "        if false && stack.is_file_backed(disk)? {"
+    ]
+  },
+  {
+    "name": "PR #182: a raw disk's own disk is not kept",
+    "file": "src/windows_backend/file_domains.rs",
+    "expect": "caught",
+    "why": "A raw disk is its own flush domain first; following its host adds to that and removes nothing.",
+    "find": [
+      "        disks.insert(disk);",
+      "        if stack.is_file_backed(disk)? {"
+    ],
+    "replace": [
+      "        let _ = disk;",
+      "        if stack.is_file_backed(disk)? {"
+    ]
+  },
+  {
+    "name": "PR #182: the whole final path is decoded, not only its volume prefix",
+    "file": "src/windows_backend/file_domains.rs",
+    "expect": "caught",
+    "why": "A Windows name may hold a lone surrogate, which is not Unicode; decoding the whole path refuses such a file's volume and leaves it unknown for no reason.",
+    "find": [
+      "    VolumePath::guid(&String::from_utf16(&path[..=end]).ok()?).ok()"
+    ],
+    "replace": [
+      "    VolumePath::guid(&String::from_utf16(path).ok()?[..=end]).ok()"
+    ]
+  },
+  {
+    "name": "PR #182: a domain mismatch reports only how many domains each side had",
+    "file": "src/windows_backend/directory_domains.rs",
+    "expect": "caught",
+    "why": "Equal counts are the common mismatch, a file on a different disk; the message must carry the domains themselves to be diagnosed.",
+    "find": [
+      "            self.predicted, self.found"
+    ],
+    "replace": [
+      "            self.predicted.len(), self.found.len()"
+    ]
+  }
   ]
 }

@@ -1,8 +1,10 @@
 // Copyright (c) 2026 Mike Grier
 //! Tests for predicting a directory's flush domains and confirming a file's against it.
 
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io;
+use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use durable_ioring::{FlushDomain, NoData};
@@ -67,6 +69,9 @@ impl StorageStack for Broken {
     fn hosts_of(&self, _volume: &VolumePath) -> io::Result<Vec<VolumePath>> {
         Err(io::Error::other("no dependency"))
     }
+    fn hosts_of_disk(&self, _disk: u32) -> io::Result<Vec<VolumePath>> {
+        Err(io::Error::other("no disk dependency"))
+    }
 }
 
 #[test]
@@ -78,6 +83,22 @@ fn a_directory_predicts_the_disks_of_its_volume() {
     assert!(!predicted.domains().is_empty());
     assert_eq!(predicted.domains(), expected_for(&directory.0).as_slice());
     assert_eq!(predicted.directory(), &wtf(&directory.0));
+}
+
+#[test]
+fn a_directory_whose_name_is_not_unicode_still_predicts_its_volumes_disks() {
+    // A lone surrogate is a valid Windows name and not Unicode; only the volume prefix of the final
+    // path is read, so it changes nothing.
+    let parent = TempDirectory::new("surrogate");
+    let path = parent
+        .0
+        .join(OsString::from_wide(&[0xD800, u16::from(b'd')]));
+    fs::create_dir(&path).expect("create a directory named with a lone surrogate");
+
+    let predicted = DirectoryDomains::predict(wtf(&path)).expect("a local directory");
+
+    assert_eq!(predicted.domains(), expected_for(&parent.0).as_slice());
+    fs::remove_dir(&path).expect("remove");
 }
 
 #[test]
@@ -109,7 +130,17 @@ fn a_file_whose_domains_differ_from_the_prediction_is_reported_with_both() {
 
     assert_eq!(mismatch.predicted, [disk_flush_domain(99)]);
     assert_eq!(mismatch.found, file.flush_domains());
-    assert!(mismatch.to_string().contains("not the ones predicted"));
+    let message = mismatch.to_string();
+    assert!(message.contains("not the ones predicted"), "{message}");
+    // Both sets, so a mismatch can be diagnosed from the message alone.
+    assert!(
+        message.contains(&format!("predicted {:?}", mismatch.predicted)),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("found {:?}", mismatch.found)),
+        "{message}"
+    );
     let _: &dyn std::error::Error = &mismatch;
 }
 

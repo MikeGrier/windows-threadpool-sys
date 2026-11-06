@@ -120,9 +120,8 @@ impl fmt::Display for DomainMismatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the file's flush domains are not the ones predicted for its directory: predicted {}, found {}",
-            self.predicted.len(),
-            self.found.len()
+            "the file's flush domains are not the ones predicted for its directory: predicted {:?}, found {:?}",
+            self.predicted, self.found
         )
     }
 }

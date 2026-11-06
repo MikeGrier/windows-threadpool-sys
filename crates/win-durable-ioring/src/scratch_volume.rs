@@ -17,7 +17,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::windows_backend::VolumePath;
+use durable_ioring::FlushDomain;
+use wtf_string::Wtf16String;
+
+use crate::windows_backend::{Cached, FileOptions, OpenedFile, VolumePath};
 
 /// How long a new volume has to appear at its drive letter before the setup is given up on.
 const MOUNT_PATIENCE: Duration = Duration::from_secs(30);
@@ -137,6 +140,23 @@ pub(crate) fn scratch_directory() -> PathBuf {
         }
         Err(_) => given,
     }
+}
+
+/// The flush domains of a file beside the scratch disks' backing files: those a raw target on a
+/// scratch disk must carry besides its own disk, since a flush of it reaches the host's storage.
+pub(crate) fn host_flush_domains() -> Vec<FlushDomain> {
+    let path = scratch_directory().join(format!("durable-ioring-host-{}.tmp", std::process::id()));
+    std::fs::File::create(&path).expect("create a file beside the scratch disks");
+    let opened = OpenedFile::<Cached>::open(
+        Wtf16String::from_os_str(path.as_os_str()),
+        FileOptions::new().read().write(),
+    )
+    .expect("open it");
+    let domains = opened.flush_domains().to_vec();
+    drop(opened);
+    let _ = std::fs::remove_file(&path);
+    assert!(!domains.is_empty(), "the host's domains are found");
+    domains
 }
 
 /// A virtual disk attached with one raw partition, and the volume path that names it.
