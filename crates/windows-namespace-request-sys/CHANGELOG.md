@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.5.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.5.1...windows-namespace-request-sys-v0.5.2) (2026-11-06)
+
 ## [0.5.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.5.0...windows-namespace-request-sys-v0.5.1) (2026-10-22)
 
 
