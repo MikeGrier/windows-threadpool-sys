@@ -16,8 +16,7 @@ use durable_ioring::{FlushDomain, IoTarget, NoData};
 use win_shared_os_owned_handle::SharedHandle;
 
 use super::{
-    StorageStack, Windows, derive, disk_domains, disk_found, found, host_volume, volume_domains,
-    volume_found, volume_prefix,
+    StorageStack, Windows, derive, found, host_volume, seeded, seeded_found, volume_prefix,
 };
 use crate::dioring::tests::{TempFile, wtf};
 use crate::scratch_volume::{ScratchVolume, scratch_directory};
@@ -101,13 +100,36 @@ impl StorageStack for Stack {
             .cloned()
             .ok_or_else(|| missing("no dependency"))
     }
+}
 
+impl Stack {
+    /// The dependency query asked of raw disk `disk`'s own handle.
     fn hosts_of_disk(&self, disk: u32) -> io::Result<Vec<VolumePath>> {
         self.disk_hosts
             .get(&disk)
             .cloned()
             .ok_or_else(|| missing("no disk dependency"))
     }
+}
+
+/// A raw volume opened at `volume`: its disks are the extents its handle reports, and its handle is
+/// asked for its hosts, as `OpenedVolume::open` does.
+fn volume_domains(stack: &Stack, volume: &VolumePath) -> io::Result<Vec<FlushDomain>> {
+    let own = stack.disks_of(volume)?;
+    seeded(stack, &own, || stack.hosts_of(volume))
+}
+
+fn volume_found(stack: &Stack, volume: &VolumePath) -> Vec<FlushDomain> {
+    volume_domains(stack, volume).unwrap_or_default()
+}
+
+/// Raw disk `disk` opened, its handle asked for its hosts, as `OpenedDisk::open` does.
+fn disk_domains(stack: &Stack, disk: u32) -> io::Result<Vec<FlushDomain>> {
+    seeded(stack, &[disk], || stack.hosts_of_disk(disk))
+}
+
+fn disk_found(stack: &Stack, disk: u32) -> Vec<FlushDomain> {
+    seeded_found(stack, &[disk], || stack.hosts_of_disk(disk))
 }
 
 /// `text` as UTF-16, the form the names arrive in.
@@ -218,6 +240,44 @@ fn a_raw_disk_that_is_virtual_is_followed_through_its_own_dependency() {
         domains(&[0, 4, 5])
     );
     assert_eq!(disk_found(&stack, 5), domains(&[0, 4, 5]));
+}
+
+#[test]
+fn a_raw_target_is_derived_from_its_handle_and_never_from_its_path_again() {
+    // The handle reports disk 5, a VHD, and names volume 2 as its host. The stack's own idea of
+    // volume 1 -- what its path would resolve to now -- is a different disk, and is never consulted.
+    let stack = Stack::default()
+        .with_disks(&volume(1), &[9])
+        .hosted_on(&volume(1), &[volume(3)])
+        .with_disks(&volume(3), &[8])
+        .backed_by_file(5)
+        .with_disks(&volume(2), &[0]);
+    assert_eq!(
+        seeded(&stack, &[5], || Ok(vec![volume(2)])).expect("from the handle"),
+        domains(&[0, 5])
+    );
+    // A plain disk never asks the handle.
+    assert_eq!(
+        seeded(
+            &Stack::default(),
+            &[3, 1, 3],
+            || -> io::Result<Vec<VolumePath>> {
+                panic!("a plain disk's handle is not asked for its hosts")
+            }
+        )
+        .expect("plain"),
+        domains(&[1, 3])
+    );
+    // A handle reporting no disk, or no host for its virtual disk, has none.
+    assert!(
+        seeded(&stack, &[], || Ok(vec![volume(2)])).is_err(),
+        "no disk"
+    );
+    assert!(seeded(&stack, &[5], || Ok(Vec::new())).is_err(), "no host");
+    assert!(
+        seeded_found(&stack, &[5], || Err(missing("refused"))).is_empty(),
+        "refused"
+    );
 }
 
 #[test]

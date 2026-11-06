@@ -145,7 +145,12 @@ pub(crate) fn scratch_directory() -> PathBuf {
 /// The flush domains of a file beside the scratch disks' backing files: those a raw target on a
 /// scratch disk must carry besides its own disk, since a flush of it reaches the host's storage.
 pub(crate) fn host_flush_domains() -> Vec<FlushDomain> {
-    let path = scratch_directory().join(format!("durable-ioring-host-{}.tmp", std::process::id()));
+    // Numbered as well, so tests running at once in this process each have their own.
+    let path = scratch_directory().join(format!(
+        "durable-ioring-host-{}-{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::File::create(&path).expect("create a file beside the scratch disks");
     let opened = OpenedFile::<Cached>::open(
         Wtf16String::from_os_str(path.as_os_str()),

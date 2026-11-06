@@ -129,11 +129,15 @@ impl<B: Buffering, A: DataAccess> OpenedDisk<B, A> {
         let geometry = B::sector_geometry(sector)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let disk_number = path.disk_number();
+        // Asked of this handle, not of `path` again.
+        let domains = file_domains::seeded_found(&file_domains::Windows, &[disk_number], || {
+            file_domains::hosts_of_handle(&file, true)
+        });
         Ok(Self {
             handle: SharedHandle::from(file),
             geometry,
             disk_number,
-            domains: file_domains::disk_found(&file_domains::Windows, disk_number),
+            domains,
             mode: PhantomData,
         })
     }

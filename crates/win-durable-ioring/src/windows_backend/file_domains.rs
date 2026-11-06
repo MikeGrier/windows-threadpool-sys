@@ -55,9 +55,6 @@ pub(super) trait StorageStack {
     fn is_file_backed(&self, disk: u32) -> io::Result<bool>;
     /// The volumes that hold the files backing the virtual disks under `volume`.
     fn hosts_of(&self, volume: &VolumePath) -> io::Result<Vec<VolumePath>>;
-    /// The volumes that hold the files backing virtual disk `disk`, asked of the disk itself: a raw
-    /// disk has no volume to ask.
-    fn hosts_of_disk(&self, disk: u32) -> io::Result<Vec<VolumePath>>;
 }
 
 /// The flush domains of `file`, or the reason none could be found; [`found`] is the all-or-nothing
@@ -66,58 +63,68 @@ pub(super) fn derive(
     stack: &impl StorageStack,
     file: &SharedHandle,
 ) -> io::Result<Vec<FlushDomain>> {
-    walk(stack, vec![stack.volume_of(file)?], Vec::new())
+    let disks = walk(stack, vec![stack.volume_of(file)?])?;
+    Ok(disks.into_iter().map(disk_flush_domain).collect())
 }
 
-/// The flush domains of a raw volume at `volume`: its disks, and for a virtual disk among them the
-/// disks of the volume holding its backing file, as a file's are found (DI-D-117). A file on the host
-/// and a raw volume on a virtual disk backed there share fate only if the raw volume carries the host's
-/// disks too.
-pub(super) fn volume_domains(
+/// The flush domains of a raw volume or disk already open, read from its own handle and not from
+/// its path again, which a drive letter reassigned since the open would send elsewhere: `own` are
+/// the disks the handle reports, and `hosts` asks the same handle for the volumes holding the backing
+/// files of any virtual disk among them. Those volumes are followed as a file's are (DI-D-117), so a
+/// raw target on a virtual disk shares fate with a file beside the disk's backing file.
+pub(super) fn seeded(
     stack: &impl StorageStack,
-    volume: &VolumePath,
+    own: &[u32],
+    hosts: impl FnOnce() -> io::Result<Vec<VolumePath>>,
 ) -> io::Result<Vec<FlushDomain>> {
-    walk(stack, vec![volume.clone()], Vec::new())
+    if own.is_empty() {
+        return Err(io::Error::other("the target sits on no disk"));
+    }
+    let mut backed = false;
+    for &disk in own {
+        backed |= stack.is_file_backed(disk)?;
+    }
+    let mut disks: Vec<u32> = own.to_vec();
+    if backed {
+        let hosts = hosts()?;
+        if hosts.is_empty() {
+            return Err(io::Error::other(
+                "the target is on a virtual disk whose backing file's volume is not named",
+            ));
+        }
+        disks.extend(walk(stack, hosts)?);
+    }
+    disks.sort_unstable();
+    disks.dedup();
+    Ok(disks.into_iter().map(disk_flush_domain).collect())
 }
 
-/// The flush domains of a raw volume at `volume`, all or nothing, as [`found`] is for a file.
-pub(super) fn volume_found(stack: &impl StorageStack, volume: &VolumePath) -> Vec<FlushDomain> {
-    volume_domains(stack, volume).unwrap_or_default()
-}
-
-/// The flush domains of raw disk `disk`, all or nothing, as [`found`] is for a file.
-pub(super) fn disk_found(stack: &impl StorageStack, disk: u32) -> Vec<FlushDomain> {
-    disk_domains(stack, disk).unwrap_or_default()
-}
-
-/// The flush domains of raw disk `disk`: itself, and if it is a virtual disk, the disks of the volume
-/// holding its backing file, asked of the disk.
-pub(super) fn disk_domains(stack: &impl StorageStack, disk: u32) -> io::Result<Vec<FlushDomain>> {
-    walk(stack, Vec::new(), vec![disk])
-}
-
-/// Every disk under `volumes` and `disks`, following each virtual disk to the volumes that hold its
-/// backing file, until nothing is left to follow.
-fn walk(
+/// [`seeded`], all or nothing, as [`found`] is for a file.
+pub(super) fn seeded_found(
     stack: &impl StorageStack,
-    volumes: Vec<VolumePath>,
-    start: Vec<u32>,
-) -> io::Result<Vec<FlushDomain>> {
+    own: &[u32],
+    hosts: impl FnOnce() -> io::Result<Vec<VolumePath>>,
+) -> Vec<FlushDomain> {
+    seeded(stack, own, hosts).unwrap_or_default()
+}
+
+/// The volumes holding the backing files of the virtual disks under the volume or disk `opened`,
+/// asked of `opened` itself; `disk` says it is a disk and not a volume.
+pub(super) fn hosts_of_handle(opened: &std::fs::File, disk: bool) -> io::Result<Vec<VolumePath>> {
+    let flags = if disk {
+        StorageDependencyFlags::HOST_VOLUMES | StorageDependencyFlags::DISK_HANDLE
+    } else {
+        StorageDependencyFlags::HOST_VOLUMES
+    };
+    hosts_named(opened, flags)
+}
+
+/// Every disk under `volumes`, following each virtual disk to the volumes that hold its backing
+/// file, until nothing is left to follow; in disk order, once each.
+fn walk(stack: &impl StorageStack, volumes: Vec<VolumePath>) -> io::Result<Vec<u32>> {
     let mut disks = BTreeSet::new();
     let mut visited = BTreeSet::new();
     let mut pending = volumes;
-    for disk in start {
-        disks.insert(disk);
-        if stack.is_file_backed(disk)? {
-            let hosts = stack.hosts_of_disk(disk)?;
-            if hosts.is_empty() {
-                return Err(io::Error::other(format!(
-                    "disk {disk} is a virtual disk whose backing file's volume is not named"
-                )));
-            }
-            pending.extend(hosts);
-        }
-    }
     // Counted as followed, and not as the size of `visited`, so the bound holds by itself.
     let mut followed = 0_usize;
     while let Some(volume) = pending.pop() {
@@ -153,7 +160,7 @@ fn walk(
             pending.extend(hosts);
         }
     }
-    Ok(disks.into_iter().map(disk_flush_domain).collect())
+    Ok(disks.into_iter().collect())
 }
 
 /// The flush domains of `file`, all or nothing: those [`derive`](fn@derive) finds, or none.
@@ -199,15 +206,6 @@ impl StorageStack for Windows {
     fn hosts_of(&self, volume: &VolumePath) -> io::Result<Vec<VolumePath>> {
         let opened = raw_open::open::<Cached, NoData>(volume.as_str(), ShareMode::ALL)?;
         hosts_named(&opened, StorageDependencyFlags::HOST_VOLUMES)
-    }
-
-    fn hosts_of_disk(&self, disk: u32) -> io::Result<Vec<VolumePath>> {
-        let opened =
-            raw_open::open::<Cached, NoData>(format!(r"\\.\PhysicalDrive{disk}"), ShareMode::ALL)?;
-        hosts_named(
-            &opened,
-            StorageDependencyFlags::HOST_VOLUMES | StorageDependencyFlags::DISK_HANDLE,
-        )
     }
 }
 

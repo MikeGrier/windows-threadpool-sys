@@ -69,9 +69,6 @@ impl StorageStack for Broken {
     fn hosts_of(&self, _volume: &VolumePath) -> io::Result<Vec<VolumePath>> {
         Err(io::Error::other("no dependency"))
     }
-    fn hosts_of_disk(&self, _disk: u32) -> io::Result<Vec<VolumePath>> {
-        Err(io::Error::other("no disk dependency"))
-    }
 }
 
 #[test]

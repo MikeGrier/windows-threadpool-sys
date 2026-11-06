@@ -21,11 +21,18 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use durable_ioring::{DurableRing, Entry, FlushDomain, ImportScope, IoTarget, IoTargetKey};
+use std::time::{Duration, Instant};
 
-use super::pushes::{Harness, instance};
-use crate::dioring::TargetSetup;
+use durable_ioring::oracle::ObservedFailures;
+use durable_ioring::{
+    DurableRing, Entry, EntryOf, FlushDomain, ImportScope, IoTarget, IoTargetKey, OpId, Outcome,
+};
+use io_buffers::AlignedBuf;
+
+use super::pushes::{BOUND, Harness, instance};
+use super::{CAPACITY, QUEUE, V};
 use crate::dioring::tests::wtf;
+use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
 use crate::scratch_volume::{ScratchDisk, ScratchVolume, scratch_directory};
 use crate::windows_backend::{
     Cached, DirectoryDomains, DiskOptions, DiskPath, FileOptions, OpenedDisk, OpenedFile,
@@ -184,9 +191,53 @@ fn a_file_on_a_virtual_disk_shares_fate_with_the_volume_holding_its_backing_file
     drop(on_disk);
 }
 
+/// An instance over raw targets, whose buffers are aligned: an unbuffered disk or volume takes
+/// only sector-aligned addresses and lengths, which the harness's `Vec<u8>` does not promise.
+type RawRing = Dioring<AlignedBuf, u64, u32>;
+
+/// The next entry of `ring`, within the bound.
+fn next_raw(ring: &mut RawRing) -> EntryOf<RawRing> {
+    let started = Instant::now();
+    loop {
+        if let Some(entry) = ring.pop().expect("pop") {
+            return entry;
+        }
+        assert!(started.elapsed() < BOUND, "nothing arrived");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// The writes, by the order they were pushed in `ops`, that a failure scoped to `domains` suspects.
+fn raw_suspects(
+    ring: &mut RawRing,
+    told: &ObservedFailures<V>,
+    ops: &[OpId],
+    domains: &[FlushDomain],
+) -> Vec<usize> {
+    let imported = ring
+        .import_failure(ImportScope::Domains(Arc::from(domains)), |_| {})
+        .expect("import");
+    let failed = match next_raw(ring) {
+        Entry::Failed(failed) => failed,
+        other => panic!("expected Failed, got {other:?}"),
+    };
+    assert_eq!(failed.id, imported.failure);
+    let suspect: Vec<OpId> = told
+        .suspects(failed.id)
+        .expect("the observer was told of the failure")
+        .iter()
+        .map(|write| write.op)
+        .collect();
+    ops.iter()
+        .enumerate()
+        .filter(|(_, op)| suspect.contains(op))
+        .map(|(index, _)| index)
+        .collect()
+}
+
 /// A raw `target` on a scratch disk and a file beside the disk's backing file: a failure of the
 /// host's storage reaches the raw target's write, and one of the raw target's own disk alone does not
-/// reach the file's.
+/// reach the file's. Each gets one sector, aligned, at an offset of three sectors.
 fn a_raw_target_on_a_virtual_disk_shares_fate_with_a_file_on_its_host(target: Win32FileTarget) {
     let on_host = Directory::under(&scratch_directory(), "raw-host");
     let (host_file, _) = on_host.open("data.db");
@@ -198,21 +249,54 @@ fn a_raw_target_on_a_virtual_disk_shares_fate_with_a_file_on_its_host(target: Wi
         .cloned()
         .collect();
     assert!(!own.is_empty(), "the virtual disk's own disk");
+    let sector = target.geometry().offset_alignment() as usize;
 
-    let mut harness = ring_over(target, Win32FileTarget::new(host_file));
+    let told = Arc::new(ObservedFailures::new());
+    let (mut ring, lineage) = RawRing::new(Setup {
+        submission_queue_size: QUEUE,
+        completion_queue_size: QUEUE,
+        files: vec![
+            TargetSetup::new(LOG, target),
+            TargetSetup::new(DATA, Win32FileTarget::new(host_file)),
+        ],
+        buffers: Vec::<Vec<u8>>::new(),
+        provider: None,
+        capacity: CAPACITY,
+        diagnostics: None,
+        failure_observer: Some(told.clone()),
+        delivery: DeliveryMode::Pool(None),
+    })
+    .expect("an instance over the raw target and the file");
+    let sector_of =
+        |fill: u8| AlignedBuf::from_bytes(&vec![fill; sector], sector).expect("aligned");
+    let at = 3 * sector as u64;
+    let ops = [
+        ring.write(LOG, at, sector_of(0xA1), lineage.at(1), 1)
+            .expect("push to the raw target"),
+        ring.write(DATA, 0, sector_of(0xD1), lineage.at(1), 2)
+            .expect("push to the file"),
+    ];
+    for _ in 0..ops.len() {
+        match next_raw(&mut ring) {
+            Entry::Op(completion) => assert!(
+                matches!(completion.outcome, Outcome::Transferred(_)),
+                "{completion:?}"
+            ),
+            other => panic!("expected a completion, got {other:?}"),
+        }
+    }
+
     assert_eq!(
-        suspects_of_a_failure_of(&mut harness, &host_domains),
+        raw_suspects(&mut ring, &told, &ops, &host_domains),
         [0, 1],
         "a failure of the host's disks reaches the raw target on the virtual disk"
     );
     assert_eq!(
-        suspects_of_a_failure_of(&mut harness, &own),
+        raw_suspects(&mut ring, &told, &ops, &own),
         [0],
         "a failure of the virtual disk alone does not reach the host's file"
     );
-    harness.finish();
 }
-
 #[test]
 #[ignore = "needs an administrator: creates and attaches a virtual disk"]
 fn a_raw_volume_on_a_virtual_disk_shares_fate_with_a_file_on_its_host() {

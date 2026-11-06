@@ -213,8 +213,12 @@ impl<B: Buffering, A: DataAccess> OpenedVolume<B, A> {
         let sector = bytes_per_sector(&file)?;
         let geometry = B::sector_geometry(sector)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        // Before the lock, which would refuse the other opens the derivation makes.
-        let domains = file_domains::volume_found(&file_domains::Windows, path);
+        // From this handle and its extents, not from `path` again, which may name another volume by
+        // now; before the lock, which would refuse the opens the walk past a virtual disk makes.
+        let own: Vec<u32> = extents.iter().map(|extent| extent.disk_number).collect();
+        let domains = file_domains::seeded_found(&file_domains::Windows, &own, || {
+            file_domains::hosts_of_handle(&file, false)
+        });
         if options.lock {
             lock_volume(&file)?;
         }

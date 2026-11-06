@@ -2412,10 +2412,12 @@
     "expect": "caught",
     "why": "A raw virtual disk's flushes reach the disks holding its backing file, as a file's on it do; a raw target left without them does not share fate with a file on the host.",
     "find": [
-      "        if stack.is_file_backed(disk)? {"
+      "    if backed {",
+      "        let hosts = hosts()?;"
     ],
     "replace": [
-      "        if false && stack.is_file_backed(disk)? {"
+      "    if false && backed {",
+      "        let hosts = hosts()?;"
     ]
   },
   {
@@ -2424,12 +2426,36 @@
     "expect": "caught",
     "why": "A raw disk is its own flush domain first; following its host adds to that and removes nothing.",
     "find": [
-      "        disks.insert(disk);",
-      "        if stack.is_file_backed(disk)? {"
+      "    let mut disks: Vec<u32> = own.to_vec();"
     ],
     "replace": [
-      "        let _ = disk;",
-      "        if stack.is_file_backed(disk)? {"
+      "    let mut disks: Vec<u32> = Vec::new();"
+    ]
+  },
+  {
+    "name": "PR #182: a raw target on plain disks still asks its handle for hosts",
+    "file": "src/windows_backend/file_domains.rs",
+    "expect": "caught",
+    "why": "The dependency query's answer for a target on no virtual disk is undocumented, so it is asked only when a disk is backed by a file.",
+    "find": [
+      "    if backed {",
+      "        let hosts = hosts()?;"
+    ],
+    "replace": [
+      "    if true || backed {",
+      "        let hosts = hosts()?;"
+    ]
+  },
+  {
+    "name": "PR #182: a raw volume's own disks are not taken from its handle's extents",
+    "file": "src/windows_backend/opened_volume.rs",
+    "expect": "caught",
+    "why": "A raw volume's domains are derived from the handle it holds, not from its path again; the extents that handle reported are its own disks.",
+    "find": [
+      "        let own: Vec<u32> = extents.iter().map(|extent| extent.disk_number).collect();"
+    ],
+    "replace": [
+      "        let own: Vec<u32> = Vec::new();"
     ]
   },
   {
