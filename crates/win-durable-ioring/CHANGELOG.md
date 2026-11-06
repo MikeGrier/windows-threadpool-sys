@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.6.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.5.2...win-durable-ioring-v0.6.0) (2026-11-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **win-durable-ioring:** a file target's domains were exactly what the consumer declared, and now include the disks of the file's volume. Failure scoping follows: files on one disk share fate, as their disk does.
+
+### Features
+
+* **win-durable-ioring:** derive a file's flush domains from its handle when it is opened ([2e799a1](https://github.com/MikeGrier/windows-threadpool-sys/commit/2e799a1c7ea425e8ec40e6a6b5afd08f241d6243))
+* **win-durable-ioring:** predict a directory's flush domains and confirm a file's against the prediction ([79de376](https://github.com/MikeGrier/windows-threadpool-sys/commit/79de37649518d435993638e0d687866a51e1c58a))
+
+
+### Bug Fixes
+
+* **win-durable-ioring:** derive raw targets' domains from the retained handle ([b119ce3](https://github.com/MikeGrier/windows-threadpool-sys/commit/b119ce36ae9f559e1785edb022f92a7326518876))
+* **win-durable-ioring:** raw virtual targets carry their host's flush domains ([6b678e4](https://github.com/MikeGrier/windows-threadpool-sys/commit/6b678e438cafbe0d9119cadaf29d5eff36a65903))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * win-volume-sys bumped from 0.1.2 to 0.1.3
+    * windows-namespace-request-sys bumped from 0.5.1 to 0.5.2
+
 ## [0.5.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.5.1...win-durable-ioring-v0.5.2) (2026-11-03)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-volume-sys-v0.1.2...win-volume-sys-v0.1.3) (2026-11-06)
+
+
+### Features
+
+* **win-volume-sys:** add storage_device_descriptor, a disk's device descriptor and bus type ([2f03054](https://github.com/MikeGrier/windows-threadpool-sys/commit/2f03054252cd7138e27457610f223bc2d6165fe7))
+
 ## [0.1.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-volume-sys-v0.1.1...win-volume-sys-v0.1.2) (2026-10-22)
 
 ## [0.1.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-volume-sys-v0.1.0...win-volume-sys-v0.1.1) (2026-10-20)
