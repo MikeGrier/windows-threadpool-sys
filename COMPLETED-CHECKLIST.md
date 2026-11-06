@@ -4533,3 +4533,140 @@ Its items, each archived under its own heading above: [M45.1](#m451), [M45.2](#m
 [M45.5](#m455), [M45.6](#m456), [M45.7](#m457), [M45.8](#m458) (and [M45.8.1](#m4581), withdrawn), [M45.9](#m459) and
 [M45.10](#m4510). The work this left waiting on a run on a runner is parked as `M45+.1` and `M45+.2` in
 [PARKED.md](PARKED.md).
+
+## Moved 2026-11-05 16:20:42 -05:00 -- M39.1: when a file's flush domains are derived
+
+### <a id="m391"></a>M39.1 -- A file opened through the namespace route has its flush domains derived at the open, all or nothing; an opt-out's shape is reserved and not built. *(completed 2026-11-05 16:20:42 -05:00)*
+
+The decision is [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117). Both choices the item named were settled by the engineer, 2026-11-05: at the open ("I would think that the data would be determined at open"), which the investigation supported on the core's interface, where blocking work belongs, and the raw volume's precedent; and an open by identifier gets the whole derivation, since every step reads the handle. An opt-out was weighed and its shape reserved without building it ("Reserve the shape but we don't need to implement it today."). The item as written:
+
+- [x] **M39.1** -- **Record the decision, and settle its two open choices.** A decision in durable-ioring's
+  [DESIGN-NOTES.md](crates/durable-ioring/DESIGN-NOTES.md), amending what `win-durable-ioring` says a file can know and
+  what [API.md](crates/durable-ioring/API.md) section 13 says ("a locality helper's job outside this crate"), with the
+  engineer's ruling quoted. The choices: whether a file's domains are derived at the open (every open pays for a few
+  queries, one of them on the volume) or on first request; and whether an open by identifier (`OpenFileById`), which has
+  a hint handle and no name, gets the handle-based half or none.
+
+## Moved 2026-11-05 16:23:59 -05:00 -- M39.2.1: the name-based calls the derivation needs
+
+### <a id="m3921"></a>M39.2.1 -- The derivation needs none of the name-based candidates; `NetDfsGetClientInfo` moves to `M39.2.3` and the volume-path calls to `M39.3`. *(completed 2026-11-05 16:23:59 -05:00)*
+
+Each candidate's page was read on 2026-11-05.
+
+- `GetDriveTypeW`: reports a removable, fixed, CD-ROM, RAM or network drive for a root path. Nothing in the derivation acts on the kind, and a device that does not answer the extents query already leaves a file unknown ([DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117)), so it is not wrapped.
+- `GetVolumePathNameW` with `GetVolumeNameForVolumeMountPointW`: resolve a name to the mount point its end lies under, and that to a volume. The derivation reads the opened handle, so `M39.2` does not need them; `M39.3`'s prediction before a file exists may, and the item now names them beside the alternative of deriving from the directory's own handle.
+- `NetDfsGetClientInfo` (the plan called it `DfsGetClientInfo`; this is the documented name): reads the DFS client's cache for a DFS root or link's UNC path, needs no special group membership, and levels 3 and 4 report the targets. Needed only if `M39.2.3` keys a remote file by its server, so the item now carries it.
+
+So nothing is wrapped here. The item as written:
+
+- [x] **M39.2.1** -- **Wrap the name-based calls the derivation needs**, as entries in
+    `windows-namespace-request-sys`, which exists for synchronous namespace calls that can block on the network. Check
+    each against its page first and record which were checked. Candidates, none yet confirmed for this use:
+    `DfsGetClientInfo` (a DFS link to the target it is using), `GetDriveTypeW` (a removable or RAM disk, which no
+    handle-based documented call reports), and `GetVolumePathNameW` with `GetVolumeNameForVolumeMountPointW` (the volume a
+    name resolves to, for the prediction of `M39.3`). Anything the handle answers is asked of the handle.
+
+## Moved 2026-11-05 16:49:13 -05:00 -- M39.2.2: a local file's flush domains
+
+### <a id="m3922"></a>M39.2.2 -- A file `win-durable-ioring` opens has its volume's disks found as its flush domains, a virtual disk followed by its bus type, all or nothing. *(completed 2026-11-05 16:49:13 -05:00)*
+
+The decision is [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117), which now also records that a virtual disk is decided by its bus type and not by the dependency query's error.
+
+- `win-volume-sys` gained `storage_device_descriptor` and `StorageBusType` (`StorageDeviceProperty`, one function per property by [WV-D-9](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-9)), with seven sabotage entries, all caught. The `STORAGE_BUS_TYPE` page lists `BusTypeNvmeof` as 20, which `windows-sys` 0.61.2 does not declare.
+- `win-durable-ioring`'s `file_domains` walks a storage stack behind a trait: the file's volume from its final path in GUID form, the volume's disks from `OpenedVolume` with no data access, a disk's bus type, and a file-backed disk's host volumes. `OpenedFile::admit` keeps what it finds, `OpenedFile::flush_domains` reports it, and `Win32FileTarget::new` carries it as `from_volume` carries a volume's. The bound on volumes followed counts volumes as followed, after a sabotage that skipped the visited check was caught only by hanging.
+- Tests: the rule against a stack in memory, in both directions (virtual disks nested, several hosts, a loop, the bound and one short of it, and a failure at each step leaving no domains); a local file against what its volume derives; a file opened in either mode carrying its domains into its target; a declaration adding to what was found; a file over `\\localhost\C$` finding none (ignored for the administrative share, and added to the CI step that runs this crate's share test); and a scratch virtual disk, through the step that already attaches one for the raw-volume tests, observing for the first time whether a VHD's disk reports `BusTypeFileBackedVirtual` and whether its dependency names the temporary directory's volume. That last one needs an administrator and has not run on this machine.
+- Four tests restated the old rule (a file target's domains are only what was declared) and now state the new one. The `dioring` tests use temporary files, all on one disk, to stand for files on separate devices; their `target` helper sets the found disk aside through a test-only `without_found_domains`. The public opt-out stays reserved and unbuilt, as DI-D-117 records.
+- Nine sabotage entries for the derivation and one control that survives, and two older entries repointed at the reshaped `Win32FileTarget::new`; all behave as declared.
+
+The item as written:
+
+- [x] **M39.2.2** -- **A local file's domains, all or nothing, with the texts that change with them** (absorbs what
+    was `M39.2.4`, which could not land apart: the first code that derives a domain is what makes the old texts false).
+    The handle's final path in `VOLUME_NAME_GUID` form names its volume; the volume, opened with no access as
+    `win-volume-sys`' tests do, gives its disk extents; each disk is `disk_flush_domain`. A disk whose bus type is
+    `BusTypeFileBackedVirtual` (`STORAGE_DEVICE_DESCRIPTOR`, read through a new `win-volume-sys` entry, one function per
+    property by [WV-D-9](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-9)) is followed through its storage dependency to
+    the volume holding its backing file, and on from there. The bus type decides it, and not the dependency query's
+    error: [the `GetStorageDependencyInformation` page](https://learn.microsoft.com/en-us/windows/win32/api/virtdisk/nf-virtdisk-getstoragedependencyinformation)
+    (read 2026-11-05) names no error for a volume that is not on a virtual disk, so `0xC03A0015` is a measurement
+    ([WV-D-10](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-10)) and nothing is built on it. No real dependency entry has
+    been observed, because attaching a virtual disk needs an elevated token, so that hop's test needs a privileged run
+    or a stated gap. Any hop that fails leaves the file with no found domains, which is unknown and shares fate with
+    everything; never a partial set. A remote file's final path has no volume GUID, so until `M39.2.3` it is unknown
+    the same way. `with_domains` stays, adding what Windows does not show, and its documentation names it: the disks of
+    a Storage Spaces pool, the disks behind a hardware RAID controller, and a cache a controller shares between disks.
+    The texts [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117) amends change here: the file target's "are
+    what it cannot know", and [API.md](crates/durable-ioring/API.md) section 13's "a locality helper's job". Two commits,
+    since two crates' code changes: the `win-volume-sys` entry, then the derivation.
+
+## Moved 2026-11-05 17:06:22 -05:00 -- M39.2.3: a remote file's domain
+
+### <a id="m3923"></a>M39.2.3 -- A file on a share is unknown: no key is derived for it, and a consumer that knows its storage declares it. *(completed 2026-11-05 17:06:22 -05:00)*
+
+The item as planned keyed a remote file by its server. Implementing it showed that unsafe: a server's name is not its identity, servers in a cluster share disks, a DFS link hides its target, and a share can be this machine's own disk, which `\\localhost\C$` showed reports as UNC and which the documented loopback flag is not documented to catch by every name. Each gives two files that share fate different keys, a missing domain. The engineer chose among leaving it unknown, one key for every remote file, and a key per server, 2026-11-05: "Go with a then", after the assistant corrected the reading that unknown keeps files apart (it shares fate with everything, the coarsest grouping). Recorded in [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117).
+
+No code changed for the behaviour: a remote handle's final path names no volume GUID, so `M39.2.2`'s derivation already found none. `Win32FileTarget`'s documentation now says no key is derived for a share and that, with none found, what a consumer declares is the file's whole set; the loopback test asserts that. `NetDfsGetClientInfo` is not wrapped, since nothing keys by server.
+
+The item as written:
+
+- [x] **M39.2.3** -- **A remote file's domain.** The server, from the handle's final path, which the open already reads
+    to refuse a remote device for an unbuffered file and which follows mapped drives and links; a DFS link resolved
+    through `NetDfsGetClientInfo`, wrapped as an entry in `windows-namespace-request-sys` if this item keys by server
+    (read 2026-11-05: it reads the DFS client's cache for a DFS root or link's UNC path, needs no special group
+    membership, and its levels 3 and 4 report the targets). Keyed by server and not by share, since two shares on one server sit on disks this cannot see and
+    the coarser key is the safe one.
+
+## Moved 2026-11-05 17:06:51 -05:00 -- M39.2: a file's flush domains, derived at its open
+
+### <a id="m392"></a>M39.2 -- A file `win-durable-ioring` opens has its flush domains derived at the open, all or nothing; a file on a share is unknown. *(completed 2026-11-05 17:06:51 -05:00)*
+
+Its steps are archived above: [M39.2.1](#m3921) (no name-based call is needed), [M39.2.2](#m3922) (a local file's domains, with `M39.2.4` folded in) and [M39.2.3](#m3923) (a file on a share is unknown). The decision is [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117). The item as written:
+
+- [x] **M39.2** -- **Derive a file's found domains at its open, all or nothing**, in `OpenedFile::admit`, for opens by path
+  and by identifier ([DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117)).
+
+## Moved 2026-11-05 17:36:55 -05:00 -- M39.3: predicting a directory's domains
+
+### <a id="m393"></a>M39.3 -- `DirectoryDomains::predict` derives a directory's domains from its own handle, and `confirm` checks a file's against them. *(completed 2026-11-05 17:36:55 -05:00)*
+
+The decision is [DI-D-118](crates/durable-ioring/DESIGN-NOTES.md#di-d-118): the engineer chose the directory's own handle over resolving its name (2026-11-05, "yes option 1"). `win-durable-ioring`'s `directory_domains` opens the directory through the namespace crate's `OpenFile` with no access and backup semantics, reusing `open_request` (now visible within the backend), and runs `file_domains::derive` on the handle. `confirm` returns a `DomainMismatch` carrying both sides. Tests: a directory predicts its volume's disks, a file created in it confirms, a differing prediction and one with an extra domain are mismatches, a missing directory is the open's own `NotFound`, a failing stack is an error and not an empty set, and over the loopback share a local prediction does not confirm the file and a shared directory is not predicted (ignored for the share; named so the existing CI step runs it). Measured on the way: a remote handle's final path in GUID form is refused by `GetFinalPathNameByHandleW` with `ERROR_PATH_NOT_FOUND`. Four sabotage entries, all caught. `GetVolumePathNameW` and `GetVolumeNameForVolumeMountPointW` are not wrapped.
+
+The item as written:
+
+- [x] **M39.3** -- **Predict a directory's domains before a file is created, and confirm them at the open.** A consumer
+  presents storage roots as directories and wants to know, before creating files, where they will land: the
+  directory's volume, mount points included: through `GetVolumePathNameW` and `GetVolumeNameForVolumeMountPointW`
+  (read 2026-11-05; the first resolves a name to the mount point its end lies under), or through the derivation of
+  `M39.2` from the directory's own handle, opened through the route; which is this item's to settle. Its path is resolved again at
+  each create, so a junction swapped between the two sends the file elsewhere; the open's own derivation is what the
+  file's declaration uses, so a swap cannot make it wrong, and the prediction is compared with it and a mismatch
+  reported. An open relative to the directory's handle would close the race, and is parked as
+  [DI-15.3](crates/durable-ioring/PARKED.md) for want of a documented call. From
+  [the design session](design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#the-real-world-model);
+  the engineer, 2026-10-21: "The volume id refinement is a good catch for that race condition."
+
+## Moved 2026-11-05 19:13:58 -05:00 -- M39.4: the working model end to end
+
+### <a id="m394"></a>M39.4 -- The working model end to end: a failure of the data file's storage reaches the log exactly when their derived domains share a disk. *(completed 2026-11-05 19:13:58 -05:00)*
+
+Built as the engineer agreed (2026-11-05, "implement m39.4 in the way you suggest"), in `win-durable-ioring`'s `dioring/tests/working_model.rs`:
+
+- **On any machine:** a data directory under the temporary directory and a log directory under `RUNNER_TEMP` when set, otherwise also under the temporary directory. Each directory is predicted and its file confirmed (DI-D-118), both files are opened through the route with their domains derived (DI-D-117), each gets one write, and a failure imported over the data file's derived domains is checked: the data write is suspect, and the log's exactly when the two files' domains share a disk. It prints which case ran. Here it was the shared case (one disk); nothing guarantees the separate case runs anywhere. An imported failure stands in for a failed flush because, in a seal that flushes both files, the order in which the two flushes complete decides whether the log's write was already covered, and an import has no order.
+- **On CI only:** a file on a formatted scratch virtual disk (`ScratchVolume::create_formatted`, new, with its script tested) and a file in the temporary directory, which holds the disk's backing file. The virtual disk's file has the host's domains and its own disk besides; a failure of the host's disks reaches both writes, and one of the virtual disk's own disk reaches only its file. It needs an administrator, so it is ignored and runs in the CI step that already attaches scratch disks, whose name filter now includes it. It has not run on this machine.
+
+No sabotage entry was added: the entries for the derivation (an open that finds nothing, a target that does not carry what was found) are also caught by the end-to-end test.
+
+The item as written:
+
+- [x] **M39.4** -- **Show it end to end, in the shape of the working model:** a data directory and a log on separate
+  disks, files opened through the namespace route with their domains derived, and a failed flush on one shown not to
+  make the other's writes suspect. Coarse on purpose: whether that can be shown without hardware that fails on demand is
+  settled once `M39.2` is built.
+
+## Moved 2026-11-05 19:14:25 -05:00 -- M39, a file's flush domains derived at its open
+
+### <a id="m39"></a>M39 -- A file's flush domains, derived when it is opened through the namespace route. *(completed 2026-11-05)*
+
+Opened 2026-10-06 as a free-standing locality helper and re-scoped by the engineer on 2026-11-05: help computing flush domains comes when a file is opened through the namespace crate, and a consumer handing handles to the durable ioring directly manages its own. A file `win-durable-ioring` opens now has its volume's disks found as its flush domains, the same keys a raw volume derives, with a virtual disk followed by its bus type, all or nothing; a file on a share is unknown; and a directory's domains can be predicted from its own handle and a file's confirmed against them. The decisions are [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117) and [DI-D-118](crates/durable-ioring/DESIGN-NOTES.md#di-d-118); a dropped proposal is [WV-D-13](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-13).
+
+Its items, each archived under its own heading above: [M39.1](#m391), [M39.2](#m392) with [M39.2.1](#m3921), [M39.2.2](#m3922) and [M39.2.3](#m3923), [M39.3](#m393) and [M39.4](#m394).

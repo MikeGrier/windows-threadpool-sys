@@ -46,8 +46,10 @@ use durable_ioring::backend::{
 };
 use durable_ioring::{IoFault, IoTargetKey, WriteCaching};
 
+mod directory_domains;
 mod disposition;
 mod file_attributes;
+mod file_domains;
 mod file_id;
 mod file_rights;
 mod file_target;
@@ -63,6 +65,7 @@ mod wait;
 pub use wait::CompletionEvent;
 
 // The markers are the core's (DI-D-66); this module states what each asks of Win32.
+pub use directory_domains::{DirectoryDomains, DomainMismatch};
 pub use disposition::Disposition;
 pub use durable_ioring::{
     CanRead, CanWrite, DataAccess, HasData, NoData, ReadOnly, ReadWrite, WriteOnly,

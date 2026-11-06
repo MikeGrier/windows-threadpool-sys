@@ -1,0 +1,321 @@
+// Copyright (c) 2026 Mike Grier
+//! The working model end to end (root `M39.4`): a database's data directory and its log directory,
+//! each file opened through this crate so its flush domains are derived ([DI-D-117]), the
+//! directories predicted and the files confirmed ([DI-D-118]), and a failure of the data file's
+//! storage shown to reach the log's writes exactly when the two share a disk.
+//!
+//! **Which case runs depends on the machine.** The data directory is under the temporary directory;
+//! the log directory is under `RUNNER_TEMP` when it is set, which on a CI runner is on a work disk of
+//! its own, and under the temporary directory otherwise. On one disk the shared case runs; on two,
+//! the separate case. Each run says which, and nothing guarantees the separate case runs anywhere.
+//!
+//! **Why an imported failure and not a failed flush.** A seal flushes both files, and a flush that
+//! fails on the data file may complete before or after the log's succeeds, which decides whether the
+//! log's write was already covered. An import scoped to the data file's domains is the same question
+//! -- the data disk's failure -- with no order in it.
+//!
+//! [DI-D-117]: ../../../../durable-ioring/DESIGN-NOTES.md#di-d-117
+//! [DI-D-118]: ../../../../durable-ioring/DESIGN-NOTES.md#di-d-118
+
+use std::fs::{self, File};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use std::time::{Duration, Instant};
+
+use durable_ioring::oracle::ObservedFailures;
+use durable_ioring::{
+    DurableRing, Entry, EntryOf, FlushDomain, ImportScope, IoTarget, IoTargetKey, OpId, Outcome,
+};
+use io_buffers::AlignedBuf;
+
+use super::pushes::{BOUND, Harness, instance};
+use super::{CAPACITY, QUEUE, V};
+use crate::dioring::tests::wtf;
+use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
+use crate::scratch_volume::{ScratchDisk, ScratchVolume, scratch_directory};
+use crate::windows_backend::{
+    Cached, DirectoryDomains, DiskOptions, DiskPath, FileOptions, OpenedDisk, OpenedFile,
+    OpenedVolume, Unbuffered, VolumeOptions, Win32FileTarget,
+};
+
+const LOG: IoTargetKey = IoTargetKey(10);
+const DATA: IoTargetKey = IoTargetKey(11);
+
+/// A directory of its own under `parent`, removed when dropped.
+struct Directory(PathBuf);
+
+impl Directory {
+    fn under(parent: &Path, tag: &str) -> Self {
+        let path = parent.join(format!(
+            "dioring-model-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("after the epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&path).expect("create the directory");
+        Self(path)
+    }
+
+    /// A file named `name` in the directory, created, then opened through this crate.
+    fn open(&self, name: &str) -> (OpenedFile, DirectoryDomains) {
+        let predicted = DirectoryDomains::predict(wtf(&self.0)).expect("predict the directory");
+        let path = self.0.join(name);
+        File::create(&path).expect("create the file");
+        let file = OpenedFile::<Cached>::open(wtf(&path), FileOptions::new().read().write())
+            .expect("open the file");
+        predicted
+            .confirm(&file)
+            .expect("the file is where its directory is");
+        (file, predicted)
+    }
+}
+
+impl Drop for Directory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The ops a failure scoped to `domains` suspects, by sequence number, after one write to the log
+/// (sequence 0) and one to the data file (sequence 1).
+fn suspects_of_a_failure_of(harness: &mut Harness, domains: &[FlushDomain]) -> Vec<u64> {
+    let imported = harness
+        .ring
+        .import_failure(ImportScope::Domains(Arc::from(domains)), |_| {})
+        .expect("import");
+    let failed = match harness.next_entry() {
+        Entry::Failed(failed) => failed,
+        other => panic!("expected Failed, got {other:?}"),
+    };
+    assert_eq!(failed.id, imported.failure);
+    harness
+        .suspects(failed.id)
+        .iter()
+        .map(|op| op.seq)
+        .collect()
+}
+
+/// A ring over `log` and `data`, each with the domains its open derived, and one write to each.
+fn ring_with_a_write_to_each(log: OpenedFile, data: OpenedFile) -> Harness {
+    ring_over(Win32FileTarget::new(log), Win32FileTarget::new(data))
+}
+
+/// A ring over `log` and `data` with one write to each, both completed.
+fn ring_over(log: Win32FileTarget, data: Win32FileTarget) -> Harness {
+    let mut harness = Harness::new(instance(
+        vec![TargetSetup::new(LOG, log), TargetSetup::new(DATA, data)],
+        Vec::new(),
+    ));
+    harness.write(LOG, 0, b"log record", 1, 1);
+    harness.write(DATA, 0, b"data page", 1, 2);
+    harness.next_n(2);
+    harness
+}
+
+fn shared(a: &[FlushDomain], b: &[FlushDomain]) -> bool {
+    a.iter().any(|domain| b.contains(domain))
+}
+
+#[test]
+fn a_failure_of_the_data_files_storage_reaches_the_log_exactly_when_they_share_a_disk() {
+    let log_root = std::env::var_os("RUNNER_TEMP").map_or_else(std::env::temp_dir, PathBuf::from);
+    let data_directory = Directory::under(&std::env::temp_dir(), "data");
+    let log_directory = Directory::under(&log_root, "log");
+
+    let (data, _) = data_directory.open("data.db");
+    let (log, _) = log_directory.open("log.ldf");
+    let data_domains = data.flush_domains().to_vec();
+    let log_domains = log.flush_domains().to_vec();
+    assert!(
+        !data_domains.is_empty() && !log_domains.is_empty(),
+        "both derived"
+    );
+    let together = shared(&data_domains, &log_domains);
+    eprintln!(
+        "the {} case: data on {data_domains:?}, log on {log_domains:?}",
+        if together { "shared" } else { "separate" }
+    );
+
+    let mut harness = ring_with_a_write_to_each(log, data);
+    let suspects = suspects_of_a_failure_of(&mut harness, &data_domains);
+
+    let expected: &[u64] = if together { &[0, 1] } else { &[1] };
+    assert_eq!(
+        suspects, expected,
+        "the data file's write is suspect, and the log's exactly when the files share a disk"
+    );
+    harness.finish();
+}
+
+#[test]
+#[ignore = "needs an administrator: creates and attaches a virtual disk"]
+fn a_file_on_a_virtual_disk_shares_fate_with_the_volume_holding_its_backing_file() {
+    // The scratch disk's file is in the temporary directory, so a file on it and a file in the
+    // temporary directory share the host's disks, which only the virtual-disk hop finds.
+    let scratch = ScratchVolume::create_formatted(64).expect("a formatted scratch volume");
+    let on_disk = Directory::under(&scratch.root(), "vhd");
+    let on_host = Directory::under(&std::env::temp_dir(), "host");
+
+    let (vhd_file, _) = on_disk.open("log.ldf");
+    let (host_file, _) = on_host.open("data.db");
+    let vhd_domains = vhd_file.flush_domains().to_vec();
+    let host_domains = host_file.flush_domains().to_vec();
+    for domain in &host_domains {
+        assert!(
+            vhd_domains.contains(domain),
+            "the host's {domain:?} is among the virtual disk's: {vhd_domains:?}"
+        );
+    }
+    let own: Vec<FlushDomain> = vhd_domains
+        .iter()
+        .filter(|domain| !host_domains.contains(domain))
+        .cloned()
+        .collect();
+    assert!(!own.is_empty(), "and the virtual disk's own disk besides");
+
+    let mut harness = ring_with_a_write_to_each(vhd_file, host_file);
+    assert_eq!(
+        suspects_of_a_failure_of(&mut harness, &host_domains),
+        [0, 1],
+        "a failure of the host's disks reaches the file on the virtual disk"
+    );
+    assert_eq!(
+        suspects_of_a_failure_of(&mut harness, &own),
+        [0],
+        "a failure of the virtual disk alone does not reach the host's file"
+    );
+    harness.finish();
+    drop(on_disk);
+}
+
+/// An instance over raw targets, whose buffers are aligned: an unbuffered disk or volume takes
+/// only sector-aligned addresses and lengths, which the harness's `Vec<u8>` does not promise.
+type RawRing = Dioring<AlignedBuf, u64, u32>;
+
+/// The next entry of `ring`, within the bound.
+fn next_raw(ring: &mut RawRing) -> EntryOf<RawRing> {
+    let started = Instant::now();
+    loop {
+        if let Some(entry) = ring.pop().expect("pop") {
+            return entry;
+        }
+        assert!(started.elapsed() < BOUND, "nothing arrived");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// The writes, by the order they were pushed in `ops`, that a failure scoped to `domains` suspects.
+fn raw_suspects(
+    ring: &mut RawRing,
+    told: &ObservedFailures<V>,
+    ops: &[OpId],
+    domains: &[FlushDomain],
+) -> Vec<usize> {
+    let imported = ring
+        .import_failure(ImportScope::Domains(Arc::from(domains)), |_| {})
+        .expect("import");
+    let failed = match next_raw(ring) {
+        Entry::Failed(failed) => failed,
+        other => panic!("expected Failed, got {other:?}"),
+    };
+    assert_eq!(failed.id, imported.failure);
+    let suspect: Vec<OpId> = told
+        .suspects(failed.id)
+        .expect("the observer was told of the failure")
+        .iter()
+        .map(|write| write.op)
+        .collect();
+    ops.iter()
+        .enumerate()
+        .filter(|(_, op)| suspect.contains(op))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// A raw `target` on a scratch disk and a file beside the disk's backing file: a failure of the
+/// host's storage reaches the raw target's write, and one of the raw target's own disk alone does not
+/// reach the file's. Each gets one sector, aligned, at an offset of three sectors.
+fn a_raw_target_on_a_virtual_disk_shares_fate_with_a_file_on_its_host(target: Win32FileTarget) {
+    let on_host = Directory::under(&scratch_directory(), "raw-host");
+    let (host_file, _) = on_host.open("data.db");
+    let host_domains = host_file.flush_domains().to_vec();
+    let own: Vec<FlushDomain> = target
+        .flush_domains()
+        .iter()
+        .filter(|domain| !host_domains.contains(domain))
+        .cloned()
+        .collect();
+    assert!(!own.is_empty(), "the virtual disk's own disk");
+    let sector = target.geometry().offset_alignment() as usize;
+
+    let told = Arc::new(ObservedFailures::new());
+    let (mut ring, lineage) = RawRing::new(Setup {
+        submission_queue_size: QUEUE,
+        completion_queue_size: QUEUE,
+        files: vec![
+            TargetSetup::new(LOG, target),
+            TargetSetup::new(DATA, Win32FileTarget::new(host_file)),
+        ],
+        buffers: Vec::<Vec<u8>>::new(),
+        provider: None,
+        capacity: CAPACITY,
+        diagnostics: None,
+        failure_observer: Some(told.clone()),
+        delivery: DeliveryMode::Pool(None),
+    })
+    .expect("an instance over the raw target and the file");
+    let sector_of =
+        |fill: u8| AlignedBuf::from_bytes(&vec![fill; sector], sector).expect("aligned");
+    let at = 3 * sector as u64;
+    let ops = [
+        ring.write(LOG, at, sector_of(0xA1), lineage.at(1), 1)
+            .expect("push to the raw target"),
+        ring.write(DATA, 0, sector_of(0xD1), lineage.at(1), 2)
+            .expect("push to the file"),
+    ];
+    for _ in 0..ops.len() {
+        match next_raw(&mut ring) {
+            Entry::Op(completion) => assert!(
+                matches!(completion.outcome, Outcome::Transferred(_)),
+                "{completion:?}"
+            ),
+            other => panic!("expected a completion, got {other:?}"),
+        }
+    }
+
+    assert_eq!(
+        raw_suspects(&mut ring, &told, &ops, &host_domains),
+        [0, 1],
+        "a failure of the host's disks reaches the raw target on the virtual disk"
+    );
+    assert_eq!(
+        raw_suspects(&mut ring, &told, &ops, &own),
+        [0],
+        "a failure of the virtual disk alone does not reach the host's file"
+    );
+}
+#[test]
+#[ignore = "needs an administrator: creates and attaches a virtual disk"]
+fn a_raw_volume_on_a_virtual_disk_shares_fate_with_a_file_on_its_host() {
+    let scratch = ScratchVolume::create(64).expect("a scratch volume");
+    let volume = OpenedVolume::<Unbuffered>::open(&scratch.path(), VolumeOptions::new())
+        .expect("open the raw volume");
+    a_raw_target_on_a_virtual_disk_shares_fate_with_a_file_on_its_host(
+        Win32FileTarget::from_volume(volume),
+    );
+}
+
+#[test]
+#[ignore = "needs an administrator: creates and attaches a virtual disk"]
+fn a_raw_disk_that_is_virtual_shares_fate_with_a_file_on_its_host() {
+    let scratch = ScratchDisk::create(64).expect("a scratch disk");
+    let disk =
+        OpenedDisk::<Unbuffered>::open(DiskPath::number(scratch.disk_number()), DiskOptions::new())
+            .expect("open the raw disk");
+    a_raw_target_on_a_virtual_disk_shares_fate_with_a_file_on_its_host(Win32FileTarget::from_disk(
+        disk,
+    ));
+}

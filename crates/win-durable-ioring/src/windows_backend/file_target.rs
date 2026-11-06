@@ -37,13 +37,21 @@ use durable_ioring::{Access, Capabilities, Geometry, HasData, IoTarget, Warranty
 /// let _ = Win32FileTarget::new(no_data);
 /// ```
 ///
-/// A volume's flush domains are found from its disks. A file's are what it cannot know, so they are
-/// declared with [`with_domains`](Self::with_domains); declaring them on a volume adds to the ones
-/// found, and never removes one.
+/// A volume's and a disk's flush domains are found when this crate opened them
+/// ([`OpenedVolume::flush_domains`], [`OpenedDisk::flush_domains`]), and a file's from its handle
+/// ([`OpenedFile::flush_domains`], DI-D-117): the disks it is on and, for a virtual disk among them,
+/// those of the volume holding its backing file, all or nothing, so a
+/// file on a share, or one whose volume could not be read, has none found and shares fate with every
+/// target. [`with_domains`](Self::with_domains) adds what Windows does not show, and never removes one
+/// found: the disks of a Storage Spaces pool, which two spaces in one pool may share; the disks behind
+/// a hardware RAID controller; and a cache a controller shares between disks. On a file with none
+/// found, such as one on a share, what is declared is its whole set: no key is derived for a share,
+/// since a server's name is not its identity and a share can be this machine's own disk, so a
+/// consumer that knows where a share's storage is says so.
 #[derive(Clone, Debug)]
 pub struct Win32FileTarget {
     handle: SharedHandle,
-    /// What the backing found for itself: a volume's disks.
+    /// What the backing found for itself: the disks of a volume, or of a file's volume.
     found: Vec<FlushDomain>,
     /// What the consumer declared.
     declared: Vec<FlushDomain>,
@@ -60,20 +68,21 @@ impl Win32FileTarget {
     /// The target `file` makes, claiming what its open mode allows and no more.
     #[must_use]
     pub fn new<B: Buffering, A: HasData>(file: OpenedFile<B, A>) -> Self {
+        let found = file.flush_domains().to_vec();
         Self {
             geometry: file.geometry(),
             handle: file.handle().clone(),
-            found: Vec::new(),
+            domains: found.clone(),
+            found,
             declared: Vec::new(),
-            domains: Vec::new(),
             warranty: B::WARRANTY,
             capabilities: B::CAPABILITIES,
             access: A::ACCESS,
         }
     }
 
-    /// The target `volume` makes: its sector's alignment, the flush domains of the disks it sits
-    /// on, and what its open mode allows and no more.
+    /// The target `volume` makes: its sector's alignment, the flush domains found when it was opened
+    /// ([`OpenedVolume::flush_domains`]), and what its open mode allows and no more.
     #[must_use]
     pub fn from_volume<B: Buffering, A: HasData>(volume: OpenedVolume<B, A>) -> Self {
         let found = volume.flush_domains();
@@ -89,11 +98,11 @@ impl Win32FileTarget {
         }
     }
 
-    /// The target `disk` makes: its sector's alignment, the disk itself as its flush domain, and
-    /// what its open mode allows and no more.
+    /// The target `disk` makes: its sector's alignment, the flush domains found when it was opened
+    /// ([`OpenedDisk::flush_domains`]), and what its open mode allows and no more.
     #[must_use]
     pub fn from_disk<B: Buffering, A: HasData>(disk: OpenedDisk<B, A>) -> Self {
-        let found = vec![disk.flush_domain()];
+        let found = disk.flush_domains().to_vec();
         Self {
             geometry: disk.geometry(),
             handle: disk.handle().clone(),
@@ -159,6 +168,16 @@ impl Win32FileTarget {
     /// The one place the attested claim is made.
     fn attested_exclusive(mut self) -> Self {
         self.warranty = WarrantyClass::Complete;
+        self
+    }
+
+    /// The target with what the backing found set aside, for a test that uses temporary files, all on
+    /// one disk, to stand for files on separate devices: their found disk would join them, as it
+    /// should for real files, and the scenario would not be the one the test means.
+    #[cfg(test)]
+    pub(crate) fn without_found_domains(mut self) -> Self {
+        self.found.clear();
+        self.domains = self.declared.clone();
         self
     }
 

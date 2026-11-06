@@ -1,0 +1,257 @@
+// Copyright (c) 2026 Mike Grier
+//! The flush domains of a file this crate opened, found from the opened handle when it is opened
+//! (DI-D-117).
+//!
+//! A local file's domains are the disks of its volume, each the same [`disk_flush_domain`] bytes a
+//! raw volume derives, so a file and a volume on one disk share fate by construction. A disk whose
+//! bus type is `BusTypeFileBackedVirtual` is followed through the volume's storage dependency to the
+//! volume that holds its backing file, and on from there; its own disk is kept as well, since an
+//! extra domain is safe.
+//!
+//! **All or nothing.** Any step that fails -- a handle with no volume GUID, as a remote file's has
+//! none; a volume that does not answer the extents control; a disk that does not describe itself; a
+//! virtual disk whose host cannot be named -- leaves the file with no domains found. None is unknown,
+//! which shares fate with every target, the safe default; a partial set is the one way a declaration
+//! makes the contract false, so one is never produced.
+//!
+//! **A snapshot.** The domains are those of the moment of the open; a volume later extended onto
+//! another disk is not seen.
+//!
+//! The steps are a trait so the rule that walks them can be tested without the devices: no virtual
+//! disk can be attached here without an elevated token, so that hop is tested against a stack built
+//! in memory, and the real stack through files on this machine's own volumes.
+
+use std::collections::BTreeSet;
+use std::io;
+use std::os::windows::ffi::OsStrExt;
+
+use durable_ioring::{FlushDomain, NoData};
+use win_shared_os_owned_handle::SharedHandle;
+use win_volume_sys::{
+    StorageBusType, StorageDependencyFlags, StorageDependencyVersion,
+    storage_dependency_information, storage_device_descriptor, volume_disk_extents,
+};
+use windows_namespace_request_sys::{FinalPathFlags, QueryFinalPath};
+
+use super::opened_file::Cached;
+use super::opened_volume::{VolumePath, disk_flush_domain};
+use super::raw_open;
+use super::share_mode::ShareMode;
+
+#[cfg(test)]
+mod tests;
+
+/// How many volumes one derivation visits before it stops: a virtual disk nested this deep is not
+/// one this crate has a reason to expect, and a loop in the dependencies must end.
+const MAX_VOLUMES: usize = 16;
+
+/// What the derivation asks of the storage stack.
+pub(super) trait StorageStack {
+    /// The volume the file `file` is on.
+    fn volume_of(&self, file: &SharedHandle) -> io::Result<VolumePath>;
+    /// The numbers of the disks the volume `volume` sits on.
+    fn disks_of(&self, volume: &VolumePath) -> io::Result<Vec<u32>>;
+    /// Whether disk `disk` is backed by a file: its bus type is `BusTypeFileBackedVirtual`.
+    fn is_file_backed(&self, disk: u32) -> io::Result<bool>;
+    /// The volumes that hold the files backing the virtual disks under `volume`.
+    fn hosts_of(&self, volume: &VolumePath) -> io::Result<Vec<VolumePath>>;
+}
+
+/// The flush domains of `file`, or the reason none could be found; [`found`] is the all-or-nothing
+/// form the open uses.
+pub(super) fn derive(
+    stack: &impl StorageStack,
+    file: &SharedHandle,
+) -> io::Result<Vec<FlushDomain>> {
+    let disks = walk(stack, vec![stack.volume_of(file)?])?;
+    Ok(disks.into_iter().map(disk_flush_domain).collect())
+}
+
+/// The flush domains of a raw volume or disk already open, read from its own handle and not from
+/// its path again, which a drive letter reassigned since the open would send elsewhere: `own` are
+/// the disks the handle reports, and `hosts` asks the same handle for the volumes holding the backing
+/// files of any virtual disk among them. Those volumes are followed as a file's are (DI-D-117), so a
+/// raw target on a virtual disk shares fate with a file beside the disk's backing file.
+pub(super) fn seeded(
+    stack: &impl StorageStack,
+    own: &[u32],
+    hosts: impl FnOnce() -> io::Result<Vec<VolumePath>>,
+) -> io::Result<Vec<FlushDomain>> {
+    if own.is_empty() {
+        return Err(io::Error::other("the target sits on no disk"));
+    }
+    let mut backed = false;
+    for &disk in own {
+        backed |= stack.is_file_backed(disk)?;
+    }
+    let mut disks: Vec<u32> = own.to_vec();
+    if backed {
+        let hosts = hosts()?;
+        if hosts.is_empty() {
+            return Err(io::Error::other(
+                "the target is on a virtual disk whose backing file's volume is not named",
+            ));
+        }
+        disks.extend(walk(stack, hosts)?);
+    }
+    disks.sort_unstable();
+    disks.dedup();
+    Ok(disks.into_iter().map(disk_flush_domain).collect())
+}
+
+/// [`seeded`], all or nothing, as [`found`] is for a file.
+pub(super) fn seeded_found(
+    stack: &impl StorageStack,
+    own: &[u32],
+    hosts: impl FnOnce() -> io::Result<Vec<VolumePath>>,
+) -> Vec<FlushDomain> {
+    seeded(stack, own, hosts).unwrap_or_default()
+}
+
+/// The volumes holding the backing files of the virtual disks under the volume or disk `opened`,
+/// asked of `opened` itself; `disk` says it is a disk and not a volume.
+pub(super) fn hosts_of_handle(opened: &std::fs::File, disk: bool) -> io::Result<Vec<VolumePath>> {
+    let flags = if disk {
+        StorageDependencyFlags::HOST_VOLUMES | StorageDependencyFlags::DISK_HANDLE
+    } else {
+        StorageDependencyFlags::HOST_VOLUMES
+    };
+    hosts_named(opened, flags)
+}
+
+/// Every disk under `volumes`, following each virtual disk to the volumes that hold its backing
+/// file, until nothing is left to follow; in disk order, once each.
+fn walk(stack: &impl StorageStack, volumes: Vec<VolumePath>) -> io::Result<Vec<u32>> {
+    let mut disks = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    let mut pending = volumes;
+    // Counted as followed, and not as the size of `visited`, so the bound holds by itself.
+    let mut followed = 0_usize;
+    while let Some(volume) = pending.pop() {
+        if !visited.insert(volume.as_str().to_owned()) {
+            continue;
+        }
+        followed += 1;
+        if followed > MAX_VOLUMES {
+            return Err(io::Error::other(
+                "the virtual disks under the file nest deeper than this crate follows",
+            ));
+        }
+        let on = stack.disks_of(&volume)?;
+        if on.is_empty() {
+            return Err(io::Error::other(format!(
+                "the volume {} sits on no disk",
+                volume.as_str()
+            )));
+        }
+        let mut backed = false;
+        for disk in on {
+            disks.insert(disk);
+            backed |= stack.is_file_backed(disk)?;
+        }
+        if backed {
+            let hosts = stack.hosts_of(&volume)?;
+            if hosts.is_empty() {
+                return Err(io::Error::other(format!(
+                    "the volume {} is on a virtual disk whose backing file's volume is not named",
+                    volume.as_str()
+                )));
+            }
+            pending.extend(hosts);
+        }
+    }
+    Ok(disks.into_iter().collect())
+}
+
+/// The flush domains of `file`, all or nothing: those [`derive`](fn@derive) finds, or none.
+pub(super) fn found(stack: &impl StorageStack, file: &SharedHandle) -> Vec<FlushDomain> {
+    derive(stack, file).unwrap_or_default()
+}
+
+/// The storage stack of this machine.
+pub(super) struct Windows;
+
+impl StorageStack for Windows {
+    fn volume_of(&self, file: &SharedHandle) -> io::Result<VolumePath> {
+        let path = QueryFinalPath::new(file.clone())
+            .with_flags(FinalPathFlags::VOLUME_NAME_GUID)
+            .perform()
+            .map_err(io::Error::other)?;
+        // Only the prefix is read: the rest of the path may hold any UTF-16, a lone surrogate
+        // included, which says nothing about the volume.
+        let path: Vec<u16> = path.to_os_string().encode_wide().collect();
+        volume_prefix(&path).ok_or_else(|| {
+            io::Error::other(format!(
+                "{} does not begin with a volume GUID",
+                String::from_utf16_lossy(&path)
+            ))
+        })
+    }
+
+    fn disks_of(&self, volume: &VolumePath) -> io::Result<Vec<u32>> {
+        // Not through `OpenedVolume::open`, which derives a volume's domains with this.
+        let opened = raw_open::open::<Cached, NoData>(volume.as_str(), ShareMode::ALL)?;
+        Ok(volume_disk_extents(&opened)?
+            .iter()
+            .map(|extent| extent.disk_number)
+            .collect())
+    }
+
+    fn is_file_backed(&self, disk: u32) -> io::Result<bool> {
+        let opened =
+            raw_open::open::<Cached, NoData>(format!(r"\\.\PhysicalDrive{disk}"), ShareMode::ALL)?;
+        Ok(storage_device_descriptor(&opened)?.bus_type == StorageBusType::FILE_BACKED_VIRTUAL)
+    }
+
+    fn hosts_of(&self, volume: &VolumePath) -> io::Result<Vec<VolumePath>> {
+        let opened = raw_open::open::<Cached, NoData>(volume.as_str(), ShareMode::ALL)?;
+        hosts_named(&opened, StorageDependencyFlags::HOST_VOLUMES)
+    }
+}
+
+/// The host volumes the storage dependency of `opened` names, asked with `flags`.
+fn hosts_named(
+    opened: &std::fs::File,
+    flags: StorageDependencyFlags,
+) -> io::Result<Vec<VolumePath>> {
+    let info = storage_dependency_information(opened, flags, StorageDependencyVersion::V2)?;
+    info.entries()
+        .iter()
+        .map(|entry| {
+            let name: Vec<u16> = entry
+                .host_volume_name()
+                .ok_or_else(|| io::Error::other("a dependency that names no host volume"))?
+                .to_os_string()
+                .encode_wide()
+                .collect();
+            host_volume(&name).ok_or_else(|| {
+                io::Error::other(format!(
+                    "{} is not a volume this crate can open",
+                    String::from_utf16_lossy(&name)
+                ))
+            })
+        })
+        .collect()
+}
+
+/// The volume a path in `VOLUME_NAME_GUID` form begins with: `\\?\Volume{...}` and nothing after
+/// it.
+fn volume_prefix(path: &[u16]) -> Option<VolumePath> {
+    let end = path.iter().position(|&unit| unit == u16::from(b'}'))?;
+    VolumePath::guid(&String::from_utf16(&path[..=end]).ok()?).ok()
+}
+
+/// A host volume as the dependency names it: a volume GUID path, or a drive letter's root. No
+/// entry has been observed (WV-D-10), so both documented-looking forms are taken and any other is
+/// refused, which leaves the file unknown.
+fn host_volume(name: &[u16]) -> Option<VolumePath> {
+    if let Some(volume) = volume_prefix(name) {
+        return Some(volume);
+    }
+    let name = String::from_utf16(name).ok()?;
+    let mut chars = name.chars();
+    match (chars.next(), chars.next(), chars.as_str()) {
+        (Some(letter), Some(':'), "" | "\\") => VolumePath::drive(letter).ok(),
+        _ => None,
+    }
+}

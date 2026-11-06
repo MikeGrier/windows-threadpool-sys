@@ -23,7 +23,7 @@ use io_buffers::AlignedBuf;
 
 use super::QUEUE;
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
-use crate::scratch_volume::ScratchDisk;
+use crate::scratch_volume::{ScratchDisk, host_flush_domains};
 use crate::windows_backend::{
     DiskOptions, DiskPath, OpenedDisk, ReadOnly, ShareMode, SharingViolation, Unbuffered,
     Win32FileTarget, disk_flush_domain,
@@ -161,10 +161,20 @@ fn a_raw_disks_sector_is_found_and_its_target_names_the_disk() {
 
     let target = Win32FileTarget::from_disk(disk);
     assert_eq!(target.warranty(), WarrantyClass::SharedDevice);
-    assert_eq!(
-        target.flush_domains(),
-        [disk_flush_domain(scratch.disk_number())]
+    // Itself, and, since it is virtual, the disks of the volume holding its file, asked of the disk.
+    let host = host_flush_domains();
+    let reported = target.flush_domains();
+    assert!(
+        reported.contains(&disk_flush_domain(scratch.disk_number())),
+        "{reported:?}"
     );
+    for domain in &host {
+        assert!(
+            reported.contains(domain),
+            "the host's {domain:?} in {reported:?}"
+        );
+    }
+    assert_eq!(reported.len(), host.len() + 1, "each once: {reported:?}");
     assert!(target.capabilities().write_through());
 }
 

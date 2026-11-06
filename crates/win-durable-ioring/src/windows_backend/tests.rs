@@ -554,10 +554,16 @@ fn attach_refuses_a_key_in_use_and_detach_hands_the_target_back() {
 #[test]
 fn a_file_target_claims_what_its_open_mode_allows() {
     let file = TempFile::new("wb-target");
-    let cached = Win32FileTarget::new(file.open());
+    let opened = file.open();
+    let found = opened.flush_domains().to_vec();
+    assert!(
+        !found.is_empty(),
+        "a local file's disks are found (DI-D-117)"
+    );
+    let cached = Win32FileTarget::new(opened);
     assert_eq!(cached.warranty(), WarrantyClass::BestEffort);
     assert_eq!(cached.geometry(), Geometry::UNALIGNED);
-    assert!(cached.flush_domains().is_empty());
+    assert_eq!(cached.flush_domains(), found.as_slice());
     assert!(!cached.capabilities().write_through());
 
     let unbuffered = Win32FileTarget::new(
@@ -566,10 +572,9 @@ fn a_file_target_claims_what_its_open_mode_allows() {
     )
     .with_domains([FlushDomain::new(b"disk".as_slice())]);
     let description = unbuffered.describe();
-    assert_eq!(
-        description.flush_domains,
-        [FlushDomain::new(b"disk".as_slice())]
-    );
+    let mut expected = found.clone();
+    expected.push(FlushDomain::new(b"disk".as_slice()));
+    assert_eq!(description.flush_domains, expected);
     assert_eq!(description.warranty, WarrantyClass::SharedDevice);
     assert_eq!(
         description.geometry,
@@ -591,7 +596,9 @@ fn an_attested_file_targets_is_complete_and_nothing_else_changes() {
 
     assert_eq!(attested.warranty(), WarrantyClass::Complete);
     assert_eq!(plain.warranty(), WarrantyClass::SharedDevice);
-    assert_eq!(attested.flush_domains(), [domain]);
+    let mut expected = open().flush_domains().to_vec();
+    expected.push(domain);
+    assert_eq!(attested.flush_domains(), expected.as_slice());
     assert_eq!(attested.flush_domains(), plain.flush_domains());
     assert_eq!(attested.geometry(), plain.geometry());
     assert_eq!(
@@ -615,15 +622,24 @@ fn an_attested_file_target_reports_complete_to_the_core() {
 
 #[test]
 fn declaring_a_file_targets_domains_again_replaces_them() {
-    // Carried over from `FileOptions`, which the target replaced: a declaration is the whole set.
+    // Carried over from `FileOptions`, which the target replaced: a declaration is the whole of what
+    // is declared, and never removes what was found for the file (DI-D-117).
     let file = TempFile::new("wb-domains");
     let domain = |name: &[u8]| FlushDomain::new(name.to_vec());
-    let target = Win32FileTarget::new(file.open())
+    let opened = file.open();
+    let found = opened.flush_domains().to_vec();
+    let target = Win32FileTarget::new(opened)
         .with_domains([domain(b"A")])
         .with_domains([domain(b"B"), domain(b"C")]);
-    assert_eq!(target.flush_domains(), [domain(b"B"), domain(b"C")]);
+    let mut expected = found.clone();
+    expected.extend([domain(b"B"), domain(b"C")]);
+    assert_eq!(target.flush_domains(), expected.as_slice());
     let cleared = target.with_domains([]);
-    assert!(cleared.flush_domains().is_empty(), "none declared again");
+    assert_eq!(
+        cleared.flush_domains(),
+        found.as_slice(),
+        "none declared again"
+    );
 }
 
 #[test]

@@ -17,7 +17,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::windows_backend::VolumePath;
+use durable_ioring::FlushDomain;
+use wtf_string::Wtf16String;
+
+use crate::windows_backend::{Cached, FileOptions, OpenedFile, VolumePath};
 
 /// How long a new volume has to appear at its drive letter before the setup is given up on.
 const MOUNT_PATIENCE: Duration = Duration::from_secs(30);
@@ -49,6 +52,11 @@ pub(crate) fn create_script(vhd: &Path, megabytes: u32, letter: char) -> String 
          assign letter={letter}\n",
         vhd = vhd.display()
     )
+}
+
+/// The `diskpart` script that puts an NTFS file system on the volume at drive letter `letter`.
+pub(crate) fn format_script(letter: char) -> String {
+    format!("select volume {letter}\nformat fs=ntfs quick\n")
 }
 
 /// The `diskpart` script that detaches the virtual disk at `vhd`.
@@ -134,6 +142,28 @@ pub(crate) fn scratch_directory() -> PathBuf {
     }
 }
 
+/// The flush domains of a file beside the scratch disks' backing files: those a raw target on a
+/// scratch disk must carry besides its own disk, since a flush of it reaches the host's storage.
+pub(crate) fn host_flush_domains() -> Vec<FlushDomain> {
+    // Numbered as well, so tests running at once in this process each have their own.
+    let path = scratch_directory().join(format!(
+        "durable-ioring-host-{}-{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::File::create(&path).expect("create a file beside the scratch disks");
+    let opened = OpenedFile::<Cached>::open(
+        Wtf16String::from_os_str(path.as_os_str()),
+        FileOptions::new().read().write(),
+    )
+    .expect("open it");
+    let domains = opened.flush_domains().to_vec();
+    drop(opened);
+    let _ = std::fs::remove_file(&path);
+    assert!(!domains.is_empty(), "the host's domains are found");
+    domains
+}
+
 /// A virtual disk attached with one raw partition, and the volume path that names it.
 pub(crate) struct ScratchVolume {
     vhd: PathBuf,
@@ -161,6 +191,30 @@ impl ScratchVolume {
         let volume = Self { vhd, letter };
         volume.wait_until_mounted()?;
         Ok(volume)
+    }
+
+    /// A volume of `megabytes` with an NTFS file system on it, for a test that needs files on a
+    /// virtual disk rather than the raw volume itself.
+    pub(crate) fn create_formatted(megabytes: u32) -> io::Result<Self> {
+        let volume = Self::create(megabytes)?;
+        run_diskpart(&format_script(volume.letter), "format")?;
+        let started = Instant::now();
+        while !volume.root().is_dir() {
+            if started.elapsed() >= MOUNT_PATIENCE {
+                return Err(io::Error::other(format!(
+                    "the scratch file system did not appear at {}",
+                    volume.root().display()
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        Ok(volume)
+    }
+
+    /// The root directory of the volume's file system, for a volume made by
+    /// [`create_formatted`](Self::create_formatted).
+    pub(crate) fn root(&self) -> PathBuf {
+        PathBuf::from(format!("{}:\\", self.letter))
     }
 
     /// The path to open the volume at.

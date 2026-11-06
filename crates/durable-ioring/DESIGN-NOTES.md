@@ -1416,7 +1416,7 @@ reports no timing, and nothing else: a domain it does not route is panicked on, 
 cannot narrow a provider to a subset of what it declares, and cannot name a domain the provider does not.
 
 **Why.** A flush domain is the consumer's exact bytes ([DI-D-21](#di-d-21)), minted by the layer that maps the consumer's
-storage onto domains (root [M39](../../CHECKLIST.md)). Whatever builds a provider must be handed those same bytes, so it
+storage onto domains (root [M39](../../COMPLETED-CHECKLIST.md#m39)). Whatever builds a provider must be handed those same bytes, so it
 knows what the provider serves when it builds it, and a provider built with its domains says so through `domains()`. A
 second list at registration would be a second statement of the same fact, free to disagree with the first. Narrowing a
 provider, or renaming domains for a provider whose identifiers differ from the consumer's, can be added later as another
@@ -2869,3 +2869,87 @@ sample does not attempt `no_std`.
 
 **Scheduled work:** `DI-M24` and `DI-21.3` to `DI-21.8`, with `DI-21.5.1` to `DI-21.5.3` for reservations, reading by LSN
 and shared clients, in [CHECKLIST.md](CHECKLIST.md), and `DI-21+.2` in [PARKED.md](PARKED.md).
+
+## <a id="di-d-117"></a>DI-D-117: a file `win-durable-ioring` opens has its flush domains derived at the open, all or nothing
+
+**Decided by the engineer, 2026-11-05 (root [M39.1](../../COMPLETED-CHECKLIST.md#m391)), from the assistant's
+investigation.** The scope, in the engineer's words: "this isn't saying that durable ioring only supports this but that our
+assistance for computing domains comes when you use the namespace crate. [...] Advanced users who want to hand handles to
+the durable ioring directly, I will assume are advanced enough to also manage their domains directly." Asked when the
+domains are found: "I would think that the data would be determined at open".
+
+- **Where.** In `OpenedFile::admit`, the checks every open makes on the handle it opened, so an open by path and an open by
+  identifier ([DI-D-70](#di-d-70)) both derive them, and `Win32FileTarget::new` carries them as `from_volume` carries a
+  volume's ([DI-D-61](#di-d-61)). A target made any other way has none found and declares its own with `with_domains`, as
+  before. The steps are root [M39.2](../../COMPLETED-CHECKLIST.md#m392)'s; a local file's domains are the same `disk_flush_domain` bytes a
+  raw volume derives, so a file and a volume on one disk share fate by construction.
+- **All or nothing.** A hop that fails leaves the file with no found domains, which is unknown and shares fate with every
+  target: the safe default. A partial set is never produced, since a missing domain is the one way a declaration makes the
+  contract false ([DI-D-21](#di-d-21)).
+- **Why at the open and not on first request.** `IoTarget::flush_domains` is an accessor the core reads once, in
+  `describe`, when it adds the target; deriving there would put blocking device I/O, with no error to report, in the core's
+  add path. The open is the call a consumer already arranges to run where blocking is acceptable, and target construction
+  does no I/O. `OpenedVolume::open` already reads its extents at the open.
+- **By identifier, all of it.** Every step reads the handle: its final path, its volume, the volume's disks, a remote
+  file's server. The caller's name is needed only for root `M39.3`'s prediction before a file exists, and possibly for a DFS
+  link, which root `M39.2.1` checks.
+- **A snapshot, stated.** The domains are those of the moment of the open. A volume later extended onto another disk is not
+  seen; deriving later would not see it either.
+- **A file on a share is unknown, and no key is derived for it.** The engineer, 2026-11-05, choosing among leaving it
+  unknown, one key for every remote file, and a key per server: "Go with a then". A server's name is not its identity
+  (one machine answers to several names), servers in a cluster share disks, a DFS link hides its target, and a share
+  can be this machine's own disk, which the documented loopback flag is not documented to catch by every name. Any key
+  would let two files that share fate carry different keys, which is a missing domain; unknown cannot be wrong. A
+  consumer that knows where a share's storage is declares it with `with_domains`, and with none found what it declares
+  is the file's whole set.
+- **A virtual disk is decided by its bus type.** A disk whose `STORAGE_DEVICE_DESCRIPTOR` bus type is
+  `BusTypeFileBackedVirtual` is followed through the volume's storage dependency to the volume holding its backing file;
+  any other is not, and the dependency query is never asked. That query's page names no error for a volume that is not on
+  a virtual disk, so the code measured for one ([WV-D-10](../win-volume-sys/DESIGN-NOTES.md#wv-d-10)) is not built on.
+  The assistant's choice, made while implementing root `M39.2.2`. A file-backed disk whose host cannot be named leaves
+  the file unknown.
+- **A raw volume and a raw disk are followed the same way.** Added 2026-11-05, from the review of PR #182, which found
+  that a raw target on a virtual disk carried only its own disk while a file beside the disk's backing file carried the
+  host's, so a failed commit on the raw target did not reach the file's writes ([CONTRACT.md](CONTRACT.md)'s complete
+  declarations). `OpenedVolume::open` and `OpenedDisk::open` now derive at the open by the same walk, seeded from the
+  handle the open retains and never from its path again, which a drive letter reassigned since the open would resolve to
+  another volume (the second review round of the same PR): a volume's own disks are the extents its handle reported, and
+  that handle is asked for its storage dependency; a disk is itself, and its handle is asked with
+  `GET_STORAGE_DEPENDENCY_FLAG_DISK_HANDLE`. Only the host volumes found are opened by name, as a file's are. All or
+  nothing as for a file: a step that fails leaves the raw target unknown, where before it had its own disks, since its
+  own disks alone would be the partial set this decision never produces. A volume derives before it takes its lock,
+  which would refuse the derivation's own opens of the hosts. The virtual-disk routes are exercised only by the
+  administrator-only tests, which run on CI.
+- **What it costs.** Measured once, 2026-11-05, on the engineer's development machine: about half as much again as a local
+  open, and a small part of an open over a loopback share, where an unbuffered open already makes the one query a remote
+  file needs. Not a reason to defer anything; a figure for a consumer weighing the reserved opt-out below.
+- **An opt-out's shape is reserved, and none is built.** The engineer: "Reserve the shape but we don't need to implement it
+  today." If one is added, it is a method on the request (`OpenRequest` and `ByIdRequest`), as `with_security_descriptor`
+  is, and not a `FileOptions` field, since the options are the parameters of the OS calls ([DI-D-64](#di-d-64)); and it
+  takes a `#[non_exhaustive]` enum whose default derives, so a mode added later, skipping or a per-volume cache, breaks
+  no caller. **No work is scheduled for it.**
+- **What it amends.** `win-durable-ioring`'s file target says a file's domains "are what it cannot know", and
+  [API.md](API.md) section 13 calls the derivation "a locality helper's job outside this crate". Both change with the code,
+  in root `M39.2`.
+
+**Scheduled work:** root `M39.2` to `M39.4`, done ([COMPLETED-CHECKLIST.md](../../COMPLETED-CHECKLIST.md#m39)); the opt-out's shape is reserved and no work is scheduled for it.
+
+## <a id="di-d-118"></a>DI-D-118: a directory's flush domains are predicted from its own handle, and a file's are checked against the prediction
+
+**Decided by the engineer, 2026-11-05 (root `M39.3`): "yes option 1".** The alternative was resolving the directory's
+name with `GetVolumePathNameW` and `GetVolumeNameForVolumeMountPointW`: two new entries, and a second statement of
+"which volume is this path on" beside the derivation, free to disagree with it.
+
+- **How.** `DirectoryDomains::predict` opens the directory through `windows-namespace-request-sys`' `OpenFile` with no
+  access and `FILE_FLAG_BACKUP_SEMANTICS`, which is what opening a directory needs, and runs [DI-D-117](#di-d-117)'s
+  derivation on that handle: one rule, the same bytes. The handle is a probe and never a target, so this is not the
+  flag [DI-D-64](#di-d-64) leaves out of a target's open options; that ruling stands.
+- **A prediction is never a declaration.** A file's domains are always what its own open derived. The directory's path is
+  resolved again at each create, so a junction swapped between the two sends the file elsewhere; `confirm` compares the
+  file's own domains with the prediction and reports a `DomainMismatch` with both, which is how that is noticed. An open
+  relative to the directory's handle would close the race, and stays parked as [DI-15.3](PARKED.md).
+- **A prediction that cannot be made is an error with its reason**, never an empty set that looks like an answer: a
+  directory on a share is not predicted, as a file on one has none found.
+- **It blocks**, as an open does; a caller that cannot block calls it on a thread that can.
+
+**Scheduled work:** none; root `M39.3` and `M39.4` are done ([COMPLETED-CHECKLIST.md](../../COMPLETED-CHECKLIST.md#m39)).

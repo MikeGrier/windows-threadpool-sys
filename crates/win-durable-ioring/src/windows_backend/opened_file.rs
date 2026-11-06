@@ -38,17 +38,19 @@ use windows_sys::Win32::Storage::FileSystem::{
 use wtf_string::{Wtf16Str, Wtf16String};
 
 use durable_ioring::{
-    Access, Capabilities, DataAccess, Geometry, GeometryError, NoData, ReadWrite, WarrantyClass,
+    Access, Capabilities, DataAccess, FlushDomain, Geometry, GeometryError, NoData, ReadWrite,
+    WarrantyClass,
 };
 
 use super::disposition::Disposition;
 use super::file_attributes::FileAttributes;
+use super::file_domains;
 use super::file_id::FileIdentifier;
 use super::file_rights::FileRights;
 use super::share_mode::ShareMode;
 
 mod by_id;
-mod open_request;
+pub(in crate::windows_backend) mod open_request;
 mod reopen;
 
 pub use by_id::{ByIdOptions, ByIdRequest, IdentityMismatch};
@@ -637,6 +639,8 @@ fn refine_sharing_by(
 pub struct OpenedFile<B: Buffering = Cached, A: DataAccess = ReadWrite> {
     handle: SharedHandle,
     geometry: Geometry,
+    /// The flush domains found from the handle when it was opened, all or nothing (DI-D-117).
+    domains: Vec<FlushDomain>,
     mode: PhantomData<(B, A)>,
 }
 
@@ -701,6 +705,20 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
     #[must_use]
     pub fn geometry(&self) -> Geometry {
         self.geometry
+    }
+
+    /// The flush domains found from the handle when the file was opened: one for each disk its volume
+    /// sits on, the same [`disk_flush_domain`](super::disk_flush_domain) bytes a raw volume derives,
+    /// with a virtual disk followed to the disks of the volume that holds its backing file (DI-D-117).
+    ///
+    /// **All or nothing.** When any step fails -- as it does for a file on a share, whose final path
+    /// names no volume -- this is empty, which is unknown and shares fate with every target, and never
+    /// a partial set. **A snapshot** of the moment of the open: a volume later extended onto another
+    /// disk is not seen. What Windows does not show is the consumer's to add with
+    /// [`Win32FileTarget::with_domains`](super::Win32FileTarget::with_domains).
+    #[must_use]
+    pub fn flush_domains(&self) -> &[FlushDomain] {
+        &self.domains
     }
 }
 
@@ -793,9 +811,11 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
                 ));
             }
         }
+        let domains = file_domains::found(&file_domains::Windows, &handle);
         Ok(OpenedFile {
             handle,
             geometry: B::geometry(),
+            domains,
             mode: PhantomData,
         })
     }

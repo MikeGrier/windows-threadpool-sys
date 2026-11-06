@@ -58,6 +58,7 @@ mod keys;
 mod delays;
 // The default diagnostic sink, and a chosen one in its place: DI-12.1.6.
 mod diagnostics;
+mod working_model;
 
 type Ring = Dioring<Vec<u8>>;
 type V = crate::WindowsIds<u64>;
@@ -306,9 +307,12 @@ fn file(key: u64, temp: &TempFile, domains: &[&str]) -> TargetSetup {
     TargetSetup::new(IoTargetKey(key), target(temp.open(), domains))
 }
 
-/// A target over `file`, declared with `domains`.
+/// A target over `file` with exactly `domains`: the disk found for the temporary file is set aside,
+/// since these tests use files on one disk to stand for files on separate devices (DI-D-117).
 pub(crate) fn target(file: OpenedFile, domains: &[&str]) -> Win32FileTarget {
-    Win32FileTarget::new(file).with_domains(domains.iter().map(|d| domain(d)))
+    Win32FileTarget::new(file)
+        .without_found_domains()
+        .with_domains(domains.iter().map(|d| domain(d)))
 }
 
 /// A provider that serves fixed domains and is never asked for anything here.

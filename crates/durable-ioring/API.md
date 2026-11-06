@@ -288,7 +288,8 @@ been given, in the order named, once the import is admitted, so the import alloc
 
 Declarations must be complete: extra domains are safe, a missing one is the one way a declaration
 can make the contract false ([CONTRACT.md](CONTRACT.md)). Deriving the bytes from Windows' storage
-topology is a locality helper's job outside this crate (root `M39`).
+topology is outside this crate: `win-durable-ioring` derives a file's from its handle when it opens it, and a raw
+volume's from its disks ([DI-D-117](DESIGN-NOTES.md#di-d-117)); a target made any other way declares its own.
 
 ### 14. Ending an instance
 

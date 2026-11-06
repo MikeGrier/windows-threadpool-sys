@@ -21,6 +21,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::bytes_per_sector;
 
+use super::file_domains;
 use super::opened_file::{Buffering, Unbuffered};
 use super::opened_volume::disk_flush_domain;
 use super::raw_open;
@@ -106,6 +107,7 @@ pub struct OpenedDisk<B: Buffering = Unbuffered, A: DataAccess = ReadWrite> {
     handle: SharedHandle,
     geometry: Geometry,
     disk_number: u32,
+    domains: Vec<FlushDomain>,
     mode: PhantomData<(B, A)>,
 }
 
@@ -126,10 +128,16 @@ impl<B: Buffering, A: DataAccess> OpenedDisk<B, A> {
         let sector = bytes_per_sector(&file)?;
         let geometry = B::sector_geometry(sector)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let disk_number = path.disk_number();
+        // Asked of this handle, not of `path` again.
+        let domains = file_domains::seeded_found(&file_domains::Windows, &[disk_number], || {
+            file_domains::hosts_of_handle(&file, true)
+        });
         Ok(Self {
             handle: SharedHandle::from(file),
             geometry,
-            disk_number: path.disk_number(),
+            disk_number,
+            domains,
             mode: PhantomData,
         })
     }
@@ -152,10 +160,20 @@ impl<B: Buffering, A: DataAccess> OpenedDisk<B, A> {
         self.disk_number
     }
 
-    /// The disk's flush domain: itself.
+    /// The disk's own flush domain: itself.
     #[must_use]
     pub fn flush_domain(&self) -> FlushDomain {
         disk_flush_domain(self.disk_number)
+    }
+
+    /// The flush domains of the disk, found when it was opened: itself, and, if it is a virtual disk
+    /// backed by a file, those of the volume that holds the file, followed as a file's are
+    /// (DI-D-117); once each, in disk order. A file on the host volume and this disk then share fate,
+    /// as they do. When any step of following fails the disk has none, which is unknown and shares
+    /// fate with every target.
+    #[must_use]
+    pub fn flush_domains(&self) -> &[FlushDomain] {
+        &self.domains
     }
 
     /// A disk over `handle`, with the parts a test gives it, so that what is derived from a disk
@@ -166,6 +184,7 @@ impl<B: Buffering, A: DataAccess> OpenedDisk<B, A> {
             handle,
             geometry: B::sector_geometry(sector).expect("a power of two"),
             disk_number,
+            domains: vec![disk_flush_domain(disk_number)],
             mode: PhantomData,
         }
     }

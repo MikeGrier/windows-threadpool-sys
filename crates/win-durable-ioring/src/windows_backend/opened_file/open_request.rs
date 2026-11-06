@@ -23,7 +23,7 @@ mod tests;
 /// What an open asks of `CreateFileW`, already checked for the combinations that cannot mean
 /// anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Parameters {
+pub(in crate::windows_backend) struct Parameters {
     /// `dwDesiredAccess`.
     pub access: u32,
     /// `dwCreationDisposition`.
@@ -37,7 +37,10 @@ pub(super) struct Parameters {
 /// The request to open `path` as `parameters` says, built on the calling thread. A path with an
 /// interior NUL is refused as invalid input, and a relative one is fixed to the current directory as
 /// it is now, before anything is touched.
-pub(super) fn request(path: Wtf16String, parameters: Parameters) -> io::Result<OpenFile> {
+pub(in crate::windows_backend) fn request(
+    path: Wtf16String,
+    parameters: Parameters,
+) -> io::Result<OpenFile> {
     Ok(OpenFile::new(path)
         .map_err(path_error)?
         .with_desired_access(parameters.access)
@@ -47,7 +50,7 @@ pub(super) fn request(path: Wtf16String, parameters: Parameters) -> io::Result<O
 }
 
 /// Make the call `request` describes, on the calling thread.
-pub(super) fn perform(request: &OpenFile) -> io::Result<OwnedHandle> {
+pub(in crate::windows_backend) fn perform(request: &OpenFile) -> io::Result<OwnedHandle> {
     request
         .perform()
         .map_err(|error| io::Error::from_raw_os_error(raw_code(error.code())))

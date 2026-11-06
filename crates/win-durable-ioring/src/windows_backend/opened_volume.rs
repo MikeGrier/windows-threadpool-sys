@@ -22,6 +22,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::{DiskExtent, bytes_per_sector, lock_volume, volume_disk_extents};
 
+use super::file_domains;
 use super::opened_file::{Buffering, Unbuffered};
 use super::raw_open;
 use super::share_mode::ShareMode;
@@ -187,6 +188,7 @@ pub struct OpenedVolume<B: Buffering = Unbuffered, A: DataAccess = ReadWrite> {
     handle: SharedHandle,
     geometry: Geometry,
     extents: Vec<DiskExtent>,
+    domains: Vec<FlushDomain>,
     locked: bool,
     mode: PhantomData<(B, A)>,
 }
@@ -211,6 +213,12 @@ impl<B: Buffering, A: DataAccess> OpenedVolume<B, A> {
         let sector = bytes_per_sector(&file)?;
         let geometry = B::sector_geometry(sector)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        // From this handle and its extents, not from `path` again, which may name another volume by
+        // now; before the lock, which would refuse the opens the walk past a virtual disk makes.
+        let own: Vec<u32> = extents.iter().map(|extent| extent.disk_number).collect();
+        let domains = file_domains::seeded_found(&file_domains::Windows, &own, || {
+            file_domains::hosts_of_handle(&file, false)
+        });
         if options.lock {
             lock_volume(&file)?;
         }
@@ -218,6 +226,7 @@ impl<B: Buffering, A: DataAccess> OpenedVolume<B, A> {
             handle: SharedHandle::from(file),
             geometry,
             extents,
+            domains,
             locked: options.lock,
             mode: PhantomData,
         })
@@ -241,10 +250,14 @@ impl<B: Buffering, A: DataAccess> OpenedVolume<B, A> {
         &self.extents
     }
 
-    /// The flush domains of the volume: one for each disk it sits on, once each, in disk order.
+    /// The flush domains of the volume, found when it was opened: one for each disk it sits on,
+    /// and, for a disk that is a virtual disk backed by a file, those of the volume that holds the
+    /// file, followed as a file's are (DI-D-117); once each, in disk order. A file on the host volume
+    /// and this volume then share fate, as they do. When any step of following fails the volume has
+    /// none, which is unknown and shares fate with every target.
     #[must_use]
     pub fn flush_domains(&self) -> Vec<FlushDomain> {
-        domains_of(&self.extents)
+        self.domains.clone()
     }
 
     /// Whether the volume was locked when it was opened.
@@ -265,6 +278,7 @@ impl<B: Buffering, A: DataAccess> OpenedVolume<B, A> {
         Self {
             handle,
             geometry: B::sector_geometry(sector).expect("a power of two"),
+            domains: domains_of(&extents),
             extents,
             locked,
             mode: PhantomData,
@@ -285,6 +299,7 @@ impl<B: Buffering, A: DataAccess> AsRawHandle for OpenedVolume<B, A> {
 }
 
 /// One flush domain for each distinct disk in `extents`, in disk order.
+#[cfg(test)]
 fn domains_of(extents: &[DiskExtent]) -> Vec<FlushDomain> {
     let mut disks: Vec<u32> = extents.iter().map(|extent| extent.disk_number).collect();
     disks.sort_unstable();

@@ -310,13 +310,22 @@ assert_eq!(scrubber.file_id()?, writer.file_id()?);
 
 ### A raw volume
 
+A file this crate opens has its flush domains found from its handle: the disks of its volume, all or nothing,
+and none for a file on a share ([DI-D-117](../durable-ioring/DESIGN-NOTES.md#di-d-117)). Before creating files,
+`DirectoryDomains::predict` gives the domains a file created in a directory will have, by the same derivation run on
+the directory's handle, and `confirm` checks a file's own against it, which is how a junction swapped between the two
+is noticed ([DI-D-118](../durable-ioring/DESIGN-NOTES.md#di-d-118)). A prediction is never a declaration.
+
 A raw volume is a target too ([DI-D-61](../durable-ioring/DESIGN-NOTES.md#di-d-61)): one handle, one
 commit per volume, and **regions are offsets the consumer allocates inside it**, not targets of their
 own. `OpenedVolume` opens it by a path that can only name a volume, a drive letter or a volume GUID,
 and finds what the backing must know for itself with documented device controls
 ([win-volume-sys](../win-volume-sys/README.md)): the disks it sits on, which become its flush
-domains (`disk_flush_domain` names a disk, so a consumer can declare the same domain for a file on
-it), and the sector it is addressed in, which is the alignment of its operations. A volume that is
+domains (`disk_flush_domain` names a disk, and a file this crate opens on it has the same domain found
+for it from its handle, [DI-D-117](../durable-ioring/DESIGN-NOTES.md#di-d-117)), with, for a virtual
+disk among them, the disks of the volume holding its backing file, as a file's are followed, so a raw
+volume on a VHD and a file beside the VHD's file share fate; and the sector it is
+addressed in, which is the alignment of its operations. A volume that is
 remote, or not a volume, is refused. It claims `SharedDevice` when opened unbuffered and `BestEffort` when opened cached, and never
 `Complete`: a lock keeps other handles off the volume, not other writers off its disks. Opening one for writing needs an
 administrator, and `VolumeOptions::lock` takes the volume lock, which a write to a volume with a
@@ -339,7 +348,9 @@ let target = Win32FileTarget::from_volume(volume);
 
 `OpenedDisk` opens a physical disk by its number, `\\.\PhysicalDriveN`, rather than a volume on it
 ([DI-D-62](../durable-ioring/DESIGN-NOTES.md#di-d-62)). The disk is its own flush domain, named by
-`disk_flush_domain` as a volume on it would name it, and its operations are aligned to its sector,
+`disk_flush_domain` as a volume on it would name it; a virtual disk carries as well the disks of the
+volume holding its backing file, found by asking the disk itself for its storage dependency
+([DI-D-117](../durable-ioring/DESIGN-NOTES.md#di-d-117)). Its operations are aligned to its sector,
 which a device control reports. It claims `SharedDevice` when opened unbuffered and `BestEffort` when opened cached, never
 `Complete`, for the reason a volume does not. Windows documents that it blocks a direct write to a sector a mounted volume covers, so a
 disk with volumes on it is written through them, or has them locked or is taken offline first; the
