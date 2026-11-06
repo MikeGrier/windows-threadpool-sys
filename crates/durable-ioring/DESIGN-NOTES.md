@@ -1416,7 +1416,7 @@ reports no timing, and nothing else: a domain it does not route is panicked on, 
 cannot narrow a provider to a subset of what it declares, and cannot name a domain the provider does not.
 
 **Why.** A flush domain is the consumer's exact bytes ([DI-D-21](#di-d-21)), minted by the layer that maps the consumer's
-storage onto domains (root [M39](../../CHECKLIST.md)). Whatever builds a provider must be handed those same bytes, so it
+storage onto domains (root [M39](../../COMPLETED-CHECKLIST.md#m39)). Whatever builds a provider must be handed those same bytes, so it
 knows what the provider serves when it builds it, and a provider built with its domains says so through `domains()`. A
 second list at registration would be a second statement of the same fact, free to disagree with the first. Narrowing a
 provider, or renaming domains for a provider whose identifiers differ from the consumer's, can be added later as another
@@ -2881,7 +2881,7 @@ domains are found: "I would think that the data would be determined at open".
 - **Where.** In `OpenedFile::admit`, the checks every open makes on the handle it opened, so an open by path and an open by
   identifier ([DI-D-70](#di-d-70)) both derive them, and `Win32FileTarget::new` carries them as `from_volume` carries a
   volume's ([DI-D-61](#di-d-61)). A target made any other way has none found and declares its own with `with_domains`, as
-  before. The steps are root [M39.2](../../CHECKLIST.md)'s; a local file's domains are the same `disk_flush_domain` bytes a
+  before. The steps are root [M39.2](../../COMPLETED-CHECKLIST.md#m392)'s; a local file's domains are the same `disk_flush_domain` bytes a
   raw volume derives, so a file and a volume on one disk share fate by construction.
 - **All or nothing.** A hop that fails leaves the file with no found domains, which is unknown and shares fate with every
   target: the safe default. A partial set is never produced, since a missing domain is the one way a declaration makes the
@@ -2920,7 +2920,7 @@ domains are found: "I would think that the data would be determined at open".
   [API.md](API.md) section 13 calls the derivation "a locality helper's job outside this crate". Both change with the code,
   in root `M39.2`.
 
-**Scheduled work:** root `M39.2` to `M39.4` in [CHECKLIST.md](../../CHECKLIST.md).
+**Scheduled work:** root `M39.2` to `M39.4`, done ([COMPLETED-CHECKLIST.md](../../COMPLETED-CHECKLIST.md#m39)); the opt-out's shape is reserved and no work is scheduled for it.
 
 ## <a id="di-d-118"></a>DI-D-118: a directory's flush domains are predicted from its own handle, and a file's are checked against the prediction
 
@@ -2940,4 +2940,4 @@ name with `GetVolumePathNameW` and `GetVolumeNameForVolumeMountPointW`: two new 
   directory on a share is not predicted, as a file on one has none found.
 - **It blocks**, as an open does; a caller that cannot block calls it on a thread that can.
 
-**Scheduled work:** none beyond root `M39.4`.
+**Scheduled work:** none; root `M39.3` and `M39.4` are done ([COMPLETED-CHECKLIST.md](../../COMPLETED-CHECKLIST.md#m39)).
