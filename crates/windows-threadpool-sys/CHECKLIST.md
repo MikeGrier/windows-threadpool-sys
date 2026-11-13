@@ -303,6 +303,11 @@ in a thread's own wait.
   - its callback receives a `SealedWaitActivation` with `result`, `is_signalled` and `rearm`, and no
     `handle`. The re-arm advice for a manual-reset event (reset through whatever owns the `Event`
     before re-arming) is restated there, as for `WaitOnlyEvent`.
+  - redact the sealed event's handle in the optional public trace dump as well as `Debug`.
+    Implementation on 2026-11-13 found that the existing lifecycle records the target value at
+    creation, arming, callback rearming and drop. Preserve those records and the ordinary wait's
+    diagnostics, but use a redacted diagnostic value for sealed targets, with a trace-enabled
+    behavioral test and sabotage. A wrapper alone cannot withhold what its inner wait publishes.
 
   A type parameter on `ThreadpoolWait` was the alternative; the wrapper leaves today's API
   untouched. Tests in a new child of [wait/tests](src/wait/tests), in the style of
