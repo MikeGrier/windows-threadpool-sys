@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.4.1...windows-threadpool-sys-v0.4.2) (2026-11-13)
+
+
+### Features
+
+* **threadpool:** add sealed event waits and callback activations ([62c35fd](https://github.com/MikeGrier/windows-threadpool-sys/commit/62c35fd57ea66b282a1ec390a2642b43b7db87c5))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * win-sync-sys bumped from 0.1.0 to 0.1.1
+
 ## [0.4.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.4.0...windows-threadpool-sys-v0.4.1) (2026-11-13)
 
 

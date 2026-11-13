@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.6.1...win-durable-ioring-v0.6.2) (2026-11-13)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-ioring-sys bumped from 0.9.2 to 0.9.3
+    * win-sync-sys bumped from 0.1.0 to 0.1.1
+    * windows-threadpool-sys bumped from 0.4.1 to 0.4.2
+    * windows-namespace-request-sys bumped from 0.5.3 to 0.5.4
+
 ## [0.6.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.6.0...win-durable-ioring-v0.6.1) (2026-11-13)
 
 

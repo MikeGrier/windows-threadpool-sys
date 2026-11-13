@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-sync-sys-v0.1.0...win-sync-sys-v0.1.1) (2026-11-13)
+
+
+### Features
+
+* **win-sync:** add sealed wait-only events ([eb58cfe](https://github.com/MikeGrier/windows-threadpool-sys/commit/eb58cfe77cda5a4f95ac9552d743fe1bf4971acc))
+* **win-sync:** support sealed targets in native thread waits ([25ee7a4](https://github.com/MikeGrier/windows-threadpool-sys/commit/25ee7a430bdc12043fce3bc466b99a9fc62976dc))
+
 ## [0.1.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-sync-sys-v0.0.2...win-sync-sys-v0.1.0) (2026-10-22)
 
 

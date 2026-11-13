@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-threadpool-sys"
-version = "0.4.1" # x-release-please-version
+version = "0.4.2" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -35,7 +35,7 @@ windows-overlapped-io-sys = { version = "0.3.1", path = "../windows-overlapped-i
 # Events: `WaitableHandle::event` creates through it, and `From<Event>` converts one into a
 # wait target. The crate makes no event of its own (WS-D-5 in win-sync-sys' DESIGN-NOTES.md).
 # Published independently, so both a path and a version.
-win-sync-sys = { version = "0.1.0", path = "../win-sync-sys" }
+win-sync-sys = { version = "0.1.1", path = "../win-sync-sys" }
 # A wait target may be shared: the wait holds one clone and the caller keeps others (the workspace
 # DESIGN-NOTES.md, "A wait may hold its handle shared"). Published independently, so both a path and
 # a version.
