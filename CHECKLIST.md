@@ -288,7 +288,7 @@ The items below make the measurement behind the durable-ioring sweeps' `timeoutS
 `whyTimeoutSeconds` in [crates/durable-ioring/sabotage.json](crates/durable-ioring/sabotage.json))
 repeatable, and test the reading it rests on.
 
-- [ ] **M34.27** -- `tools/measure-sweep-durations.ps1`: the CI duration of every full-suite launch in
+- [x] **M34.27** -- `tools/measure-sweep-durations.ps1`: the CI duration of every full-suite launch in
   the sabotage sweeps, read from the shard job logs, with its tests. Done when it fetches the shard
   job logs of the sweep runs since a date for the named manifests, keeps one row per full-suite
   launch (each baseline, and each entry whose verdict did not come from its narrowed run), reports

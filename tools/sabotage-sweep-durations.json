@@ -1,0 +1,64 @@
+{
+  "description": "Sabotages for measure-sweep-durations.ps1, the script the durable-ioring manifests' timeoutSeconds is measured with, judged by test-measure-sweep-durations.ps1. Run with tools/run-sabotage.ps1 -Manifest tools/sabotage-sweep-durations.json -CargoCommand tools/sabotage-sweep-durations-runner.cmd; see tools/README-sabotage.md.",
+  "root": "..",
+  "package": "sabotage-sweep-durations",
+  "testArgs": ["--suite"],
+  "sabotages": [
+    {
+      "name": "a build launch is counted as a suite",
+      "file": "tools/measure-sweep-durations.ps1",
+      "expect": "caught",
+      "why": "A build takes several times as long as the suite on these runners, so counting it would raise every percentile the bound is set from.",
+      "find": ["            if ($pending -and -not $isBuild) {"],
+      "replace": ["            if ($pending) {"]
+    },
+    {
+      "name": "a narrowed run that caught the entry is counted as a suite",
+      "file": "tools/measure-sweep-durations.ps1",
+      "expect": "caught",
+      "why": "A narrowed run is a few tests, so counting it would pull the entry durations down to a few seconds and say nothing about the suite.",
+      "find": ["                if ($verdict -notmatch '^caught \\(its recorded tests failed' -and $launches.Count -gt 0) {"],
+      "replace": ["                if ($launches.Count -gt 0) {"]
+    },
+    {
+      "name": "the first run launch of an entry is taken instead of the last",
+      "file": "tools/measure-sweep-durations.ps1",
+      "expect": "caught",
+      "why": "After a narrowed run that was not credited, the suite runs second; taking the first records the narrowed run's duration as the suite's.",
+      "find": ["                    $last = $launches[-1]"],
+      "replace": ["                    $last = $launches[0]"]
+    },
+    {
+      "name": "a launch killed at the bound is dropped",
+      "file": "tools/measure-sweep-durations.ps1",
+      "expect": "caught",
+      "why": "The killed launches are the evidence that a bound is inside the tail; dropping them reports a sweep that has none.",
+      "find": ["        if ($line -match 'the bound of (\\d+)ms was reached') { $pending = @{ Code = 'bound'; Ms = [int]$Matches[1] }; continue }"],
+      "replace": ["        if ($line -match 'the bound of (\\d+)ms was reached') { continue }"]
+    },
+    {
+      "name": "the percentile rounds its rank down",
+      "file": "tools/measure-sweep-durations.ps1",
+      "expect": "caught",
+      "why": "Nearest rank is the ceiling of p x n; flooring it reports the sample below, which for p99.9 of 1,000 is the 998th.",
+      "find": ["    $at = [Math]::Ceiling($P * $Sorted.Count) - 1"],
+      "replace": ["    $at = [Math]::Floor($P * $Sorted.Count) - 1"]
+    },
+    {
+      "name": "a log for another manifest is read",
+      "file": "tools/measure-sweep-durations.ps1",
+      "expect": "caught",
+      "why": "Every manifest's shard logs share the cache directory, so a manifest asked about would take on another's durations.",
+      "find": ["        if (-not $labels.ContainsKey($header.Manifest)) { continue }"],
+      "replace": [""]
+    },
+    {
+      "name": "control: the verdict's trailing timing is stripped with a looser pattern",
+      "file": "tools/measure-sweep-durations.ps1",
+      "expect": "survives",
+      "why": "A control. The harness always ends a verdict with '(Ns)' or '(Ns, ~... left)', which both patterns remove, so no row changes.",
+      "find": ["                $verdict = $text.Substring($current.Length).Trim() -replace '\\s*\\(\\d+s(, ~[^)]*)?\\)$', ''"],
+      "replace": ["                $verdict = $text.Substring($current.Length).Trim() -replace '\\s*\\(\\d+s[^)]*\\)$', ''"]
+    }
+  ]
+}

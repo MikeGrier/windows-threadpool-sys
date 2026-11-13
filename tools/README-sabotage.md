@@ -198,6 +198,17 @@ through [sabotage-records-runner.cmd](sabotage-records-runner.cmd), the same arr
     -CargoCommand (Resolve-Path tools\sabotage-records-runner.cmd).Path
 ```
 
+[sabotage-sweep-durations.json](sabotage-sweep-durations.json) does the same for
+[measure-sweep-durations.ps1](measure-sweep-durations.ps1), which reads the sweep jobs' logs to
+measure how long each manifest's suite takes on CI, judged by
+[test-measure-sweep-durations.ps1](test-measure-sweep-durations.ps1) through
+[sabotage-sweep-durations-runner.cmd](sabotage-sweep-durations-runner.cmd):
+
+```powershell
+.\tools\run-sabotage.ps1 -Manifest tools\sabotage-sweep-durations.json `
+    -CargoCommand (Resolve-Path tools\sabotage-sweep-durations-runner.cmd).Path
+```
+
 Each entry runs the whole suite, so the cost is roughly
 `(entries + 1) x <suite time>` -- about five and a half minutes for these eight
 now that the suite parallelises, against nineteen when it did not. Like every

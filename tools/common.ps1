@@ -712,6 +712,16 @@ function Get-SabotageManifestCrate {
     return $Manifest.Substring(0, $at)
 }
 
+# The label a manifest's sweep jobs, caches and artifacts are named by: its crate's directory name,
+# with `-<kind>` added for a `sabotage-<kind>.json`.
+function Get-SabotageManifestLabel {
+    param([string] $Path)
+    $crate = Split-Path -Leaf (Split-Path -Parent $Path)
+    $kind = [System.IO.Path]::GetFileNameWithoutExtension($Path).Substring('sabotage'.Length).TrimStart('-')
+    if ($kind) { return "$crate-$kind" }
+    return $crate
+}
+
 # `Path`, full, in the case each of its directories and its file have on disk, so
 # a path typed in another case is named as git names it. A part that is not there
 # is kept as given.
