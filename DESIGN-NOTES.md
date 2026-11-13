@@ -924,6 +924,11 @@ that hands the value back rather than an answer that is wrong.
 `WS-2.2` made an `Event`'s clones share one handle ([its WS-D-10](crates/win-sync-sys/DESIGN-NOTES.md#ws-d-10)): the
 wait and every clone the caller keeps hold the one handle, and no duplicate is made to signal through.
 
+**Wait-only events preserve their access.** `From<WaitOnlyEvent>` transfers the same shared handle into
+the wait. The wait and callback receive only borrowed handles with the `SYNCHRONIZE` access already
+granted; the conversion neither duplicates nor broadens access. A holder that must change signal state
+retains an `Event` and acts through it.
+
 ## Re-arming is gated against teardown, under the same lock that arms
 
 Both the timer and the wait let a callback re-arm the object from inside itself, which is what the SDK requires

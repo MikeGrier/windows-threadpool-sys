@@ -268,57 +268,7 @@ component nobody has written.
 
 Graduated 2026-10-21 from `M-T14+`, whose gate, [M-T14](COMPLETED-CHECKLIST.md#m-t141), is complete.
 
-- [ ] **M-T16.1** (was `M-T14+.1`) -- **A thread-pool wait target from `win_sync_sys::WaitOnlyEvent`.** From
-  [WS-1+.5](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-1+5): a wait-only handle is still known to be
-  an event and carries `SYNCHRONIZE`, which is all a pool wait needs, so a `From` conversion
-  alongside `Event`'s is safe for the reason [WS-D-5](../win-sync-sys/DESIGN-NOTES.md#ws-d-5) gives.
-  Decide whether it is a `From` impl or a second constructor, with the pool's `Event` conversion as
-  the model, and test it as that conversion is. It lets a consumer hand a thread-pool wait the
-  handle it was given without giving the pool the power to signal it.
-
-  **Requested 2026-11-12 by canopy** (MikeGrier/canopy, branch `mikegrier/first`, its `API-3`, which
-  specifies this change in `WINDOWS-THREADPOOL-SYS-WAIT-ONLY-EVENT.md` at that repository's root):
-  canopy's completion doorbell must lend a handle that cannot reset its manual-reset event, and a
-  client must be able to register it with a thread-pool wait without `unsafe`. The request settles
-  the open question as **a `From` impl**, not a `WaitableHandle::wait_only(&Event)` constructor: the
-  owner of the event decides when the wait-only handle is made, and it matches `From<Event>`. The
-  engineer accepted the request on 2026-11-12. The work:
-  - `impl From<WaitOnlyEvent> for WaitableHandle` in [wait.rs](src/wait.rs), beside `From<Event>`,
-    building `WaitTarget::Shared` from `SharedHandle::from(event)`. Sound for `From<Event>`'s reason:
-    a `WaitOnlyEvent` is made only from an `Event`, so it is never a mutex
-    ([WS-D-4](../win-sync-sys/DESIGN-NOTES.md#ws-d-4), [WS-D-7](../win-sync-sys/DESIGN-NOTES.md#ws-d-7)),
-    and `SYNCHRONIZE` is the access a pool wait needs.
-  - Documentation, swept per CONTRACT INTEGRITY rule 3 (grep `From<Event>`, `Event` and `reset`
-    across this crate's `src/`, `tests/`, README and the root [DESIGN-NOTES.md](../../DESIGN-NOTES.md)):
-    the impl's own doc; `WaitableHandle`'s list of safe constructors; the module doc in
-    [wait.rs](src/wait.rs); `WaitActivation::handle`, whose doc says a callback can reset through it,
-    which a wait-only handle refuses; `WaitActivation::rearm`, whose reset-before-rearm advice must
-    then go through whatever owns the `Event`, or the callback re-arms on a still-signalled event and
-    runs again at once; `into_handle`, which hands back a `SYNCHRONIZE`-only handle as last holder;
-    and [README.md](README.md) "Waits own a handle of proven provenance". State what a wait built this
-    way cannot do (signal or reset the event, by the callback or by any holder of the wait) and what
-    it does not guard against (a holder duplicating the handle for more access, as `WaitOnlyEvent`'s
-    own doc says).
-  - The decision, as a paragraph in the root [DESIGN-NOTES.md](../../DESIGN-NOTES.md)
-    [A wait may hold its handle shared](../../DESIGN-NOTES.md#a-wait-may-share-its-handle) and its
-    alternatives (the constructor) in [DESIGN-RATIONALE.md](../../DESIGN-RATIONALE.md).
-  - Tests in the style of the `From<Event>` ones. [tests.rs](src/wait/tests.rs) is 52 KiB (large), so
-    they go in a new child module, `src/wait/tests/wait_only.rs`, not appended:
-    a wait built from `event.duplicate_wait_only()` runs its callback when the `Event` is set; the
-    target is the same object as the `Event` (`CompareObjectHandles`) but not the same handle; with a
-    manual-reset event, re-arming after the owner resets waits for the next set, and re-arming without
-    a reset activates again at once; the handle `ThreadpoolWait::handle` and `WaitActivation::handle`
-    lend refuses `SetEvent` and `ResetEvent` with `ERROR_ACCESS_DENIED`, and an `Event`-built wait's
-    handle accepts both (the control); the wait keeps the handle open after every other `WaitOnlyEvent`
-    clone and the `Event` drop, and `into_handle` returns it only once the wait is the last holder.
-  - [sabotage.json](sabotage.json) entries: the impl re-duplicating the handle with
-    `EVENT_MODIFY_STATE` added (which Windows allows) must turn the access-denied test red, and the
-    impl holding a duplicate instead of the shared handle must turn the last-holder test red.
-  - [win-sync-sys' README.md](../win-sync-sys/README.md) says the pool accepts an `Event` without
-    `unsafe`; add `WaitOnlyEvent` in a separate `docs(win-sync)` commit, so that crate gets no release.
-
-  Verify: this crate's wait tests (`cargo_test -p windows-threadpool-sys`, `test_filter` `wait::`),
-  its doctests, and `run-sabotage.ps1 -Since origin/main` on this crate's manifest.
+- [x] **M-T16.1** -- Accept `WaitOnlyEvent` as a safe thread-pool wait target. -> [completed 2026-11-12](COMPLETED-CHECKLIST.md#m-t161)
 
 - [ ] **M-T16.2** -- **Release `M-T16.1` and tell canopy.** The commit is `feat(threadpool)`, and
   this workspace's release-please config has `bump-patch-for-minor-pre-major`, so it releases as

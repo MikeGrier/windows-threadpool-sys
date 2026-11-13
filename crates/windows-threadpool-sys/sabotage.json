@@ -439,6 +439,22 @@
       "why": "The manifest checking itself. The label is for a reader, and no test reads it.",
       "find": ["                    WaitTarget::Shared(_) => \"CloseHandle, by the last holder\",\n"],
       "replace": ["                    WaitTarget::Shared(_) => \"shared\",\n"]
+    },
+    {
+      "name": "M-T16.1: WaitOnlyEvent conversion preserves SYNCHRONIZE-only access",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The conversion must not replace the supplied SYNCHRONIZE-only handle with one granted EVENT_MODIFY_STATE. The access-denied tests exercise both ThreadpoolWait::handle and WaitActivation::handle, and the Event-backed positive control stays writable.",
+      "find": ["            target: WaitTarget::Shared(SharedHandle::from(event)),"],
+      "replace": ["            target: WaitTarget::Shared(SharedHandle::new(win_sync_sys::duplicate_handle_with_access(&event, win_sync_sys::Access::SYNCHRONIZE | win_sync_sys::Access::EVENT_MODIFY_STATE).unwrap()))"]
+    },
+    {
+      "name": "M-T16.1: WaitOnlyEvent conversion shares the supplied handle",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The safe conversion transfers the shared handle, it does not duplicate it. The raw-handle equality assertion against a retained WaitOnlyEvent clone detects a duplicate even when it refers to the same event and keeps the event alive.",
+      "find": ["            target: WaitTarget::Shared(SharedHandle::from(event)),"],
+      "replace": ["            target: WaitTarget::Shared(SharedHandle::new(win_sync_sys::duplicate_handle_with_access(&event, win_sync_sys::Access::SYNCHRONIZE).unwrap()))"]
     }
   ]
 }

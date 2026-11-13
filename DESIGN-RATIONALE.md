@@ -1100,3 +1100,13 @@ count that outlives a run.
 - **What building it found.** The tests caught two things a reading would not have: `@()` over an empty generic list
   throws on PowerShell 7 here, so the empty case of every parse failed; and PowerShell 7 reads an ISO 8601 string out
   of JSON as a DateTime, and written back it differs from the branch's text, so every publish would have committed.
+
+## Why the wait accepts a WaitOnlyEvent by conversion
+
+[DESIGN-NOTES.md](DESIGN-NOTES.md) records the current contract. `WaitOnlyEvent` already proves that the
+handle is an event and carries only `SYNCHRONIZE` access. A constructor taking `&Event` would move the
+decision to duplicate and restrict access into the thread-pool crate, without giving the caller a
+first-class value for that reduced authority. `From<WaitOnlyEvent>` instead consumes the value whose
+access the owner explicitly chose and transfers its shared handle without another duplicate. The owner
+can keep an `Event` to set or reset it; the wait never gains those rights. This is an access boundary on
+the handle, not a defense against a holder that deliberately duplicates it with broader access.

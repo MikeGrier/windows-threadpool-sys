@@ -2494,3 +2494,13 @@ finding is of a different and worse kind: a rule nothing tests.
   > [COMPLETED-CHECKLIST.md](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-22).
 
 Items, each archived above under its own heading: [M-T15.1](#m-t151).
+
+## Moved 2026-11-12 23:42:16 -05:00 -- M-T16.1, a wait-only event target
+
+### <a id="m-t161"></a>M-T16.1 -- Accept `WaitOnlyEvent` as a safe thread-pool wait target. *(completed 2026-11-12 23:42:16 -05:00)*
+
+Implemented `From<WaitOnlyEvent> for WaitableHandle` in [wait.rs](src/wait.rs) by transferring the existing shared handle, preserving event provenance and `SYNCHRONIZE`-only access. The wait and callback lend that handle without gaining signal or reset access; an owner retaining an `Event` changes its state through that owner. Updated the access and rearm documentation, and demonstrated the conversion in the repeating-wait doctest.
+
+Added focused coverage in [wait_only.rs](src/wait/tests/wait_only.rs) for manual- and auto-reset behavior, callback rearming, access-denied operations and the Event-backed positive control, handle identity, and lifetime. Added access-widening and duplicate-handle mutations in [sabotage.json](sabotage.json), both caught by the tests.
+
+Updated the thread-pool [README.md](README.md), the [win-sync-sys README.md](../win-sync-sys/README.md), and the workspace [DESIGN-NOTES.md](../../DESIGN-NOTES.md#a-wait-may-share-its-handle) and [DESIGN-RATIONALE.md](../../DESIGN-RATIONALE.md). The focused wait-only tests, full package tests and doctests, all-target Clippy, sabotage patch validation, and targeted sabotage sweep passed.
