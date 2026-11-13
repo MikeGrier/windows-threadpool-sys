@@ -1948,7 +1948,7 @@
       "expect": "survives",
       "why": "Declared, and not a gap a test can close: the remote and unknown-location checks are the path open's, made by the same function and caught there, and no test reaches them by identifier, since the OpenFileById page lists SMB as not supported and the call opens only a file on a file system, whose final path is readable.",
       "find": ["        OpenedFile::admit(handle)\n"],
-      "replace": ["        Ok(OpenedFile {\n            handle,\n            geometry: B::geometry(),\n            mode: PhantomData,\n        })\n"]
+      "replace": ["        let domains = super::file_domains::found(&super::file_domains::Windows, &handle);\n        Ok(OpenedFile {\n            handle,\n            geometry: B::geometry(),\n            domains,\n            mode: PhantomData,\n        })\n"]
     },
     {
       "name": "DI-15.2 control: the open's error binding is renamed",
@@ -1964,7 +1964,7 @@
       "expect": "caught",
       "why": "A reopen from any handle can reach a device or a share, so an unbuffered reopen of NUL or of a file on a share would claim SharedDevice for a handle whose location is unknown or remote (DI-14.5, DI-14.6.2).",
       "find": ["        OpenedFile::admit(SharedHandle::from(handle))\n"],
-      "replace": ["        Ok(OpenedFile {\n            handle: SharedHandle::from(handle),\n            geometry: B::geometry(),\n            mode: PhantomData,\n        })\n"]
+      "replace": ["        let handle = SharedHandle::from(handle);\n        let domains = super::file_domains::found(&super::file_domains::Windows, &handle);\n        Ok(OpenedFile {\n            handle,\n            geometry: B::geometry(),\n            domains,\n            mode: PhantomData,\n        })\n"]
     },
     {
       "name": "DI-15.4: a reopen's buffering flags are not passed",
