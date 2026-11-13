@@ -280,3 +280,41 @@ Graduated 2026-10-21 from `M-T14+`, whose gate, [M-T14](COMPLETED-CHECKLIST.md#m
   release-please PR merges and the crate is on crates.io, report the version on canopy's request so
   its `API-3` follow-ups (acadia's `EventSignal::wait_only`, the doorbell lending it, the dev-dependency
   bump) can proceed; posting there needs the engineer's say-so.
+
+## M-T17 -- Threadless waits on a sealed wait-only event
+
+Requested 2026-11-13 by canopy (its `RG-4`); the reason and the type are
+[win-sync-sys WS-M3](../win-sync-sys/CHECKLIST.md#ws-m3----a-wait-only-event-safe-code-cannot-reach-the-handle-of).
+The engineer, 2026-11-13: a sealed event must be usable in this crate's threadless waits, not only
+in a thread's own wait.
+
+- [ ] **M-T17.1** -- **A thread-pool wait on a `SealedWaitOnlyEvent` that never lends its handle.**
+
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M3` -> `WS-3.1` and `WS-3.2`
+  > must land first. See [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
+
+  Today `WaitableHandle::handle` / `into_handle`, `ThreadpoolWait::handle` and
+  `WaitActivation::handle` all lend the target's handle, so a sealed target needs types without them,
+  making the absence a compile-time fact:
+  - `SealedWaitableHandle`, `From<SealedWaitOnlyEvent>`, built from
+    `SealedWaitOnlyEvent::into_shared_handle` as `WaitTarget::Shared`; no `handle`, no `into_handle`;
+  - `SealedThreadpoolWait`, wrapping `ThreadpoolWait` and forwarding its lifecycle (`new`, `arm`,
+    `disarm`, `wait`, `try_cancel_pending`, `stop_and_drain`, drop) without `handle`;
+  - its callback receives a `SealedWaitActivation` with `result`, `is_signalled` and `rearm`, and no
+    `handle`. The re-arm advice for a manual-reset event (reset through whatever owns the `Event`
+    before re-arming) is restated there, as for `WaitOnlyEvent`.
+
+  A type parameter on `ThreadpoolWait` was the alternative; the wrapper leaves today's API
+  untouched. Tests in a new child of [wait/tests](src/wait/tests), in the style of
+  [wait_only.rs](src/wait/tests/wait_only.rs): the callback runs when the `Event` is set; manual-reset
+  re-arm with and without a reset; an auto-reset event consumed by the pool's wait; the wait keeps
+  the event alive after every other holder drops. `compile_fail` doctests: `handle` on each of the
+  three types and `into_handle` on the target. Docs: [README.md](README.md) and the
+  [wait.rs](src/wait.rs) module doc.
+
+- [ ] **M-T17.2** -- **Release `WS-M3` and `M-T17.1`, and tell canopy.** `feat(win-sync)` releases
+  `win-sync-sys` 0.1.1 and `feat(threadpool)` this crate's next patch (one release with `M-T16.2`'s
+  if that has not happened yet); this crate's `win-sync-sys` requirement must admit 0.1.1 -- read the
+  release PR to see whether the workspace plugin rewrites it, and if not, set it in a commit of its
+  own. Then report both versions on canopy's request so `RG-4` can proceed; posting there needs the
+  engineer's say-so.
