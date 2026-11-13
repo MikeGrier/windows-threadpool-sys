@@ -34,6 +34,7 @@
 
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use win_durable_ioring::backend::RefusalKind;
@@ -186,9 +187,12 @@ pub struct Scratch(PathBuf);
 
 impl Scratch {
     pub fn new(tag: &str) -> Self {
+        // Tests are threads of one process and reuse tags, so the process id alone is not enough.
+        static NEXT: AtomicU32 = AtomicU32::new(0);
         let path = std::env::temp_dir().join(format!(
-            "dioring-blocking-push-{}-{tag}.bin",
-            std::process::id()
+            "dioring-blocking-push-{}-{tag}-{}.bin",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::write(&path, []).expect("a scratch file");
         Self(path)

@@ -220,3 +220,14 @@ fn a_push_the_ring_takes_never_calls_make_room() {
     assert!(id.is_ok());
     assert_eq!(rooms, 0);
 }
+
+/// Tests run as threads of one process and `run` names its file by delivery, so two at once ask for
+/// the same tag; each must still get its own file, or one's drop removes the file the other opens.
+#[test]
+fn two_scratch_files_with_one_tag_are_two_files() {
+    let first = Scratch::new("same");
+    let second = Scratch::new("same");
+    assert_ne!(first.0, second.0);
+    drop(first);
+    assert!(second.0.exists(), "{}", second.0.display());
+}
