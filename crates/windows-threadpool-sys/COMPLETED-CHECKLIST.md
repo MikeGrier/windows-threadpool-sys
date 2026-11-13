@@ -2530,3 +2530,21 @@ and doctests, rustdoc with warnings denied, formatting, all-target Clippy, and t
 [sabotage.json](sabotage.json) sweep. Handle-exposure, duplicate-owner, trace-leak and missing-call
 mutations were caught, and the equivalent control survived. Release coordination stays in
 [CHECKLIST.md](CHECKLIST.md) `M-T17.2`.
+
+## Moved 2026-11-13 14:02:09 -05:00 -- M-T16, release and canopy handoff
+
+### <a id="m-t162"></a>M-T16.2 -- Release `M-T16.1` and tell canopy. *(completion recorded 2026-11-13 14:02:09 UTC-05:00)*
+
+The engineer confirmed on 2026-11-13 that this item had been taken care of, including the release
+and canopy handoff. This records that confirmation; no additional notification was sent here.
+
+The release decision for this item was `feat(threadpool)` without a `Release-As` footer,
+using `bump-patch-for-minor-pre-major` for 0.4.1 rather than the request's 0.5.0. The engineer,
+2026-11-12: "there is no need to increment the version higher". The additive change fit canopy's
+`windows-threadpool-sys = "0.4.0"` requirement, and its acadia already required the `win-sync-sys`
+release carrying `duplicate_wait_only`. The handoff concerned canopy's `API-3` follow-ups.
+
+### <a id="m-t16"></a>M-T16 -- Follow-ups to the `Event` conversion
+
+Graduated 2026-10-21 from `M-T14+`, following [M-T14](#m-t141).
+Items: [M-T16.1](#m-t161) and [M-T16.2](#m-t162).
