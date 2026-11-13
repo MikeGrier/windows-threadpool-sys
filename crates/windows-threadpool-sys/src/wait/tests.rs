@@ -4,6 +4,7 @@
 //! Every test drives a real event handle, since the wait object's contract is
 //! about handle ownership and per-activation rearming rather than about timing.
 
+mod sealed;
 mod wait_only;
 
 use std::os::windows::io::{AsHandle, AsRawHandle};

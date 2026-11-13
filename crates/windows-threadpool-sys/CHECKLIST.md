@@ -288,34 +288,7 @@ Requested 2026-11-13 by canopy (its `RG-4`); the reason and the type are
 The engineer, 2026-11-13: a sealed event must be usable in this crate's threadless waits, not only
 in a thread's own wait.
 
-- [ ] **M-T17.1** -- **A thread-pool wait on a `SealedWaitOnlyEvent` that never lends its handle.**
-
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M3` -> `WS-3.1` and `WS-3.2`
-  > must land first. See [COMPLETED-CHECKLIST.md](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-m3).
-
-  Today `WaitableHandle::handle` / `into_handle`, `ThreadpoolWait::handle` and
-  `WaitActivation::handle` all lend the target's handle, so a sealed target needs types without them,
-  making the absence a compile-time fact:
-  - `SealedWaitableHandle`, `From<SealedWaitOnlyEvent>`, built from
-    `SealedWaitOnlyEvent::into_shared_handle` as `WaitTarget::Shared`; no `handle`, no `into_handle`;
-  - `SealedThreadpoolWait`, wrapping `ThreadpoolWait` and forwarding its lifecycle (`new`, `arm`,
-    `disarm`, `wait`, `try_cancel_pending`, `stop_and_drain`, drop) without `handle`;
-  - its callback receives a `SealedWaitActivation` with `result`, `is_signalled` and `rearm`, and no
-    `handle`. The re-arm advice for a manual-reset event (reset through whatever owns the `Event`
-    before re-arming) is restated there, as for `WaitOnlyEvent`.
-  - redact the sealed event's handle in the optional public trace dump as well as `Debug`.
-    Implementation on 2026-11-13 found that the existing lifecycle records the target value at
-    creation, arming, callback rearming and drop. Preserve those records and the ordinary wait's
-    diagnostics, but use a redacted diagnostic value for sealed targets, with a trace-enabled
-    behavioral test and sabotage. A wrapper alone cannot withhold what its inner wait publishes.
-
-  A type parameter on `ThreadpoolWait` was the alternative; the wrapper leaves today's API
-  untouched. Tests in a new child of [wait/tests](src/wait/tests), in the style of
-  [wait_only.rs](src/wait/tests/wait_only.rs): the callback runs when the `Event` is set; manual-reset
-  re-arm with and without a reset; an auto-reset event consumed by the pool's wait; the wait keeps
-  the event alive after every other holder drops. `compile_fail` doctests: `handle` on each of the
-  three types and `into_handle` on the target. Docs: [README.md](README.md) and the
-  [wait.rs](src/wait.rs) module doc.
+- [x] **M-T17.1** -- Add sealed thread-pool waits without exposing their event handles. -> [completed 2026-11-13](COMPLETED-CHECKLIST.md#m-t171)
 
 - [ ] **M-T17.2** -- **Release `WS-M3` and `M-T17.1`, and tell canopy.** `feat(win-sync)` releases
   `win-sync-sys` 0.1.1 and `feat(threadpool)` this crate's next patch (one release with `M-T16.2`'s

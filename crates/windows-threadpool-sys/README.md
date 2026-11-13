@@ -132,6 +132,43 @@ the caller to remember:
   do not rely on a queued *tick* running during teardown; the guarantee here is
   about which primitive the rundown invokes.
 
+## Sealed event waits
+
+`SealedThreadpoolWait` accepts a `SealedWaitableHandle` made from `win_sync_sys::SealedWaitOnlyEvent`.
+It uses the native thread pool, without a dedicated waiting thread. Its callback receives
+`SealedWaitActivation`, with `result`, `is_signalled` and `rearm`, but no handle accessor.
+Neither the target, wait nor activation offers a safe conversion to the corresponding unsealed
+type. `Debug` omits handles; the optional trace retains lifecycle records but writes zero in
+sealed event-handle fields. Ordinary waits retain their existing diagnostics.
+
+```rust
+use std::sync::mpsc;
+use std::time::Duration;
+use win_sync_sys::{Event, ResetMode};
+use windows_threadpool_sys::wait::{SealedThreadpoolWait, WaitResult};
+
+let owner = Event::new(ResetMode::Manual, false)?;
+let target = owner.duplicate_sealed_wait_only()?.into();
+let (sender, receiver) = mpsc::channel();
+let wait = SealedThreadpoolWait::new(target, move |activation| {
+  let _ = sender.send(activation.result());
+}, None)?;
+
+wait.arm(None);
+owner.set()?;
+let result = receiver.recv_timeout(Duration::from_secs(30));
+wait.stop_and_drain();
+assert_eq!(result.expect("callback"), WaitResult::Signalled);
+# Ok::<(), std::io::Error>(())
+```
+
+The seal does not revoke the owner's or previously retained aliases' access. For repeated
+manual-reset waits, reset through the owning `Event` before rearming, or accept immediate
+reactivation and overlapping callbacks. Auto-reset waits consume the signal. Draining,
+concurrent-arm limits and `fail-fast` obligations follow `ThreadpoolWait`'s lifecycle contract.
+The safe cancellation method requires `self-heal`; `try_cancel_pending_no_heal_tracking` remains
+available as an unsafe operation in every feature build, with the same pool-repair obligation.
+
 ## Features
 
 | feature | default | what it does |

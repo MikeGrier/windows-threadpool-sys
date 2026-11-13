@@ -929,6 +929,34 @@ the wait. The wait and callback receive only borrowed handles with the `SYNCHRON
 granted; the conversion neither duplicates nor broadens access. A holder that must change signal state
 retains an `Event` and acts through it.
 
+## <a id="sealed-threadpool-waits"></a>Sealed thread-pool waits preserve the Rust handle boundary
+
+For `M-T17.1`, requested by the engineer on 2026-11-13: `SealedWaitableHandle` accepts only
+`win_sync_sys::SealedWaitOnlyEvent`, transferring its shared handle without duplication.
+`SealedThreadpoolWait` and `SealedWaitActivation` expose lifecycle operations and callback results,
+not the event handle or a conversion to an unsealed wrapper. Their contract includes the sealed
+event's [handle-access obligation](crates/win-sync-sys/src/event.rs); owning events and retained
+unsealed aliases are not revoked. No DACL is changed.
+
+The wait starts idle, activates once per arming, and permits immediate callback rearming.
+Manual-reset rearming follows an owner reset unless immediate reactivation is intended;
+auto-reset waits consume the signal. Draining suppresses callback rearming, runs queued callbacks,
+and waits for executing ones; external concurrent arming is still the caller's to serialize.
+Drop drains before releasing the target and retains the `fail-fast` obligation. Safe cancellation
+keeps its `self-heal` gate and repair behavior; explicit unsafe untracked cancellation remains
+available in every feature configuration. The existing wait implements this shared lifecycle;
+the callback adapter lends only the sealed activation. There is no dedicated waiting thread.
+
+The public trace is part of the boundary. Sealed targets use zero for diagnostic event-handle
+fields at creation, arming, callback rearming and drop, including native-call brackets. The
+actual target passed to Win32 is unchanged. Ordinary waits retain their target values; trace
+records and native wait-object identifiers are not suppressed. `Debug` also omits event handles.
+Diagnostic context storage is conditional on the `trace` feature.
+
+Rationale: [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-sealed-waits-wrap-the-existing-lifecycle).
+Work: [COMPLETED-CHECKLIST.md](crates/windows-threadpool-sys/COMPLETED-CHECKLIST.md#m-t171) `M-T17.1`;
+release coordination remains [CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md) `M-T17.2`.
+
 ## Re-arming is gated against teardown, under the same lock that arms
 
 Both the timer and the wait let a callback re-arm the object from inside itself, which is what the SDK requires

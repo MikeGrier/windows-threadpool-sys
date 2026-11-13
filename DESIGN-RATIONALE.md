@@ -1110,3 +1110,19 @@ first-class value for that reduced authority. `From<WaitOnlyEvent>` instead cons
 access the owner explicitly chose and transfers its shared handle without another duplicate. The owner
 can keep an `Event` to set or reset it; the wait never gains those rights. This is an access boundary on
 the handle, not a defense against a holder that deliberately duplicates it with broader access.
+
+## Why sealed waits wrap the existing lifecycle
+
+The contract is in [DESIGN-NOTES.md](DESIGN-NOTES.md#sealed-threadpool-waits). The engineer wanted
+the Rust API boundary used by canopy's protocol analysis, for both native thread waits and
+thread-pool waits, rather than a kernel security boundary inside one process. A separate wrapper
+keeps the existing handle-lending API available and shares its drain, cancellation and rearm
+implementation. A type parameter on the existing public wait was considered; the wrapper is
+additive without changing those callers' type signatures.
+
+Implementation exposed a path the original wrapper-only plan missed: `trace::dump` is public
+and the inner wait records its target. Hiding accessors and redacting `Debug` would still have
+left that value in the trace. A diagnostic value separate from the native target closes that
+path while keeping the existing lifecycle records. An isolated trace-enabled child exercises the
+sealed case and an ordinary-wait control; neither a disabled trace nor another test's records
+can satisfy it. The acceptance criterion was added to `M-T17.1` before changing the core.
