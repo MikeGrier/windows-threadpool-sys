@@ -8,7 +8,7 @@ use std::time::Duration;
 use windows_sys::Win32::System::Threading::SignalObjectAndWait;
 
 use crate::event::Event;
-use crate::wait::{Alertable, WaitOutcome, milliseconds, outcome};
+use crate::wait::{Alertable, WaitOutcome, Waitable, milliseconds, outcome};
 
 /// An object [`signal_object_and_wait`] can signal: an event, a semaphore or a mutex.
 ///
@@ -48,6 +48,23 @@ impl<T: Signalable + ?Sized> Signalable for &T {}
 /// signal is not undone. The outcomes are those of a wait on one object, with `wait` changed as
 /// [`wait_for_single_object`](crate::wait_for_single_object) describes.
 ///
+/// The wait target accepts any `AsHandle` type, [`SealedWaitOnlyEvent`](crate::SealedWaitOnlyEvent)
+/// or [`WaitObject`](crate::WaitObject). Sealed targets cannot be passed as `signal`.
+///
+/// ```compile_fail
+/// use win_sync_sys::{Alertable, Event, SealedWaitOnlyEvent, signal_object_and_wait};
+/// fn signal(sealed: &SealedWaitOnlyEvent, other: &Event) {
+///     let _ = signal_object_and_wait(sealed, other, None, Alertable::No);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use win_sync_sys::{Alertable, Event, WaitObject, signal_object_and_wait};
+/// fn signal(opaque: WaitObject<'_>, other: &Event) {
+///     let _ = signal_object_and_wait(opaque, other, None, Alertable::No);
+/// }
+/// ```
+///
 /// # Errors
 ///
 /// [`io::ErrorKind::InvalidInput`] for a timeout the call cannot express, before anything is
@@ -58,16 +75,16 @@ impl<T: Signalable + ?Sized> Signalable for &T {}
 /// is not an object the call can signal.
 pub fn signal_object_and_wait(
     signal: impl Signalable,
-    wait: impl AsHandle,
+    wait: impl Waitable,
     timeout: Option<Duration>,
     alertable: Alertable,
 ) -> io::Result<WaitOutcome> {
     let milliseconds = milliseconds(timeout)?;
-    // SAFETY: both handles are borrowed, so open for the call, and the wait ends within it.
+    // SAFETY: both borrows outlive the call; the wait target is never used as the signal target.
     let code = unsafe {
         SignalObjectAndWait(
             signal.as_handle().as_raw_handle(),
-            wait.as_handle().as_raw_handle(),
+            wait.waitable_handle().as_raw_handle(),
             milliseconds,
             alertable.as_bool(),
         )

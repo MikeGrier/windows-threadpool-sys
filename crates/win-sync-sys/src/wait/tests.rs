@@ -17,7 +17,7 @@ use super::{
     Alertable, WaitOutcome, milliseconds, outcome, wait_for_single_object,
     wait_for_single_object_ex,
 };
-use crate::{Event, ResetMode, queue_user_apc_to_current_thread};
+use crate::{Event, ResetMode, WaitObject, Waitable, queue_user_apc_to_current_thread};
 
 /// How long a test waits for something that should happen.
 const BOUND: Duration = Duration::from_secs(5);
@@ -26,6 +26,154 @@ const BOUND: Duration = Duration::from_secs(5);
 /// early against a high-resolution clock. Evidence of a timeout honoured, not proof of how
 /// precisely.
 const EARLY: Duration = Duration::from_millis(40);
+
+#[test]
+fn sealed_single_waits_accept_owning_and_borrowed_targets() {
+    for mode in [ResetMode::Auto, ResetMode::Manual] {
+        for initially_signalled in [false, true] {
+            let owner = Event::new(mode, initially_signalled).expect("event");
+            let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+            let expected = if initially_signalled {
+                WaitOutcome::Signalled
+            } else {
+                WaitOutcome::TimedOut
+            };
+            assert_eq!(
+                wait_for_single_object(&sealed, Some(Duration::ZERO)).expect("poll"),
+                expected
+            );
+            owner.set().expect("set");
+            assert_eq!(
+                wait_for_single_object(sealed, Some(BOUND)).expect("owned wait"),
+                WaitOutcome::Signalled
+            );
+            assert_eq!(
+                crate::test_support::is_signalled(&owner),
+                mode == ResetMode::Manual
+            );
+        }
+    }
+}
+
+#[test]
+fn sealed_extended_waits_preserve_alertability_and_signals() {
+    let owner = auto(true);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    for alertable in [Alertable::No, Alertable::Yes] {
+        owner.set().expect("set");
+        assert_eq!(
+            wait_for_single_object_ex(&sealed, Some(BOUND), alertable).expect("wait"),
+            WaitOutcome::Signalled
+        );
+        assert!(!crate::test_support::is_signalled(&owner));
+        assert_eq!(
+            wait_for_single_object_ex(sealed.clone(), Some(Duration::ZERO), alertable)
+                .expect("poll"),
+            WaitOutcome::TimedOut
+        );
+    }
+    queue_user_apc_to_current_thread(|| {}).expect("queue");
+    assert_eq!(
+        wait_for_single_object_ex(&sealed, Some(Duration::ZERO), Alertable::No).expect("poll"),
+        WaitOutcome::TimedOut
+    );
+    owner.set().expect("set");
+    assert_eq!(
+        wait_for_single_object_ex(&sealed, Some(BOUND), Alertable::Yes).expect("APC wait"),
+        WaitOutcome::Alerted
+    );
+    assert!(crate::test_support::is_signalled(&owner));
+}
+
+#[test]
+fn wait_object_copies_preserve_the_borrow_and_hide_the_handle() {
+    fn assert_traits<T: Copy + Send + Sync>() {}
+    assert_traits::<WaitObject<'_>>();
+    let owner = manual(true);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    let original = sealed.wait_object();
+    let copy = original;
+    assert_eq!(format!("{copy:?}"), "WaitObject { .. }");
+    assert_eq!(format!("{copy:#?}"), "WaitObject { .. }");
+    assert_eq!(
+        unsafe { copy.waitable_handle() }.as_raw_handle(),
+        unsafe { sealed.as_waitable_handle() }.as_raw_handle()
+    );
+    assert_eq!(
+        wait_for_single_object(original, Some(BOUND)).expect("wait"),
+        WaitOutcome::Signalled
+    );
+    let borrowed_copy = &copy;
+    assert_eq!(
+        wait_for_single_object(borrowed_copy, Some(BOUND)).expect("wait"),
+        WaitOutcome::Signalled
+    );
+    assert_eq!(
+        wait_for_single_object_ex(copy, Some(BOUND), Alertable::No).expect("wait"),
+        WaitOutcome::Signalled
+    );
+    owner.reset().expect("reset");
+    assert_eq!(
+        wait_for_single_object(copy, Some(Duration::ZERO)).expect("poll"),
+        WaitOutcome::TimedOut
+    );
+}
+
+#[test]
+fn waitable_blanket_impl_keeps_generic_and_erased_as_handle_callers() {
+    fn generic<T: AsHandle>(object: T) -> WaitOutcome {
+        wait_for_single_object(object, Some(Duration::ZERO)).expect("generic wait")
+    }
+    let owner = manual(true);
+    let erased: &dyn AsHandle = &owner;
+    let view = WaitObject::from(owner.as_handle());
+    assert_eq!(generic(erased), WaitOutcome::Signalled);
+    assert_eq!(generic(owner.as_handle()), WaitOutcome::Signalled);
+    assert_eq!(
+        wait_for_single_object(view, Some(BOUND)).expect("view wait"),
+        WaitOutcome::Signalled
+    );
+    assert_eq!(
+        unsafe { view.waitable_handle() }.as_raw_handle(),
+        owner.as_raw_handle()
+    );
+    assert_eq!(
+        generic(owner.try_into_owned().expect("last owner")),
+        WaitOutcome::Signalled
+    );
+}
+
+#[test]
+fn sealed_single_wait_keeps_the_last_owner_alive() {
+    let owner = manual(true);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    drop(owner);
+    assert_eq!(
+        wait_for_single_object(&sealed, Some(BOUND)).expect("borrowed wait"),
+        WaitOutcome::Signalled
+    );
+    assert_eq!(
+        wait_for_single_object(sealed, Some(BOUND)).expect("owning wait"),
+        WaitOutcome::Signalled
+    );
+}
+
+#[test]
+fn sealed_single_wait_refuses_unrepresentable_timeouts_without_taking_a_signal() {
+    let owner = auto(true);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    let too_long = Some(Duration::from_millis(u64::from(u32::MAX)));
+    for result in [
+        wait_for_single_object(&sealed, too_long),
+        wait_for_single_object_ex(&sealed, too_long, Alertable::No),
+    ] {
+        assert_eq!(
+            result.expect_err("invalid timeout").kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+    assert!(crate::test_support::is_signalled(&owner));
+}
 
 fn auto(signalled: bool) -> Event {
     Event::new(ResetMode::Auto, signalled).expect("an event")

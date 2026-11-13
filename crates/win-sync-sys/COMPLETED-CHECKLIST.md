@@ -179,5 +179,35 @@ refusal. Borrowed-access identity tests independently check that the accessor re
 The compile-fail examples guard safe extraction; [sabotage.json](sabotage.json) records mutations
 that expose it and mutations that break access or ownership, together with an equivalent control.
 
-The remaining work stays in [CHECKLIST.md](CHECKLIST.md) `WS-3.2` and the thread-pool
+The continuation is [WS-3.2](#ws-32) and the thread-pool
 [CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md) `M-T17.1`.
+
+## Moved 2026-11-13 12:57:06 -05:00 -- WS-M3, opaque thread-wait targets
+
+### <a id="ws-32"></a>WS-3.2 -- Accept sealed events in thread waits and mixed wait sets. *(completed 2026-11-13 12:57:06 UTC-05:00)*
+
+Implemented [WS-D-12](DESIGN-NOTES.md#ws-d-12) in [wait.rs](src/wait.rs),
+[wait_many.rs](src/wait_many.rs), [signal.rs](src/signal.rs) and [event.rs](src/event.rs).
+The compiled example in [README.md](README.md) mixes a sealed doorbell and an ordinary shutdown
+event without `unsafe`. Existing `AsHandle`-bounded callers build unchanged.
+
+The [single-wait tests](src/wait/tests.rs), [multiple-wait tests](src/wait_many/tests.rs) and
+[signal-and-wait tests](src/signal/tests.rs) cover owned and borrowed inputs, mixed positions,
+wait-for-all atomicity, both reset modes, timeouts, APCs, access errors, count bounds and mutex
+abandonment. Compile-fail examples guard trait sealing, opaque access, signal-position exclusion
+and borrowed lifetimes. [sabotage.json](sabotage.json) detects exposed raw/borrowed handles and
+debug output; adding `AsHandle` now conflicts with explicit implementations at build time.
+The equivalent control survives.
+
+Validation: package tests and doctests, rustdoc with warnings denied, formatting, all-target
+Clippy, default-workspace all-target checks in debug and release, and the branch-scoped
+sabotage sweep passed.
+
+> **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-threadpool-sys` ->
+> `M-T17` -> `M-T17.1` (a threadless wait on a sealed event). See
+> [CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md#m-t17----threadless-waits-on-a-sealed-wait-only-event).
+
+### <a id="ws-m3"></a>WS-M3 -- A wait-only event safe code cannot reach the handle of
+
+Items: [WS-3.1](#ws-31) and [WS-3.2](#ws-32). Release coordination is
+[CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md) `M-T17.2`.

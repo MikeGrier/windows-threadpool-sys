@@ -262,6 +262,8 @@ impl From<WaitOnlyEvent> for SharedHandle {
 /// aliases retained before conversion. It changes no operating-system security descriptor.
 /// A wait on a manual-reset event leaves its level unchanged; a satisfied wait on an auto-reset
 /// event consumes the signal. This type has no `set` or `reset`, and its `Debug` hides the handle.
+/// The crate's thread-wait functions accept it directly; [`wait_object`](Self::wait_object)
+/// supplies an opaque borrow for a mixed set of targets.
 ///
 /// # Handle-access contract
 ///
@@ -315,6 +317,11 @@ impl std::fmt::Debug for SealedWaitOnlyEvent {
 }
 
 impl SealedWaitOnlyEvent {
+    /// Borrow an opaque target for a mixed [`wait_for_any`](crate::wait_for_any) or wait-for-all.
+    pub fn wait_object(&self) -> crate::WaitObject<'_> {
+        crate::WaitObject::from(self)
+    }
+
     /// Borrow the event's `SYNCHRONIZE`-only handle.
     ///
     /// # Safety

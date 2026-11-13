@@ -15,7 +15,9 @@ mod wait_many;
 pub use apc::{queue_user_apc, queue_user_apc_to_current_thread};
 pub use event::{Event, ResetMode, SealedWaitOnlyEvent, WaitOnlyEvent};
 pub use signal::{Signalable, signal_object_and_wait};
-pub use wait::{Alertable, WaitOutcome, wait_for_single_object, wait_for_single_object_ex};
+pub use wait::{
+    Alertable, WaitObject, WaitOutcome, Waitable, wait_for_single_object, wait_for_single_object_ex,
+};
 pub use wait_many::{MAXIMUM_OBJECTS, WaitAnyOutcome, wait_for_all, wait_for_any};
 // `DuplicateHandle` is documented under Handles and Objects, so it lives in `win-handles-sys`; it is
 // re-exported here at the paths it had.

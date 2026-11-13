@@ -2,7 +2,7 @@
 //! Waiting on several kernel objects at once: `WaitForMultipleObjectsEx`.
 
 use std::io;
-use std::os::windows::io::{AsHandle, AsRawHandle};
+use std::os::windows::io::AsRawHandle;
 use std::ptr;
 use std::time::Duration;
 
@@ -13,7 +13,7 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::System::SystemServices::MAXIMUM_WAIT_OBJECTS;
 use windows_sys::Win32::System::Threading::WaitForMultipleObjectsEx;
 
-use crate::wait::{Alertable, WaitOutcome, milliseconds};
+use crate::wait::{Alertable, WaitOutcome, Waitable, milliseconds};
 
 /// The most objects one wait takes: `MAXIMUM_WAIT_OBJECTS`.
 ///
@@ -46,8 +46,9 @@ pub enum WaitAnyOutcome {
 /// Wait until **any one** of `objects` is signalled, for up to `timeout`: `None` is no limit and
 /// `Duration::ZERO` only asks. `WaitForMultipleObjectsEx` with `bWaitAll` false.
 ///
-/// The objects are the borrowed handles of whatever the caller holds: a slice of `&Event`, of
-/// `OwnedHandle`, or of `BorrowedHandle` for a mixture, made with `as_handle`.
+/// The objects may be any `AsHandle` type, sealed events or references to them. Use
+/// [`WaitObject`](crate::WaitObject) for a mixture containing a [`SealedWaitOnlyEvent`](crate::SealedWaitOnlyEvent);
+/// a `BorrowedHandle` slice made with `as_handle` still accepts mixtures of ordinary handles.
 ///
 /// **Only the signalled object reported has been changed** by the wait: an auto-reset event is
 /// unsignalled again, a mutex owned, a semaphore's count one lower. The others are as they were,
@@ -61,7 +62,7 @@ pub enum WaitAnyOutcome {
 /// `GetLastError` when the wait fails, such as access denied for a handle without `SYNCHRONIZE`
 /// access, or invalid handle.
 pub fn wait_for_any(
-    objects: &[impl AsHandle],
+    objects: &[impl Waitable],
     timeout: Option<Duration>,
     alertable: Alertable,
 ) -> io::Result<WaitAnyOutcome> {
@@ -71,6 +72,9 @@ pub fn wait_for_any(
 
 /// Wait until **all** of `objects` are signalled at once, for up to `timeout`: `None` is no limit and
 /// `Duration::ZERO` only asks. `WaitForMultipleObjectsEx` with `bWaitAll` true.
+///
+/// Accepts the same objects as [`wait_for_any`], including sealed events and
+/// [`WaitObject`](crate::WaitObject) mixtures without exposing their handles.
 ///
 /// **The wait is atomic**: it takes from the objects only when every one is signalled, and takes
 /// from all of them together. A wait that times out has taken nothing, so an object that was
@@ -87,7 +91,7 @@ pub fn wait_for_any(
 ///
 /// As [`wait_for_any`].
 pub fn wait_for_all(
-    objects: &[impl AsHandle],
+    objects: &[impl Waitable],
     timeout: Option<Duration>,
     alertable: Alertable,
 ) -> io::Result<WaitOutcome> {
@@ -97,7 +101,7 @@ pub fn wait_for_all(
 
 /// The call's return value and how many objects it was given.
 fn wait(
-    objects: &[impl AsHandle],
+    objects: &[impl Waitable],
     wait_all: bool,
     timeout: Option<Duration>,
     alertable: Alertable,
@@ -112,7 +116,7 @@ fn wait(
     }
     let mut handles: [HANDLE; MAXIMUM_OBJECTS] = [ptr::null_mut(); MAXIMUM_OBJECTS];
     for (slot, object) in handles.iter_mut().zip(objects) {
-        *slot = object.as_handle().as_raw_handle();
+        *slot = unsafe { object.waitable_handle() }.as_raw_handle();
     }
     // SAFETY: the first `count` entries are handles borrowed from `objects`, which are open for
     // the whole call, and `count` is at most the array's length; the call reads only those.

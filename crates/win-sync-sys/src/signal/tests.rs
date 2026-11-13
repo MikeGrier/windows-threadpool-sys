@@ -16,6 +16,75 @@ use crate::{
 const NO: Alertable = Alertable::No;
 const POLL: Option<Duration> = Some(Duration::ZERO);
 
+#[test]
+fn sealed_wait_targets_do_not_change_which_object_is_signalled() {
+    for mode in [crate::ResetMode::Auto, crate::ResetMode::Manual] {
+        for initially_signalled in [false, true] {
+            let signal = manual(false);
+            let owner = Event::new(mode, initially_signalled).expect("event");
+            let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+            let expected = if initially_signalled {
+                WaitOutcome::Signalled
+            } else {
+                WaitOutcome::TimedOut
+            };
+            assert_eq!(
+                signal_object_and_wait(&signal, &sealed, POLL, NO).expect("borrowed"),
+                expected
+            );
+            assert!(is_signalled(&signal));
+            assert_eq!(
+                is_signalled(&owner),
+                initially_signalled && mode == crate::ResetMode::Manual
+            );
+            signal.reset().expect("reset");
+            owner.set().expect("set");
+            assert_eq!(
+                signal_object_and_wait(&signal, sealed.wait_object(), POLL, NO).expect("opaque"),
+                WaitOutcome::Signalled
+            );
+            assert!(is_signalled(&signal));
+            signal.reset().expect("reset");
+            owner.set().expect("set");
+            assert_eq!(
+                signal_object_and_wait(&signal, sealed, POLL, NO).expect("owning"),
+                WaitOutcome::Signalled
+            );
+            assert!(is_signalled(&signal));
+        }
+    }
+}
+
+#[test]
+fn sealed_signal_and_wait_keeps_alertability() {
+    let signal = manual(false);
+    let owner = auto(true);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    queue_user_apc_to_current_thread(|| {}).expect("queue");
+    assert_eq!(
+        signal_object_and_wait(&signal, &sealed, Some(BOUND), Alertable::Yes).expect("alertable"),
+        WaitOutcome::Alerted
+    );
+    assert!(is_signalled(&signal));
+    assert!(is_signalled(&owner));
+}
+
+#[test]
+fn sealed_signal_and_wait_refuses_invalid_timeouts_before_signalling() {
+    let signal = manual(false);
+    let owner = auto(true);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    let too_long = Some(Duration::from_millis(u64::from(u32::MAX)));
+    assert_eq!(
+        signal_object_and_wait(&signal, sealed.wait_object(), too_long, NO)
+            .expect_err("timeout")
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+    assert!(!is_signalled(&signal));
+    assert!(is_signalled(&owner));
+}
+
 fn denied() -> Option<i32> {
     i32::try_from(ERROR_ACCESS_DENIED).ok()
 }

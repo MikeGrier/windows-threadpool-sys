@@ -15,12 +15,294 @@ use super::{
 };
 use crate::test_support::{BOUND, abandoned_mutex, auto, is_signalled, manual};
 use crate::{
-    Access, Alertable, Event, WaitOutcome, duplicate_handle_with_access,
-    queue_user_apc_to_current_thread,
+    Access, Alertable, Event, SealedWaitOnlyEvent, WaitObject, WaitOutcome,
+    duplicate_handle_with_access, queue_user_apc_to_current_thread,
 };
 
 const NO: Alertable = Alertable::No;
 const POLL: Option<Duration> = Some(Duration::ZERO);
+
+#[test]
+fn sealed_mixture_reports_each_signalled_object_without_lending_handles() {
+    let owners = [manual(false), manual(false), manual(false)];
+    let sealed = owners[1]
+        .duplicate_sealed_wait_only()
+        .expect("sealed event");
+    let objects = [
+        owners[0].as_handle().into(),
+        sealed.wait_object(),
+        owners[2].as_handle().into(),
+    ];
+    assert_eq!(
+        wait_for_any(&objects, POLL, NO).expect("poll"),
+        WaitAnyOutcome::TimedOut
+    );
+    for (index, owner) in owners.iter().enumerate() {
+        owner.set().expect("set");
+        assert_eq!(
+            wait_for_any(&objects, POLL, NO).expect("wait"),
+            WaitAnyOutcome::Signalled(index)
+        );
+        owner.reset().expect("reset");
+    }
+}
+
+#[test]
+fn sealed_mixture_wait_all_takes_nothing_until_every_object_is_signalled() {
+    for sealed_first in [false, true] {
+        let owner = auto(false);
+        let other = auto(false);
+        let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+        let objects = [sealed.wait_object(), other.as_handle().into()];
+        let (first, last) = if sealed_first {
+            (&owner, &other)
+        } else {
+            (&other, &owner)
+        };
+        first.set().expect("first signal");
+        assert_eq!(
+            wait_for_all(&objects, POLL, NO).expect("partial wait"),
+            WaitOutcome::TimedOut
+        );
+        assert!(is_signalled(first), "timed-out wait consumed nothing");
+        first.set().expect("restore signal consumed by observation");
+        last.set().expect("last signal");
+        assert_eq!(
+            wait_for_all(&objects, Some(BOUND), NO).expect("complete wait"),
+            WaitOutcome::Signalled
+        );
+        assert!(!is_signalled(&owner));
+        assert!(!is_signalled(&other));
+    }
+}
+
+#[test]
+fn sealed_mixture_wait_any_consumes_only_the_lowest_signalled_auto_event() {
+    let owners = [auto(true), auto(true), auto(true)];
+    let sealed = owners[1]
+        .duplicate_sealed_wait_only()
+        .expect("sealed event");
+    let objects = [
+        owners[0].as_handle().into(),
+        sealed.wait_object(),
+        owners[2].as_handle().into(),
+    ];
+    for (index, owner) in owners.iter().enumerate() {
+        assert_eq!(
+            wait_for_any(&objects, POLL, NO).expect("wait"),
+            WaitAnyOutcome::Signalled(index)
+        );
+        assert!(!is_signalled(owner));
+    }
+    assert_eq!(
+        wait_for_any(&objects, POLL, NO).expect("poll"),
+        WaitAnyOutcome::TimedOut
+    );
+}
+
+#[test]
+fn sealed_mixture_wait_all_leaves_manual_events_signalled() {
+    let owner = manual(true);
+    let other = manual(true);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    let objects = [sealed.wait_object(), other.as_handle().into()];
+    for _ in 0..2 {
+        assert_eq!(
+            wait_for_all(&objects, POLL, NO).expect("wait"),
+            WaitOutcome::Signalled
+        );
+    }
+    assert!(is_signalled(&owner));
+    assert!(is_signalled(&other));
+}
+
+#[test]
+fn sealed_mixtures_honor_alertability_without_consuming_signals() {
+    let owner = auto(true);
+    let other = auto(true);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    let objects = [sealed.wait_object(), other.as_handle().into()];
+    queue_user_apc_to_current_thread(|| {}).expect("queue");
+    assert_eq!(
+        wait_for_any(&objects, Some(BOUND), Alertable::Yes).expect("alerted any"),
+        WaitAnyOutcome::Alerted
+    );
+    queue_user_apc_to_current_thread(|| {}).expect("queue");
+    assert_eq!(
+        wait_for_all(&objects, Some(BOUND), Alertable::Yes).expect("alerted all"),
+        WaitOutcome::Alerted
+    );
+    assert!(is_signalled(&owner));
+    assert!(is_signalled(&other));
+    queue_user_apc_to_current_thread(|| {}).expect("queue");
+    assert_eq!(
+        wait_for_any(&objects, POLL, NO).expect("ordinary poll"),
+        WaitAnyOutcome::TimedOut
+    );
+    assert_eq!(
+        wait_for_all(&objects, POLL, NO).expect("ordinary poll"),
+        WaitOutcome::TimedOut
+    );
+    assert_eq!(
+        wait_for_any(&objects, Some(BOUND), Alertable::Yes).expect("drain APC"),
+        WaitAnyOutcome::Alerted
+    );
+}
+
+#[test]
+fn sealed_events_alone_accept_owned_and_reference_slices() {
+    let owners = [manual(true), manual(true)];
+    let sealed: Vec<SealedWaitOnlyEvent> = owners
+        .iter()
+        .map(|owner| owner.duplicate_sealed_wait_only().expect("sealed event"))
+        .collect();
+    assert_eq!(
+        wait_for_any(&sealed, POLL, NO).expect("owned any"),
+        WaitAnyOutcome::Signalled(0)
+    );
+    assert_eq!(
+        wait_for_all(&sealed, POLL, NO).expect("owned all"),
+        WaitOutcome::Signalled
+    );
+    let borrowed = [&sealed[0], &sealed[1]];
+    assert_eq!(
+        wait_for_any(&borrowed, POLL, NO).expect("borrowed any"),
+        WaitAnyOutcome::Signalled(0)
+    );
+    assert_eq!(
+        wait_for_all(&borrowed, POLL, NO).expect("borrowed all"),
+        WaitOutcome::Signalled
+    );
+}
+
+#[test]
+fn sealed_mixtures_preserve_native_access_errors() {
+    let owner = manual(true);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    let no_wait = duplicate_handle_with_access(&owner, Access::EVENT_MODIFY_STATE)
+        .expect("non-waitable handle");
+    let objects = [no_wait.as_handle().into(), sealed.wait_object()];
+    for result in [
+        wait_for_any(&objects, POLL, NO).map(|_| ()),
+        wait_for_all(&objects, POLL, NO).map(|_| ()),
+    ] {
+        assert_eq!(
+            result.expect_err("access denied").raw_os_error(),
+            Some(ERROR_ACCESS_DENIED as i32)
+        );
+    }
+    assert!(is_signalled(&owner));
+}
+
+#[test]
+fn sealed_mixtures_support_the_maximum_count_and_refuse_invalid_counts_and_timeouts() {
+    let owners = events(MAXIMUM_OBJECTS);
+    let sealed = owners[MAXIMUM_OBJECTS - 1]
+        .duplicate_sealed_wait_only()
+        .expect("sealed event");
+    let mut objects: Vec<WaitObject<'_>> = owners[..MAXIMUM_OBJECTS - 1]
+        .iter()
+        .map(|owner| owner.as_handle().into())
+        .collect();
+    objects.push(sealed.wait_object());
+    owners[MAXIMUM_OBJECTS - 1].set().expect("last signal");
+    assert_eq!(
+        wait_for_any(&objects, POLL, NO).expect("maximum any"),
+        WaitAnyOutcome::Signalled(MAXIMUM_OBJECTS - 1)
+    );
+    for owner in &owners {
+        owner.set().expect("set");
+    }
+    assert_eq!(
+        wait_for_all(&objects, POLL, NO).expect("maximum all"),
+        WaitOutcome::Signalled
+    );
+    assert_eq!(
+        wait_for_any(&objects, POLL, NO).expect("consumed"),
+        WaitAnyOutcome::TimedOut
+    );
+    let empty: [WaitObject<'_>; 0] = [];
+    objects.push(sealed.wait_object());
+    for targets in [&empty[..], &objects[..]] {
+        for result in [
+            wait_for_any(targets, POLL, NO).map(|_| ()),
+            wait_for_all(targets, POLL, NO).map(|_| ()),
+        ] {
+            assert_eq!(
+                result.expect_err("invalid count").kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+    }
+    objects.pop();
+    owners[MAXIMUM_OBJECTS - 1].set().expect("set");
+    let too_long = Some(Duration::from_millis(u64::from(u32::MAX)));
+    for result in [
+        wait_for_any(&objects, too_long, NO).map(|_| ()),
+        wait_for_all(&objects, too_long, NO).map(|_| ()),
+    ] {
+        assert_eq!(
+            result.expect_err("invalid timeout").kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+    assert!(is_signalled(&owners[MAXIMUM_OBJECTS - 1]));
+}
+
+#[test]
+fn sealed_mixture_accepts_a_mutex_and_reports_abandonment() {
+    let owner = auto(true);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    let mutex = abandoned_mutex();
+    let objects = [mutex.as_handle().into(), sealed.wait_object()];
+    assert_eq!(
+        wait_for_any(&objects, POLL, NO).expect("abandoned any"),
+        WaitAnyOutcome::Abandoned(0)
+    );
+    assert!(is_signalled(&owner), "the sealed event was not selected");
+    owner.set().expect("restore signal");
+    let second_mutex = abandoned_mutex();
+    let objects = [sealed.wait_object(), second_mutex.as_handle().into()];
+    assert_eq!(
+        wait_for_all(&objects, POLL, NO).expect("abandoned all"),
+        WaitOutcome::Abandoned
+    );
+    assert!(!is_signalled(&owner));
+}
+
+#[test]
+fn sealed_wait_object_copies_are_the_same_target_not_duplicate_handles() {
+    let owner = manual(true);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    let object = sealed.wait_object();
+    let twice = [object, object];
+    assert_eq!(
+        wait_for_any(&twice, POLL, NO).expect("any"),
+        WaitAnyOutcome::Signalled(0)
+    );
+    assert_eq!(
+        wait_for_all(&twice, POLL, NO)
+            .expect_err("same handle twice")
+            .raw_os_error(),
+        Some(ERROR_INVALID_PARAMETER as i32)
+    );
+    assert!(is_signalled(&owner));
+}
+
+#[test]
+fn sealed_mixture_waits_for_another_thread_to_set_the_event() {
+    let owner = manual(false);
+    let other = manual(false);
+    let sealed = owner.duplicate_sealed_wait_only().expect("sealed event");
+    let signaller = owner.clone();
+    let worker = std::thread::spawn(move || signaller.set());
+    let objects = [other.as_handle().into(), sealed.wait_object()];
+    assert_eq!(
+        wait_for_any(&objects, Some(BOUND), NO).expect("wait"),
+        WaitAnyOutcome::Signalled(1)
+    );
+    worker.join().expect("worker").expect("set");
+}
 
 /// `count` auto-reset events, none signalled.
 fn events(count: usize) -> Vec<Event> {
