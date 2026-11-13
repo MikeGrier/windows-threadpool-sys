@@ -242,10 +242,11 @@ fn a_callback_can_rearm_with_a_timeout() {
     let wait = SealedThreadpoolWait::new(
         target,
         move |activation| {
+            // Recorded first: the rearm permits an overlapping timeout callback.
+            recorder.record(activation.result());
             if activation.is_signalled() {
                 activation.rearm(Some(Duration::from_millis(10)));
             }
-            recorder.record(activation.result());
         },
         None,
     )
