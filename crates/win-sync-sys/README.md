@@ -56,8 +56,10 @@ assert_eq!(
 # Ok::<(), std::io::Error>(())
 ```
 
-`windows-threadpool-sys` accepts an `Event` as a thread-pool wait target without `unsafe`, because
-an `Event` is never a mutex -- the one kind of object the pool cannot wait on.
+`windows-threadpool-sys` accepts an `Event` or `WaitOnlyEvent` as a thread-pool wait target without
+`unsafe`: both prove the object is an event, never a mutex. The wait shares a `WaitOnlyEvent`'s
+`SYNCHRONIZE`-only handle; keep the owning `Event` to set or reset it. See the [thread-pool wait
+documentation](../windows-threadpool-sys/README.md) for its access and rearm behavior.
 
 - **`wait_for_any`**, **`wait_for_all`**, **`signal_object_and_wait`**, **`wait_for_single_object_ex`**
   and **`queue_user_apc`** -- the rest of the wait functions: `WaitForMultipleObjectsEx` for up to

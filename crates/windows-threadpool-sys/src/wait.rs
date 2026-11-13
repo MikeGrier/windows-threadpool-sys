@@ -9,8 +9,9 @@
 //!   therefore holds its handle rather than borrowing one -- owning it, or
 //!   sharing it as a `SharedHandle` -- so it cannot be closed underneath a
 //!   pending wait. Use [`ThreadpoolWait::handle`] to inspect it; to signal an
-//!   event the wait holds, build the wait from a `win-sync-sys` [`Event`] and
-//!   keep a clone of it.
+//!   event the wait holds, build it from a `win-sync-sys` [`Event`] to retain
+//!   event access, or from a [`WaitOnlyEvent`] for a `SYNCHRONIZE`-only handle
+//!   that cannot set or reset the event.
 //! - **A wait fires at most once per arming.** The SDK requires the wait to be
 //!   rearmed explicitly for each activation, so the callback receives a
 //!   [`WaitActivation`] carrying [`WaitActivation::rearm`]. A callback that does
@@ -28,7 +29,7 @@ use std::time::Duration;
 use crate::rearm::RearmSuppression;
 
 use win_shared_os_owned_handle::SharedHandle;
-use win_sync_sys::{Event, ResetMode};
+use win_sync_sys::{Event, ResetMode, WaitOnlyEvent};
 use windows_sys::Win32::Foundation::{FALSE, FILETIME, HANDLE, TRUE, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
     CloseThreadpoolWait, CreateThreadpoolWait, PTP_CALLBACK_INSTANCE, PTP_WAIT, SetThreadpoolWait,
@@ -133,7 +134,7 @@ impl WaitTarget {
         }
     }
 
-    /// Borrow the handle, for signalling or inspecting it.
+    /// Borrow the handle, for inspecting it or signalling it when its access permits.
     pub(crate) fn borrow(&self) -> BorrowedHandle<'_> {
         match self {
             WaitTarget::Owned(handle) => handle.as_handle(),
@@ -169,15 +170,18 @@ impl std::fmt::Debug for WaitTarget {
 /// type instead of a bare [`OwnedHandle`] moves that precondition from prose
 /// into the type system, so a safe caller cannot reach the undefined case.
 ///
-/// Construct one safely from a `win-sync-sys` [`Event`] (`From<Event>`) or with
-/// [`WaitableHandle::event`], or vouch for a handle
-/// obtained elsewhere with the narrow [`WaitableHandle::assume_waitable`] seam --
+/// Construct one safely from a `win-sync-sys` [`Event`] (`From<Event>`), a
+/// [`WaitOnlyEvent`] (`From<WaitOnlyEvent>`), or with [`WaitableHandle::event`],
+/// or vouch for a handle obtained elsewhere with the narrow
+/// [`WaitableHandle::assume_waitable`] seam --
 /// [`WaitableHandle::assume_waitable_shared`] when the handle is shared with
 /// other holders, or [`WaitableHandle::assume_waitable_with`] when the handle
 /// needs a close routine other than `CloseHandle`.
 /// This mirrors `UnassociatedEndpoint` in `windows-overlapped-io-sys`, which
 /// pairs a safe `open` with an `assume_overlapped` escape hatch for the same
-/// reason.
+/// reason. A wait built from a [`WaitOnlyEvent`] holds and lends only its
+/// `SYNCHRONIZE` access; the borrowed handle cannot set or reset the event. Keep
+/// an [`Event`] separately when another part of the program must signal or reset it.
 #[derive(Debug)]
 pub struct WaitableHandle {
     target: WaitTarget,
@@ -287,7 +291,8 @@ impl WaitableHandle {
         }
     }
 
-    /// Borrow the underlying handle, for signalling or inspecting it.
+    /// Borrow the underlying handle, for inspecting it or signalling it when
+    /// its granted access permits.
     #[must_use]
     pub fn handle(&self) -> BorrowedHandle<'_> {
         self.target.borrow()
@@ -308,7 +313,8 @@ impl WaitableHandle {
     /// [`assume_waitable_shared`](Self::assume_waitable_shared)) gives its
     /// handle back only as its last holder, as
     /// [`SharedHandle::try_into_owned`] does; while another holder remains, the
-    /// wrapper is returned unchanged, still holding its clone.
+    /// wrapper is returned unchanged, still holding its clone. For a target from
+    /// [`WaitOnlyEvent`], the recovered handle retains `SYNCHRONIZE` access only.
     pub fn into_handle(self) -> Result<OwnedHandle, Self> {
         match self.target {
             WaitTarget::Owned(handle) => Ok(handle),
@@ -344,6 +350,23 @@ impl From<Event> for WaitableHandle {
     fn from(event: Event) -> Self {
         Self {
             target: WaitTarget::Shared(event.into()),
+        }
+    }
+}
+
+/// A wait-only event is always a target the pool supports, so this needs no `unsafe`.
+///
+/// [`WaitOnlyEvent`] can only be made from an [`Event`], so it is known not to be
+/// a mutex. Its handle carries `SYNCHRONIZE` access only: the wait can observe a
+/// signal, but neither the wait nor a callback borrowing its handle can set or
+/// reset the event. Keep the owning [`Event`] wherever the event must be changed.
+///
+/// The wait shares the wait-only handle and keeps it open. `into_handle` returns
+/// that same `SYNCHRONIZE`-only handle only when the wait is its last holder.
+impl From<WaitOnlyEvent> for WaitableHandle {
+    fn from(event: WaitOnlyEvent) -> Self {
+        Self {
+            target: WaitTarget::Shared(SharedHandle::from(event)),
         }
     }
 }
@@ -479,11 +502,10 @@ impl WaitActivation<'_> {
     /// Borrow the handle this activation was for.
     ///
     /// The wait owns the handle and outlives every callback, so it is open for
-    /// the duration of this borrow. This is what makes the documented way out of
-    /// the overlap hazard on [`rearm`](Self::rearm) reachable: a callback
-    /// watching a manual-reset event can reset it before re-arming, so the next
-    /// activation waits for a fresh signal instead of starting immediately
-    /// alongside this one.
+    /// the duration of this borrow. If the wait was built from an [`Event`], a
+    /// callback watching a manual-reset event can reset it through this handle
+    /// before re-arming. A wait built from [`WaitOnlyEvent`] lends only
+    /// `SYNCHRONIZE` access; reset that event through its owning [`Event`] instead.
     #[must_use]
     pub fn handle(&self) -> BorrowedHandle<'_> {
         // SAFETY: the wait owns this handle and cannot be dropped while a
@@ -515,8 +537,11 @@ impl WaitActivation<'_> {
     /// observed.
     ///
     /// Either reset the event before re-arming, so the next activation waits
-    /// for a fresh signal -- through a clone of the `win-sync-sys` [`Event`]
-    /// the wait was built from, which the callback keeps:
+    /// for a fresh signal. If the wait was built from an [`Event`], reset through
+    /// the clone the callback keeps; if it was built from a [`WaitOnlyEvent`],
+    /// reset through whichever owner keeps the [`Event`]. The wait-only handle
+    /// cannot reset the event, so re-arming without an owner reset activates again
+    /// immediately:
     ///
     /// ```no_run
     /// # fn example(activation: &windows_threadpool_sys::wait::WaitActivation<'_>, event: &win_sync_sys::Event) {
@@ -721,7 +746,7 @@ unsafe extern "system" fn wait_trampoline(
 /// ```
 /// # use std::sync::Arc;
 /// # use std::sync::atomic::{AtomicUsize, Ordering};
-/// use win_sync_sys::{Event, ResetMode};
+/// use win_sync_sys::{Event, ResetMode, WaitOnlyEvent};
 /// use windows_threadpool_sys::wait::ThreadpoolWait;
 ///
 /// let event = Event::new(ResetMode::Auto, false)?;
@@ -729,7 +754,8 @@ unsafe extern "system" fn wait_trampoline(
 ///
 /// let seen = Arc::new(AtomicUsize::new(0));
 /// let counter = Arc::clone(&seen);
-/// let wait = ThreadpoolWait::new(event.into(), move |activation| {
+/// let waitable: WaitOnlyEvent = event.duplicate_wait_only()?;
+/// let wait = ThreadpoolWait::new(waitable.into(), move |activation| {
 ///     counter.fetch_add(1, Ordering::SeqCst);
 ///     activation.rearm(None);
 /// }, None)?;

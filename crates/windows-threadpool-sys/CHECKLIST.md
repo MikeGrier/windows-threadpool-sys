@@ -268,10 +268,15 @@ component nobody has written.
 
 Graduated 2026-10-21 from `M-T14+`, whose gate, [M-T14](COMPLETED-CHECKLIST.md#m-t141), is complete.
 
-- [ ] **M-T16.1** (was `M-T14+.1`) -- **A thread-pool wait target from `win_sync_sys::WaitOnlyEvent`.** From
-  [WS-1+.5](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-1+5): a wait-only handle is still known to be
-  an event and carries `SYNCHRONIZE`, which is all a pool wait needs, so a `From` conversion
-  alongside `Event`'s is safe for the reason [WS-D-5](../win-sync-sys/DESIGN-NOTES.md#ws-d-5) gives.
-  Decide whether it is a `From` impl or a second constructor, with the pool's `Event` conversion as
-  the model, and test it as that conversion is. It lets a consumer hand a thread-pool wait the
-  handle it was given without giving the pool the power to signal it.
+- [x] **M-T16.1** -- Accept `WaitOnlyEvent` as a safe thread-pool wait target. -> [completed 2026-11-12](COMPLETED-CHECKLIST.md#m-t161)
+
+- [ ] **M-T16.2** -- **Release `M-T16.1` and tell canopy.** The commit is `feat(threadpool)`, and
+  this workspace's release-please config has `bump-patch-for-minor-pre-major`, so it releases as
+  **0.4.1**, not the 0.5.0 the request asks for. The engineer, 2026-11-12: "there is no need to
+  increment the version higher", so the commit carries no `Release-As` footer. The change is
+  additive, `win-sync-sys` is already in this crate's public API through `From<Event>`, and canopy's
+  `windows-threadpool-sys = "0.4.0"` requirement admits 0.4.1. No `win-sync-sys` release is needed:
+  `duplicate_wait_only` shipped in its 0.1.0, which canopy's acadia already requires. Once the
+  release-please PR merges and the crate is on crates.io, report the version on canopy's request so
+  its `API-3` follow-ups (acadia's `EventSignal::wait_only`, the doorbell lending it, the dev-dependency
+  bump) can proceed; posting there needs the engineer's say-so.

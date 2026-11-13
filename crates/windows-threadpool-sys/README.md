@@ -89,10 +89,13 @@ the caller to remember:
 - **Waits own a handle of proven provenance.** The pool supports only some kinds
   of handle — a mutex handle, for instance, makes the native behaviour undefined
   with no error returned — so `ThreadpoolWait` takes a `WaitableHandle` rather
-  than any `OwnedHandle`. It converts safely from an `Event` of the
-  `win-sync-sys` crate -- an event is never a mutex -- and offers one narrow
-  `unsafe` seam for handles obtained elsewhere, which keeps unsupported handles out of the safe API instead of
-  documenting a rule the caller must remember. The wait then owns the handle and
+  than any `OwnedHandle`. It converts safely from either an `Event` or `WaitOnlyEvent` of the
+  `win-sync-sys` crate -- both prove event provenance -- and offers one narrow
+  `unsafe` seam for handles obtained elsewhere, which keeps unsupported handles
+  out of the safe API instead of documenting a rule the caller must remember.
+  An `Event` target shares its Event's handle; a `WaitOnlyEvent` target shares its
+  `SYNCHRONIZE`-only handle. The wait and callback cannot signal or reset through
+  it, so keep the owning `Event` wherever signal state must change. The wait then owns the handle and
   hands it back only as a borrow, so it cannot be closed underneath a pending
   wait.
 - **Periodic timers reject a period they cannot honour.** The pool takes the
