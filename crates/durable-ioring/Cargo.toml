@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 description = "Epoch-based durability for a file-I/O ring, portable: the contract, the core that decides when writes are durable and what a failure puts at risk, the target and backend traits, an in-memory backend, and a conformance oracle. Drivers supply the platform; win-durable-ioring is the Windows one. No unsafe code."
 readme = "COMPONENT.md"
 

@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 description = "A Windows guard-page global allocator for test builds: every allocation abuts a PAGE_NOACCESS guard page, and a freed address is decommitted and never reused, so an overrun or a use-after-free faults deterministically instead of reading stale bytes."
 
 # Test instrumentation, not library surface. Publishing it would invite a

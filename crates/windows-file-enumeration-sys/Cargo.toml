@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 documentation = "https://docs.rs/windows-file-enumeration-sys"
 description = "Memory-safe asynchronous enumeration of one Windows directory with bounded submission and completion rings."
 readme = "README.md"

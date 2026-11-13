@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 readme = "README.md"
 description = "Reports length changes across a large population of files on a beat the caller owns, reading each length through a handle held open, rather than running a timer per file."
 keywords = ["windows", "file", "tail", "watcher"]

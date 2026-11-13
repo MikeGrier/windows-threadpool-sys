@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 readme = "README.md"
 description = "Memory-safe Rust over the Win32 volume device controls: the disks a volume sits on, the sector size it is addressed in, and its lock. Thin over Win32, adding no policy."
 keywords = ["windows", "volume", "disk", "ioctl", "ffi"]
