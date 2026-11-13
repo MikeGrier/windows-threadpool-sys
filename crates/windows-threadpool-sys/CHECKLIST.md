@@ -284,14 +284,14 @@ Graduated 2026-10-21 from `M-T14+`, whose gate, [M-T14](COMPLETED-CHECKLIST.md#m
 ## M-T17 -- Threadless waits on a sealed wait-only event
 
 Requested 2026-11-13 by canopy (its `RG-4`); the reason and the type are
-[win-sync-sys WS-M3](../win-sync-sys/CHECKLIST.md#ws-m3----a-wait-only-event-safe-code-cannot-reach-the-handle-of).
+[win-sync-sys WS-M3](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-m3).
 The engineer, 2026-11-13: a sealed event must be usable in this crate's threadless waits, not only
 in a thread's own wait.
 
 - [ ] **M-T17.1** -- **A thread-pool wait on a `SealedWaitOnlyEvent` that never lends its handle.**
 
   > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M3` -> `WS-3.1` and `WS-3.2`
-  > must land first. See [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
+  > must land first. See [COMPLETED-CHECKLIST.md](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-m3).
 
   Today `WaitableHandle::handle` / `into_handle`, `ThreadpoolWait::handle` and
   `WaitActivation::handle` all lend the target's handle, so a sealed target needs types without them,
