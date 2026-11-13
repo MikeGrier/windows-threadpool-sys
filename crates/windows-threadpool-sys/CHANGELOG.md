@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.4.0...windows-threadpool-sys-v0.4.1) (2026-11-13)
+
+
+### Features
+
+* **threadpool:** accept wait-only event handles ([425677e](https://github.com/MikeGrier/windows-threadpool-sys/commit/425677e42d3fd6e9622f198e6153184fbf15a140))
+
 ## [0.4.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.3.0...windows-threadpool-sys-v0.4.0) (2026-10-22)
 
 
