@@ -4670,3 +4670,20 @@ The item as written:
 Opened 2026-10-06 as a free-standing locality helper and re-scoped by the engineer on 2026-11-05: help computing flush domains comes when a file is opened through the namespace crate, and a consumer handing handles to the durable ioring directly manages its own. A file `win-durable-ioring` opens now has its volume's disks found as its flush domains, the same keys a raw volume derives, with a virtual disk followed by its bus type, all or nothing; a file on a share is unknown; and a directory's domains can be predicted from its own handle and a file's confirmed against them. The decisions are [DI-D-117](crates/durable-ioring/DESIGN-NOTES.md#di-d-117) and [DI-D-118](crates/durable-ioring/DESIGN-NOTES.md#di-d-118); a dropped proposal is [WV-D-13](crates/win-volume-sys/DESIGN-NOTES.md#wv-d-13).
 
 Its items, each archived under its own heading above: [M39.1](#m391), [M39.2](#m392) with [M39.2.1](#m3921), [M39.2.2](#m3922) and [M39.2.3](#m3923), [M39.3](#m393) and [M39.4](#m394).
+
+## Moved 2026-11-13 14:46:56 -05:00 -- PR 187 review and CI repair
+
+### <a id="pr187-1"></a>PR187-1 -- Clarify the release minimum and pin sealed-wait compiler diagnostics. *(completed 2026-11-13 14:46:56 -05:00)*
+
+- [x] **PR187-1** -- Correct the dependency-minimum requirement in the thread-pool
+  [CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md), pin the compiler diagnostics for
+  the sealed-wait compile-fail examples in both crates, verify the CI guard, and reply to
+  [review 5896658744](https://github.com/MikeGrier/windows-threadpool-sys/pull/187#pullrequestreview-5896658744).
+
+The repair is [cdf7cf8c](https://github.com/MikeGrier/windows-threadpool-sys/commit/cdf7cf8c).
+Verified the [annotation guard](tools/check-compile-fail-codes.ps1), both crates' all-feature
+doctests with `RUSTC_BOOTSTRAP=1`, thread-pool no-default-feature doctests with the same
+enforcement, formatting, and all-target Clippy. Runtime implementation and tests were unchanged.
+The [review reply](https://github.com/MikeGrier/windows-threadpool-sys/pull/187#discussion_r4567868362)
+records the response; the release action remains `M-T17.2` in the component's
+[CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md).

@@ -4,6 +4,153 @@
   "notCoveredHere": "Event::new's and Event::duplicate_wait_only's error paths are absent: CreateEventW and DuplicateHandle fail only when the process cannot get another handle or the kernel cannot allocate the object, which no test can produce on demand. event.rs says so at each definition. The APC routine's panic is absent: a panic out of an extern \"system\" function aborts the process, which no in-process test survives. So is an APC delivered during a thread's start, which aborts when the routine touches the Rust runtime and is documented on queue_user_apc rather than tested. QueueUserAPC's failure for the current thread (the kernel cannot allocate the APC) is not reachable on demand.",
   "sabotages": [
     {
+      "name": "WS-3.2: downstream code may implement Waitable without AsHandle",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "Removing the private supertrait makes the downstream-implementation compile-fail example compile.",
+      "find": ["pub trait Waitable: private::Sealed {\n"],
+      "replace": ["pub trait Waitable {\n"]
+    },
+    {
+      "name": "WS-3.2: the trait accessor is declared safe",
+      "file": "src/wait.rs",
+      "expect": "refused-by-build",
+      "buildError": "E0053",
+      "why": "The unsafe implementations cannot satisfy a safe trait method; the compiler rejects changing this half of the contract.",
+      "find": ["    unsafe fn waitable_handle(&self) -> BorrowedHandle<'_>;\n"],
+      "replace": ["    fn waitable_handle(&self) -> BorrowedHandle<'_>;\n"]
+    },
+    {
+      "name": "WS-3.2: WaitObject implements AsHandle",
+      "file": "src/wait.rs",
+      "expect": "refused-by-build",
+      "buildError": "conflicting implementations",
+      "why": "AsHandle would collide with the opaque target's explicit Waitable and sealing implementations, preventing this escape at the build.",
+      "find": ["impl private::Sealed for WaitObject<'_> {}\n"],
+      "replace": ["impl AsHandle for WaitObject<'_> {\n    fn as_handle(&self) -> BorrowedHandle<'_> { self.handle }\n}\n\nimpl private::Sealed for WaitObject<'_> {}\n"]
+    },
+    {
+      "name": "WS-3.2: WaitObject exposes the raw handle",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The raw-handle compile-fail example must detect this escape independently of AsHandle.",
+      "find": ["impl private::Sealed for WaitObject<'_> {}\n"],
+      "replace": ["impl AsRawHandle for WaitObject<'_> {\n    fn as_raw_handle(&self) -> std::os::windows::io::RawHandle { self.handle.as_raw_handle() }\n}\n\nimpl private::Sealed for WaitObject<'_> {}\n"]
+    },
+    {
+      "name": "WS-3.2: WaitObject safely converts back into a borrowed handle",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "A consuming conversion leaks a sealed target just as a borrowed accessor does; its compile-fail example must notice.",
+      "find": ["impl private::Sealed for WaitObject<'_> {}\n"],
+      "replace": ["impl<'a> From<WaitObject<'a>> for BorrowedHandle<'a> {\n    fn from(object: WaitObject<'a>) -> Self { object.handle }\n}\n\nimpl private::Sealed for WaitObject<'_> {}\n"]
+    },
+    {
+      "name": "WS-3.2: WaitObject Debug reveals its handle",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The safe formatter is part of the opaque target's boundary too.",
+      "find": ["impl std::fmt::Debug for WaitObject<'_> {\n    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n"],
+      "replace": ["impl std::fmt::Debug for WaitObject<'_> {\n    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        return self.handle.fmt(formatter);\n"]
+    },
+    {
+      "name": "CONTROL: WS-3.2: the Copy and Clone derives change order",
+      "file": "src/wait.rs",
+      "expect": "survives",
+      "why": "Derive order changes neither the opaque borrow nor its wait behavior.",
+      "find": ["#[derive(Clone, Copy)]\npub struct WaitObject<'a> {\n"],
+      "replace": ["#[derive(Copy, Clone)]\npub struct WaitObject<'a> {\n"]
+    },
+    {
+      "name": "WS-3.1: sealed borrowed access becomes safe",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "The accessor's compile-fail doctest must fail when safe code can borrow the handle.",
+      "find": ["    pub unsafe fn as_waitable_handle(&self) -> BorrowedHandle<'_> {\n"],
+      "replace": ["    pub fn as_waitable_handle(&self) -> BorrowedHandle<'_> {\n"]
+    },
+    {
+      "name": "WS-3.1: sealed owned access becomes safe",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "The extraction compile-fail doctest guards the consuming escape hatch independently.",
+      "find": ["    pub unsafe fn into_shared_handle(self) -> SharedHandle {\n"],
+      "replace": ["    pub fn into_shared_handle(self) -> SharedHandle {\n"]
+    },
+    {
+      "name": "WS-3.1: sealed event implements AsHandle",
+      "file": "src/event.rs",
+      "expect": "refused-by-build",
+      "buildError": "conflicting implementations",
+      "why": "Since WS-3.2 the blanket AsHandle implementation conflicts with the explicit sealed-event Waitable implementation, so this escape is rejected by the build before doctests.",
+      "find": ["impl SealedWaitOnlyEvent {\n"],
+      "replace": ["impl AsHandle for SealedWaitOnlyEvent {\n    fn as_handle(&self) -> BorrowedHandle<'_> { self.handle.as_handle() }\n}\n\nimpl SealedWaitOnlyEvent {\n"]
+    },
+    {
+      "name": "WS-3.1: sealed event implements AsRawHandle",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "The raw-handle compile-fail example checks this separate route.",
+      "find": ["impl SealedWaitOnlyEvent {\n"],
+      "replace": ["impl AsRawHandle for SealedWaitOnlyEvent {\n    fn as_raw_handle(&self) -> RawHandle { self.handle.as_raw_handle() }\n}\n\nimpl SealedWaitOnlyEvent {\n"]
+    },
+    {
+      "name": "WS-3.1: sealed event converts safely into SharedHandle",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "A safe From conversion bypasses the unsafe owned accessor and must turn its own doctest red.",
+      "find": ["impl SealedWaitOnlyEvent {\n"],
+      "replace": ["impl From<SealedWaitOnlyEvent> for SharedHandle {\n    fn from(event: SealedWaitOnlyEvent) -> Self { event.handle }\n}\n\nimpl SealedWaitOnlyEvent {\n"]
+    },
+    {
+      "name": "WS-3.1: sealed event exposes try_into_owned",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "Requiring the last holder does not make a safe handle extraction permissible.",
+      "find": ["impl SealedWaitOnlyEvent {\n"],
+      "replace": ["impl SealedWaitOnlyEvent {\n    /// Extract the handle when unique.\n    pub fn try_into_owned(self) -> Result<OwnedHandle, Self> {\n        self.handle.try_into_owned().map_err(|handle| Self { handle })\n    }\n"]
+    },
+    {
+      "name": "WS-3.1: sealed constructor retains full access",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "The new constructor must actually use the existing narrowing path; the access tests check both constructors.",
+      "find": ["        self.duplicate_wait_only().map(SealedWaitOnlyEvent::from)\n"],
+      "replace": ["        Ok(SealedWaitOnlyEvent { handle: self.handle.clone() })\n"]
+    },
+    {
+      "name": "WS-3.1: sealing duplicates rather than shares",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "Identity and last-holder tests cover sharing with aliases that predate conversion.",
+      "find": ["impl From<WaitOnlyEvent> for SealedWaitOnlyEvent {\n    fn from(event: WaitOnlyEvent) -> Self {\n        Self {\n            handle: event.handle,\n        }\n    }\n}\n"],
+      "replace": ["impl From<WaitOnlyEvent> for SealedWaitOnlyEvent {\n    fn from(event: WaitOnlyEvent) -> Self {\n        Self { handle: SharedHandle::new(event.as_handle().try_clone_to_owned().expect(\"duplicate\")) }\n    }\n}\n"]
+    },
+    {
+      "name": "WS-3.1: sealed extraction duplicates rather than transfers",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "The extracted handle must still share ownership with surviving sealed clones.",
+      "find": ["    pub unsafe fn into_shared_handle(self) -> SharedHandle {\n        self.handle\n    }\n"],
+      "replace": ["    pub unsafe fn into_shared_handle(self) -> SharedHandle {\n        SharedHandle::new(self.handle.as_handle().try_clone_to_owned().expect(\"duplicate\"))\n    }\n"]
+    },
+    {
+      "name": "WS-3.1: Debug reveals the sealed handle",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "Debug is safe code too; its regression test requires the redacted representation.",
+      "find": ["impl std::fmt::Debug for SealedWaitOnlyEvent {\n    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n"],
+      "replace": ["impl std::fmt::Debug for SealedWaitOnlyEvent {\n    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        return self.handle.fmt(formatter);\n"]
+    },
+    {
+      "name": "CONTROL: WS-3.1: sealing clones the shared owner before dropping the source",
+      "file": "src/event.rs",
+      "expect": "survives",
+      "why": "Cloning SharedHandle and dropping the original transfers one ownership share just as moving it does; no OS handle is duplicated.",
+      "find": ["impl From<WaitOnlyEvent> for SealedWaitOnlyEvent {\n    fn from(event: WaitOnlyEvent) -> Self {\n        Self {\n            handle: event.handle,\n        }\n    }\n}\n"],
+      "replace": ["impl From<WaitOnlyEvent> for SealedWaitOnlyEvent {\n    fn from(event: WaitOnlyEvent) -> Self {\n        Self { handle: event.handle.clone() }\n    }\n}\n"]
+    },
+    {
       "name": "WS-1.1: set resets instead",
       "file": "src/event.rs",
       "expect": "caught",
@@ -144,7 +291,7 @@
       "file": "src/wait.rs",
       "expect": "caught",
       "why": "The handle given is the one waited on; every wait test sees the call fail instead.",
-      "find": ["    let code = unsafe { WaitForSingleObject(object.as_handle().as_raw_handle(), milliseconds) };\n"],
+      "find": ["    let code =\n        unsafe { WaitForSingleObject(object.waitable_handle().as_raw_handle(), milliseconds) };\n"],
       "replace": ["    let code = unsafe { WaitForSingleObject(std::ptr::null_mut(), milliseconds) };\n"]
     },
     {
@@ -296,8 +443,8 @@
       "file": "src/signal.rs",
       "expect": "caught",
       "why": "The two handles are different kinds of argument; swapped, the wait object is signalled and the other is waited on.",
-      "find": ["            signal.as_handle().as_raw_handle(),\n            wait.as_handle().as_raw_handle(),\n"],
-      "replace": ["            wait.as_handle().as_raw_handle(),\n            signal.as_handle().as_raw_handle(),\n"]
+      "find": ["            signal.as_handle().as_raw_handle(),\n            wait.waitable_handle().as_raw_handle(),\n"],
+      "replace": ["            wait.waitable_handle().as_raw_handle(),\n            signal.as_handle().as_raw_handle(),\n"]
     },
     {
       "name": "WS-1+.1: a refused APC is reported as queued",

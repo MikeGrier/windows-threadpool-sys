@@ -2,13 +2,154 @@
 //! Waiting on one kernel object: `WaitForSingleObject` and `WaitForSingleObjectEx`.
 
 use std::io;
-use std::os::windows::io::{AsHandle, AsRawHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
     FALSE, TRUE, WAIT_ABANDONED, WAIT_FAILED, WAIT_IO_COMPLETION, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject, WaitForSingleObjectEx};
+
+use crate::SealedWaitOnlyEvent;
+
+mod private {
+    pub trait Sealed {}
+}
+
+/// An object accepted by the thread-based wait functions without exposing its handle to safe code.
+///
+/// Every [`AsHandle`] type implements this, as do [`SealedWaitOnlyEvent`], its reference, and
+/// [`WaitObject`]. Implementations are sealed; downstream types participate through `AsHandle`.
+/// This makes no claim about object kind: unlike thread-pool waits, these waits accept mutexes.
+///
+/// A type without `AsHandle` cannot add an implementation outside this crate:
+///
+/// ```compile_fail,E0277
+/// use std::os::windows::io::BorrowedHandle;
+/// use win_sync_sys::Waitable;
+/// struct External;
+/// impl Waitable for External {
+///     unsafe fn waitable_handle(&self) -> BorrowedHandle<'_> { unimplemented!() }
+/// }
+/// ```
+pub trait Waitable: private::Sealed {
+    /// Borrow the handle for a wait.
+    ///
+    /// # Safety
+    ///
+    /// Preserve [`SealedWaitOnlyEvent`'s handle-access contract](SealedWaitOnlyEvent#handle-access-contract)
+    /// for the returned handle and every handle derived from it, even after this borrow ends.
+    ///
+    /// ```compile_fail,E0133
+    /// use win_sync_sys::{SealedWaitOnlyEvent, Waitable};
+    /// fn expose(event: &SealedWaitOnlyEvent) { let _ = event.waitable_handle(); }
+    /// ```
+    unsafe fn waitable_handle(&self) -> BorrowedHandle<'_>;
+}
+
+impl<T: AsHandle + ?Sized> private::Sealed for T {}
+
+impl<T: AsHandle + ?Sized> Waitable for T {
+    unsafe fn waitable_handle(&self) -> BorrowedHandle<'_> {
+        self.as_handle()
+    }
+}
+
+impl private::Sealed for SealedWaitOnlyEvent {}
+
+impl Waitable for SealedWaitOnlyEvent {
+    unsafe fn waitable_handle(&self) -> BorrowedHandle<'_> {
+        unsafe { self.as_waitable_handle() }
+    }
+}
+
+impl private::Sealed for &SealedWaitOnlyEvent {}
+
+impl Waitable for &SealedWaitOnlyEvent {
+    unsafe fn waitable_handle(&self) -> BorrowedHandle<'_> {
+        unsafe { self.as_waitable_handle() }
+    }
+}
+
+/// An opaque borrowed wait target for mixing sealed events with ordinary handles.
+///
+/// Construct from a [`BorrowedHandle`] or [`SealedWaitOnlyEvent::wait_object`]. Copies borrow the
+/// same object and never duplicate its handle. Neither `Debug` nor a safe accessor reveals it.
+/// The borrow keeps the source alive for the wait; waiting retains the native object's semantics.
+///
+/// ```compile_fail,E0599
+/// use std::os::windows::io::AsHandle;
+/// use win_sync_sys::WaitObject;
+/// fn expose(object: WaitObject<'_>) { let _ = object.as_handle(); }
+/// ```
+///
+/// ```compile_fail,E0599
+/// use std::os::windows::io::AsRawHandle;
+/// use win_sync_sys::WaitObject;
+/// fn expose(object: WaitObject<'_>) { let _ = object.as_raw_handle(); }
+/// ```
+///
+/// ```compile_fail,E0133
+/// use win_sync_sys::{WaitObject, Waitable};
+/// fn expose(object: WaitObject<'_>) { let _ = object.waitable_handle(); }
+/// ```
+///
+/// ```compile_fail,E0515
+/// use win_sync_sys::{SealedWaitOnlyEvent, WaitObject};
+/// fn escape(event: SealedWaitOnlyEvent) -> WaitObject<'static> { event.wait_object() }
+/// ```
+///
+/// ```compile_fail,E0515
+/// use std::os::windows::io::{AsHandle, OwnedHandle};
+/// use win_sync_sys::WaitObject;
+/// fn escape(owner: OwnedHandle) -> WaitObject<'static> { owner.as_handle().into() }
+/// ```
+///
+/// ```compile_fail,E0277
+/// use std::os::windows::io::BorrowedHandle;
+/// use win_sync_sys::WaitObject;
+/// fn expose<'a>(object: WaitObject<'a>) -> BorrowedHandle<'a> { object.into() }
+/// ```
+#[derive(Clone, Copy)]
+pub struct WaitObject<'a> {
+    handle: BorrowedHandle<'a>,
+}
+
+impl std::fmt::Debug for WaitObject<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("WaitObject").finish_non_exhaustive()
+    }
+}
+
+impl<'a> From<BorrowedHandle<'a>> for WaitObject<'a> {
+    fn from(handle: BorrowedHandle<'a>) -> Self {
+        Self { handle }
+    }
+}
+
+impl<'a> From<&'a SealedWaitOnlyEvent> for WaitObject<'a> {
+    fn from(event: &'a SealedWaitOnlyEvent) -> Self {
+        Self {
+            handle: unsafe { event.as_waitable_handle() },
+        }
+    }
+}
+
+impl private::Sealed for WaitObject<'_> {}
+
+impl Waitable for WaitObject<'_> {
+    unsafe fn waitable_handle(&self) -> BorrowedHandle<'_> {
+        self.handle
+    }
+}
+
+impl private::Sealed for &WaitObject<'_> {}
+
+impl Waitable for &WaitObject<'_> {
+    unsafe fn waitable_handle(&self) -> BorrowedHandle<'_> {
+        self.handle
+    }
+}
 
 /// Whether a wait can be ended early by an APC queued to the waiting thread.
 ///
@@ -63,6 +204,9 @@ pub enum WaitOutcome {
 /// Wait for `object` to be signalled, for up to `timeout`: `None` is no limit, and `Duration::ZERO`
 /// only asks whether it is signalled now.
 ///
+/// Accepts any [`AsHandle`] type, a [`SealedWaitOnlyEvent`] or its reference, or a [`WaitObject`].
+/// Sealed targets never lend their handle to the caller of this function.
+///
 /// **A satisfied wait changes the object**, as the Win32 call does: it resets an auto-reset event,
 /// acquires a mutex and decrements a semaphore. The wait is not alertable, so a queued APC does
 /// not end it; [`wait_for_single_object_ex`] is the one an APC can end.
@@ -77,12 +221,13 @@ pub enum WaitOutcome {
 /// error from `GetLastError` when the wait fails, such as access denied for a handle without
 /// `SYNCHRONIZE` access.
 pub fn wait_for_single_object(
-    object: impl AsHandle,
+    object: impl Waitable,
     timeout: Option<Duration>,
 ) -> io::Result<WaitOutcome> {
     let milliseconds = milliseconds(timeout)?;
-    // SAFETY: a borrowed handle is open for the borrow's lifetime, and the wait ends within it.
-    let code = unsafe { WaitForSingleObject(object.as_handle().as_raw_handle(), milliseconds) };
+    // SAFETY: the target stays borrowed and its handle is used only for this wait.
+    let code =
+        unsafe { WaitForSingleObject(object.waitable_handle().as_raw_handle(), milliseconds) };
     outcome(code)
 }
 
@@ -92,19 +237,22 @@ pub fn wait_for_single_object(
 /// [`Alertable::Yes`] it returns [`WaitOutcome::Alerted`] when an APC queued to the calling thread
 /// ran, without having taken anything from the object.
 ///
+/// Accepts the same [`Waitable`] objects as [`wait_for_single_object`], including
+/// [`SealedWaitOnlyEvent`] and [`WaitObject`].
+///
 /// # Errors
 ///
 /// As [`wait_for_single_object`].
 pub fn wait_for_single_object_ex(
-    object: impl AsHandle,
+    object: impl Waitable,
     timeout: Option<Duration>,
     alertable: Alertable,
 ) -> io::Result<WaitOutcome> {
     let milliseconds = milliseconds(timeout)?;
-    // SAFETY: a borrowed handle is open for the borrow's lifetime, and the wait ends within it.
+    // SAFETY: the target stays borrowed and its handle is used only for this wait.
     let code = unsafe {
         WaitForSingleObjectEx(
-            object.as_handle().as_raw_handle(),
+            object.waitable_handle().as_raw_handle(),
             milliseconds,
             alertable.as_bool(),
         )

@@ -157,9 +157,8 @@ impl Event {
             .map_err(|handle| Self { handle })
     }
 
-    /// A new handle to the same event that can wait on it and do nothing else: the one operation
-    /// here that makes a handle, because access belongs to a handle and narrowing it needs a new
-    /// one ([WS-D-10](../DESIGN-NOTES.md#ws-d-10)).
+    /// A new handle to the same event with wait-only access; narrowing access needs a new handle
+    /// ([WS-D-10](../DESIGN-NOTES.md#ws-d-10)).
     ///
     /// The handle carries `SYNCHRONIZE` access alone, so it can neither set nor reset the event:
     /// the kernel refuses a `SetEvent` or `ResetEvent` on it. A clone cannot give that, since it
@@ -180,6 +179,19 @@ impl Event {
             handle: SharedHandle::new(duplicate_handle_with_access(self, Access::SYNCHRONIZE)?),
         })
     }
+
+    /// A wait-only duplicate whose handle cannot be obtained by safe code.
+    ///
+    /// This seals [`duplicate_wait_only`](Self::duplicate_wait_only)'s result; it does not
+    /// revoke the owner's access. A satisfied wait still consumes an auto-reset event's signal.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`duplicate_wait_only`](Self::duplicate_wait_only), with the same
+    /// resource-exhaustion limitation on testing that path.
+    pub fn duplicate_sealed_wait_only(&self) -> io::Result<SealedWaitOnlyEvent> {
+        self.duplicate_wait_only().map(SealedWaitOnlyEvent::from)
+    }
 }
 
 /// A handle to an event that can wait on it and cannot set or reset it.
@@ -195,6 +207,7 @@ impl Event {
 /// duplicate it asking for more access, which Windows allows
 /// ([`duplicate_handle_with_access`](crate::duplicate_handle_with_access)), so this guards against
 /// a handle used for what it was not handed out for, not against a holder bent on signalling.
+/// Convert into [`SealedWaitOnlyEvent`] to withhold handle access from safe code through that value.
 ///
 /// **It is still known to be an event**, so what [WS-D-4](../DESIGN-NOTES.md#ws-d-4) lets a consumer
 /// rely on holds here too: the handle is not a mutex, which is the one kind of object a thread-pool
@@ -236,6 +249,116 @@ impl AsRawHandle for WaitOnlyEvent {
 impl From<WaitOnlyEvent> for SharedHandle {
     fn from(event: WaitOnlyEvent) -> Self {
         event.handle
+    }
+}
+
+/// A shared wait-only event whose handle is accessible only through `unsafe` operations.
+///
+/// Made by [`Event::duplicate_sealed_wait_only`] or by consuming a [`WaitOnlyEvent`]. Conversion
+/// and cloning share the existing handle, with `SYNCHRONIZE` alone; they do not duplicate it.
+/// The object is an event, never a mutex, and the type is `Send` and `Sync`.
+///
+/// The seal restricts access through this value, not through the owning [`Event`] or unsealed
+/// aliases retained before conversion. It changes no operating-system security descriptor.
+/// A wait on a manual-reset event leaves its level unchanged; a satisfied wait on an auto-reset
+/// event consumes the signal. This type has no `set` or `reset`, and its `Debug` hides the handle.
+/// The crate's thread-wait functions accept it directly; [`wait_object`](Self::wait_object)
+/// supplies an opaque borrow for a mixed set of targets.
+///
+/// # Handle-access contract
+///
+/// Treat an extracted handle and every handle derived from it as wait-only: do not explicitly
+/// change the event's state, widen access, or expose it to code that could do either. This
+/// obligation lasts until those handles are closed, not merely until the accessor returns.
+/// Owning, cloning and dropping such handles is permitted while preserving this restriction.
+/// The `unsafe` boundary protects protocol analyses relying on this restriction, not just
+/// memory safety ([WS-D-11](../DESIGN-NOTES.md#ws-d-11)).
+///
+/// Safe code cannot borrow, extract, or convert the handle:
+///
+/// ```compile_fail,E0599
+/// use std::os::windows::io::AsHandle;
+/// use win_sync_sys::SealedWaitOnlyEvent;
+/// fn borrow(event: &SealedWaitOnlyEvent) { let _ = event.as_handle(); }
+/// ```
+///
+/// ```compile_fail,E0599
+/// use std::os::windows::io::AsRawHandle;
+/// use win_sync_sys::SealedWaitOnlyEvent;
+/// fn raw(event: &SealedWaitOnlyEvent) { let _ = event.as_raw_handle(); }
+/// ```
+///
+/// ```compile_fail,E0277
+/// use win_shared_os_owned_handle::SharedHandle;
+/// use win_sync_sys::SealedWaitOnlyEvent;
+/// fn shared(event: SealedWaitOnlyEvent) { let _ = SharedHandle::from(event); }
+/// ```
+///
+/// ```compile_fail,E0599
+/// use win_sync_sys::SealedWaitOnlyEvent;
+/// fn owned(event: SealedWaitOnlyEvent) { let _ = event.try_into_owned(); }
+/// ```
+///
+/// ```compile_fail,E0308
+/// use win_sync_sys::{SealedWaitOnlyEvent, WaitOnlyEvent};
+/// fn unseal(event: SealedWaitOnlyEvent) { let _ = WaitOnlyEvent::from(event); }
+/// ```
+#[derive(Clone)]
+pub struct SealedWaitOnlyEvent {
+    handle: SharedHandle,
+}
+
+impl std::fmt::Debug for SealedWaitOnlyEvent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SealedWaitOnlyEvent")
+            .finish_non_exhaustive()
+    }
+}
+
+impl SealedWaitOnlyEvent {
+    /// Borrow an opaque target for a mixed [`wait_for_any`](crate::wait_for_any) or wait-for-all.
+    pub fn wait_object(&self) -> crate::WaitObject<'_> {
+        crate::WaitObject::from(self)
+    }
+
+    /// Borrow the event's `SYNCHRONIZE`-only handle.
+    ///
+    /// # Safety
+    ///
+    /// Preserve the [handle-access contract](Self#handle-access-contract), including for every
+    /// derived handle after this borrow ends.
+    ///
+    /// ```compile_fail,E0133
+    /// use win_sync_sys::SealedWaitOnlyEvent;
+    /// fn borrow(event: &SealedWaitOnlyEvent) { let _ = event.as_waitable_handle(); }
+    /// ```
+    pub unsafe fn as_waitable_handle(&self) -> BorrowedHandle<'_> {
+        self.handle.as_handle()
+    }
+
+    /// Transfer this holder's shared handle without duplicating it or requiring the last clone.
+    ///
+    /// # Safety
+    ///
+    /// Preserve the [handle-access contract](Self#handle-access-contract) for the returned handle
+    /// and all its descendants, including after every sealed holder has dropped.
+    ///
+    /// ```compile_fail,E0133
+    /// use win_sync_sys::SealedWaitOnlyEvent;
+    /// fn shared(event: SealedWaitOnlyEvent) { let _ = event.into_shared_handle(); }
+    /// ```
+    pub unsafe fn into_shared_handle(self) -> SharedHandle {
+        self.handle
+    }
+}
+
+/// Seal this holder without revoking any unsealed aliases or creating another handle.
+impl From<WaitOnlyEvent> for SealedWaitOnlyEvent {
+    fn from(event: WaitOnlyEvent) -> Self {
+        Self {
+            handle: event.handle,
+        }
     }
 }
 

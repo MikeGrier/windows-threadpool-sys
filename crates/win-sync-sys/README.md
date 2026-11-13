@@ -31,7 +31,8 @@ let handle: SharedHandle = ready.into();
 # Ok::<(), std::io::Error>(())
 ```
 
-- **`wait_for_single_object`** -- `WaitForSingleObject` over any handle, an `Event` included, with
+- **`wait_for_single_object`** -- `WaitForSingleObject` over any `Waitable`, including every
+  `AsHandle` type and `SealedWaitOnlyEvent`, with
   a timeout of `None` for no limit or a `Duration`. It reports how the wait ended as a
   `WaitOutcome`, so a mutex abandoned by its owner is not mistaken for a signal. A satisfied wait
   changes the object as the Win32 call does: an auto-reset event is consumed.
@@ -65,7 +66,7 @@ documentation](../windows-threadpool-sys/README.md) for its access and rearm beh
   and **`queue_user_apc`** -- the rest of the wait functions: `WaitForMultipleObjectsEx` for up to
   `MAXIMUM_OBJECTS` (64) objects, either until any one is signalled, reporting which, or until all
   are at once, which takes from them atomically; `SignalObjectAndWait`, which can signal only a
-  `Signalable` object, so a `WaitOnlyEvent` is refused by the compiler; and the alertable form of
+  `Signalable` object, so wait-only and sealed targets are refused in the signal position; and the alertable form of
   each, an `Alertable::Yes` wait that an APC ends with `Alerted`. `queue_user_apc` takes a Rust
   closure and runs it on the target thread in its next alertable wait.
 
@@ -129,6 +130,51 @@ assert_eq!(wait_for_single_object(&adopted, None)?, WaitOutcome::Signalled);
 # Ok::<(), std::io::Error>(())
 ```
 
+- **`SealedWaitOnlyEvent`** -- `Event::duplicate_sealed_wait_only` makes a wait-only duplicate
+  whose handle safe code cannot obtain. `SealedWaitOnlyEvent::from(waiter)` seals an existing
+  `WaitOnlyEvent` without duplicating its handle or revoking previously retained aliases.
+  Clones share the handle, and `Debug` does not display it. The unsafe accessors carry a
+  wait-only obligation for the extracted handle and its descendants; see the type's
+  [handle-access contract](https://docs.rs/win-sync-sys/latest/win_sync_sys/struct.SealedWaitOnlyEvent.html#handle-access-contract).
+  A manual-reset event's level is unchanged by waiting; an auto-reset event's signal is consumed.
+  The single-object wait functions accept it by value or reference without `unsafe`.
+
+- **`WaitObject<'a>`** -- an opaque borrow for a mixed wait set. Make one with
+  `sealed.wait_object()` or `WaitObject::from(handle.as_handle())`, then pass the slice to
+  `wait_for_any` or `wait_for_all`. `Copy` copies the borrow, not the OS handle; neither its
+  `Debug` nor a safe accessor exposes the handle. The slice may mix object kinds, including
+  mutexes. `Waitable` supplies the common wait-only contract, with a blanket implementation
+  preserving existing `AsHandle` callers; its handle accessor requires `unsafe`.
+
+```rust
+use std::os::windows::io::AsHandle;
+use std::time::Duration;
+use win_sync_sys::{
+    Alertable, Event, ResetMode, SealedWaitOnlyEvent, WaitAnyOutcome, WaitOutcome,
+    wait_for_all, wait_for_any, wait_for_single_object,
+};
+
+let owner = Event::new(ResetMode::Manual, false)?;
+let sealed = owner.duplicate_sealed_wait_only()?;
+let converted = SealedWaitOnlyEvent::from(owner.duplicate_wait_only()?);
+let clone = sealed.clone();
+let shutdown = Event::new(ResetMode::Manual, false)?;
+let objects = [sealed.wait_object(), shutdown.as_handle().into()];
+let poll = Some(Duration::ZERO);
+
+shutdown.set()?;
+assert_eq!(wait_for_any(&objects, poll, Alertable::No)?, WaitAnyOutcome::Signalled(1));
+assert_eq!(wait_for_all(&objects, poll, Alertable::No)?, WaitOutcome::TimedOut);
+shutdown.reset()?;
+owner.set()?;
+assert_eq!(wait_for_any(&objects, poll, Alertable::No)?, WaitAnyOutcome::Signalled(0));
+shutdown.set()?;
+assert_eq!(wait_for_all(&objects, poll, Alertable::No)?, WaitOutcome::Signalled);
+assert_eq!(wait_for_single_object(&clone, poll)?, WaitOutcome::Signalled);
+assert_eq!(wait_for_single_object(converted, poll)?, WaitOutcome::Signalled);
+# Ok::<(), std::io::Error>(())
+```
+
 ## What is not here
 
 - **`PulseEvent`, deliberately.** Its own documentation calls it unreliable and says it should not
@@ -138,9 +184,9 @@ assert_eq!(wait_for_single_object(&adopted, None)?, WaitOutcome::Signalled);
   reports that it did. Microsoft's replacement is a condition variable.
 - **Named events and `OpenEvent`.** Every event here is unnamed. Whether named objects belong in
   this crate is not yet decided.
-- **The other kernel objects** -- semaphores, mutexes and waitable timers -- are planned in this
-  crate's `CHECKLIST.md`.
+- **The other kernel objects** -- semaphores, mutexes and waitable timers -- are in
+  [PARKED.md](PARKED.md).
 - **The in-process primitives** -- SRW locks, condition variables, critical sections, one-time
   initialization, barriers and `WaitOnAddress` -- are parked rather than rejected.
 
-The reasoning behind each is in this crate's `DESIGN-NOTES.md`.
+The reasoning behind each is in this crate's [DESIGN-NOTES.md](DESIGN-NOTES.md).

@@ -20,6 +20,7 @@
 //! | [`timer::ThreadpoolTimer`] | `TP_TIMER` | a due time arrives, once per arming |
 //! | [`timer::ThreadpoolPeriodicTimer`] | `TP_TIMER` | every period, until stopped |
 //! | [`wait::ThreadpoolWait`] | `TP_WAIT` | a handle signals or a wait times out |
+//! | [`wait::SealedThreadpoolWait`] | `TP_WAIT` | a sealed event signals or a wait times out, without exposing its handle |
 //! | [`io::ThreadpoolIo`] | `TP_IO` | an overlapped operation completes |
 //!
 //! One-shot and periodic timers are separate types on purpose. The platform

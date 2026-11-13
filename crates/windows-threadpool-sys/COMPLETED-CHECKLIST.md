@@ -2504,3 +2504,47 @@ Implemented `From<WaitOnlyEvent> for WaitableHandle` in [wait.rs](src/wait.rs) b
 Added focused coverage in [wait_only.rs](src/wait/tests/wait_only.rs) for manual- and auto-reset behavior, callback rearming, access-denied operations and the Event-backed positive control, handle identity, and lifetime. Added access-widening and duplicate-handle mutations in [sabotage.json](sabotage.json), both caught by the tests.
 
 Updated the thread-pool [README.md](README.md), the [win-sync-sys README.md](../win-sync-sys/README.md), and the workspace [DESIGN-NOTES.md](../../DESIGN-NOTES.md#a-wait-may-share-its-handle) and [DESIGN-RATIONALE.md](../../DESIGN-RATIONALE.md). The focused wait-only tests, full package tests and doctests, all-target Clippy, sabotage patch validation, and targeted sabotage sweep passed.
+
+## Moved 2026-11-13 13:49:03 -05:00 -- M-T17.1, sealed thread-pool waits
+
+### <a id="m-t171"></a>M-T17.1 -- Add sealed thread-pool waits without exposing their event handles. *(completed 2026-11-13 13:49:03 UTC-05:00)*
+
+Implemented the [sealed-wait decision](../../DESIGN-NOTES.md#sealed-threadpool-waits) in
+[sealed.rs](src/wait/sealed.rs), re-exported by [wait.rs](src/wait.rs). The existing native wait
+lifecycle drives the new target, wait and callback wrappers. The prerequisite is
+[WS-M3](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-m3).
+
+Implementation found the optional public trace could reveal a target despite opaque wrappers.
+The plan was amended before changing that path: sealed diagnostics now use a separate redacted
+value, while ordinary target diagnostics and the native handle passed to Win32 are unchanged.
+The rationale is in [DESIGN-RATIONALE.md](../../DESIGN-RATIONALE.md#why-sealed-waits-wrap-the-existing-lifecycle).
+
+[Tests](src/wait/tests/sealed.rs) cover shared ownership, last-holder release, owner signalling,
+reset modes, rearming, timeouts, cancellation, private pools, drainage, callback-capture release
+and redacted debugging. Trace tests run in an isolated armed child, with an ordinary-wait control.
+Compile-fail doctests reject safe handle access and unsealing; the [README.md](README.md) example
+registers and observes a sealed wait without `unsafe`.
+
+Verified the full crate suite and doctests with all features, focused no-default-feature tests
+and doctests, rustdoc with warnings denied, formatting, all-target Clippy, and the branch-scoped
+[sabotage.json](sabotage.json) sweep. Handle-exposure, duplicate-owner, trace-leak and missing-call
+mutations were caught, and the equivalent control survived. Release coordination stays in
+[CHECKLIST.md](CHECKLIST.md) `M-T17.2`.
+
+## Moved 2026-11-13 14:02:09 -05:00 -- M-T16, release and canopy handoff
+
+### <a id="m-t162"></a>M-T16.2 -- Release `M-T16.1` and tell canopy. *(completion recorded 2026-11-13 14:02:09 UTC-05:00)*
+
+The engineer confirmed on 2026-11-13 that this item had been taken care of, including the release
+and canopy handoff. This records that confirmation; no additional notification was sent here.
+
+The release decision for this item was `feat(threadpool)` without a `Release-As` footer,
+using `bump-patch-for-minor-pre-major` for 0.4.1 rather than the request's 0.5.0. The engineer,
+2026-11-12: "there is no need to increment the version higher". The additive change fit canopy's
+`windows-threadpool-sys = "0.4.0"` requirement, and its acadia already required the `win-sync-sys`
+release carrying `duplicate_wait_only`. The handoff concerned canopy's `API-3` follow-ups.
+
+### <a id="m-t16"></a>M-T16 -- Follow-ups to the `Event` conversion
+
+Graduated 2026-10-21 from `M-T14+`, following [M-T14](#m-t141).
+Items: [M-T16.1](#m-t161) and [M-T16.2](#m-t162).

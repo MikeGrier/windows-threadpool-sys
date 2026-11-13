@@ -264,19 +264,21 @@ component nobody has written.
   **`M-T7.1` is unrelated and does not gate this.** That item is the pool *stall*; this is pool
   *placement*. They share a crate and nothing else.
 
-## M-T16 -- Follow-ups to the `Event` conversion
+## M-T17 -- Threadless waits on a sealed wait-only event
 
-Graduated 2026-10-21 from `M-T14+`, whose gate, [M-T14](COMPLETED-CHECKLIST.md#m-t141), is complete.
+Requested 2026-11-13 by canopy (its `RG-4`); the reason and the type are
+[win-sync-sys WS-M3](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-m3).
+The engineer, 2026-11-13: a sealed event must be usable in this crate's threadless waits, not only
+in a thread's own wait.
 
-- [x] **M-T16.1** -- Accept `WaitOnlyEvent` as a safe thread-pool wait target. -> [completed 2026-11-12](COMPLETED-CHECKLIST.md#m-t161)
+- [x] **M-T17.1** -- Add sealed thread-pool waits without exposing their event handles. -> [completed 2026-11-13](COMPLETED-CHECKLIST.md#m-t171)
 
-- [ ] **M-T16.2** -- **Release `M-T16.1` and tell canopy.** The commit is `feat(threadpool)`, and
-  this workspace's release-please config has `bump-patch-for-minor-pre-major`, so it releases as
-  **0.4.1**, not the 0.5.0 the request asks for. The engineer, 2026-11-12: "there is no need to
-  increment the version higher", so the commit carries no `Release-As` footer. The change is
-  additive, `win-sync-sys` is already in this crate's public API through `From<Event>`, and canopy's
-  `windows-threadpool-sys = "0.4.0"` requirement admits 0.4.1. No `win-sync-sys` release is needed:
-  `duplicate_wait_only` shipped in its 0.1.0, which canopy's acadia already requires. Once the
-  release-please PR merges and the crate is on crates.io, report the version on canopy's request so
-  its `API-3` follow-ups (acadia's `EventSignal::wait_only`, the doorbell lending it, the dev-dependency
-  bump) can proceed; posting there needs the engineer's say-so.
+- [ ] **M-T17.2** -- **Release `WS-M3` and `M-T17.1`, and tell canopy.** `feat(win-sync)` releases
+  `win-sync-sys` 0.1.1 and `feat(threadpool)` this crate's next patch;
+  before publishing this crate, raise its `win-sync-sys` **minimum** to the release containing
+  the sealed APIs (planned as 0.1.1). Merely admitting that version is insufficient: `0.1.0`
+  still permits resolution to a version without those APIs. Read the release PR to see whether
+  the workspace plugin raises the minimum; if not, update it in a commit of its own. Verify the
+  resulting requirement excludes earlier versions. Then report both versions on canopy's request
+  so `RG-4` can proceed; posting there needs the
+  engineer's say-so.

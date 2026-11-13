@@ -12,6 +12,9 @@
 //!   event the wait holds, build it from a `win-sync-sys` [`Event`] to retain
 //!   event access, or from a [`WaitOnlyEvent`] for a `SYNCHRONIZE`-only handle
 //!   that cannot set or reset the event.
+//!   To withhold the handle from safe code, convert a `SealedWaitOnlyEvent` into
+//!   [`SealedWaitableHandle`] and use [`SealedThreadpoolWait`]; its callback receives
+//!   [`SealedWaitActivation`] without a handle accessor. Its trace target values are redacted.
 //! - **A wait fires at most once per arming.** The SDK requires the wait to be
 //!   rearmed explicitly for each activation, so the callback receives a
 //!   [`WaitActivation`] carrying [`WaitActivation::rearm`]. A callback that does
@@ -38,6 +41,9 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::core::BOOL;
 
 use crate::callback_env::CallbackEnviron;
+
+mod sealed;
+pub use sealed::{SealedThreadpoolWait, SealedWaitActivation, SealedWaitableHandle};
 
 /// Wait results the pool reports. Changing either value is a breaking change.
 mod wait_status {
@@ -400,6 +406,8 @@ impl WaitResult {
 struct WaitContext {
     wait: AtomicIsize,
     handle: HANDLE,
+    #[cfg(feature = "trace")]
+    trace_handle: usize,
     /// Stops a callback re-arming this wait once a teardown has begun.
     ///
     /// Arming takes this lock and does nothing while the count is non-zero, so
@@ -433,6 +441,17 @@ struct WaitContext {
 }
 
 impl WaitContext {
+    fn trace_handle(&self) -> usize {
+        #[cfg(feature = "trace")]
+        {
+            self.trace_handle
+        }
+        #[cfg(not(feature = "trace"))]
+        {
+            0
+        }
+    }
+
     /// Lock the suppression count, recovering from a panicking holder.
     fn suppression(&self) -> std::sync::MutexGuard<'_, u32> {
         self.rearm.lock()
@@ -618,10 +637,10 @@ impl WaitActivation<'_> {
             // SAFETY: `wait` is this object's live PTP_WAIT, published before any
             // callback could run, and `handle` is owned by that object so it is
             // still open. The timeout, if any, is a live stack value for the call.
-            unsafe { arm_raw(wait, self.ctx.handle, timeout) };
+            unsafe { arm_raw(wait, self.ctx.handle, timeout, self.ctx.trace_handle()) };
         });
         drop(suppressed);
-        crate::trace_record!("wait", "rearm-left", wait, self.ctx.handle as usize);
+        crate::trace_record!("wait", "rearm-left", wait, self.ctx.trace_handle());
         true
     }
 }
@@ -643,15 +662,15 @@ pub(crate) unsafe fn disarm_raw(wait: PTP_WAIT) {
 /// the wait is disarmed or the object released.
 pub(crate) unsafe fn arm_member(wait: PTP_WAIT, target: &WaitTarget, timeout: Option<Duration>) {
     // SAFETY: forwarded from this function's own contract.
-    unsafe { arm_raw(wait, target.raw(), timeout) };
+    unsafe { arm_raw(wait, target.raw(), timeout, target.raw() as usize) };
 }
 
 /// Arm or disarm a wait object.
 ///
 /// SAFETY: `wait` must be a live `PTP_WAIT` and `handle` a live waitable handle
 /// (or null to disarm).
-unsafe fn arm_raw(wait: PTP_WAIT, handle: HANDLE, timeout: Option<Duration>) {
-    crate::trace_call!("SetThreadpoolWait", wait, handle as usize, {
+unsafe fn arm_raw(wait: PTP_WAIT, handle: HANDLE, timeout: Option<Duration>, _trace_handle: usize) {
+    crate::trace_call!("SetThreadpoolWait", wait, _trace_handle, {
         match timeout {
             Some(timeout) => {
                 let filetime = relative_filetime(timeout);
@@ -663,7 +682,7 @@ unsafe fn arm_raw(wait: PTP_WAIT, handle: HANDLE, timeout: Option<Duration>) {
             None => unsafe { SetThreadpoolWait(wait, handle, ptr::null()) },
         }
     });
-    crate::trace_record!("wait", "armed", wait, handle as usize);
+    crate::trace_record!("wait", "armed", wait, _trace_handle);
 }
 
 /// Trampoline from the raw `PTP_WAIT_CALLBACK` ABI into the boxed closure.
@@ -814,7 +833,24 @@ impl ThreadpoolWait {
     where
         F: Fn(&WaitActivation<'_>) + Send + Sync + 'static,
     {
+        Self::new_with_trace(handle, callback, env, true)
+    }
+
+    fn new_with_trace<F>(
+        handle: WaitableHandle,
+        callback: F,
+        env: Option<&mut CallbackEnviron<'_>>,
+        trace_target: bool,
+    ) -> io::Result<Self>
+    where
+        F: Fn(&WaitActivation<'_>) + Send + Sync + 'static,
+    {
         let target = handle.into_target();
+        let trace_handle = if trace_target {
+            target.raw() as usize
+        } else {
+            0
+        };
         // Read before `env` is consumed below, and registered before the object
         // exists: the entry must be able to repair this pool from the moment
         // anything of ours can dispatch on it.
@@ -822,6 +858,8 @@ impl ThreadpoolWait {
         let context = Box::into_raw(Box::new(WaitContext {
             wait: AtomicIsize::new(0),
             handle: target.raw(),
+            #[cfg(feature = "trace")]
+            trace_handle,
             rearm: RearmSuppression::new(),
             obligation: crate::obligation::CloseObligation::new(),
             registration,
@@ -850,7 +888,7 @@ impl ThreadpoolWait {
         // so no callback can observe the unpublished value.
         // SAFETY: context is live and exclusively ours until the first arming.
         unsafe { (*context).wait.store(wait, Ordering::Release) };
-        crate::trace_record!("wait", "created", wait, target.raw() as usize);
+        crate::trace_record!("wait", "created", wait, trace_handle);
 
         Ok(Self {
             wait,
@@ -893,10 +931,18 @@ impl ThreadpoolWait {
     pub fn arm(&self, timeout: Option<Duration>) {
         // SAFETY: the context outlives every callback and is freed only by Drop,
         // which cannot run while this borrow of self is alive.
-        unsafe { &*self.context }.obligation.record_live_before(|| {
+        let context = unsafe { &*self.context };
+        context.obligation.record_live_before(|| {
             // SAFETY: `wait` is valid for the lifetime of self, and the handle is
             // owned by self so it is still open.
-            unsafe { arm_raw(self.wait, self.target.raw(), timeout) };
+            unsafe {
+                arm_raw(
+                    self.wait,
+                    self.target.raw(),
+                    timeout,
+                    context.trace_handle(),
+                )
+            };
         });
     }
 
@@ -1225,9 +1271,10 @@ impl Drop for ThreadpoolWait {
         // SAFETY: the context outlives every callback; Drop frees it below,
         // after the drain.
         let ctx = unsafe { &*self.context };
+        let _trace_handle = ctx.trace_handle();
         // Raised and never released: unlike `stop_and_drain`, there is no
         // afterwards for this object.
-        crate::trace_record!("wait", "drop-begin", self.wait, self.target.raw() as usize);
+        crate::trace_record!("wait", "drop-begin", self.wait, _trace_handle);
         // Read before the disarm and drain, and emitted before them: the record
         // marks the start of the blocking interval it reports, so a reader sees
         // what the following gap is for rather than learning it afterwards.
@@ -1258,14 +1305,14 @@ impl Drop for ThreadpoolWait {
         unsafe {
             drop(Box::from_raw(self.context));
         }
-        // The last record this object emits, and it carries the target handle
+        // The last record this object emits, and it carries the diagnostic target value
         // because nothing after it can: the close of that handle is the field
         // drop that runs the instant this body returns, with no code of ours in
         // between. So the interval from `drop-drained` to the handle's close
         // holds exactly `CloseThreadpoolWait`, the context free, and that field
         // drop -- a reader who sees a gap there is looking at one of those three
         // and not at something unrecorded.
-        crate::trace_record!("wait", "drop-closed", self.wait, self.target.raw() as usize);
+        crate::trace_record!("wait", "drop-closed", self.wait, _trace_handle);
         // Last, after the drain, the close and the context free. A panic
         // unwinds, so anything after it would be skipped; the target handle
         // still closes, because field drops run even when `Drop::drop` unwinds.

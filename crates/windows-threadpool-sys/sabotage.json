@@ -10,6 +10,118 @@
   "whyTestArgs": "--all-features, because this crate's two optional features each gate code these sabotages patch and tests that catch them: `self-heal` gates the whole repair registry, and `trace` gates the record buffer and every test that reads it -- including the one that catches the periodic member draining rather than cancelling, which is observable only in the trace. Without the features the patched code is not compiled, the sabotage lands in code that does not exist, and the sweep reports SURVIVED for guards that are present and working. (It formerly said this was about the hook module; that module was removed, and the reason the flag is still required is a different one.) -p, because testArgs replaces everything after `cargo test`, so without it the sweep ran the whole workspace: cargo stops at the first failing test binary, and a dependent crate's test failing first was reported as this crate's catch while this crate's own tests never ran. Three entries had to be verified by hand for that reason before it was scoped (2026-10-15).",
   "sabotages": [
     {
+      "name": "M-T17.1: sealed target lends its handle",
+      "file": "src/wait/sealed.rs",
+      "expect": "caught",
+      "why": "The target handle compile-fail example must detect a safe borrowed escape.",
+      "find": ["impl From<SealedWaitOnlyEvent> for SealedWaitableHandle {\n"],
+      "replace": ["impl SealedWaitableHandle {\n    #[doc(hidden)]\n    pub fn handle(&self) -> std::os::windows::io::BorrowedHandle<'_> { self.target.borrow() }\n}\n\nimpl From<SealedWaitOnlyEvent> for SealedWaitableHandle {\n"]
+    },
+    {
+      "name": "M-T17.1: sealed target gives its handle back",
+      "file": "src/wait/sealed.rs",
+      "expect": "caught",
+      "why": "Last-holder extraction would still bypass the sealed boundary; the consuming escape has its own compile-fail guard.",
+      "find": ["impl From<SealedWaitOnlyEvent> for SealedWaitableHandle {\n"],
+      "replace": ["impl SealedWaitableHandle {\n    #[doc(hidden)]\n    pub fn into_handle(self) -> Result<std::os::windows::io::OwnedHandle, Self> {\n        WaitableHandle { target: self.target }.into_handle().map_err(|original| Self { target: original.target })\n    }\n}\n\nimpl From<SealedWaitOnlyEvent> for SealedWaitableHandle {\n"]
+    },
+    {
+      "name": "M-T17.1: sealed target exposes AsRawHandle",
+      "file": "src/wait/sealed.rs",
+      "expect": "caught",
+      "why": "The raw-handle escape is checked independently of an inherent accessor.",
+      "find": ["impl From<SealedWaitOnlyEvent> for SealedWaitableHandle {\n"],
+      "replace": ["impl std::os::windows::io::AsRawHandle for SealedWaitableHandle {\n    fn as_raw_handle(&self) -> std::os::windows::io::RawHandle { self.target.raw() }\n}\n\nimpl From<SealedWaitOnlyEvent> for SealedWaitableHandle {\n"]
+    },
+    {
+      "name": "M-T17.1: sealed callback lends its handle",
+      "file": "src/wait/sealed.rs",
+      "expect": "caught",
+      "why": "A callback must not recover the inner activation's borrowed handle.",
+      "find": ["impl SealedWaitActivation<'_> {\n"],
+      "replace": ["impl SealedWaitActivation<'_> {\n    #[doc(hidden)]\n    pub fn handle(&self) -> std::os::windows::io::BorrowedHandle<'_> { self.inner.handle() }\n"]
+    },
+    {
+      "name": "M-T17.1: sealed wait lends its handle",
+      "file": "src/wait/sealed.rs",
+      "expect": "caught",
+      "why": "The wait object's compile-fail example guards this separate safe escape.",
+      "find": ["impl SealedThreadpoolWait {\n"],
+      "replace": ["impl SealedThreadpoolWait {\n    #[doc(hidden)]\n    pub fn handle(&self) -> std::os::windows::io::BorrowedHandle<'_> { self.inner.handle() }\n"]
+    },
+    {
+      "name": "M-T17.1: conversion duplicates the sealed handle",
+      "file": "src/wait/sealed.rs",
+      "expect": "caught",
+      "why": "The original handle must remain shared through target and wait ownership, not merely refer to the same event.",
+      "find": ["            target: WaitTarget::Shared(unsafe { event.into_shared_handle() }),\n"],
+      "replace": ["            target: WaitTarget::Shared({\n                let original = unsafe { event.into_shared_handle() };\n                win_shared_os_owned_handle::SharedHandle::new(std::os::windows::io::AsHandle::as_handle(&original).try_clone_to_owned().expect(\"duplicate\"))\n            }),\n"]
+    },
+    {
+      "name": "M-T17.1: sealed wait publishes its trace target",
+      "file": "src/wait/sealed.rs",
+      "expect": "caught",
+      "why": "The trace-armed child checks actual published records, including the native-call brackets.",
+      "find": ["            env,\n            false,\n"],
+      "replace": ["            env,\n            true,\n"]
+    },
+    {
+      "name": "M-T17.1: ordinary wait loses its trace target",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The ordinary-wait control ensures redaction does not silently remove existing diagnostics.",
+      "find": ["        Self::new_with_trace(handle, callback, env, true)\n"],
+      "replace": ["        Self::new_with_trace(handle, callback, env, false)\n"]
+    },
+    {
+      "name": "M-T17.1: native arming bracket exposes the real handle",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "Redacting the lifecycle records alone is insufficient if the native-call bracket still publishes the target.",
+      "find": ["    crate::trace_call!(\"SetThreadpoolWait\", wait, _trace_handle, {\n"],
+      "replace": ["    crate::trace_call!(\"SetThreadpoolWait\", wait, handle as usize, {\n"]
+    },
+    {
+      "name": "M-T17.1: sealed wait skips disarming",
+      "file": "src/wait/sealed.rs",
+      "expect": "caught",
+      "why": "The native-operation trace and disarm/reuse test must notice a dropped forwarding call.",
+      "find": ["        self.inner.disarm();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "M-T17.1: sealed wait skips callback drainage",
+      "file": "src/wait/sealed.rs",
+      "expect": "caught",
+      "why": "The isolated trace test observes the required wait call, independently of callback timing.",
+      "find": ["        self.inner.wait();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "M-T17.1: sealed wait skips stop and drain",
+      "file": "src/wait/sealed.rs",
+      "expect": "caught",
+      "why": "The isolated lifecycle test requires both native disarm and drain operations.",
+      "find": ["        self.inner.stop_and_drain();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "M-T17.1: untracked sealed cancellation becomes safe",
+      "file": "src/wait/sealed.rs",
+      "expect": "caught",
+      "why": "The wrapper must preserve the caller's explicit pool-repair obligation in every feature configuration.",
+      "find": ["    pub unsafe fn try_cancel_pending_no_heal_tracking(&self) {\n"],
+      "replace": ["    pub fn try_cancel_pending_no_heal_tracking(&self) {\n"]
+    },
+    {
+      "name": "CONTROL: M-T17.1: the signal predicate reads the forwarded result",
+      "file": "src/wait/sealed.rs",
+      "expect": "survives",
+      "why": "Comparing the forwarded result with Signalled is the same predicate as the inner activation's method, including for timeouts and Other.",
+      "find": ["        self.inner.is_signalled()\n"],
+      "replace": ["        self.result() == WaitResult::Signalled\n"]
+    },
+    {
       "name": "the pre-main initialiser is dropped by the linker",
       "file": "src/trace.rs",
       "expect": "caught",

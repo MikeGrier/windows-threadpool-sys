@@ -14,7 +14,7 @@ use windows_sys::Win32::System::Threading::{
     WaitForSingleObject,
 };
 
-use super::{Event, ResetMode, WaitOnlyEvent};
+use super::{Event, ResetMode, SealedWaitOnlyEvent, WaitOnlyEvent};
 use crate::{WaitOutcome, wait_for_single_object};
 
 /// How long a test waits for something that should happen, in milliseconds.
@@ -466,6 +466,196 @@ fn as_handle_lends_a_wait_only_clones_handle_as_raw_handle_names() {
 fn a_wait_only_event_is_send_and_sync() {
     fn assert_send_and_sync<T: Send + Sync>() {}
     assert_send_and_sync::<WaitOnlyEvent>();
+}
+
+#[test]
+fn sealed_conversion_preserves_the_existing_handle_and_its_aliases() {
+    let owner = event(ResetMode::Manual, false);
+    let original = wait_only(&owner);
+    let alias = original.clone();
+    let sealed = SealedWaitOnlyEvent::from(original);
+    let borrowed = unsafe { sealed.as_waitable_handle() };
+    assert_eq!(borrowed.as_raw_handle(), alias.as_raw_handle());
+    assert!(same_object(&borrowed, &owner));
+    owner.set().expect("set");
+    assert!(take(&alias));
+    assert!(take(&borrowed));
+}
+
+#[test]
+fn sealed_constructor_duplicates_the_handle_not_the_object() {
+    let owner = event(ResetMode::Manual, false);
+    let other = event(ResetMode::Manual, false);
+    let sealed = owner
+        .duplicate_sealed_wait_only()
+        .expect("sealed duplicate");
+    let borrowed = unsafe { sealed.as_waitable_handle() };
+    assert_ne!(borrowed.as_raw_handle(), owner.as_raw_handle());
+    assert!(same_object(&borrowed, &owner));
+    assert!(!same_object(&borrowed, &other));
+}
+
+#[test]
+fn sealed_clones_share_one_handle() {
+    let owner = event(ResetMode::Manual, false);
+    let original = owner
+        .duplicate_sealed_wait_only()
+        .expect("sealed duplicate");
+    let clone = original.clone();
+    let original_handle = unsafe { original.as_waitable_handle() };
+    let clone_handle = unsafe { clone.as_waitable_handle() };
+    assert_eq!(
+        original_handle.as_raw_handle(),
+        clone_handle.as_raw_handle()
+    );
+    owner.set().expect("set");
+    assert!(take(&clone_handle));
+    owner.reset().expect("reset");
+    assert!(!take(&original_handle));
+}
+
+#[test]
+fn sealed_handles_refuse_state_changes_and_owners_allow_them() {
+    for mode in [ResetMode::Manual, ResetMode::Auto] {
+        let owner = event(mode, false);
+        let direct = owner
+            .duplicate_sealed_wait_only()
+            .expect("sealed duplicate");
+        let converted = SealedWaitOnlyEvent::from(wait_only(&owner));
+        for sealed in [&direct, &converted, &direct.clone()] {
+            assert_eq!(
+                raw_set_error(&sealed.handle),
+                Some(ERROR_ACCESS_DENIED as i32)
+            );
+            assert!(!take(&owner));
+            assert_eq!(raw_set_error(&owner), None);
+            assert_eq!(
+                raw_reset_error(&sealed.handle),
+                Some(ERROR_ACCESS_DENIED as i32)
+            );
+            assert!(take(&owner));
+            assert_eq!(raw_set_error(&owner), None);
+            assert_eq!(raw_reset_error(&owner), None);
+            assert!(!take(&sealed.handle));
+        }
+    }
+}
+
+#[test]
+fn sealed_manual_waits_preserve_the_signal_until_the_owner_resets() {
+    for initially_signalled in [false, true] {
+        let owner = event(ResetMode::Manual, initially_signalled);
+        let sealed = owner
+            .duplicate_sealed_wait_only()
+            .expect("sealed duplicate");
+        let handle = unsafe { sealed.as_waitable_handle() };
+        assert_eq!(take(&handle), initially_signalled);
+        assert_eq!(take(&handle), initially_signalled);
+        owner.set().expect("set");
+        assert!(take(&handle));
+        assert!(take(&handle));
+        owner.reset().expect("reset");
+        assert!(!take(&handle));
+    }
+}
+
+#[test]
+fn sealed_auto_waits_consume_the_signal() {
+    for initially_signalled in [false, true] {
+        let owner = event(ResetMode::Auto, initially_signalled);
+        let sealed = owner
+            .duplicate_sealed_wait_only()
+            .expect("sealed duplicate");
+        let handle = unsafe { sealed.as_waitable_handle() };
+        assert_eq!(take(&handle), initially_signalled);
+        assert!(!take(&owner));
+        owner.set().expect("set");
+        assert!(take(&handle));
+        assert!(!take(&handle));
+    }
+}
+
+#[test]
+fn sealed_clone_outlives_the_owner_and_original() {
+    let owner = event(ResetMode::Manual, true);
+    let original = owner
+        .duplicate_sealed_wait_only()
+        .expect("sealed duplicate");
+    let clone = original.clone();
+    let raw = unsafe { original.as_waitable_handle() }.as_raw_handle();
+    drop(owner);
+    drop(original);
+    let handle = unsafe { clone.as_waitable_handle() };
+    assert_eq!(handle.as_raw_handle(), raw);
+    assert!(take(&handle));
+}
+
+#[test]
+fn sealed_shared_extraction_preserves_the_handle_and_last_holder_rule() {
+    let owner = event(ResetMode::Manual, true);
+    let sealed = owner
+        .duplicate_sealed_wait_only()
+        .expect("sealed duplicate");
+    let clone = sealed.clone();
+    let raw = unsafe { sealed.as_waitable_handle() }.as_raw_handle();
+    let shared = unsafe { sealed.into_shared_handle() };
+    assert_eq!(shared.as_raw_handle(), raw);
+    let shared = shared
+        .try_into_owned()
+        .expect_err("the sealed clone still holds it");
+    drop(owner);
+    assert!(take(&shared));
+    drop(clone);
+    let owned = shared.try_into_owned().expect("last holder");
+    assert_eq!(owned.as_raw_handle(), raw);
+    assert!(take(&owned));
+}
+
+#[test]
+fn sealed_shared_extraction_respects_preexisting_unsealed_aliases() {
+    let owner = event(ResetMode::Manual, true);
+    let original = wait_only(&owner);
+    let alias = original.clone();
+    let raw = alias.as_raw_handle();
+    let sealed = SealedWaitOnlyEvent::from(original);
+    let shared = unsafe { sealed.into_shared_handle() };
+    let shared = shared
+        .try_into_owned()
+        .expect_err("unsealed alias still holds it");
+    drop(alias);
+    let owned = shared.try_into_owned().expect("last holder");
+    assert_eq!(owned.as_raw_handle(), raw);
+    assert!(take(&owned));
+}
+
+#[test]
+fn sealed_debug_never_formats_the_handle() {
+    let owner = event(ResetMode::Manual, false);
+    let sealed = owner
+        .duplicate_sealed_wait_only()
+        .expect("sealed duplicate");
+    assert_eq!(format!("{sealed:?}"), "SealedWaitOnlyEvent { .. }");
+    assert_eq!(format!("{sealed:#?}"), "SealedWaitOnlyEvent { .. }");
+}
+
+#[test]
+fn sealed_event_is_send_and_sync() {
+    fn assert_send_and_sync<T: Send + Sync>() {}
+    assert_send_and_sync::<SealedWaitOnlyEvent>();
+}
+
+#[test]
+fn sealed_event_can_wait_after_moving_to_another_thread() {
+    let owner = event(ResetMode::Manual, false);
+    let sealed = owner
+        .duplicate_sealed_wait_only()
+        .expect("sealed duplicate");
+    let worker = std::thread::spawn(move || {
+        let handle = unsafe { sealed.as_waitable_handle() };
+        wait_for_single_object(handle, Some(bound())).expect("wait")
+    });
+    owner.set().expect("set");
+    assert_eq!(worker.join().expect("worker"), WaitOutcome::Signalled);
 }
 
 // --- clones share one handle (WS-2.2, WS-D-10) ---
