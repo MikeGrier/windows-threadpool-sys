@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 description = "A published, deliberately-legible EXAMPLE test harness for file-change-notification handlers built on windows-file-watcher's test-util seam. Read it, cut-and-paste from it, adapt it -- an exemplar of technique, not a supported framework."
 readme = "README.md"
 keywords = ["windows", "filesystem", "testing", "example"]

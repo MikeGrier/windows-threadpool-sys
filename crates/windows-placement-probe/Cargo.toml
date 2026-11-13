@@ -38,7 +38,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 description = "Measures what thread placement costs on a Windows machine -- SMT siblings, cache domains, efficiency classes and NUMA hops -- and produces one structured record to send back."
 readme = "README.md"
 

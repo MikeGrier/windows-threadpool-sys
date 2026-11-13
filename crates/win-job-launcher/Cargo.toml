@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 description = "Runs one command inside a fresh Windows job object under a wall-clock bound, and kills the whole process tree at the bound."
 
 # Tooling for this repository's sabotage harness, not library surface. It is

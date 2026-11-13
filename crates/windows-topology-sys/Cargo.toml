@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 documentation = "https://docs.rs/windows-topology-sys"
 description = "Safe enumeration of Windows processor, cache, and memory topology, with a JSON-describable schema for discovered or synthetic topologies."
 readme = "README.md"

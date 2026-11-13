@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 readme = "README.md"
 description = "Memory-safe Rust over the Win32 text-handling API, starting with CompareStringOrdinal: an ordinal comparison of two counted UTF-16 strings, case-sensitive or not, as an Ordering. Thin over Win32, adding no policy."
 keywords = ["windows", "string", "unicode", "ffi"]

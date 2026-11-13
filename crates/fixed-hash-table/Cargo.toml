@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 readme = "README.md"
 description = "Hash tables whose capacity is fixed when they are made, which refuse an insert when full rather than grow: no_std and allocation-free by default, with storage on the heap, allocated once, for clients that want it. Portable."
 keywords = ["hashmap", "no-std", "fixed-capacity", "no-alloc", "collections"]

@@ -14,7 +14,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 documentation = "https://docs.rs/windows-waitable-queues"
 description = "Bounded producer/consumer queues whose readiness is a waitable Windows HANDLE, so a consumer can park on a queue and a kernel object in the same wait."
 readme = "README.md"

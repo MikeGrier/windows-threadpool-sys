@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 readme = "README.md"
 description = "Memory-safe Rust over the Win32 Event Tracing provider functions: register a provider, ask whether a session is listening, write an event from typed fields, and unregister when dropped. Thin over Win32, adding no policy."
 keywords = ["windows", "etw", "tracing", "events", "ffi"]

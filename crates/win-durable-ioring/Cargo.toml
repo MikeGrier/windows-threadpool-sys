@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 description = "A ring for Windows file I/O with durability scheduled into its work: writes are tagged with epochs, and durability through an epoch is requested and reported in the ring's own completion stream. The Windows driver for durable-ioring, built on windows-ioring-sys. No unsafe code."
 readme = "README.md"
 

@@ -9,7 +9,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 description = "Executable probes for the Windows behaviour this workspace's designs rest on -- supported, documented APIs, in the specific cases their documentation does not describe."
 
 [lib]

@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 readme = "README.md"
 description = "Memory-safe Rust over the Win32 authorization API: an owned security descriptor, SDDL text to and from one, and a descriptor read from an open handle. Thin over Win32, adding no policy."
 keywords = ["windows", "security", "sddl", "acl", "ffi"]

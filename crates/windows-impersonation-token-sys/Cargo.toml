@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 documentation = "https://docs.rs/windows-impersonation-token-sys"
 description = "Memory-safe capture, transport, and scoped application of Windows impersonation tokens."
 readme = "README.md"

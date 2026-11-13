@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
+
 readme = "README.md"
 description = "A shared, reference-counted error for no_std code that must not depend on the global allocator: one count, no weak references, and the allocator that made it recorded beside it. Portable."
 keywords = ["error", "no-std", "allocator", "refcount", "shared"]
