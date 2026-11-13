@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.8](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v0.2.7...windows-file-watcher-v0.2.8) (2026-11-13)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-threadpool-sys bumped from 0.4.1 to 0.4.2
+
 ## [0.2.7](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v0.2.6...windows-file-watcher-v0.2.7) (2026-11-13)
 
 
