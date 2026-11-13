@@ -129,6 +129,33 @@ assert_eq!(wait_for_single_object(&adopted, None)?, WaitOutcome::Signalled);
 # Ok::<(), std::io::Error>(())
 ```
 
+- **`SealedWaitOnlyEvent`** -- `Event::duplicate_sealed_wait_only` makes a wait-only duplicate
+  whose handle safe code cannot obtain. `SealedWaitOnlyEvent::from(waiter)` seals an existing
+  `WaitOnlyEvent` without duplicating its handle or revoking previously retained aliases.
+  Clones share the handle, and `Debug` does not display it. The unsafe accessors carry a
+  wait-only obligation for the extracted handle and its descendants; see the type's
+  [handle-access contract](https://docs.rs/win-sync-sys/latest/win_sync_sys/struct.SealedWaitOnlyEvent.html#handle-access-contract).
+  A manual-reset event's level is unchanged by waiting; an auto-reset event's signal is consumed.
+
+```rust
+use std::time::Duration;
+use win_sync_sys::{Event, ResetMode, SealedWaitOnlyEvent, WaitOutcome, wait_for_single_object};
+
+let owner = Event::new(ResetMode::Manual, true)?;
+let sealed = owner.duplicate_sealed_wait_only()?;
+let converted = SealedWaitOnlyEvent::from(owner.duplicate_wait_only()?);
+let clone = sealed.clone();
+// SAFETY: the borrowed handle is used only for this wait and is not exposed further.
+let borrowed = unsafe { sealed.as_waitable_handle() };
+assert_eq!(wait_for_single_object(borrowed, Some(Duration::ZERO))?, WaitOutcome::Signalled);
+// SAFETY: the shared handle and its clone remain local and are used only for waiting.
+let shared = unsafe { converted.into_shared_handle() };
+let shared_clone = shared.clone();
+assert_eq!(wait_for_single_object(&shared_clone, Some(Duration::ZERO))?, WaitOutcome::Signalled);
+drop((shared, shared_clone, clone));
+# Ok::<(), std::io::Error>(())
+```
+
 ## What is not here
 
 - **`PulseEvent`, deliberately.** Its own documentation calls it unreliable and says it should not

@@ -47,41 +47,7 @@ WS-M2 -- an event's clones share one handle -- is complete and archived in
 
 ## WS-M3 -- A wait-only event safe code cannot reach the handle of
 
-Requested 2026-11-13 by canopy (MikeGrier/canopy, its `RG-4`): canopy's doorbell is a protocol
-over a manual-reset event, and its TLA+ model (`Doorbell.tla`) assumes nothing outside the protocol
-changes the event's level. `WaitOnlyEvent` cannot set or reset, but it lends its handle, and safe
-code can duplicate a borrowed handle with more access (`duplicate_handle_with_access`) and signal
-through that. The engineer, 2026-11-13: the guarantee wanted is in the Rust types, not the
-operating system's -- inside a process no DACL is a boundary, since code that handles raw `HANDLE`
-values can reach the creator's full-access handle by value. With a type whose handle safe code
-cannot reach, the model's environment is the holders of the `Event` plus `unsafe` blocks, which can
-be enumerated. **The main deliverable is the multiple-object wait** (`WS-3.2`): a consumer waits on
-the doorbell together with its own handles.
-
-- [ ] **WS-3.1** -- **`SealedWaitOnlyEvent`, and the decision.** In [event.rs](src/event.rs) beside
-  `WaitOnlyEvent`, which stays as it is (a wait-only handle a consumer can borrow is still an
-  option):
-  - made by `Event::duplicate_sealed_wait_only()` and by `From<WaitOnlyEvent>` (sealing only removes
-    capabilities, so it is safe); `Clone` sharing one handle, `Send`, `Sync`, as `WaitOnlyEvent` is;
-  - **no** `AsHandle`, `AsRawHandle`, `Into<SharedHandle>` or `try_into_owned`;
-  - the only ways to its handle are `unsafe fn as_waitable_handle(&self) -> BorrowedHandle<'_>` and
-    `unsafe fn into_shared_handle(self) -> SharedHandle` (the second is what
-    `windows-threadpool-sys` builds a wait target from). Their contract: the caller only waits on
-    the handle, never changes the event's state through it, never duplicates it with more access,
-    and never lets it reach code that might. State that analyses built on this type rely on the
-    contract -- that, not memory safety, is why it is `unsafe`.
-  - Documentation of exactly what a holder can do, so a model can encode it: wait, and nothing else
-    -- except that a satisfied wait on an **auto-reset** event consumes the signal, which is a reset
-    a holder causes in safe code. What it does not cover: the `Event`'s holders, and `unsafe` code.
-  - `compile_fail` doctests: `as_handle`, `as_raw_handle`, `SharedHandle::from` and
-    `try_into_owned` are unavailable on it. Unit tests in the style of the wait-only ones in
-    [event/tests.rs](src/event/tests.rs) (same object as the `Event`, not the same handle; refuses
-    `SetEvent` / `ResetEvent` through the unsafe accessor; clones share; lifetime after the `Event`
-    drops).
-  - Decision `WS-D-11` in [DESIGN-NOTES.md](DESIGN-NOTES.md): why a type and not a DACL. Measured
-    2026-11-13 and set aside: a security descriptor granting `SYNCHRONIZE` plus an `OWNER RIGHTS`
-    (`OW`) ACE makes the kernel refuse widening a wait-only duplicate, but not use of the creator's
-    full-access handle, which in-process code can reach by value.
+- [x] **WS-3.1** -- Add `SealedWaitOnlyEvent` and record its Rust handle-access boundary. -> [completed 2026-11-13](COMPLETED-CHECKLIST.md#ws-31)
 
 - [ ] **WS-3.2** -- **The waits accept it, alone or mixed with other handles.** In
   [wait.rs](src/wait.rs), [wait_many.rs](src/wait_many.rs) and [signal.rs](src/signal.rs):

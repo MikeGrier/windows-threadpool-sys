@@ -163,3 +163,21 @@ cloning where it duplicated; the deletion here. The sweep found the `WS-1+.1` AP
 pre-existing gap since `WS-D-9`'s same-process check came to precede `QueueUserAPC`'s own refusal; one test's
 handle was given the query right so that the refusal is the call's again, in a commit of its own. All 47 of the
 crate's sabotages behave as declared.
+
+## Moved 2026-11-13 12:25:10 -05:00 -- WS-3.1, the sealed event type
+
+### <a id="ws-31"></a>WS-3.1 -- Add `SealedWaitOnlyEvent` and record its Rust handle-access boundary. *(completed 2026-11-13 12:25:10 UTC-05:00)*
+
+Implemented [WS-D-11](DESIGN-NOTES.md#ws-d-11) in [event.rs](src/event.rs), exported through
+[lib.rs](src/lib.rs), with a compiled example in [README.md](README.md). The decision records
+canopy's motivation and the distinction between a Rust API restriction and an OS security claim.
+
+[Tests](src/event/tests.rs) exercise identity, sharing, retained aliases, extraction, lifetime,
+reset modes and redacted debugging. Access-denial probes inspect the private backing handle so
+they do not violate the public escape hatch's wait-only obligation merely to test the kernel's
+refusal. Borrowed-access identity tests independently check that the accessor returns that handle.
+The compile-fail examples guard safe extraction; [sabotage.json](sabotage.json) records mutations
+that expose it and mutations that break access or ownership, together with an equivalent control.
+
+The remaining work stays in [CHECKLIST.md](CHECKLIST.md) `WS-3.2` and the thread-pool
+[CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md) `M-T17.1`.
