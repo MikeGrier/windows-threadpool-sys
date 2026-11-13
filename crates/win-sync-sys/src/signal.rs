@@ -51,14 +51,14 @@ impl<T: Signalable + ?Sized> Signalable for &T {}
 /// The wait target accepts any `AsHandle` type, [`SealedWaitOnlyEvent`](crate::SealedWaitOnlyEvent)
 /// or [`WaitObject`](crate::WaitObject). Sealed targets cannot be passed as `signal`.
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use win_sync_sys::{Alertable, Event, SealedWaitOnlyEvent, signal_object_and_wait};
 /// fn signal(sealed: &SealedWaitOnlyEvent, other: &Event) {
 ///     let _ = signal_object_and_wait(sealed, other, None, Alertable::No);
 /// }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use win_sync_sys::{Alertable, Event, WaitObject, signal_object_and_wait};
 /// fn signal(opaque: WaitObject<'_>, other: &Event) {
 ///     let _ = signal_object_and_wait(opaque, other, None, Alertable::No);

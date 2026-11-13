@@ -15,28 +15,28 @@ use crate::callback_env::CallbackEnviron;
 /// `Debug` output reveals it. The owning event and previously retained unsealed aliases remain
 /// outside this boundary, as specified by [`SealedWaitOnlyEvent`].
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use windows_threadpool_sys::wait::SealedWaitableHandle;
 /// fn expose(target: &SealedWaitableHandle) { let _ = target.handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use windows_threadpool_sys::wait::SealedWaitableHandle;
 /// fn expose(target: SealedWaitableHandle) { let _ = target.into_handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use windows_threadpool_sys::wait::{SealedWaitableHandle, WaitableHandle};
 /// fn unseal(target: SealedWaitableHandle) { let _ = WaitableHandle::from(target); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use std::os::windows::io::AsHandle;
 /// use windows_threadpool_sys::wait::SealedWaitableHandle;
 /// fn expose(target: &SealedWaitableHandle) { let _ = target.as_handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use std::os::windows::io::AsRawHandle;
 /// use windows_threadpool_sys::wait::SealedWaitableHandle;
 /// fn expose(target: &SealedWaitableHandle) { let _ = target.as_raw_handle(); }
@@ -63,18 +63,18 @@ impl std::fmt::Debug for SealedWaitableHandle {
 
 /// A sealed wait's callback activation, with its result and rearm operation but no handle access.
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use windows_threadpool_sys::wait::SealedWaitActivation;
 /// fn expose(activation: &SealedWaitActivation<'_>) { let _ = activation.handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use std::os::windows::io::AsHandle;
 /// use windows_threadpool_sys::wait::SealedWaitActivation;
 /// fn expose(activation: &SealedWaitActivation<'_>) { let _ = activation.as_handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use std::os::windows::io::AsRawHandle;
 /// use windows_threadpool_sys::wait::SealedWaitActivation;
 /// fn expose(activation: &SealedWaitActivation<'_>) { let _ = activation.as_raw_handle(); }
@@ -125,24 +125,24 @@ impl SealedWaitActivation<'_> {
 /// With `trace` enabled, event-handle fields are zero; wait-object identifiers and lifecycle
 /// records remain available. No redaction is applied to ordinary [`ThreadpoolWait`] targets.
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use windows_threadpool_sys::wait::SealedThreadpoolWait;
 /// fn expose(wait: &SealedThreadpoolWait) { let _ = wait.handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use std::os::windows::io::AsHandle;
 /// use windows_threadpool_sys::wait::SealedThreadpoolWait;
 /// fn expose(wait: &SealedThreadpoolWait) { let _ = wait.as_handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use std::os::windows::io::AsRawHandle;
 /// use windows_threadpool_sys::wait::SealedThreadpoolWait;
 /// fn expose(wait: &SealedThreadpoolWait) { let _ = wait.as_raw_handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0308
 /// use windows_threadpool_sys::wait::{SealedThreadpoolWait, ThreadpoolWait};
 /// fn unseal(wait: SealedThreadpoolWait) { let _ = ThreadpoolWait::from(wait); }
 /// ```
@@ -220,7 +220,7 @@ impl SealedThreadpoolWait {
     /// Uphold [`ThreadpoolWait::try_cancel_pending_no_heal_tracking`]'s pool-repair obligation:
     /// ensure the pool is repaired by submitting work or otherwise keeping it live.
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0133
     /// use windows_threadpool_sys::wait::SealedThreadpoolWait;
     /// fn cancel(wait: &SealedThreadpoolWait) { wait.try_cancel_pending_no_heal_tracking(); }
     /// ```

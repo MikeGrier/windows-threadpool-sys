@@ -24,7 +24,7 @@ mod private {
 ///
 /// A type without `AsHandle` cannot add an implementation outside this crate:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use std::os::windows::io::BorrowedHandle;
 /// use win_sync_sys::Waitable;
 /// struct External;
@@ -40,7 +40,7 @@ pub trait Waitable: private::Sealed {
     /// Preserve [`SealedWaitOnlyEvent`'s handle-access contract](SealedWaitOnlyEvent#handle-access-contract)
     /// for the returned handle and every handle derived from it, even after this borrow ends.
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0133
     /// use win_sync_sys::{SealedWaitOnlyEvent, Waitable};
     /// fn expose(event: &SealedWaitOnlyEvent) { let _ = event.waitable_handle(); }
     /// ```
@@ -77,35 +77,35 @@ impl Waitable for &SealedWaitOnlyEvent {
 /// same object and never duplicate its handle. Neither `Debug` nor a safe accessor reveals it.
 /// The borrow keeps the source alive for the wait; waiting retains the native object's semantics.
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use std::os::windows::io::AsHandle;
 /// use win_sync_sys::WaitObject;
 /// fn expose(object: WaitObject<'_>) { let _ = object.as_handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use std::os::windows::io::AsRawHandle;
 /// use win_sync_sys::WaitObject;
 /// fn expose(object: WaitObject<'_>) { let _ = object.as_raw_handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0133
 /// use win_sync_sys::{WaitObject, Waitable};
 /// fn expose(object: WaitObject<'_>) { let _ = object.waitable_handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0515
 /// use win_sync_sys::{SealedWaitOnlyEvent, WaitObject};
 /// fn escape(event: SealedWaitOnlyEvent) -> WaitObject<'static> { event.wait_object() }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0515
 /// use std::os::windows::io::{AsHandle, OwnedHandle};
 /// use win_sync_sys::WaitObject;
 /// fn escape(owner: OwnedHandle) -> WaitObject<'static> { owner.as_handle().into() }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use std::os::windows::io::BorrowedHandle;
 /// use win_sync_sys::WaitObject;
 /// fn expose<'a>(object: WaitObject<'a>) -> BorrowedHandle<'a> { object.into() }

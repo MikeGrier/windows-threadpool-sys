@@ -275,7 +275,10 @@ in a thread's own wait.
 
 - [ ] **M-T17.2** -- **Release `WS-M3` and `M-T17.1`, and tell canopy.** `feat(win-sync)` releases
   `win-sync-sys` 0.1.1 and `feat(threadpool)` this crate's next patch;
-  this crate's `win-sync-sys` requirement must admit 0.1.1 -- read the
-  release PR to see whether the workspace plugin rewrites it, and if not, set it in a commit of its
-  own. Then report both versions on canopy's request so `RG-4` can proceed; posting there needs the
+  before publishing this crate, raise its `win-sync-sys` **minimum** to the release containing
+  the sealed APIs (planned as 0.1.1). Merely admitting that version is insufficient: `0.1.0`
+  still permits resolution to a version without those APIs. Read the release PR to see whether
+  the workspace plugin raises the minimum; if not, update it in a commit of its own. Verify the
+  resulting requirement excludes earlier versions. Then report both versions on canopy's request
+  so `RG-4` can proceed; posting there needs the
   engineer's say-so.

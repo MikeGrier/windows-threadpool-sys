@@ -276,30 +276,30 @@ impl From<WaitOnlyEvent> for SharedHandle {
 ///
 /// Safe code cannot borrow, extract, or convert the handle:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use std::os::windows::io::AsHandle;
 /// use win_sync_sys::SealedWaitOnlyEvent;
 /// fn borrow(event: &SealedWaitOnlyEvent) { let _ = event.as_handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use std::os::windows::io::AsRawHandle;
 /// use win_sync_sys::SealedWaitOnlyEvent;
 /// fn raw(event: &SealedWaitOnlyEvent) { let _ = event.as_raw_handle(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use win_shared_os_owned_handle::SharedHandle;
 /// use win_sync_sys::SealedWaitOnlyEvent;
 /// fn shared(event: SealedWaitOnlyEvent) { let _ = SharedHandle::from(event); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// use win_sync_sys::SealedWaitOnlyEvent;
 /// fn owned(event: SealedWaitOnlyEvent) { let _ = event.try_into_owned(); }
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0308
 /// use win_sync_sys::{SealedWaitOnlyEvent, WaitOnlyEvent};
 /// fn unseal(event: SealedWaitOnlyEvent) { let _ = WaitOnlyEvent::from(event); }
 /// ```
@@ -329,7 +329,7 @@ impl SealedWaitOnlyEvent {
     /// Preserve the [handle-access contract](Self#handle-access-contract), including for every
     /// derived handle after this borrow ends.
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0133
     /// use win_sync_sys::SealedWaitOnlyEvent;
     /// fn borrow(event: &SealedWaitOnlyEvent) { let _ = event.as_waitable_handle(); }
     /// ```
@@ -344,7 +344,7 @@ impl SealedWaitOnlyEvent {
     /// Preserve the [handle-access contract](Self#handle-access-contract) for the returned handle
     /// and all its descendants, including after every sealed holder has dropped.
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0133
     /// use win_sync_sys::SealedWaitOnlyEvent;
     /// fn shared(event: SealedWaitOnlyEvent) { let _ = event.into_shared_handle(); }
     /// ```
