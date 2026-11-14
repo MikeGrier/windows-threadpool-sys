@@ -284,6 +284,33 @@ last learned. The decision and its alternatives are in
 
 - [x] **M34.26** -- Add `expect: hardware-dependent` to the sabotage harness, and declare the RS-C-4 covering-flag entry with it.
 
+The items below make the measurement behind the durable-ioring sweeps' `timeoutSeconds` (see
+`whyTimeoutSeconds` in [crates/durable-ioring/sabotage.json](crates/durable-ioring/sabotage.json))
+repeatable, and test the reading it rests on.
+
+- [x] **M34.27** -- `tools/measure-sweep-durations.ps1`: the CI duration of every full-suite launch in
+  the sabotage sweeps, read from the shard job logs, with its tests. Done when it fetches the shard
+  job logs of the sweep runs since a date for the named manifests, keeps one row per full-suite
+  launch (each baseline, and each entry whose verdict did not come from its narrowed run), reports
+  each manifest's baseline percentiles and the entries that reached the bound (on every launch, or
+  only on some), and `tools/test-measure-sweep-durations.ps1` drives it over fixture logs in both
+  directions: a build launch and a narrowed run are left out, a full-suite launch and one killed at
+  the bound are kept. The test runs in CI beside the other sabotage tool tests.
+
+- [x] **M34.28** -- An instrumented CI run that times each test in win-durable-ioring's three
+  file-I/O test binaries against the runner's disk latency. Whole-launch durations cannot tell a
+  runner's I/O stall from a timed wait that masks a lost wakeup. Done when a `workflow_dispatch`
+  workflow runs the `win_durable_ioring` unit tests, `overlapped_evidence` and the `blocking_push`
+  example repeatedly on several hosted runners, records each test's start, end and `exec_time`
+  (libtest's JSON report, enabled at run time by `RUSTC_BOOTSTRAP=1`, which changes nothing that is
+  compiled) beside per-second disk and processor counters from `typeperf`, and a report names the
+  tests that carry the tail and whether each slow execution overlaps high disk latency. The report's
+  join is tested over fixtures.
+
+- [ ] **M34.29** -- Dispatch the `M34.28` workflow once it is on `main`, and record what it shows
+  against the bound in `whyTimeoutSeconds`. `workflow_dispatch` runs only a workflow the default
+  branch carries, so this waits for the merge of the pull request that adds it.
+
 ## M37 -- Discharge the failable-call standard across the workspace
 
 Numbered M37, not M22. This section arrived from PR #84, which numbered it M22 without knowing

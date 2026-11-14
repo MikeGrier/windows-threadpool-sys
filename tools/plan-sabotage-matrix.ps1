@@ -182,8 +182,7 @@ foreach ($path in $chosen) {
     # A crate may carry several manifests, each with its own `testArgs`: `sabotage.json` and
     # `sabotage-<kind>.json`. The label names a job, a cache and an artifact, so it must differ
     # between them; for the plain one it is the crate, as it always was.
-    $kind = [System.IO.Path]::GetFileNameWithoutExtension($path).Substring('sabotage'.Length).TrimStart('-')
-    $label = if ($kind) { "$crate-$kind" } else { $crate }
+    $label = Get-SabotageManifestLabel $path
     for ($shard = 0; $shard -lt $shards; $shard++) {
         $include += [ordered]@{
             crate    = $crate

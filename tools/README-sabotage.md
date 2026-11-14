@@ -198,6 +198,28 @@ through [sabotage-records-runner.cmd](sabotage-records-runner.cmd), the same arr
     -CargoCommand (Resolve-Path tools\sabotage-records-runner.cmd).Path
 ```
 
+[sabotage-sweep-durations.json](sabotage-sweep-durations.json) does the same for
+[measure-sweep-durations.ps1](measure-sweep-durations.ps1), which reads the sweep jobs' logs to
+measure how long each manifest's suite takes on CI, judged by
+[test-measure-sweep-durations.ps1](test-measure-sweep-durations.ps1) through
+[sabotage-sweep-durations-runner.cmd](sabotage-sweep-durations-runner.cmd):
+
+```powershell
+.\tools\run-sabotage.ps1 -Manifest tools\sabotage-sweep-durations.json `
+    -CargoCommand (Resolve-Path tools\sabotage-sweep-durations-runner.cmd).Path
+```
+
+[sabotage-io-test-tail.json](sabotage-io-test-tail.json) does the same for
+[report-io-test-tail.ps1](report-io-test-tail.ps1), the report of the `io test tail` workflow, which
+joins each file-I/O test's executions to the runner's disk counters, judged by
+[test-report-io-test-tail.ps1](test-report-io-test-tail.ps1) through
+[sabotage-io-test-tail-runner.cmd](sabotage-io-test-tail-runner.cmd):
+
+```powershell
+.\tools\run-sabotage.ps1 -Manifest tools\sabotage-io-test-tail.json `
+    -CargoCommand (Resolve-Path tools\sabotage-io-test-tail-runner.cmd).Path
+```
+
 Each entry runs the whole suite, so the cost is roughly
 `(entries + 1) x <suite time>` -- about five and a half minutes for these eight
 now that the suite parallelises, against nineteen when it did not. Like every
