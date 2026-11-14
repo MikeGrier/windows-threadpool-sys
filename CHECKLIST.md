@@ -297,7 +297,7 @@ repeatable, and test the reading it rests on.
   directions: a build launch and a narrowed run are left out, a full-suite launch and one killed at
   the bound are kept. The test runs in CI beside the other sabotage tool tests.
 
-- [ ] **M34.28** -- An instrumented CI run that times each test in win-durable-ioring's three
+- [x] **M34.28** -- An instrumented CI run that times each test in win-durable-ioring's three
   file-I/O test binaries against the runner's disk latency. Whole-launch durations cannot tell a
   runner's I/O stall from a timed wait that masks a lost wakeup. Done when a `workflow_dispatch`
   workflow runs the `win_durable_ioring` unit tests, `overlapped_evidence` and the `blocking_push`

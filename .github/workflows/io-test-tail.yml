@@ -1,0 +1,97 @@
+# Copyright (c) Mike Grier.
+#
+# Times every test in win-durable-ioring's three file-I/O test binaries beside the runner's disk and
+# processor counters (CHECKLIST.md M34.28), to say whether the duration tail the sabotage sweeps
+# measure on hosted runners is the disk or a timed wait that masks a lost wakeup.
+#
+# Manual only. It answers a question; it gates nothing, and it is not run on a schedule because one
+# run's answer stands until the suite or the runners change. Each runner probes in one of two modes:
+# `steady` builds once and reruns the binaries; `rebuild` touches the crate and rebuilds before every
+# iteration, as a sweep entry does before each run, so build output is being written back around the
+# tests. tools/probe-io-test-tail.ps1 says what is recorded and how.
+name: io test tail
+
+on:
+  workflow_dispatch:
+    inputs:
+      runners:
+        description: 'Runners per mode (1-20)'
+        default: '6'
+        required: true
+      iterations:
+        description: 'Iterations per runner (1-500)'
+        default: '60'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        shell: pwsh
+        env:
+          RUNNERS: ${{ inputs.runners }}
+          ITERATIONS: ${{ inputs.iterations }}
+        # The inputs are free text, so they are checked here and travel as numbers from then on.
+        run: |
+          $runners = 0; $iterations = 0
+          if (-not [int]::TryParse($env:RUNNERS, [ref]$runners) -or $runners -lt 1 -or $runners -gt 20) { throw "runners must be 1-20, got '$env:RUNNERS'" }
+          if (-not [int]::TryParse($env:ITERATIONS, [ref]$iterations) -or $iterations -lt 1 -or $iterations -gt 500) { throw "iterations must be 1-500, got '$env:ITERATIONS'" }
+          $include = foreach ($mode in 'steady', 'rebuild') { foreach ($n in 1..$runners) { @{ mode = $mode; n = $n; iterations = $iterations } } }
+          "matrix=$(@{ include = @($include) } | ConvertTo-Json -Compress -Depth 4)" >> $env:GITHUB_OUTPUT
+
+  probe:
+    name: probe ${{ matrix.mode }} ${{ matrix.n }}
+    needs: plan
+    runs-on: windows-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      # The repository's pinned toolchain, as the sabotage sweeps use: rust-toolchain.toml decides
+      # which one cargo runs.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: io-test-tail
+      - name: Probe
+        shell: pwsh
+        env:
+          PROBE_MODE: ${{ matrix.mode }}
+          PROBE_ITERATIONS: ${{ matrix.iterations }}
+          PROBE_OUT: .scratch/io-tail/${{ matrix.mode }}-${{ matrix.n }}
+        run: ./tools/probe-io-test-tail.ps1 -Mode $env:PROBE_MODE -Iterations ([int]$env:PROBE_ITERATIONS) -OutputDirectory $env:PROBE_OUT
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: io-tail-${{ matrix.mode }}-${{ matrix.n }}
+          path: .scratch/io-tail
+          if-no-files-found: error
+          retention-days: 30
+
+  report:
+    needs: probe
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: io-tail-*
+          path: .scratch/io-tail
+          merge-multiple: true
+      # The report writes through Write-Host, so its stream is redirected to be kept.
+      - name: Report
+        shell: pwsh
+        run: |
+          $report = @(./tools/report-io-test-tail.ps1 -Path .scratch/io-tail 6>&1 | ForEach-Object { "$_" })
+          $report
+          @('```') + $report + @('```') | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY

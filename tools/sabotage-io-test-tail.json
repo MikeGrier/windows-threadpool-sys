@@ -1,0 +1,48 @@
+{
+  "description": "Sabotages for report-io-test-tail.ps1, which joins the file-I/O tests' executions to the runner's disk counters (CHECKLIST.md M34.28), judged by test-report-io-test-tail.ps1. Run with tools/run-sabotage.ps1 -Manifest tools/sabotage-io-test-tail.json -CargoCommand tools/sabotage-io-test-tail-runner.cmd; see tools/README-sabotage.md.",
+  "root": "..",
+  "package": "sabotage-io-test-tail",
+  "testArgs": ["--suite"],
+  "sabotages": [
+    {
+      "name": "the counters' local time is taken as UTC",
+      "file": "tools/report-io-test-tail.ps1",
+      "expect": "caught",
+      "why": "typeperf stamps samples in local time; read as UTC, every sample is off by the time-zone bias, so a slow execution is compared with the disk hours away from it.",
+      "find": ["            Utc      = [DateTime]::SpecifyKind($local.AddMinutes($bias), [DateTimeKind]::Utc)"],
+      "replace": ["            Utc      = [DateTime]::SpecifyKind($local, [DateTimeKind]::Utc)"]
+    },
+    {
+      "name": "the _Total average is read as a drive",
+      "file": "tools/report-io-test-tail.ps1",
+      "expect": "caught",
+      "why": "The _Total instance averages the drives, so a stall on one drive would be read twice and an average could be called a stall on a drive it never reached.",
+      "find": ["        if ($name -match '\\\\LogicalDisk\\(_Total\\)\\\\') { continue }"],
+      "replace": [""]
+    },
+    {
+      "name": "slowness ignores the test's own median",
+      "file": "tools/report-io-test-tail.ps1",
+      "expect": "caught",
+      "why": "A test that always takes seconds would be listed as slow on every execution, burying the executions that are slow for that test.",
+      "find": ["        if ($r.Seconds -lt $SlowFloorSeconds -or $r.Seconds -lt $SlowFactor * $median) { continue }"],
+      "replace": ["        if ($r.Seconds -lt $SlowFloorSeconds) { continue }"]
+    },
+    {
+      "name": "a sample at the threshold is not a stall",
+      "file": "tools/report-io-test-tail.ps1",
+      "expect": "caught",
+      "why": "The threshold is a percentile of the samples, so it is itself a sample; excluding it leaves the worst sample in a short series below the line.",
+      "find": ["                Median = $median; Samples = $inside.Count; PeakLatency = $peak; Stall = ($inside.Count -gt 0 -and $peak -ge $threshold)"],
+      "replace": ["                Median = $median; Samples = $inside.Count; PeakLatency = $peak; Stall = ($inside.Count -gt 0 -and $peak -gt $threshold)"]
+    },
+    {
+      "name": "control: the peak latency is taken with LINQ",
+      "file": "tools/report-io-test-tail.ps1",
+      "expect": "survives",
+      "why": "A control: the same maximum computed another way.",
+      "find": ["            Latency  = ($lat | Measure-Object -Maximum).Maximum"],
+      "replace": ["            Latency  = [System.Linq.Enumerable]::Max([double[]]$lat)"]
+    }
+  ]
+}

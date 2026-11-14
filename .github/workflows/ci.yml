@@ -224,6 +224,11 @@ jobs:
       - name: Run test-measure-sweep-durations.ps1
         shell: pwsh
         run: ./tools/test-measure-sweep-durations.ps1
+      # The join the io-test-tail workflow's report rests on: libtest's UTC event times
+      # against typeperf's local-time samples. PowerShell 7 only, which it requires.
+      - name: Run test-report-io-test-tail.ps1
+        shell: pwsh
+        run: ./tools/test-report-io-test-tail.ps1
       # The check that a test's ignore reason and its module agree about its tier, driven
       # both from recorded listings and against a real fixture workspace, because the
       # JSON libtest writes is what it reads and is not always valid JSON. Both hosts:
